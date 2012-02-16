@@ -33,6 +33,11 @@
 #include <openssl/evp.h>
 #include <openssl/md5.h>
 
+#include <hardware/keymaster.h>
+
+#include <cutils/list.h>
+
+//#define LOG_NDEBUG 0
 #define LOG_TAG "keystore"
 #include <cutils/log.h>
 #include <cutils/sockets.h>
@@ -55,6 +60,62 @@ struct Value {
     uint8_t value[VALUE_SIZE];
 };
 
+class ValueString {
+public:
+    ValueString(const Value* orig) {
+        length = orig->length;
+        value = new char[length + 1];
+        memcpy(value, orig->value, length);
+        value[length] = '\0';
+    }
+
+    ~ValueString() {
+        delete[] value;
+    }
+
+    const char* c_str() const {
+        return value;
+    }
+
+    char* release() {
+        char* ret = value;
+        value = NULL;
+        return ret;
+    }
+
+private:
+    char* value;
+    size_t length;
+};
+
+static int keymaster_device_initialize(keymaster_device_t** dev) {
+    int rc;
+
+    const hw_module_t* mod;
+    rc = hw_get_module_by_class(KEYSTORE_HARDWARE_MODULE_ID, NULL, &mod);
+    if (rc) {
+        ALOGE("could not find any keystore module");
+        goto out;
+    }
+
+    rc = keymaster_open(mod, dev);
+    if (rc) {
+        ALOGE("could not open keymaster device in %s (%s)",
+            KEYSTORE_HARDWARE_MODULE_ID, strerror(-rc));
+        goto out;
+    }
+
+    return 0;
+
+out:
+    *dev = NULL;
+    return rc;
+}
+
+static void keymaster_device_release(keymaster_device_t* dev) {
+    keymaster_close(dev);
+}
+
 /* Here is the encoding of keys. This is necessary in order to allow arbitrary
  * characters in keys. Characters in [0-~] are not encoded. Others are encoded
  * into two bytes. The first byte is one of [+-.] which represents the first
@@ -62,9 +123,7 @@ struct Value {
  * [0-o]. Therefore in the worst case the length of a key gets doubled. Note
  * that Base64 cannot be used here due to the need of prefix match on keys. */
 
-static int encode_key(char* out, uid_t uid, const Value* key) {
-    int n = snprintf(out, NAME_MAX, "%u_", uid);
-    out += n;
+static int encode_key(char* out, const Value* key) {
     const uint8_t* in = key->value;
     int length = key->length;
     for (int i = length; i > 0; --i, ++in, ++out) {
@@ -77,7 +136,14 @@ static int encode_key(char* out, uid_t uid, const Value* key) {
         }
     }
     *out = '\0';
-    return n + length;
+    return length;
+}
+
+static int encode_key_for_uid(char* out, uid_t uid, const Value* key) {
+    int n = snprintf(out, NAME_MAX, "%u_", uid);
+    out += n;
+
+    return n + encode_key(out, key);
 }
 
 static int decode_key(uint8_t* out, const char* in, int length) {
@@ -290,10 +356,18 @@ private:
     struct blob mBlob;
 };
 
+typedef struct {
+    uint32_t uid;
+    const uint8_t* keyName;
+
+    struct listnode plist;
+} grant_t;
+
 class KeyStore {
 public:
-    KeyStore(Entropy* entropy)
+    KeyStore(Entropy* entropy, keymaster_device_t* device)
         : mEntropy(entropy)
+        , mDevice(device)
         , mRetry(MAX_RETRY)
     {
         if (access(MASTER_KEY_FILE, R_OK) == 0) {
@@ -301,6 +375,8 @@ public:
         } else {
             setState(STATE_UNINITIALIZED);
         }
+
+        list_init(&mGrants);
     }
 
     State getState() const {
@@ -309,6 +385,10 @@ public:
 
     int8_t getRetry() const {
         return mRetry;
+    }
+
+    keymaster_device_t* getDevice() const {
+        return mDevice;
     }
 
     ResponseCode initialize(Value* pw) {
@@ -436,6 +516,44 @@ public:
         return keyBlob->encryptBlob(filename, &mMasterKeyEncryption, mEntropy);
     }
 
+    void addGrant(const char* filename, const Value* uidValue) {
+        uid_t uid;
+        if (!convertToUid(uidValue, &uid)) {
+            return;
+        }
+
+        grant_t *grant = getGrant(filename, uid);
+        if (grant == NULL) {
+            grant = new grant_t;
+            grant->uid = uid;
+            grant->keyName = reinterpret_cast<const uint8_t*>(strdup(filename));
+            list_add_tail(&mGrants, &grant->plist);
+        }
+    }
+
+    bool removeGrant(const Value* keyValue, const Value* uidValue) {
+        uid_t uid;
+        if (!convertToUid(uidValue, &uid)) {
+            return false;
+        }
+
+        ValueString keyString(keyValue);
+
+        grant_t *grant = getGrant(keyString.c_str(), uid);
+        if (grant != NULL) {
+            list_remove(&grant->plist);
+            delete grant;
+            return true;
+        }
+
+        return false;
+    }
+
+    bool hasGrant(const Value* keyValue, const uid_t uid) const {
+        ValueString keyString(keyValue);
+        return getGrant(keyString.c_str(), uid) != NULL;
+    }
+
 private:
     static const char* MASTER_KEY_FILE;
     static const int MASTER_KEY_SIZE_BYTES = 16;
@@ -446,6 +564,8 @@ private:
 
     Entropy* mEntropy;
 
+    keymaster_device_t* mDevice;
+
     State mState;
     int8_t mRetry;
 
@@ -454,6 +574,8 @@ private:
 
     AES_KEY mMasterKeyEncryption;
     AES_KEY mMasterKeyDecryption;
+
+    struct listnode mGrants;
 
     void setState(State state) {
         mState = state;
@@ -507,6 +629,29 @@ private:
                 && (strcmp(filename, ".") != 0)
                 && (strcmp(filename, "..") != 0));
     }
+
+    grant_t* getGrant(const char* keyName, uid_t uid) const {
+        struct listnode *node;
+        grant_t *grant;
+
+        list_for_each(node, &mGrants) {
+            grant = node_to_item(node, grant_t, plist);
+            if (grant->uid == uid
+                    && !strcmp(reinterpret_cast<const char*>(grant->keyName),
+                               keyName)) {
+                return grant;
+            }
+        }
+
+        return NULL;
+    }
+
+    bool convertToUid(const Value* uidValue, uid_t* uid) const {
+        ValueString uidString(uidValue);
+        char* end = NULL;
+        *uid = strtol(uidString.c_str(), &end, 10);
+        return *end == '\0';
+    }
 };
 
 const char* KeyStore::MASTER_KEY_FILE = ".masterkey";
@@ -558,6 +703,36 @@ static void send_message(int sock, const uint8_t* message, int length) {
     send(sock, message, length, 0);
 }
 
+static ResponseCode get_key_for_name(KeyStore* keyStore, Blob* keyBlob, const Value* keyName,
+        const uid_t uid) {
+    char filename[NAME_MAX];
+
+    encode_key_for_uid(filename, uid, keyName);
+    ResponseCode responseCode = keyStore->get(filename, keyBlob);
+    if (responseCode == NO_ERROR) {
+        return responseCode;
+    }
+
+    // If this is the Wifi or VPN user, they actually want system
+    // UID keys.
+    if (uid == AID_WIFI || uid == AID_VPN) {
+        encode_key_for_uid(filename, AID_SYSTEM, keyName);
+        responseCode = keyStore->get(filename, keyBlob);
+        if (responseCode == NO_ERROR) {
+            return responseCode;
+        }
+    }
+
+    // They might be using a granted key.
+    if (!keyStore->hasGrant(keyName, uid)) {
+        return responseCode;
+    }
+
+    // It is a granted key. Try to load it.
+    encode_key(filename, keyName);
+    return keyStore->get(filename, keyBlob);
+}
+
 /* Here are the actions. Each of them is a function without arguments. All
  * information is defined in global variables, which are set properly before
  * performing an action. The number of parameters required by each action is
@@ -574,7 +749,7 @@ static ResponseCode test(KeyStore* keyStore, int sock, uid_t uid, Value*, Value*
 
 static ResponseCode get(KeyStore* keyStore, int sock, uid_t uid, Value* keyName, Value*, Value*) {
     char filename[NAME_MAX];
-    encode_key(filename, uid, keyName);
+    encode_key_for_uid(filename, uid, keyName);
     Blob keyBlob;
     ResponseCode responseCode = keyStore->get(filename, &keyBlob);
     if (responseCode != NO_ERROR) {
@@ -588,20 +763,20 @@ static ResponseCode get(KeyStore* keyStore, int sock, uid_t uid, Value* keyName,
 static ResponseCode insert(KeyStore* keyStore, int sock, uid_t uid, Value* keyName, Value* val,
         Value*) {
     char filename[NAME_MAX];
-    encode_key(filename, uid, keyName);
+    encode_key_for_uid(filename, uid, keyName);
     Blob keyBlob(val->value, val->length, NULL, 0);
     return keyStore->put(filename, &keyBlob);
 }
 
 static ResponseCode del(KeyStore* keyStore, int sock, uid_t uid, Value* keyName, Value*, Value*) {
     char filename[NAME_MAX];
-    encode_key(filename, uid, keyName);
+    encode_key_for_uid(filename, uid, keyName);
     return (unlink(filename) && errno != ENOENT) ? SYSTEM_ERROR : NO_ERROR;
 }
 
 static ResponseCode exist(KeyStore* keyStore, int sock, uid_t uid, Value* keyName, Value*, Value*) {
     char filename[NAME_MAX];
-    encode_key(filename, uid, keyName);
+    encode_key_for_uid(filename, uid, keyName);
     if (access(filename, R_OK) == -1) {
         return (errno != ENOENT) ? SYSTEM_ERROR : KEY_NOT_FOUND;
     }
@@ -614,7 +789,7 @@ static ResponseCode saw(KeyStore* keyStore, int sock, uid_t uid, Value* keyPrefi
         return SYSTEM_ERROR;
     }
     char filename[NAME_MAX];
-    int n = encode_key(filename, uid, keyPrefix);
+    int n = encode_key_for_uid(filename, uid, keyPrefix);
     send_code(sock, NO_ERROR);
 
     struct dirent* file;
@@ -671,8 +846,239 @@ static ResponseCode zero(KeyStore* keyStore, int sock, uid_t uid, Value*, Value*
     return keyStore->isEmpty() ? KEY_NOT_FOUND : NO_ERROR;
 }
 
-/* Here are the permissions, actions, users, and the main function. */
+static ResponseCode generate(KeyStore* keyStore, int sock, uid_t uid, Value* keyName, Value*,
+        Value*) {
+    char filename[NAME_MAX];
+    uint8_t* data;
+    size_t dataLength;
+    int rc;
 
+    const keymaster_device_t* device = keyStore->getDevice();
+    if (device == NULL) {
+        return SYSTEM_ERROR;
+    }
+
+    if (device->generate_keypair == NULL) {
+        return SYSTEM_ERROR;
+    }
+
+    keymaster_rsa_keygen_params_t rsa_params;
+    rsa_params.modulus_size = 2048;
+    rsa_params.public_exponent = 0x10001;
+
+    rc = device->generate_keypair(device, TYPE_RSA, &rsa_params, &data, &dataLength);
+    if (rc) {
+        return SYSTEM_ERROR;
+    }
+
+    encode_key_for_uid(filename, uid, keyName);
+
+    Blob keyBlob(data, dataLength, NULL, 0);
+    free(data);
+
+    return keyStore->put(filename, &keyBlob);
+}
+
+static ResponseCode import(KeyStore* keyStore, int sock, uid_t uid, Value* keyName, Value* key,
+        Value*) {
+    char filename[NAME_MAX];
+    uint8_t* data;
+    size_t dataLength;
+    int rc;
+
+    const keymaster_device_t* device = keyStore->getDevice();
+    if (device == NULL) {
+        ALOGE("No keymaster device!");
+        return SYSTEM_ERROR;
+    }
+
+    if (device->import_keypair == NULL) {
+        ALOGE("Keymaster doesn't support import!");
+        return SYSTEM_ERROR;
+    }
+
+    rc = device->import_keypair(device, key->value, key->length, &data, &dataLength);
+    if (rc) {
+        ALOGE("Error while importing keypair: %d", rc);
+        return SYSTEM_ERROR;
+    }
+
+    encode_key_for_uid(filename, uid, keyName);
+
+    Blob keyBlob(data, dataLength, NULL, 0);
+    free(data);
+
+    return keyStore->put(filename, &keyBlob);
+}
+
+/*
+ * TODO: The abstraction between things stored in hardware and regular blobs
+ * of data stored on the filesystem should be moved down to keystore itself.
+ * Unfortunately the Java code that calls this has naming conventions that it
+ * knows about. Ideally keystore shouldn't be used to store random blobs of
+ * data.
+ *
+ * Until that happens, it's necessary to have a separate "get_pubkey" and
+ * "del_key" since the Java code doesn't really communicate what it's
+ * intentions are.
+ */
+static ResponseCode get_pubkey(KeyStore* keyStore, int sock, uid_t uid, Value* keyName, Value*, Value*) {
+    Blob keyBlob;
+    ALOGV("get_pubkey '%s' from uid %d", ValueString(keyName).c_str(), uid);
+
+    ResponseCode responseCode = get_key_for_name(keyStore, &keyBlob, keyName, uid);
+    if (responseCode != NO_ERROR) {
+        return responseCode;
+    }
+
+    const keymaster_device_t* device = keyStore->getDevice();
+    if (device == NULL) {
+        return SYSTEM_ERROR;
+    }
+
+    if (device->get_keypair_public == NULL) {
+        ALOGE("device has no get_keypair_public implementation!");
+        return SYSTEM_ERROR;
+    }
+
+    uint8_t* data = NULL;
+    size_t dataLength;
+
+    int rc = device->get_keypair_public(device, keyBlob.getValue(), keyBlob.getLength(), &data,
+            &dataLength);
+    if (rc) {
+        return SYSTEM_ERROR;
+    }
+
+    send_code(sock, NO_ERROR);
+    send_message(sock, data, dataLength);
+    free(data);
+
+    return NO_ERROR_RESPONSE_CODE_SENT;
+}
+
+static ResponseCode del_key(KeyStore* keyStore, int sock, uid_t uid, Value* keyName, Value*,
+        Value*) {
+    char filename[NAME_MAX];
+    encode_key_for_uid(filename, uid, keyName);
+    Blob keyBlob;
+    ResponseCode responseCode = keyStore->get(filename, &keyBlob);
+    if (responseCode != NO_ERROR) {
+        return responseCode;
+    }
+
+    const keymaster_device_t* device = keyStore->getDevice();
+    if (device == NULL) {
+        return SYSTEM_ERROR;
+    }
+
+    if (device->delete_keypair == NULL) {
+        ALOGE("device has no delete_keypair implementation!");
+        return SYSTEM_ERROR;
+    }
+
+    uint8_t* data = NULL;
+    size_t dataLength;
+
+    int rc = device->delete_keypair(device, keyBlob.getValue(), keyBlob.getLength());
+
+    return rc ? SYSTEM_ERROR : NO_ERROR;
+}
+
+static ResponseCode sign(KeyStore* keyStore, int sock, uid_t uid, Value* keyName, Value* data,
+        Value*) {
+    ALOGV("sign %s from uid %d", ValueString(keyName).c_str(), uid);
+    Blob keyBlob;
+    int rc;
+
+    ResponseCode responseCode = get_key_for_name(keyStore, &keyBlob, keyName, uid);
+    if (responseCode != NO_ERROR) {
+        return responseCode;
+    }
+
+    uint8_t* signedData;
+    size_t signedDataLength;
+
+    const keymaster_device_t* device = keyStore->getDevice();
+    if (device == NULL) {
+        return SYSTEM_ERROR;
+    }
+
+    if (device->sign_data == NULL) {
+        return SYSTEM_ERROR;
+    }
+
+    keymaster_rsa_sign_params_t params;
+    params.digest_type = DIGEST_NONE;
+    params.padding_type = PADDING_NONE;
+
+    rc = device->sign_data(device, &params, keyBlob.getValue(), keyBlob.getLength(),
+            data->value, data->length, &signedData, &signedDataLength);
+    if (rc) {
+        return SYSTEM_ERROR;
+    }
+
+    send_code(sock, NO_ERROR);
+    send_message(sock, signedData, signedDataLength);
+    return NO_ERROR_RESPONSE_CODE_SENT;
+}
+
+static ResponseCode verify(KeyStore* keyStore, int sock, uid_t uid, Value* keyName, Value* data,
+        Value* signature) {
+    Blob keyBlob;
+    int rc;
+
+    ResponseCode responseCode = get_key_for_name(keyStore, &keyBlob, keyName, uid);
+    if (responseCode != NO_ERROR) {
+        return responseCode;
+    }
+
+    const keymaster_device_t* device = keyStore->getDevice();
+    if (device == NULL) {
+        return SYSTEM_ERROR;
+    }
+
+    if (device->verify_data == NULL) {
+        return SYSTEM_ERROR;
+    }
+
+    keymaster_rsa_sign_params_t params;
+    params.digest_type = DIGEST_NONE;
+    params.padding_type = PADDING_NONE;
+
+    rc = device->verify_data(device, &params, keyBlob.getValue(), keyBlob.getLength(),
+            data->value, data->length, signature->value, signature->length);
+    if (rc) {
+        return SYSTEM_ERROR;
+    } else {
+        return NO_ERROR;
+    }
+}
+
+static ResponseCode grant(KeyStore* keyStore, int sock, uid_t uid, Value* keyName,
+        Value* granteeData, Value*) {
+    char filename[NAME_MAX];
+    encode_key_for_uid(filename, uid, keyName);
+    if (access(filename, R_OK) == -1) {
+        return (errno != ENOENT) ? SYSTEM_ERROR : KEY_NOT_FOUND;
+    }
+
+    keyStore->addGrant(filename, granteeData);
+    return NO_ERROR;
+}
+
+static ResponseCode ungrant(KeyStore* keyStore, int sock, uid_t uid, Value* keyName,
+        Value* granteeData, Value*) {
+    char filename[NAME_MAX];
+    encode_key_for_uid(filename, uid, keyName);
+    if (access(filename, R_OK) == -1) {
+        return (errno != ENOENT) ? SYSTEM_ERROR : KEY_NOT_FOUND;
+    }
+
+    return keyStore->removeGrant(keyName, granteeData) ? NO_ERROR : KEY_NOT_FOUND;
+}
+
+/* Here are the permissions, actions, users, and the main function. */
 enum perm {
     P_TEST     = 1 << TEST,
     P_GET      = 1 << GET,
@@ -685,6 +1091,9 @@ enum perm {
     P_LOCK     = 1 << LOCK,
     P_UNLOCK   = 1 << UNLOCK,
     P_ZERO     = 1 << ZERO,
+    P_SIGN     = 1 << SIGN,
+    P_VERIFY   = 1 << VERIFY,
+    P_GRANT    = 1 << GRANT,
 };
 
 static const int MAX_PARAM = 3;
@@ -710,6 +1119,14 @@ static struct action {
     {lock,       CommandCodes[LOCK],       STATE_NO_ERROR, P_LOCK,     {0, 0, 0}},
     {unlock,     CommandCodes[UNLOCK],     STATE_LOCKED,   P_UNLOCK,   {PASSWORD_SIZE, 0, 0}},
     {zero,       CommandCodes[ZERO],       STATE_ANY,      P_ZERO,     {0, 0, 0}},
+    {generate,   CommandCodes[GENERATE],   STATE_NO_ERROR, P_INSERT,   {KEY_SIZE, 0, 0}},
+    {import,     CommandCodes[IMPORT],     STATE_NO_ERROR, P_INSERT,   {KEY_SIZE, VALUE_SIZE, 0}},
+    {sign,       CommandCodes[SIGN],       STATE_NO_ERROR, P_SIGN,     {KEY_SIZE, VALUE_SIZE, 0}},
+    {verify,     CommandCodes[VERIFY],     STATE_NO_ERROR, P_VERIFY,   {KEY_SIZE, VALUE_SIZE, VALUE_SIZE}},
+    {get_pubkey, CommandCodes[GET_PUBKEY], STATE_NO_ERROR, P_GET,      {KEY_SIZE, 0, 0}},
+    {del_key,    CommandCodes[DEL_KEY],    STATE_ANY,      P_DELETE,   {KEY_SIZE, 0, 0}},
+    {grant,      CommandCodes[GRANT],      STATE_NO_ERROR, P_GRANT,    {KEY_SIZE, KEY_SIZE, 0}},
+    {ungrant,    CommandCodes[UNGRANT],    STATE_NO_ERROR, P_GRANT,    {KEY_SIZE, KEY_SIZE, 0}},
     {NULL,       0,                        STATE_ANY,      0,          {0, 0, 0}},
 };
 
@@ -719,10 +1136,11 @@ static struct user {
     uint32_t perms;
 } users[] = {
     {AID_SYSTEM,   ~0,         ~0},
-    {AID_VPN,      AID_SYSTEM, P_GET},
-    {AID_WIFI,     AID_SYSTEM, P_GET},
+    {AID_VPN,      AID_SYSTEM, P_GET | P_SIGN | P_VERIFY },
+    {AID_WIFI,     AID_SYSTEM, P_GET | P_SIGN | P_VERIFY },
     {AID_ROOT,     AID_SYSTEM, P_GET},
-    {~0,           ~0,         P_TEST | P_GET | P_INSERT | P_DELETE | P_EXIST | P_SAW},
+    {~0,           ~0,         P_TEST | P_GET | P_INSERT | P_DELETE | P_EXIST | P_SAW |
+                               P_SIGN | P_VERIFY},
 };
 
 static ResponseCode process(KeyStore* keyStore, int sock, uid_t uid, int8_t code) {
@@ -762,6 +1180,8 @@ static ResponseCode process(KeyStore* keyStore, int sock, uid_t uid, int8_t code
 }
 
 int main(int argc, char* argv[]) {
+    void* hardwareContext = NULL;
+
     int controlSocket = android_get_control_socket("keystore");
     if (argc < 2) {
         ALOGE("A directory must be specified!");
@@ -776,6 +1196,13 @@ int main(int argc, char* argv[]) {
     if (!entropy.open()) {
         return 1;
     }
+
+    keymaster_device_t* dev;
+    if (keymaster_device_initialize(&dev)) {
+        ALOGE("keystore keymaster could not be initialized; exiting");
+        return 1;
+    }
+
     if (listen(controlSocket, 3) == -1) {
         ALOGE("listen: %s", strerror(errno));
         return 1;
@@ -783,7 +1210,7 @@ int main(int argc, char* argv[]) {
 
     signal(SIGPIPE, SIG_IGN);
 
-    KeyStore keyStore(&entropy);
+    KeyStore keyStore(&entropy, dev);
     int sock;
     while ((sock = accept(controlSocket, NULL, 0)) != -1) {
         struct timeval tv;
@@ -816,5 +1243,8 @@ int main(int argc, char* argv[]) {
         close(sock);
     }
     ALOGE("accept: %s", strerror(errno));
+
+    keymaster_device_release(dev);
+
     return 1;
 }

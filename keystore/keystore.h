@@ -40,6 +40,7 @@ enum ResponseCode {
     WRONG_PASSWORD_1  = 11,
     WRONG_PASSWORD_2  = 12,
     WRONG_PASSWORD_3  = 13, // MAX_RETRY = 4
+    SIGNATURE_INVALID = 14,
 };
 
 enum CommandNames {
@@ -54,10 +55,20 @@ enum CommandNames {
     LOCK = 8,
     UNLOCK = 9,
     ZERO = 10,
+    GENERATE = 11,
+    IMPORT = 12,
+    SIGN = 13,
+    VERIFY = 14,
+    GET_PUBKEY = 15,
+    DEL_KEY = 16,
+    GRANT = 17,
+    UNGRANT = 18,
 };
 
 typedef uint8_t command_code_t;
 
+// Taken: a b c d e f g h i j k l m n o p q r s t u v w x y z
+//        * *   * *   *   *   * * * *   *   * * * * *   *   *
 command_code_t CommandCodes[] = {
     't', // TEST
     'g', // GET
@@ -70,6 +81,14 @@ command_code_t CommandCodes[] = {
     'l', // LOCK
     'u', // UNLOCK
     'z', // ZERO
+    'a', // GENERATE
+    'm', // IMPORT
+    'n', // SIGN
+    'v', // VERIFY
+    'b', // GET_PUBKEY
+    'k', // DEL_KEY
+    'x', // GRANT
+    'y', // UNGRANT
 };
 
 #endif
