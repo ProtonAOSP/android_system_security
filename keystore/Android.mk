@@ -30,3 +30,11 @@ LOCAL_SHARED_LIBRARIES := libcutils libcrypto
 LOCAL_MODULE := keystore_cli
 LOCAL_MODULE_TAGS := debug
 include $(BUILD_EXECUTABLE)
+
+# Library for keystore clients
+include $(CLEAR_VARS)
+LOCAL_SRC_FILES := keystore_client.cpp
+LOCAL_SHARED_LIBRARIES := libcutils
+LOCAL_MODULE := libkeystore_client
+LOCAL_MODULE_TAGS := optional
+include $(BUILD_SHARED_LIBRARY)

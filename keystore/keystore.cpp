@@ -80,7 +80,7 @@ static int encode_key(char* out, uid_t uid, const Value* key) {
     return n + length;
 }
 
-static int decode_key(uint8_t* out, char* in, int length) {
+static int decode_key(uint8_t* out, const char* in, int length) {
     for (int i = 0; i < length; ++i, ++in, ++out) {
         if (*in >= '0' && *in <= '~') {
             *out = *in;
@@ -139,7 +139,7 @@ public:
         return true;
     }
 
-    bool generate_random_data(uint8_t* data, size_t size) {
+    bool generate_random_data(uint8_t* data, size_t size) const {
         return (readFully(mRandom, data, size) == size);
     }
 
@@ -183,15 +183,19 @@ public:
 
     Blob() {}
 
-    uint8_t* getValue() {
+    const uint8_t* getValue() const {
         return mBlob.value;
     }
 
-    int32_t getLength() {
+    int32_t getLength() const {
         return mBlob.length;
     }
 
-    uint8_t getInfo() {
+    const uint8_t* getInfo() const {
+        return mBlob.value + mBlob.length;
+    }
+
+    uint8_t getInfoLength() const {
         return mBlob.info;
     }
 
@@ -288,7 +292,10 @@ private:
 
 class KeyStore {
 public:
-    KeyStore(Entropy* entropy) : mEntropy(entropy), mRetry(MAX_RETRY) {
+    KeyStore(Entropy* entropy)
+        : mEntropy(entropy)
+        , mRetry(MAX_RETRY)
+    {
         if (access(MASTER_KEY_FILE, R_OK) == 0) {
             setState(STATE_LOCKED);
         } else {
@@ -296,11 +303,11 @@ public:
         }
     }
 
-    State getState() {
+    State getState() const {
         return mState;
     }
 
-    int8_t getRetry() {
+    int8_t getRetry() const {
         return mRetry;
     }
 
@@ -399,7 +406,7 @@ public:
         return true;
     }
 
-    bool isEmpty() {
+    bool isEmpty() const {
         DIR* dir = opendir(".");
         struct dirent* file;
         if (!dir) {
@@ -545,7 +552,7 @@ static void send_code(int sock, int8_t code) {
     send(sock, &code, 1, 0);
 }
 
-static void send_message(int sock, uint8_t* message, int length) {
+static void send_message(int sock, const uint8_t* message, int length) {
     uint16_t bytes = htons(length);
     send(sock, &bytes, 2, 0);
     send(sock, message, length, 0);
@@ -561,11 +568,11 @@ static void send_message(int sock, uint8_t* message, int length) {
 
 static const ResponseCode NO_ERROR_RESPONSE_CODE_SENT = (ResponseCode) 0;
 
-static ResponseCode test(KeyStore* keyStore, int sock, uid_t uid, Value*, Value*) {
+static ResponseCode test(KeyStore* keyStore, int sock, uid_t uid, Value*, Value*, Value*) {
     return (ResponseCode) keyStore->getState();
 }
 
-static ResponseCode get(KeyStore* keyStore, int sock, uid_t uid, Value* keyName, Value*) {
+static ResponseCode get(KeyStore* keyStore, int sock, uid_t uid, Value* keyName, Value*, Value*) {
     char filename[NAME_MAX];
     encode_key(filename, uid, keyName);
     Blob keyBlob;
@@ -578,20 +585,21 @@ static ResponseCode get(KeyStore* keyStore, int sock, uid_t uid, Value* keyName,
     return NO_ERROR_RESPONSE_CODE_SENT;
 }
 
-static ResponseCode insert(KeyStore* keyStore, int sock, uid_t uid, Value* keyName, Value* val) {
+static ResponseCode insert(KeyStore* keyStore, int sock, uid_t uid, Value* keyName, Value* val,
+        Value*) {
     char filename[NAME_MAX];
     encode_key(filename, uid, keyName);
     Blob keyBlob(val->value, val->length, NULL, 0);
     return keyStore->put(filename, &keyBlob);
 }
 
-static ResponseCode del(KeyStore* keyStore, int sock, uid_t uid, Value* keyName, Value*) {
+static ResponseCode del(KeyStore* keyStore, int sock, uid_t uid, Value* keyName, Value*, Value*) {
     char filename[NAME_MAX];
     encode_key(filename, uid, keyName);
     return (unlink(filename) && errno != ENOENT) ? SYSTEM_ERROR : NO_ERROR;
 }
 
-static ResponseCode exist(KeyStore* keyStore, int sock, uid_t uid, Value* keyName, Value*) {
+static ResponseCode exist(KeyStore* keyStore, int sock, uid_t uid, Value* keyName, Value*, Value*) {
     char filename[NAME_MAX];
     encode_key(filename, uid, keyName);
     if (access(filename, R_OK) == -1) {
@@ -600,7 +608,7 @@ static ResponseCode exist(KeyStore* keyStore, int sock, uid_t uid, Value* keyNam
     return NO_ERROR;
 }
 
-static ResponseCode saw(KeyStore* keyStore, int sock, uid_t uid, Value* keyPrefix, Value*) {
+static ResponseCode saw(KeyStore* keyStore, int sock, uid_t uid, Value* keyPrefix, Value*, Value*) {
     DIR* dir = opendir(".");
     if (!dir) {
         return SYSTEM_ERROR;
@@ -612,7 +620,7 @@ static ResponseCode saw(KeyStore* keyStore, int sock, uid_t uid, Value* keyPrefi
     struct dirent* file;
     while ((file = readdir(dir)) != NULL) {
         if (!strncmp(filename, file->d_name, n)) {
-            char* p = &file->d_name[n];
+            const char* p = &file->d_name[n];
             keyPrefix->length = decode_key(keyPrefix->value, p, strlen(p));
             send_message(sock, keyPrefix->value, keyPrefix->length);
         }
@@ -621,7 +629,7 @@ static ResponseCode saw(KeyStore* keyStore, int sock, uid_t uid, Value* keyPrefi
     return NO_ERROR_RESPONSE_CODE_SENT;
 }
 
-static ResponseCode reset(KeyStore* keyStore, int sock, uid_t uid, Value*, Value*) {
+static ResponseCode reset(KeyStore* keyStore, int sock, uid_t uid, Value*, Value*, Value*) {
     return keyStore->reset() ? NO_ERROR : SYSTEM_ERROR;
 }
 
@@ -631,7 +639,7 @@ static ResponseCode reset(KeyStore* keyStore, int sock, uid_t uid, Value*, Value
  * any thing goes wrong during the transition, the new file will not overwrite
  * the old one. This avoids permanent damages of the existing data. */
 
-static ResponseCode password(KeyStore* keyStore, int sock, uid_t uid, Value* pw, Value*) {
+static ResponseCode password(KeyStore* keyStore, int sock, uid_t uid, Value* pw, Value*, Value*) {
     switch (keyStore->getState()) {
         case STATE_UNINITIALIZED: {
             // generate master key, encrypt with password, write to file, initialize mMasterKey*.
@@ -649,58 +657,60 @@ static ResponseCode password(KeyStore* keyStore, int sock, uid_t uid, Value* pw,
     return SYSTEM_ERROR;
 }
 
-static ResponseCode lock(KeyStore* keyStore, int sock, uid_t uid, Value*, Value*) {
+static ResponseCode lock(KeyStore* keyStore, int sock, uid_t uid, Value*, Value*, Value*) {
     keyStore->lock();
     return NO_ERROR;
 }
 
-static ResponseCode unlock(KeyStore* keyStore, int sock, uid_t uid, Value* pw, Value* unused) {
-    return password(keyStore, sock, uid, pw, unused);
+static ResponseCode unlock(KeyStore* keyStore, int sock, uid_t uid, Value* pw, Value* unused,
+        Value* unused2) {
+    return password(keyStore, sock, uid, pw, unused, unused2);
 }
 
-static ResponseCode zero(KeyStore* keyStore, int sock, uid_t uid, Value*, Value*) {
+static ResponseCode zero(KeyStore* keyStore, int sock, uid_t uid, Value*, Value*, Value*) {
     return keyStore->isEmpty() ? KEY_NOT_FOUND : NO_ERROR;
 }
 
 /* Here are the permissions, actions, users, and the main function. */
 
 enum perm {
-    TEST     =    1,
-    GET      =    2,
-    INSERT   =    4,
-    DELETE   =    8,
-    EXIST    =   16,
-    SAW      =   32,
-    RESET    =   64,
-    PASSWORD =  128,
-    LOCK     =  256,
-    UNLOCK   =  512,
-    ZERO     = 1024,
+    P_TEST     = 1 << TEST,
+    P_GET      = 1 << GET,
+    P_INSERT   = 1 << INSERT,
+    P_DELETE   = 1 << DELETE,
+    P_EXIST    = 1 << EXIST,
+    P_SAW      = 1 << SAW,
+    P_RESET    = 1 << RESET,
+    P_PASSWORD = 1 << PASSWORD,
+    P_LOCK     = 1 << LOCK,
+    P_UNLOCK   = 1 << UNLOCK,
+    P_ZERO     = 1 << ZERO,
 };
 
-static const int MAX_PARAM = 2;
+static const int MAX_PARAM = 3;
 
 static const State STATE_ANY = (State) 0;
 
 static struct action {
-    ResponseCode (*run)(KeyStore* keyStore, int sock, uid_t uid, Value* param1, Value* param2);
+    ResponseCode (*run)(KeyStore* keyStore, int sock, uid_t uid, Value* param1, Value* param2,
+            Value* param3);
     int8_t code;
     State state;
     uint32_t perm;
     int lengths[MAX_PARAM];
 } actions[] = {
-    {test,     't', STATE_ANY,      TEST,     {0, 0}},
-    {get,      'g', STATE_NO_ERROR, GET,      {KEY_SIZE, 0}},
-    {insert,   'i', STATE_NO_ERROR, INSERT,   {KEY_SIZE, VALUE_SIZE}},
-    {del,      'd', STATE_ANY,      DELETE,   {KEY_SIZE, 0}},
-    {exist,    'e', STATE_ANY,      EXIST,    {KEY_SIZE, 0}},
-    {saw,      's', STATE_ANY,      SAW,      {KEY_SIZE, 0}},
-    {reset,    'r', STATE_ANY,      RESET,    {0, 0}},
-    {password, 'p', STATE_ANY,      PASSWORD, {PASSWORD_SIZE, 0}},
-    {lock,     'l', STATE_NO_ERROR, LOCK,     {0, 0}},
-    {unlock,   'u', STATE_LOCKED,   UNLOCK,   {PASSWORD_SIZE, 0}},
-    {zero,     'z', STATE_ANY,      ZERO,     {0, 0}},
-    {NULL,      0 , STATE_ANY,      0,        {0, 0}},
+    {test,       CommandCodes[TEST],       STATE_ANY,      P_TEST,     {0, 0, 0}},
+    {get,        CommandCodes[GET],        STATE_NO_ERROR, P_GET,      {KEY_SIZE, 0, 0}},
+    {insert,     CommandCodes[INSERT],     STATE_NO_ERROR, P_INSERT,   {KEY_SIZE, VALUE_SIZE, 0}},
+    {del,        CommandCodes[DELETE],     STATE_ANY,      P_DELETE,   {KEY_SIZE, 0, 0}},
+    {exist,      CommandCodes[EXIST],      STATE_ANY,      P_EXIST,    {KEY_SIZE, 0, 0}},
+    {saw,        CommandCodes[SAW],        STATE_ANY,      P_SAW,      {KEY_SIZE, 0, 0}},
+    {reset,      CommandCodes[RESET],      STATE_ANY,      P_RESET,    {0, 0, 0}},
+    {password,   CommandCodes[PASSWORD],   STATE_ANY,      P_PASSWORD, {PASSWORD_SIZE, 0, 0}},
+    {lock,       CommandCodes[LOCK],       STATE_NO_ERROR, P_LOCK,     {0, 0, 0}},
+    {unlock,     CommandCodes[UNLOCK],     STATE_LOCKED,   P_UNLOCK,   {PASSWORD_SIZE, 0, 0}},
+    {zero,       CommandCodes[ZERO],       STATE_ANY,      P_ZERO,     {0, 0, 0}},
+    {NULL,       0,                        STATE_ANY,      0,          {0, 0, 0}},
 };
 
 static struct user {
@@ -709,10 +719,10 @@ static struct user {
     uint32_t perms;
 } users[] = {
     {AID_SYSTEM,   ~0,         ~0},
-    {AID_VPN,      AID_SYSTEM, GET},
-    {AID_WIFI,     AID_SYSTEM, GET},
-    {AID_ROOT,     AID_SYSTEM, GET},
-    {~0,           ~0,         TEST | GET | INSERT | DELETE | EXIST | SAW},
+    {AID_VPN,      AID_SYSTEM, P_GET},
+    {AID_WIFI,     AID_SYSTEM, P_GET},
+    {AID_ROOT,     AID_SYSTEM, P_GET},
+    {~0,           ~0,         P_TEST | P_GET | P_INSERT | P_DELETE | P_EXIST | P_SAW},
 };
 
 static ResponseCode process(KeyStore* keyStore, int sock, uid_t uid, int8_t code) {
@@ -748,7 +758,7 @@ static ResponseCode process(KeyStore* keyStore, int sock, uid_t uid, int8_t code
     if (!recv_end_of_file(sock)) {
         return PROTOCOL_ERROR;
     }
-    return action->run(keyStore, sock, uid, &params[0], &params[1]);
+    return action->run(keyStore, sock, uid, &params[0], &params[1], &params[2]);
 }
 
 int main(int argc, char* argv[]) {

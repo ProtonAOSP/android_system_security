@@ -17,6 +17,8 @@
 #ifndef __KEYSTORE_H__
 #define __KEYSTORE_H__
 
+#include <stdint.h>
+
 // note state values overlap with ResponseCode for the purposes of the state() API
 enum State {
     STATE_NO_ERROR      = 1,
@@ -38,6 +40,36 @@ enum ResponseCode {
     WRONG_PASSWORD_1  = 11,
     WRONG_PASSWORD_2  = 12,
     WRONG_PASSWORD_3  = 13, // MAX_RETRY = 4
+};
+
+enum CommandNames {
+    TEST = 0,
+    GET = 1,
+    INSERT = 2,
+    DELETE = 3,
+    EXIST = 4,
+    SAW = 5,
+    RESET = 6,
+    PASSWORD = 7,
+    LOCK = 8,
+    UNLOCK = 9,
+    ZERO = 10,
+};
+
+typedef uint8_t command_code_t;
+
+command_code_t CommandCodes[] = {
+    't', // TEST
+    'g', // GET
+    'i', // INSERT
+    'd', // DELETE
+    'e', // EXIST
+    's', // SAW
+    'r', // RESET
+    'p', // PASSWORD
+    'l', // LOCK
+    'u', // UNLOCK
+    'z', // ZERO
 };
 
 #endif
