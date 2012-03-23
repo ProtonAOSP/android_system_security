@@ -23,6 +23,7 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <assert.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -30,10 +31,14 @@
 #include <arpa/inet.h>
 
 #include <openssl/aes.h>
+#include <openssl/bio.h>
 #include <openssl/evp.h>
 #include <openssl/md5.h>
+#include <openssl/pem.h>
 
 #include <hardware/keymaster.h>
+
+#include <utils/UniquePtr.h>
 
 #include <cutils/list.h>
 
@@ -55,7 +60,39 @@
 #define VALUE_SIZE      32768
 #define PASSWORD_SIZE   VALUE_SIZE
 
+
+struct BIO_Delete {
+    void operator()(BIO* p) const {
+        BIO_free(p);
+    }
+};
+typedef UniquePtr<BIO, BIO_Delete> Unique_BIO;
+
+struct EVP_PKEY_Delete {
+    void operator()(EVP_PKEY* p) const {
+        EVP_PKEY_free(p);
+    }
+};
+typedef UniquePtr<EVP_PKEY, EVP_PKEY_Delete> Unique_EVP_PKEY;
+
+struct PKCS8_PRIV_KEY_INFO_Delete {
+    void operator()(PKCS8_PRIV_KEY_INFO* p) const {
+        PKCS8_PRIV_KEY_INFO_free(p);
+    }
+};
+typedef UniquePtr<PKCS8_PRIV_KEY_INFO, PKCS8_PRIV_KEY_INFO_Delete> Unique_PKCS8_PRIV_KEY_INFO;
+
+
 struct Value {
+    Value(const uint8_t* orig, int origLen) {
+        assert(origLen <= VALUE_SIZE);
+        memcpy(value, orig, origLen);
+        length = origLen;
+    }
+
+    Value() {
+    }
+
     int length;
     uint8_t value[VALUE_SIZE];
 };
@@ -63,6 +100,7 @@ struct Value {
 class ValueString {
 public:
     ValueString(const Value* orig) {
+        assert(length <= VALUE_SIZE);
         length = orig->length;
         value = new char[length + 1];
         memcpy(value, orig->value, length);
@@ -217,30 +255,57 @@ private:
  * the description. The secret is stored in ciphertext, and its original size
  * can be found in blob.length. The description is stored after the secret in
  * plaintext, and its size is specified in blob.info. The total size of the two
- * parts must be no more than VALUE_SIZE bytes. The first three bytes of the
- * file are reserved for future use and are always set to zero. Fields other
+ * parts must be no more than VALUE_SIZE bytes. The first field is the version,
+ * the second is the blob's type, and the third byte is reserved. Fields other
  * than blob.info, blob.length, and blob.value are modified by encryptBlob()
  * and decryptBlob(). Thus they should not be accessed from outside. */
 
+/* ** Note to future implementors of encryption: **
+ * Currently this is the construction:
+ *   metadata || Enc(MD5(data) || data)
+ *
+ * This should be the construction used for encrypting if re-implementing:
+ *
+ *   Derive independent keys for encryption and MAC:
+ *     Kenc = AES_encrypt(masterKey, "Encrypt")
+ *     Kmac = AES_encrypt(masterKey, "MAC")
+ *
+ *   Store this:
+ *     metadata || AES_CTR_encrypt(Kenc, rand_IV, data) ||
+ *             HMAC(Kmac, metadata || Enc(data))
+ */
 struct __attribute__((packed)) blob {
-    uint8_t reserved[3];
+    uint8_t version;
+    uint8_t type;
+    uint8_t reserved;
     uint8_t info;
     uint8_t vector[AES_BLOCK_SIZE];
-    uint8_t encrypted[0];
+    uint8_t encrypted[0]; // Marks offset to encrypted data.
     uint8_t digest[MD5_DIGEST_LENGTH];
-    uint8_t digested[0];
+    uint8_t digested[0]; // Marks offset to digested data.
     int32_t length; // in network byte order when encrypted
     uint8_t value[VALUE_SIZE + AES_BLOCK_SIZE];
 };
 
+typedef enum {
+    TYPE_GENERIC = 1,
+    TYPE_MASTER_KEY = 2,
+    TYPE_KEY_PAIR = 3,
+} BlobType;
+
+static const uint8_t CurrentBlobVersion = 1;
+
 class Blob {
 public:
-    Blob(uint8_t* value, int32_t valueLength, uint8_t* info, uint8_t infoLength) {
+    Blob(uint8_t* value, int32_t valueLength, uint8_t* info, uint8_t infoLength, BlobType type) {
         mBlob.length = valueLength;
         memcpy(mBlob.value, value, valueLength);
 
         mBlob.info = infoLength;
         memcpy(mBlob.value + valueLength, info, infoLength);
+
+        mBlob.version = CurrentBlobVersion;
+        mBlob.type = uint8_t(type);
     }
 
     Blob(blob b) {
@@ -263,6 +328,22 @@ public:
 
     uint8_t getInfoLength() const {
         return mBlob.info;
+    }
+
+    uint8_t getVersion() const {
+        return mBlob.version;
+    }
+
+    void setVersion(uint8_t version) {
+        mBlob.version = version;
+    }
+
+    BlobType getType() const {
+        return BlobType(mBlob.type);
+    }
+
+    void setType(BlobType type) {
+        mBlob.type = uint8_t(type);
     }
 
     ResponseCode encryptBlob(const char* filename, AES_KEY *aes_key, Entropy* entropy) {
@@ -290,7 +371,7 @@ public:
         AES_cbc_encrypt(mBlob.encrypted, mBlob.encrypted, encryptedLength,
                         aes_key, vector, AES_ENCRYPT);
 
-        memset(mBlob.reserved, 0, sizeof(mBlob.reserved));
+        mBlob.reserved = 0;
         size_t headerLength = (mBlob.encrypted - (uint8_t*) &mBlob);
         size_t fileLength = encryptedLength + headerLength + mBlob.info;
 
@@ -408,7 +489,7 @@ public:
         generateKeyFromPassword(passwordKey, MASTER_KEY_SIZE_BYTES, pw, mSalt);
         AES_KEY passwordAesKey;
         AES_set_encrypt_key(passwordKey, MASTER_KEY_SIZE_BITS, &passwordAesKey);
-        Blob masterKeyBlob(mMasterKey, sizeof(mMasterKey), mSalt, sizeof(mSalt));
+        Blob masterKeyBlob(mMasterKey, sizeof(mMasterKey), mSalt, sizeof(mSalt), TYPE_MASTER_KEY);
         return masterKeyBlob.encryptBlob(MASTER_KEY_FILE, &passwordAesKey, mEntropy);
     }
 
@@ -508,8 +589,23 @@ public:
         setState(STATE_LOCKED);
     }
 
-    ResponseCode get(const char* filename, Blob* keyBlob) {
-        return keyBlob->decryptBlob(filename, &mMasterKeyDecryption);
+    ResponseCode get(const char* filename, Blob* keyBlob, const BlobType type) {
+        ResponseCode rc = keyBlob->decryptBlob(filename, &mMasterKeyDecryption);
+        if (rc != NO_ERROR) {
+            return rc;
+        }
+
+        const uint8_t version = keyBlob->getVersion();
+        if (version < CurrentBlobVersion) {
+            upgrade(filename, keyBlob, version, type);
+        }
+
+        if (keyBlob->getType() != type) {
+            ALOGW("key found but type doesn't match: %d vs %d", keyBlob->getType(), type);
+            return KEY_NOT_FOUND;
+        }
+
+        return rc;
     }
 
     ResponseCode put(const char* filename, Blob* keyBlob) {
@@ -552,6 +648,28 @@ public:
     bool hasGrant(const Value* keyValue, const uid_t uid) const {
         ValueString keyString(keyValue);
         return getGrant(keyString.c_str(), uid) != NULL;
+    }
+
+    ResponseCode importKey(const Value* key, const char* filename) {
+        uint8_t* data;
+        size_t dataLength;
+        int rc;
+
+        if (mDevice->import_keypair == NULL) {
+            ALOGE("Keymaster doesn't support import!");
+            return SYSTEM_ERROR;
+        }
+
+        rc = mDevice->import_keypair(mDevice, key->value, key->length, &data, &dataLength);
+        if (rc) {
+            ALOGE("Error while importing keypair: %d", rc);
+            return SYSTEM_ERROR;
+        }
+
+        Blob keyBlob(data, dataLength, NULL, 0, TYPE_KEY_PAIR);
+        free(data);
+
+        return put(filename, &keyBlob);
     }
 
 private:
@@ -652,6 +770,80 @@ private:
         *uid = strtol(uidString.c_str(), &end, 10);
         return *end == '\0';
     }
+
+    /**
+     * Upgrade code. This will upgrade the key from the current version
+     * to whatever is newest.
+     */
+    void upgrade(const char* filename, Blob* blob, const uint8_t oldVersion, const BlobType type) {
+        bool updated = false;
+        uint8_t version = oldVersion;
+
+        /* From V0 -> V1: All old types were unknown */
+        if (version == 0) {
+            ALOGV("upgrading to version 1 and setting type %d", type);
+
+            blob->setType(type);
+            if (type == TYPE_KEY_PAIR) {
+                importBlobAsKey(blob, filename);
+            }
+            version = 1;
+            updated = true;
+        }
+
+        /*
+         * If we've updated, set the key blob to the right version
+         * and write it.
+         * */
+        if (updated) {
+            ALOGV("updated and writing file %s", filename);
+            blob->setVersion(version);
+            this->put(filename, blob);
+        }
+    }
+
+    /**
+     * Takes a blob that is an PEM-encoded RSA key as a byte array and
+     * converts it to a DER-encoded PKCS#8 for import into a keymaster.
+     * Then it overwrites the original blob with the new blob
+     * format that is returned from the keymaster.
+     */
+    ResponseCode importBlobAsKey(Blob* blob, const char* filename) {
+        // We won't even write to the blob directly with this BIO, so const_cast is okay.
+        Unique_BIO b(BIO_new_mem_buf(const_cast<uint8_t*>(blob->getValue()), blob->getLength()));
+        if (b.get() == NULL) {
+            ALOGE("Problem instantiating BIO");
+            return SYSTEM_ERROR;
+        }
+
+        Unique_EVP_PKEY pkey(PEM_read_bio_PrivateKey(b.get(), NULL, NULL, NULL));
+        if (pkey.get() == NULL) {
+            ALOGE("Couldn't read old PEM file");
+            return SYSTEM_ERROR;
+        }
+
+        Unique_PKCS8_PRIV_KEY_INFO pkcs8(EVP_PKEY2PKCS8(pkey.get()));
+        int len = i2d_PKCS8_PRIV_KEY_INFO(pkcs8.get(), NULL);
+        if (len < 0) {
+            ALOGE("Couldn't measure PKCS#8 length");
+            return SYSTEM_ERROR;
+        }
+
+        Value pkcs8key;
+        pkcs8key.length = len;
+        uint8_t* tmp = pkcs8key.value;
+        if (i2d_PKCS8_PRIV_KEY_INFO(pkcs8.get(), &tmp) != len) {
+            ALOGE("Couldn't convert to PKCS#8");
+            return SYSTEM_ERROR;
+        }
+
+        ResponseCode rc = importKey(&pkcs8key, filename);
+        if (rc != NO_ERROR) {
+            return rc;
+        }
+
+        return get(filename, blob, TYPE_KEY_PAIR);
+    }
 };
 
 const char* KeyStore::MASTER_KEY_FILE = ".masterkey";
@@ -704,11 +896,11 @@ static void send_message(int sock, const uint8_t* message, int length) {
 }
 
 static ResponseCode get_key_for_name(KeyStore* keyStore, Blob* keyBlob, const Value* keyName,
-        const uid_t uid) {
+        const uid_t uid, const BlobType type) {
     char filename[NAME_MAX];
 
     encode_key_for_uid(filename, uid, keyName);
-    ResponseCode responseCode = keyStore->get(filename, keyBlob);
+    ResponseCode responseCode = keyStore->get(filename, keyBlob, type);
     if (responseCode == NO_ERROR) {
         return responseCode;
     }
@@ -717,7 +909,7 @@ static ResponseCode get_key_for_name(KeyStore* keyStore, Blob* keyBlob, const Va
     // UID keys.
     if (uid == AID_WIFI || uid == AID_VPN) {
         encode_key_for_uid(filename, AID_SYSTEM, keyName);
-        responseCode = keyStore->get(filename, keyBlob);
+        responseCode = keyStore->get(filename, keyBlob, type);
         if (responseCode == NO_ERROR) {
             return responseCode;
         }
@@ -730,7 +922,7 @@ static ResponseCode get_key_for_name(KeyStore* keyStore, Blob* keyBlob, const Va
 
     // It is a granted key. Try to load it.
     encode_key(filename, keyName);
-    return keyStore->get(filename, keyBlob);
+    return keyStore->get(filename, keyBlob, type);
 }
 
 /* Here are the actions. Each of them is a function without arguments. All
@@ -751,7 +943,7 @@ static ResponseCode get(KeyStore* keyStore, int sock, uid_t uid, Value* keyName,
     char filename[NAME_MAX];
     encode_key_for_uid(filename, uid, keyName);
     Blob keyBlob;
-    ResponseCode responseCode = keyStore->get(filename, &keyBlob);
+    ResponseCode responseCode = keyStore->get(filename, &keyBlob, TYPE_GENERIC);
     if (responseCode != NO_ERROR) {
         return responseCode;
     }
@@ -764,13 +956,18 @@ static ResponseCode insert(KeyStore* keyStore, int sock, uid_t uid, Value* keyNa
         Value*) {
     char filename[NAME_MAX];
     encode_key_for_uid(filename, uid, keyName);
-    Blob keyBlob(val->value, val->length, NULL, 0);
+    Blob keyBlob(val->value, val->length, NULL, 0, TYPE_GENERIC);
     return keyStore->put(filename, &keyBlob);
 }
 
 static ResponseCode del(KeyStore* keyStore, int sock, uid_t uid, Value* keyName, Value*, Value*) {
     char filename[NAME_MAX];
     encode_key_for_uid(filename, uid, keyName);
+    Blob keyBlob;
+    ResponseCode responseCode = keyStore->get(filename, &keyBlob, TYPE_GENERIC);
+    if (responseCode != NO_ERROR) {
+        return responseCode;
+    }
     return (unlink(filename) && errno != ENOENT) ? SYSTEM_ERROR : NO_ERROR;
 }
 
@@ -891,7 +1088,7 @@ static ResponseCode generate(KeyStore* keyStore, int sock, uid_t uid, Value* key
 
     encode_key_for_uid(filename, uid, keyName);
 
-    Blob keyBlob(data, dataLength, NULL, 0);
+    Blob keyBlob(data, dataLength, NULL, 0, TYPE_KEY_PAIR);
     free(data);
 
     return keyStore->put(filename, &keyBlob);
@@ -900,33 +1097,10 @@ static ResponseCode generate(KeyStore* keyStore, int sock, uid_t uid, Value* key
 static ResponseCode import(KeyStore* keyStore, int sock, uid_t uid, Value* keyName, Value* key,
         Value*) {
     char filename[NAME_MAX];
-    uint8_t* data;
-    size_t dataLength;
-    int rc;
-
-    const keymaster_device_t* device = keyStore->getDevice();
-    if (device == NULL) {
-        ALOGE("No keymaster device!");
-        return SYSTEM_ERROR;
-    }
-
-    if (device->import_keypair == NULL) {
-        ALOGE("Keymaster doesn't support import!");
-        return SYSTEM_ERROR;
-    }
-
-    rc = device->import_keypair(device, key->value, key->length, &data, &dataLength);
-    if (rc) {
-        ALOGE("Error while importing keypair: %d", rc);
-        return SYSTEM_ERROR;
-    }
 
     encode_key_for_uid(filename, uid, keyName);
 
-    Blob keyBlob(data, dataLength, NULL, 0);
-    free(data);
-
-    return keyStore->put(filename, &keyBlob);
+    return keyStore->importKey(key, filename);
 }
 
 /*
@@ -944,7 +1118,7 @@ static ResponseCode get_pubkey(KeyStore* keyStore, int sock, uid_t uid, Value* k
     Blob keyBlob;
     ALOGV("get_pubkey '%s' from uid %d", ValueString(keyName).c_str(), uid);
 
-    ResponseCode responseCode = get_key_for_name(keyStore, &keyBlob, keyName, uid);
+    ResponseCode responseCode = get_key_for_name(keyStore, &keyBlob, keyName, uid, TYPE_KEY_PAIR);
     if (responseCode != NO_ERROR) {
         return responseCode;
     }
@@ -980,7 +1154,7 @@ static ResponseCode del_key(KeyStore* keyStore, int sock, uid_t uid, Value* keyN
     char filename[NAME_MAX];
     encode_key_for_uid(filename, uid, keyName);
     Blob keyBlob;
-    ResponseCode responseCode = keyStore->get(filename, &keyBlob);
+    ResponseCode responseCode = keyStore->get(filename, &keyBlob, TYPE_KEY_PAIR);
     if (responseCode != NO_ERROR) {
         return responseCode;
     }
@@ -1009,7 +1183,7 @@ static ResponseCode sign(KeyStore* keyStore, int sock, uid_t uid, Value* keyName
     Blob keyBlob;
     int rc;
 
-    ResponseCode responseCode = get_key_for_name(keyStore, &keyBlob, keyName, uid);
+    ResponseCode responseCode = get_key_for_name(keyStore, &keyBlob, keyName, uid, TYPE_KEY_PAIR);
     if (responseCode != NO_ERROR) {
         return responseCode;
     }
@@ -1019,10 +1193,12 @@ static ResponseCode sign(KeyStore* keyStore, int sock, uid_t uid, Value* keyName
 
     const keymaster_device_t* device = keyStore->getDevice();
     if (device == NULL) {
+        ALOGE("no keymaster device; cannot sign");
         return SYSTEM_ERROR;
     }
 
     if (device->sign_data == NULL) {
+        ALOGE("device doesn't implement signing");
         return SYSTEM_ERROR;
     }
 
@@ -1033,6 +1209,7 @@ static ResponseCode sign(KeyStore* keyStore, int sock, uid_t uid, Value* keyName
     rc = device->sign_data(device, &params, keyBlob.getValue(), keyBlob.getLength(),
             data->value, data->length, &signedData, &signedDataLength);
     if (rc) {
+        ALOGW("device couldn't sign data");
         return SYSTEM_ERROR;
     }
 
@@ -1046,7 +1223,7 @@ static ResponseCode verify(KeyStore* keyStore, int sock, uid_t uid, Value* keyNa
     Blob keyBlob;
     int rc;
 
-    ResponseCode responseCode = get_key_for_name(keyStore, &keyBlob, keyName, uid);
+    ResponseCode responseCode = get_key_for_name(keyStore, &keyBlob, keyName, uid, TYPE_KEY_PAIR);
     if (responseCode != NO_ERROR) {
         return responseCode;
     }

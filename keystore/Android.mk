@@ -17,7 +17,7 @@
 LOCAL_PATH := $(call my-dir)
 
 include $(CLEAR_VARS)
-LOCAL_SRC_FILES := keystore.cpp
+LOCAL_SRC_FILES := keystore.cpp keyblob_utils.cpp
 LOCAL_C_INCLUDES := external/openssl/include
 LOCAL_SHARED_LIBRARIES := libcutils libcrypto libhardware
 LOCAL_MODULE := keystore
@@ -34,7 +34,7 @@ include $(BUILD_EXECUTABLE)
 
 # Library for keystore clients
 include $(CLEAR_VARS)
-LOCAL_SRC_FILES := keystore_client.cpp
+LOCAL_SRC_FILES := keystore_client.cpp keyblob_utils.cpp
 LOCAL_SHARED_LIBRARIES := libcutils
 LOCAL_MODULE := libkeystore_client
 LOCAL_MODULE_TAGS := optional

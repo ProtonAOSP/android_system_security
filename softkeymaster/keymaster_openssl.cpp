@@ -17,6 +17,8 @@
 #include <string.h>
 #include <stdint.h>
 
+#include <keystore.h>
+
 #include <hardware/hardware.h>
 #include <hardware/keymaster.h>
 
@@ -101,7 +103,8 @@ static int wrap_key(EVP_PKEY* pkey, int type, uint8_t** keyBlob, size_t* keyBlob
     }
 
     /* int type + int size + private key data + int size + public key data */
-    *keyBlobLength = sizeof(int) + sizeof(int) + privateLen + sizeof(int) + publicLen;
+    *keyBlobLength = get_softkey_header_size() + sizeof(int) + sizeof(int) + privateLen
+            + sizeof(int) + publicLen;
 
     UniquePtr<unsigned char[]> derData(new unsigned char[*keyBlobLength]);
     if (derData.get() == NULL) {
@@ -109,6 +112,9 @@ static int wrap_key(EVP_PKEY* pkey, int type, uint8_t** keyBlob, size_t* keyBlob
         return -1;
     }
     unsigned char* p = derData.get();
+
+    /* Write the magic value for software keys. */
+    p = add_softkey_header(p, *keyBlobLength);
 
     /* Write key type to allocated buffer */
     for (int i = sizeof(int) - 1; i >= 0; i--) {
@@ -150,11 +156,18 @@ static EVP_PKEY* unwrap_key(const uint8_t* keyBlob, const size_t keyBlobLength) 
     }
 
     // Should be large enough for:
-    // int32 type, int32 pubLen, char* pub, int32 privLen, char* priv
-    if (keyBlobLength < (sizeof(int) + sizeof(int) + 1 + sizeof(int) + 1)) {
+    // int32 magic, int32 type, int32 pubLen, char* pub, int32 privLen, char* priv
+    if (keyBlobLength < (get_softkey_header_size() + sizeof(int) + sizeof(int) + 1
+            + sizeof(int) + 1)) {
         ALOGE("key blob appears to be truncated");
         return NULL;
     }
+
+    if (!is_softkey(p, keyBlobLength)) {
+        ALOGE("cannot read key; it was not made by this keymaster");
+        return NULL;
+    }
+    p += get_softkey_header_size();
 
     int type = 0;
     for (size_t i = 0; i < sizeof(int); i++) {
@@ -466,6 +479,8 @@ static int openssl_open(const hw_module_t* module, const char* name,
     dev->common.version = 1;
     dev->common.module = (struct hw_module_t*) module;
     dev->common.close = openssl_close;
+
+    dev->flags = KEYMASTER_SOFTWARE_ONLY;
 
     dev->generate_keypair = openssl_generate_keypair;
     dev->import_keypair = openssl_import_keypair;
