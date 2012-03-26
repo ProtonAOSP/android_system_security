@@ -805,7 +805,25 @@ static ResponseCode saw(KeyStore* keyStore, int sock, uid_t uid, Value* keyPrefi
 }
 
 static ResponseCode reset(KeyStore* keyStore, int sock, uid_t uid, Value*, Value*, Value*) {
-    return keyStore->reset() ? NO_ERROR : SYSTEM_ERROR;
+    ResponseCode rc = keyStore->reset() ? NO_ERROR : SYSTEM_ERROR;
+
+    const keymaster_device_t* device = keyStore->getDevice();
+    if (device == NULL) {
+        ALOGE("No keymaster device!");
+        return SYSTEM_ERROR;
+    }
+
+    if (device->delete_all == NULL) {
+        ALOGV("keymaster device doesn't implement delete_all");
+        return rc;
+    }
+
+    if (device->delete_all(device)) {
+        ALOGE("Problem calling keymaster's delete_all");
+        return SYSTEM_ERROR;
+    }
+
+    return rc;
 }
 
 /* Here is the history. To improve the security, the parameters to generate the
