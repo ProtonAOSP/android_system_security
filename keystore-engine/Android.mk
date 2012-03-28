@@ -27,7 +27,6 @@ LOCAL_SRC_FILES := eng_keystore.cpp
 LOCAL_CFLAGS := -fvisibility=hidden -Wall -Werror
 
 LOCAL_C_INCLUDES += \
-	libcore/include \
 	system/security/keystore \
 	external/openssl/include
 

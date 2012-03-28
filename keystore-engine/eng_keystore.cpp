@@ -25,7 +25,7 @@
 
 #include <keystore.h>
 
-#include <UniquePtr.h>
+#include <utils/UniquePtr.h>
 
 #include <sys/socket.h>
 #include <stdarg.h>
