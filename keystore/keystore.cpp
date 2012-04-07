@@ -1340,7 +1340,7 @@ static ResponseCode process(KeyStore* keyStore, int sock, uid_t uid, int8_t code
     struct action* action = actions;
     int i;
 
-    while (~user->uid && user->uid != uid) {
+    while (~user->uid && user->uid != (uid % AID_USER)) {
         ++user;
     }
     while (action->code && action->code != code) {
