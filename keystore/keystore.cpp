@@ -935,7 +935,7 @@ static ResponseCode get_key_for_name(KeyStore* keyStore, Blob* keyBlob, const Va
 
 static const ResponseCode NO_ERROR_RESPONSE_CODE_SENT = (ResponseCode) 0;
 
-static ResponseCode test(KeyStore* keyStore, int sock, uid_t uid, Value*, Value*, Value*) {
+static ResponseCode test(KeyStore* keyStore, int, uid_t, Value*, Value*, Value*) {
     return (ResponseCode) keyStore->getState();
 }
 
@@ -952,7 +952,7 @@ static ResponseCode get(KeyStore* keyStore, int sock, uid_t uid, Value* keyName,
     return NO_ERROR_RESPONSE_CODE_SENT;
 }
 
-static ResponseCode insert(KeyStore* keyStore, int sock, uid_t uid, Value* keyName, Value* val,
+static ResponseCode insert(KeyStore* keyStore, int, uid_t uid, Value* keyName, Value* val,
         Value*) {
     char filename[NAME_MAX];
     encode_key_for_uid(filename, uid, keyName);
@@ -960,7 +960,7 @@ static ResponseCode insert(KeyStore* keyStore, int sock, uid_t uid, Value* keyNa
     return keyStore->put(filename, &keyBlob);
 }
 
-static ResponseCode del(KeyStore* keyStore, int sock, uid_t uid, Value* keyName, Value*, Value*) {
+static ResponseCode del(KeyStore* keyStore, int, uid_t uid, Value* keyName, Value*, Value*) {
     char filename[NAME_MAX];
     encode_key_for_uid(filename, uid, keyName);
     Blob keyBlob;
@@ -971,7 +971,7 @@ static ResponseCode del(KeyStore* keyStore, int sock, uid_t uid, Value* keyName,
     return (unlink(filename) && errno != ENOENT) ? SYSTEM_ERROR : NO_ERROR;
 }
 
-static ResponseCode exist(KeyStore* keyStore, int sock, uid_t uid, Value* keyName, Value*, Value*) {
+static ResponseCode exist(KeyStore*, int, uid_t uid, Value* keyName, Value*, Value*) {
     char filename[NAME_MAX];
     encode_key_for_uid(filename, uid, keyName);
     if (access(filename, R_OK) == -1) {
@@ -980,7 +980,7 @@ static ResponseCode exist(KeyStore* keyStore, int sock, uid_t uid, Value* keyNam
     return NO_ERROR;
 }
 
-static ResponseCode saw(KeyStore* keyStore, int sock, uid_t uid, Value* keyPrefix, Value*, Value*) {
+static ResponseCode saw(KeyStore*, int sock, uid_t uid, Value* keyPrefix, Value*, Value*) {
     DIR* dir = opendir(".");
     if (!dir) {
         return SYSTEM_ERROR;
@@ -1001,7 +1001,7 @@ static ResponseCode saw(KeyStore* keyStore, int sock, uid_t uid, Value* keyPrefi
     return NO_ERROR_RESPONSE_CODE_SENT;
 }
 
-static ResponseCode reset(KeyStore* keyStore, int sock, uid_t uid, Value*, Value*, Value*) {
+static ResponseCode reset(KeyStore* keyStore, int, uid_t, Value*, Value*, Value*) {
     ResponseCode rc = keyStore->reset() ? NO_ERROR : SYSTEM_ERROR;
 
     const keymaster_device_t* device = keyStore->getDevice();
@@ -1029,7 +1029,7 @@ static ResponseCode reset(KeyStore* keyStore, int sock, uid_t uid, Value*, Value
  * any thing goes wrong during the transition, the new file will not overwrite
  * the old one. This avoids permanent damages of the existing data. */
 
-static ResponseCode password(KeyStore* keyStore, int sock, uid_t uid, Value* pw, Value*, Value*) {
+static ResponseCode password(KeyStore* keyStore, int, uid_t, Value* pw, Value*, Value*) {
     switch (keyStore->getState()) {
         case STATE_UNINITIALIZED: {
             // generate master key, encrypt with password, write to file, initialize mMasterKey*.
@@ -1047,7 +1047,7 @@ static ResponseCode password(KeyStore* keyStore, int sock, uid_t uid, Value* pw,
     return SYSTEM_ERROR;
 }
 
-static ResponseCode lock(KeyStore* keyStore, int sock, uid_t uid, Value*, Value*, Value*) {
+static ResponseCode lock(KeyStore* keyStore, int, uid_t, Value*, Value*, Value*) {
     keyStore->lock();
     return NO_ERROR;
 }
@@ -1057,11 +1057,11 @@ static ResponseCode unlock(KeyStore* keyStore, int sock, uid_t uid, Value* pw, V
     return password(keyStore, sock, uid, pw, unused, unused2);
 }
 
-static ResponseCode zero(KeyStore* keyStore, int sock, uid_t uid, Value*, Value*, Value*) {
+static ResponseCode zero(KeyStore* keyStore, int, uid_t, Value*, Value*, Value*) {
     return keyStore->isEmpty() ? KEY_NOT_FOUND : NO_ERROR;
 }
 
-static ResponseCode generate(KeyStore* keyStore, int sock, uid_t uid, Value* keyName, Value*,
+static ResponseCode generate(KeyStore* keyStore, int, uid_t uid, Value* keyName, Value*,
         Value*) {
     char filename[NAME_MAX];
     uint8_t* data;
@@ -1094,7 +1094,7 @@ static ResponseCode generate(KeyStore* keyStore, int sock, uid_t uid, Value* key
     return keyStore->put(filename, &keyBlob);
 }
 
-static ResponseCode import(KeyStore* keyStore, int sock, uid_t uid, Value* keyName, Value* key,
+static ResponseCode import(KeyStore* keyStore, int, uid_t uid, Value* keyName, Value* key,
         Value*) {
     char filename[NAME_MAX];
 
@@ -1149,7 +1149,7 @@ static ResponseCode get_pubkey(KeyStore* keyStore, int sock, uid_t uid, Value* k
     return NO_ERROR_RESPONSE_CODE_SENT;
 }
 
-static ResponseCode del_key(KeyStore* keyStore, int sock, uid_t uid, Value* keyName, Value*,
+static ResponseCode del_key(KeyStore* keyStore, int, uid_t uid, Value* keyName, Value*,
         Value*) {
     char filename[NAME_MAX];
     encode_key_for_uid(filename, uid, keyName);
@@ -1168,9 +1168,6 @@ static ResponseCode del_key(KeyStore* keyStore, int sock, uid_t uid, Value* keyN
         ALOGE("device has no delete_keypair implementation!");
         return SYSTEM_ERROR;
     }
-
-    uint8_t* data = NULL;
-    size_t dataLength;
 
     int rc = device->delete_keypair(device, keyBlob.getValue(), keyBlob.getLength());
 
@@ -1218,7 +1215,7 @@ static ResponseCode sign(KeyStore* keyStore, int sock, uid_t uid, Value* keyName
     return NO_ERROR_RESPONSE_CODE_SENT;
 }
 
-static ResponseCode verify(KeyStore* keyStore, int sock, uid_t uid, Value* keyName, Value* data,
+static ResponseCode verify(KeyStore* keyStore, int, uid_t uid, Value* keyName, Value* data,
         Value* signature) {
     Blob keyBlob;
     int rc;
@@ -1250,7 +1247,7 @@ static ResponseCode verify(KeyStore* keyStore, int sock, uid_t uid, Value* keyNa
     }
 }
 
-static ResponseCode grant(KeyStore* keyStore, int sock, uid_t uid, Value* keyName,
+static ResponseCode grant(KeyStore* keyStore, int, uid_t uid, Value* keyName,
         Value* granteeData, Value*) {
     char filename[NAME_MAX];
     encode_key_for_uid(filename, uid, keyName);
@@ -1262,7 +1259,7 @@ static ResponseCode grant(KeyStore* keyStore, int sock, uid_t uid, Value* keyNam
     return NO_ERROR;
 }
 
-static ResponseCode ungrant(KeyStore* keyStore, int sock, uid_t uid, Value* keyName,
+static ResponseCode ungrant(KeyStore* keyStore, int, uid_t uid, Value* keyName,
         Value* granteeData, Value*) {
     char filename[NAME_MAX];
     encode_key_for_uid(filename, uid, keyName);
@@ -1375,8 +1372,6 @@ static ResponseCode process(KeyStore* keyStore, int sock, uid_t uid, int8_t code
 }
 
 int main(int argc, char* argv[]) {
-    void* hardwareContext = NULL;
-
     int controlSocket = android_get_control_socket("keystore");
     if (argc < 2) {
         ALOGE("A directory must be specified!");
