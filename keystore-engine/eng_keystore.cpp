@@ -30,6 +30,7 @@
 #include <sys/socket.h>
 #include <stdarg.h>
 #include <string.h>
+#include <unistd.h>
 
 #include <openssl/objects.h>
 #include <openssl/engine.h>
@@ -81,20 +82,11 @@ typedef UniquePtr<RSA, RSA_Delete> Unique_RSA;
  */
 static int rsa_key_handle;
 
-
-/**
- * Execute a keystore command. The number of arguments should be passed in
- * "numArgs" and be preceeded by the length as a size_t.
- *
- * If a reply is expected, the "reply" field must be of size
- * KEYSTORE_MESSAGE_SIZE.
- *
- * Example for numArgs == 2:
- *   keystore_cmd(cmd, reply, 2, size_t, char*, size_t, char*);
- *
- * The return value will be the length of the reply stored in "reply."
- * If an error occurs, the return value will be -1.
+/*
+ * Only initialize the rsa_key_handle once.
  */
+static pthread_once_t rsa_key_handle_control = PTHREAD_ONCE_INIT;
+
 
 /**
  * Makes sure the ex_data for the keyhandle is initially set to NULL.
@@ -268,6 +260,15 @@ static const ENGINE_CMD_DEFN keystore_cmd_defns[] = {
     {0, NULL, NULL, 0}
 };
 
+/**
+ * Called to initialize RSA's ex_data for the key_id handle. This should
+ * only be called when protected by a lock.
+ */
+static void init_rsa_key_handle() {
+    rsa_key_handle = RSA_get_ex_new_index(0, NULL, keyhandle_new, keyhandle_dup,
+            keyhandle_free);
+}
+
 static int keystore_engine_setup(ENGINE* e) {
     ALOGV("keystore_engine_setup");
 
@@ -286,8 +287,8 @@ static int keystore_engine_setup(ENGINE* e) {
         return 0;
     }
 
-    /* We need a handle in the RSA keys as well for keygen. */
-    rsa_key_handle = RSA_get_ex_new_index(0, NULL, keyhandle_new, keyhandle_dup, keyhandle_free);
+    /* We need a handle in the RSA keys as well for keygen if it's not already initialized. */
+    pthread_once(&rsa_key_handle_control, init_rsa_key_handle);
     if (rsa_key_handle < 0) {
         ALOGE("Could not set up RSA ex_data index");
         return 0;
