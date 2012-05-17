@@ -486,6 +486,7 @@ static int openssl_open(const hw_module_t* module, const char* name,
     dev->import_keypair = openssl_import_keypair;
     dev->get_keypair_public = openssl_get_keypair_public;
     dev->delete_keypair = NULL;
+    dev->delete_all = NULL;
     dev->sign_data = openssl_sign_data;
     dev->verify_data = openssl_verify_data;
 
