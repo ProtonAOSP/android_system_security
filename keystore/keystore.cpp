@@ -439,7 +439,7 @@ private:
 
 typedef struct {
     uint32_t uid;
-    const uint8_t* keyName;
+    const uint8_t* filename;
 
     struct listnode plist;
 } grant_t;
@@ -622,20 +622,18 @@ public:
         if (grant == NULL) {
             grant = new grant_t;
             grant->uid = uid;
-            grant->keyName = reinterpret_cast<const uint8_t*>(strdup(filename));
+            grant->filename = reinterpret_cast<const uint8_t*>(strdup(filename));
             list_add_tail(&mGrants, &grant->plist);
         }
     }
 
-    bool removeGrant(const Value* keyValue, const Value* uidValue) {
+    bool removeGrant(const char* filename, const Value* uidValue) {
         uid_t uid;
         if (!convertToUid(uidValue, &uid)) {
             return false;
         }
 
-        ValueString keyString(keyValue);
-
-        grant_t *grant = getGrant(keyString.c_str(), uid);
+        grant_t *grant = getGrant(filename, uid);
         if (grant != NULL) {
             list_remove(&grant->plist);
             delete grant;
@@ -645,9 +643,8 @@ public:
         return false;
     }
 
-    bool hasGrant(const Value* keyValue, const uid_t uid) const {
-        ValueString keyString(keyValue);
-        return getGrant(keyString.c_str(), uid) != NULL;
+    bool hasGrant(const char* filename, const uid_t uid) const {
+        return getGrant(filename, uid) != NULL;
     }
 
     ResponseCode importKey(const Value* key, const char* filename) {
@@ -748,15 +745,15 @@ private:
                 && (strcmp(filename, "..") != 0));
     }
 
-    grant_t* getGrant(const char* keyName, uid_t uid) const {
+    grant_t* getGrant(const char* filename, uid_t uid) const {
         struct listnode *node;
         grant_t *grant;
 
         list_for_each(node, &mGrants) {
             grant = node_to_item(node, grant_t, plist);
             if (grant->uid == uid
-                    && !strcmp(reinterpret_cast<const char*>(grant->keyName),
-                               keyName)) {
+                    && !strcmp(reinterpret_cast<const char*>(grant->filename),
+                               filename)) {
                 return grant;
             }
         }
@@ -916,12 +913,12 @@ static ResponseCode get_key_for_name(KeyStore* keyStore, Blob* keyBlob, const Va
     }
 
     // They might be using a granted key.
-    if (!keyStore->hasGrant(keyName, uid)) {
+    encode_key(filename, keyName);
+    if (!keyStore->hasGrant(filename, uid)) {
         return responseCode;
     }
 
     // It is a granted key. Try to load it.
-    encode_key(filename, keyName);
     return keyStore->get(filename, keyBlob, type);
 }
 
@@ -1267,7 +1264,7 @@ static ResponseCode ungrant(KeyStore* keyStore, int, uid_t uid, Value* keyName,
         return (errno != ENOENT) ? SYSTEM_ERROR : KEY_NOT_FOUND;
     }
 
-    return keyStore->removeGrant(keyName, granteeData) ? NO_ERROR : KEY_NOT_FOUND;
+    return keyStore->removeGrant(filename, granteeData) ? NO_ERROR : KEY_NOT_FOUND;
 }
 
 /* Here are the permissions, actions, users, and the main function. */
