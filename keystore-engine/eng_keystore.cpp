@@ -36,7 +36,7 @@
 #include <openssl/engine.h>
 #include <openssl/evp.h>
 
-#define LOG_NDEBUG 0
+//#define LOG_NDEBUG 0
 #define LOG_TAG "OpenSSL-keystore"
 #include <cutils/log.h>
 
@@ -210,9 +210,14 @@ static int register_rsa_methods() {
     return 1;
 }
 
-static EVP_PKEY* keystore_loadkey(ENGINE* e, const char* key_id, UI_METHOD *ui_method,
-        void *callback_data) {
+static EVP_PKEY* keystore_loadkey(ENGINE* e, const char* key_id, UI_METHOD* ui_method,
+        void* callback_data) {
+#if LOG_NDEBUG
+    (void)ui_method;
+    (void)callback_data;
+#else
     ALOGV("keystore_loadkey(%p, \"%s\", %p, %p)", e, key_id, ui_method, callback_data);
+#endif
 
     Keystore_Reply reply;
     if (keystore_cmd(CommandCodes[GET_PUBKEY], &reply, 1, strlen(key_id), key_id) != NO_ERROR) {
