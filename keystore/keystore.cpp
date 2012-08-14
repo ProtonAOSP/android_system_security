@@ -1156,19 +1156,25 @@ static ResponseCode del_key(KeyStore* keyStore, int, uid_t uid, Value* keyName, 
         return responseCode;
     }
 
+    ResponseCode rc = NO_ERROR;
+
     const keymaster_device_t* device = keyStore->getDevice();
     if (device == NULL) {
-        return SYSTEM_ERROR;
+        rc = SYSTEM_ERROR;
+    } else {
+        // A device doesn't have to implement delete_keypair.
+        if (device->delete_keypair != NULL) {
+            if (device->delete_keypair(device, keyBlob.getValue(), keyBlob.getLength())) {
+                rc = SYSTEM_ERROR;
+            }
+        }
     }
 
-    if (device->delete_keypair == NULL) {
-        ALOGE("device has no delete_keypair implementation!");
-        return SYSTEM_ERROR;
+    if (rc != NO_ERROR) {
+        return rc;
     }
 
-    int rc = device->delete_keypair(device, keyBlob.getValue(), keyBlob.getLength());
-
-    return rc ? SYSTEM_ERROR : NO_ERROR;
+    return (unlink(filename) && errno != ENOENT) ? SYSTEM_ERROR : NO_ERROR;
 }
 
 static ResponseCode sign(KeyStore* keyStore, int sock, uid_t uid, Value* keyName, Value* data,
