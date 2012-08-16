@@ -281,6 +281,7 @@ static int keystore_engine_setup(ENGINE* e) {
             || !ENGINE_set_name(e, KEYSTORE_ENGINE_NAME)
             || !ENGINE_set_load_privkey_function(e, keystore_loadkey)
             || !ENGINE_set_load_pubkey_function(e, keystore_loadkey)
+            || !ENGINE_set_flags(e, 0)
             || !ENGINE_set_cmd_defns(e, keystore_cmd_defns)) {
         ALOGE("Could not set up keystore engine");
         return 0;
