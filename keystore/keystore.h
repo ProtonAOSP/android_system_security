@@ -63,12 +63,13 @@ enum CommandNames {
     DEL_KEY = 16,
     GRANT = 17,
     UNGRANT = 18,
+    GETMTIME = 19,
 };
 
 typedef uint8_t command_code_t;
 
 // Taken: a b c d e f g h i j k l m n o p q r s t u v w x y z
-//        * *   * *   *   *   * * * *   *   * * * * *   *   *
+//        * * * * *   *   *   * * * *   *   * * * * *   *   *
 command_code_t CommandCodes[] = {
     't', // TEST
     'g', // GET
@@ -89,6 +90,7 @@ command_code_t CommandCodes[] = {
     'k', // DEL_KEY
     'x', // GRANT
     'y', // UNGRANT
+    'c', // GETMTIME
 };
 
 /**
