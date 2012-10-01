@@ -47,7 +47,7 @@ ResponseCode keystore_cmd(command_code_t cmd, Keystore_Reply* reply, int numArgs
             return SYSTEM_ERROR;
         }
 
-        uint8_t bytes[2] = { argLen >> 8, argLen };
+        uint8_t bytes[2] = { (uint8_t)(argLen >> 8), (uint8_t)argLen };
         if (TEMP_FAILURE_RETRY(send(sock, bytes, 2, MSG_NOSIGNAL)) != 2
                 || TEMP_FAILURE_RETRY(send(sock, arg, argLen, MSG_NOSIGNAL))
                         != static_cast<ssize_t>(argLen)) {
