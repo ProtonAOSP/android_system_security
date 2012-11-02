@@ -28,7 +28,7 @@ LOCAL_C_INCLUDES := \
 
 LOCAL_C_FLAGS = -fvisibility=hidden -Wall -Werror
 
-LOCAL_SHARED_LIBRARIES := libcrypto liblog libkeystore_client
+LOCAL_SHARED_LIBRARIES := libcrypto liblog libkeystore_binder
 
 LOCAL_MODULE_TAGS := optional
 

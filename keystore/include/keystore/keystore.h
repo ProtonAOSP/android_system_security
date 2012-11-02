@@ -43,56 +43,6 @@ enum ResponseCode {
     SIGNATURE_INVALID = 14,
 };
 
-enum CommandNames {
-    TEST = 0,
-    GET = 1,
-    INSERT = 2,
-    DELETE = 3,
-    EXIST = 4,
-    SAW = 5,
-    RESET = 6,
-    PASSWORD = 7,
-    LOCK = 8,
-    UNLOCK = 9,
-    ZERO = 10,
-    GENERATE = 11,
-    IMPORT = 12,
-    SIGN = 13,
-    VERIFY = 14,
-    GET_PUBKEY = 15,
-    DEL_KEY = 16,
-    GRANT = 17,
-    UNGRANT = 18,
-    GETMTIME = 19,
-};
-
-typedef uint8_t command_code_t;
-
-// Taken: a b c d e f g h i j k l m n o p q r s t u v w x y z
-//        * * * * *   *   *   * * * *   *   * * * * *   *   *
-command_code_t CommandCodes[] = {
-    't', // TEST
-    'g', // GET
-    'i', // INSERT
-    'd', // DELETE
-    'e', // EXIST
-    's', // SAW
-    'r', // RESET
-    'p', // PASSWORD
-    'l', // LOCK
-    'u', // UNLOCK
-    'z', // ZERO
-    'a', // GENERATE
-    'm', // IMPORT
-    'n', // SIGN
-    'v', // VERIFY
-    'b', // GET_PUBKEY
-    'k', // DEL_KEY
-    'x', // GRANT
-    'y', // UNGRANT
-    'c', // GETMTIME
-};
-
 /**
  * Returns the size of the softkey magic header value for measuring
  * and allocating purposes.
