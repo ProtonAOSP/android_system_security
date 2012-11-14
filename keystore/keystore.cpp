@@ -295,9 +295,9 @@ static void decode_key(char* out, const char* in, size_t length) {
 static size_t readFully(int fd, uint8_t* data, size_t size) {
     size_t remaining = size;
     while (remaining > 0) {
-        ssize_t n = TEMP_FAILURE_RETRY(read(fd, data, size));
-        if (n == -1 || n == 0) {
-            return size-remaining;
+        ssize_t n = TEMP_FAILURE_RETRY(read(fd, data, remaining));
+        if (n < 0) {
+            return size - remaining;
         }
         data += n;
         remaining -= n;
@@ -308,9 +308,10 @@ static size_t readFully(int fd, uint8_t* data, size_t size) {
 static size_t writeFully(int fd, uint8_t* data, size_t size) {
     size_t remaining = size;
     while (remaining > 0) {
-        ssize_t n = TEMP_FAILURE_RETRY(write(fd, data, size));
-        if (n == -1 || n == 0) {
-            return size-remaining;
+        ssize_t n = TEMP_FAILURE_RETRY(write(fd, data, remaining));
+        if (n < 0) {
+            ALOGW("write failed: %s", strerror(errno));
+            return size - remaining;
         }
         data += n;
         remaining -= n;
@@ -322,15 +323,15 @@ class Entropy {
 public:
     Entropy() : mRandom(-1) {}
     ~Entropy() {
-        if (mRandom != -1) {
+        if (mRandom >= 0) {
             close(mRandom);
         }
     }
 
     bool open() {
         const char* randomDevice = "/dev/urandom";
-        mRandom = ::open(randomDevice, O_RDONLY);
-        if (mRandom == -1) {
+        mRandom = TEMP_FAILURE_RETRY(::open(randomDevice, O_RDONLY));
+        if (mRandom < 0) {
             ALOGE("open: %s: %s", randomDevice, strerror(errno));
             return false;
         }
@@ -443,6 +444,7 @@ public:
 
     ResponseCode encryptBlob(const char* filename, AES_KEY *aes_key, Entropy* entropy) {
         if (!entropy->generate_random_data(mBlob.vector, AES_BLOCK_SIZE)) {
+            ALOGW("Could not read random data for: %s", filename);
             return SYSTEM_ERROR;
         }
 
@@ -471,8 +473,10 @@ public:
         size_t fileLength = encryptedLength + headerLength + mBlob.info;
 
         const char* tmpFileName = ".tmp";
-        int out = open(tmpFileName, O_WRONLY | O_TRUNC | O_CREAT, S_IRUSR | S_IWUSR);
-        if (out == -1) {
+        int out = TEMP_FAILURE_RETRY(open(tmpFileName,
+                O_WRONLY | O_TRUNC | O_CREAT, S_IRUSR | S_IWUSR));
+        if (out < 0) {
+            ALOGW("could not open file: %s: %s", tmpFileName, strerror(errno));
             return SYSTEM_ERROR;
         }
         size_t writtenBytes = writeFully(out, (uint8_t*) &mBlob, fileLength);
@@ -480,15 +484,20 @@ public:
             return SYSTEM_ERROR;
         }
         if (writtenBytes != fileLength) {
+            ALOGW("blob not fully written %zu != %zu", writtenBytes, fileLength);
             unlink(tmpFileName);
             return SYSTEM_ERROR;
         }
-        return (rename(tmpFileName, filename) == 0) ? ::NO_ERROR : ::SYSTEM_ERROR;
+        if (rename(tmpFileName, filename) == -1) {
+            ALOGW("could not rename blob to %s: %s", filename, strerror(errno));
+            return SYSTEM_ERROR;
+        }
+        return NO_ERROR;
     }
 
     ResponseCode decryptBlob(const char* filename, AES_KEY *aes_key) {
-        int in = open(filename, O_RDONLY);
-        if (in == -1) {
+        int in = TEMP_FAILURE_RETRY(open(filename, O_RDONLY));
+        if (in < 0) {
             return (errno == ENOENT) ? KEY_NOT_FOUND : SYSTEM_ERROR;
         }
         // fileLength may be less than sizeof(mBlob) since the in
@@ -589,8 +598,8 @@ public:
     }
 
     ResponseCode readMasterKey(const android::String8& pw) {
-        int in = open(MASTER_KEY_FILE, O_RDONLY);
-        if (in == -1) {
+        int in = TEMP_FAILURE_RETRY(open(MASTER_KEY_FILE, O_RDONLY));
+        if (in < 0) {
             return SYSTEM_ERROR;
         }
 
@@ -1007,6 +1016,7 @@ public:
         Blob keyBlob;
         ResponseCode responseCode = mKeyStore->get(filename, &keyBlob, TYPE_GENERIC);
         if (responseCode != ::NO_ERROR) {
+            ALOGW("Could not read %s", filename);
             *item = NULL;
             *itemLength = 0;
             return responseCode;
@@ -1558,7 +1568,7 @@ public:
             return (errno != ENOENT) ? ::SYSTEM_ERROR : ::KEY_NOT_FOUND;
         }
 
-        int fd = open(filename, O_NOFOLLOW, O_RDONLY);
+        int fd = TEMP_FAILURE_RETRY(open(filename, O_NOFOLLOW, O_RDONLY));
         if (fd < 0) {
             return ::SYSTEM_ERROR;
         }
