@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 
+//#define LOG_NDEBUG 0
+#define LOG_TAG "keystore"
+
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
@@ -42,13 +45,15 @@
 
 #include <cutils/list.h>
 
-//#define LOG_NDEBUG 0
-#define LOG_TAG "keystore"
+#include <keystore/IKeystoreService.h>
+#include <binder/IPCThreadState.h>
+#include <binder/IServiceManager.h>
+
 #include <cutils/log.h>
 #include <cutils/sockets.h>
 #include <private/android_filesystem_config.h>
 
-#include "keystore.h"
+#include <keystore/keystore.h>
 
 /* KeyStore is a secured storage for key-value pairs. In this implementation,
  * each file stores one key-value pair. Keys are encoded in file names, and
@@ -154,6 +159,72 @@ static void keymaster_device_release(keymaster_device_t* dev) {
     keymaster_close(dev);
 }
 
+/***************
+ * PERMISSIONS *
+ ***************/
+
+/* Here are the permissions, actions, users, and the main function. */
+typedef enum {
+    P_TEST     = 1 << 0,
+    P_GET      = 1 << 1,
+    P_INSERT   = 1 << 2,
+    P_DELETE   = 1 << 3,
+    P_EXIST    = 1 << 4,
+    P_SAW      = 1 << 5,
+    P_RESET    = 1 << 6,
+    P_PASSWORD = 1 << 7,
+    P_LOCK     = 1 << 8,
+    P_UNLOCK   = 1 << 9,
+    P_ZERO     = 1 << 10,
+    P_SIGN     = 1 << 11,
+    P_VERIFY   = 1 << 12,
+    P_GRANT    = 1 << 13,
+} perm_t;
+
+static struct user_euid {
+    uid_t uid;
+    uid_t euid;
+} user_euids[] = {
+    {AID_VPN, AID_SYSTEM},
+    {AID_WIFI, AID_SYSTEM},
+    {AID_ROOT, AID_SYSTEM},
+};
+
+static struct user_perm {
+    uid_t uid;
+    perm_t perms;
+} user_perms[] = {
+    {AID_SYSTEM, static_cast<perm_t>((uint32_t)(~0)) },
+    {AID_VPN,    static_cast<perm_t>(P_GET | P_SIGN | P_VERIFY) },
+    {AID_WIFI,   static_cast<perm_t>(P_GET | P_SIGN | P_VERIFY) },
+    {AID_ROOT,   static_cast<perm_t>(P_GET) },
+};
+
+static const perm_t DEFAULT_PERMS = static_cast<perm_t>(P_TEST | P_GET | P_INSERT | P_DELETE | P_EXIST | P_SAW | P_SIGN
+        | P_VERIFY);
+
+static bool has_permission(uid_t uid, perm_t perm) {
+    for (size_t i = 0; i < sizeof(user_perms)/sizeof(user_perms[0]); i++) {
+        struct user_perm user = user_perms[i];
+        if (user.uid == uid) {
+            return user.perms & perm;
+        }
+    }
+
+    return DEFAULT_PERMS & perm;
+}
+
+static uid_t get_keystore_euid(uid_t uid) {
+    for (size_t i = 0; i < sizeof(user_euids)/sizeof(user_euids[0]); i++) {
+        struct user_euid user = user_euids[i];
+        if (user.uid == uid) {
+            return user.euid;
+        }
+    }
+
+    return uid;
+}
+
 /* Here is the encoding of keys. This is necessary in order to allow arbitrary
  * characters in keys. Characters in [0-~] are not encoded. Others are encoded
  * into two bytes. The first byte is one of [+-.] which represents the first
@@ -161,9 +232,9 @@ static void keymaster_device_release(keymaster_device_t* dev) {
  * [0-o]. Therefore in the worst case the length of a key gets doubled. Note
  * that Base64 cannot be used here due to the need of prefix match on keys. */
 
-static int encode_key(char* out, const Value* key) {
-    const uint8_t* in = key->value;
-    int length = key->length;
+static int encode_key(char* out, const android::String8& keyName) {
+    const uint8_t* in = reinterpret_cast<const uint8_t*>(keyName.string());
+    size_t length = keyName.length();
     for (int i = length; i > 0; --i, ++in, ++out) {
         if (*in >= '0' && *in <= '~') {
             *out = *in;
@@ -177,25 +248,48 @@ static int encode_key(char* out, const Value* key) {
     return length;
 }
 
-static int encode_key_for_uid(char* out, uid_t uid, const Value* key) {
+static int encode_key_for_uid(char* out, uid_t uid, const android::String8& keyName) {
     int n = snprintf(out, NAME_MAX, "%u_", uid);
     out += n;
 
-    return n + encode_key(out, key);
+    return n + encode_key(out, keyName);
 }
 
-static int decode_key(uint8_t* out, const char* in, int length) {
-    for (int i = 0; i < length; ++i, ++in, ++out) {
-        if (*in >= '0' && *in <= '~') {
-            *out = *in;
+/*
+ * Converts from the "escaped" format on disk to actual name.
+ * This will be smaller than the input string.
+ *
+ * Characters that should combine with the next at the end will be truncated.
+ */
+static size_t decode_key_length(const char* in, size_t length) {
+    size_t outLength = 0;
+
+    for (const char* end = in + length; in < end; in++) {
+        /* This combines with the next character. */
+        if (*in < '0' || *in > '~') {
+            continue;
+        }
+
+        outLength++;
+    }
+    return outLength;
+}
+
+static void decode_key(char* out, const char* in, size_t length) {
+    for (const char* end = in + length; in < end; in++) {
+        if (*in < '0' || *in > '~') {
+            /* Truncate combining characters at the end. */
+            if (in + 1 >= end) {
+                break;
+            }
+
+            *out = (*in++ - '+') << 6;
+            *out++ |= (*in - '0') & 0x3F;
         } else {
-            *out = (*in - '+') << 6;
-            *out |= (*++in - '0') & 0x3F;
-            --length;
+            *out++ = *in;
         }
     }
     *out = '\0';
-    return length;
 }
 
 static size_t readFully(int fd, uint8_t* data, size_t size) {
@@ -293,18 +387,19 @@ typedef enum {
     TYPE_KEY_PAIR = 3,
 } BlobType;
 
-static const uint8_t CurrentBlobVersion = 1;
+static const uint8_t CURRENT_BLOB_VERSION = 1;
 
 class Blob {
 public:
-    Blob(uint8_t* value, int32_t valueLength, uint8_t* info, uint8_t infoLength, BlobType type) {
+    Blob(const uint8_t* value, int32_t valueLength, const uint8_t* info, uint8_t infoLength,
+            BlobType type) {
         mBlob.length = valueLength;
         memcpy(mBlob.value, value, valueLength);
 
         mBlob.info = infoLength;
         memcpy(mBlob.value + valueLength, info, infoLength);
 
-        mBlob.version = CurrentBlobVersion;
+        mBlob.version = CURRENT_BLOB_VERSION;
         mBlob.type = uint8_t(type);
     }
 
@@ -388,7 +483,7 @@ public:
             unlink(tmpFileName);
             return SYSTEM_ERROR;
         }
-        return (rename(tmpFileName, filename) == 0) ? NO_ERROR : SYSTEM_ERROR;
+        return (rename(tmpFileName, filename) == 0) ? ::NO_ERROR : ::SYSTEM_ERROR;
     }
 
     ResponseCode decryptBlob(const char* filename, AES_KEY *aes_key) {
@@ -430,7 +525,7 @@ public:
             // move info from after padding to after data
             memmove(&mBlob.value[mBlob.length], &mBlob.value[maxValueLength], mBlob.info);
         }
-        return NO_ERROR;
+        return ::NO_ERROR;
     }
 
 private:
@@ -472,7 +567,7 @@ public:
         return mDevice;
     }
 
-    ResponseCode initialize(Value* pw) {
+    ResponseCode initialize(const android::String8& pw) {
         if (!generateMasterKey()) {
             return SYSTEM_ERROR;
         }
@@ -481,10 +576,10 @@ public:
             return response;
         }
         setupMasterKeys();
-        return NO_ERROR;
+        return ::NO_ERROR;
     }
 
-    ResponseCode writeMasterKey(Value* pw) {
+    ResponseCode writeMasterKey(const android::String8& pw) {
         uint8_t passwordKey[MASTER_KEY_SIZE_BYTES];
         generateKeyFromPassword(passwordKey, MASTER_KEY_SIZE_BYTES, pw, mSalt);
         AES_KEY passwordAesKey;
@@ -493,7 +588,7 @@ public:
         return masterKeyBlob.encryptBlob(MASTER_KEY_FILE, &passwordAesKey, mEntropy);
     }
 
-    ResponseCode readMasterKey(Value* pw) {
+    ResponseCode readMasterKey(const android::String8& pw) {
         int in = open(MASTER_KEY_FILE, O_RDONLY);
         if (in == -1) {
             return SYSTEM_ERROR;
@@ -596,7 +691,7 @@ public:
         }
 
         const uint8_t version = keyBlob->getVersion();
-        if (version < CurrentBlobVersion) {
+        if (version < CURRENT_BLOB_VERSION) {
             upgrade(filename, keyBlob, version, type);
         }
 
@@ -612,28 +707,18 @@ public:
         return keyBlob->encryptBlob(filename, &mMasterKeyEncryption, mEntropy);
     }
 
-    void addGrant(const char* filename, const Value* uidValue) {
-        uid_t uid;
-        if (!convertToUid(uidValue, &uid)) {
-            return;
-        }
-
-        grant_t *grant = getGrant(filename, uid);
+    void addGrant(const char* filename, uid_t granteeUid) {
+        grant_t *grant = getGrant(filename, granteeUid);
         if (grant == NULL) {
             grant = new grant_t;
-            grant->uid = uid;
+            grant->uid = granteeUid;
             grant->filename = reinterpret_cast<const uint8_t*>(strdup(filename));
             list_add_tail(&mGrants, &grant->plist);
         }
     }
 
-    bool removeGrant(const char* filename, const Value* uidValue) {
-        uid_t uid;
-        if (!convertToUid(uidValue, &uid)) {
-            return false;
-        }
-
-        grant_t *grant = getGrant(filename, uid);
+    bool removeGrant(const char* filename, uid_t granteeUid) {
+        grant_t *grant = getGrant(filename, granteeUid);
         if (grant != NULL) {
             list_remove(&grant->plist);
             delete grant;
@@ -647,7 +732,7 @@ public:
         return getGrant(filename, uid) != NULL;
     }
 
-    ResponseCode importKey(const Value* key, const char* filename) {
+    ResponseCode importKey(const uint8_t* key, size_t keyLen, const char* filename) {
         uint8_t* data;
         size_t dataLength;
         int rc;
@@ -657,7 +742,7 @@ public:
             return SYSTEM_ERROR;
         }
 
-        rc = mDevice->import_keypair(mDevice, key->value, key->length, &data, &dataLength);
+        rc = mDevice->import_keypair(mDevice, key, keyLen, &data, &dataLength);
         if (rc) {
             ALOGE("Error while importing keypair: %d", rc);
             return SYSTEM_ERROR;
@@ -726,7 +811,8 @@ private:
         memset(&mMasterKeyDecryption, 0, sizeof(mMasterKeyDecryption));
     }
 
-    static void generateKeyFromPassword(uint8_t* key, ssize_t keySize, Value* pw, uint8_t* salt) {
+    static void generateKeyFromPassword(uint8_t* key, ssize_t keySize, const android::String8& pw,
+            uint8_t* salt) {
         size_t saltSize;
         if (salt != NULL) {
             saltSize = SALT_SIZE;
@@ -736,7 +822,9 @@ private:
             // sizeof = 9, not strlen = 8
             saltSize = sizeof("keystore");
         }
-        PKCS5_PBKDF2_HMAC_SHA1((char*) pw->value, pw->length, salt, saltSize, 8192, keySize, key);
+
+        PKCS5_PBKDF2_HMAC_SHA1(reinterpret_cast<const char*>(pw.string()), pw.length(), salt,
+                saltSize, 8192, keySize, key);
     }
 
     static bool isKeyFile(const char* filename) {
@@ -834,7 +922,7 @@ private:
             return SYSTEM_ERROR;
         }
 
-        ResponseCode rc = importKey(&pkcs8key, filename);
+        ResponseCode rc = importKey(pkcs8key.value, pkcs8key.length, filename);
         if (rc != NO_ERROR) {
             return rc;
         }
@@ -845,55 +933,8 @@ private:
 
 const char* KeyStore::MASTER_KEY_FILE = ".masterkey";
 
-/* Here is the protocol used in both requests and responses:
- *     code [length_1 message_1 ... length_n message_n] end-of-file
- * where code is one byte long and lengths are unsigned 16-bit integers in
- * network order. Thus the maximum length of a message is 65535 bytes. */
-
-static int recv_code(int sock, int8_t* code) {
-    return recv(sock, code, 1, 0) == 1;
-}
-
-static int recv_message(int sock, uint8_t* message, int length) {
-    uint8_t bytes[2];
-    if (recv(sock, &bytes[0], 1, 0) != 1 ||
-        recv(sock, &bytes[1], 1, 0) != 1) {
-        return -1;
-    } else {
-        int offset = bytes[0] << 8 | bytes[1];
-        if (length < offset) {
-            return -1;
-        }
-        length = offset;
-        offset = 0;
-        while (offset < length) {
-            int n = recv(sock, &message[offset], length - offset, 0);
-            if (n <= 0) {
-                return -1;
-            }
-            offset += n;
-        }
-    }
-    return length;
-}
-
-static int recv_end_of_file(int sock) {
-    uint8_t byte;
-    return recv(sock, &byte, 1, 0) == 0;
-}
-
-static void send_code(int sock, int8_t code) {
-    send(sock, &code, 1, 0);
-}
-
-static void send_message(int sock, const uint8_t* message, int length) {
-    uint16_t bytes = htons(length);
-    send(sock, &bytes, 2, 0);
-    send(sock, message, length, 0);
-}
-
-static ResponseCode get_key_for_name(KeyStore* keyStore, Blob* keyBlob, const Value* keyName,
-        const uid_t uid, const BlobType type) {
+static ResponseCode get_key_for_name(KeyStore* keyStore, Blob* keyBlob,
+        const android::String8& keyName, const uid_t uid, const BlobType type) {
     char filename[NAME_MAX];
 
     encode_key_for_uid(filename, uid, keyName);
@@ -922,494 +963,627 @@ static ResponseCode get_key_for_name(KeyStore* keyStore, Blob* keyBlob, const Va
     return keyStore->get(filename, keyBlob, type);
 }
 
-/* Here are the actions. Each of them is a function without arguments. All
- * information is defined in global variables, which are set properly before
- * performing an action. The number of parameters required by each action is
- * fixed and defined in a table. If the return value of an action is positive,
- * it will be treated as a response code and transmitted to the client. Note
- * that the lengths of parameters are checked when they are received, so
- * boundary checks on parameters are omitted. */
-
-static const ResponseCode NO_ERROR_RESPONSE_CODE_SENT = (ResponseCode) 0;
-
-static ResponseCode test(KeyStore* keyStore, int, uid_t, Value*, Value*, Value*) {
-    return (ResponseCode) keyStore->getState();
-}
-
-static ResponseCode get(KeyStore* keyStore, int sock, uid_t uid, Value* keyName, Value*, Value*) {
-    char filename[NAME_MAX];
-    encode_key_for_uid(filename, uid, keyName);
-    Blob keyBlob;
-    ResponseCode responseCode = keyStore->get(filename, &keyBlob, TYPE_GENERIC);
-    if (responseCode != NO_ERROR) {
-        return responseCode;
+namespace android {
+class KeyStoreProxy : public BnKeystoreService, public IBinder::DeathRecipient {
+public:
+    KeyStoreProxy(KeyStore* keyStore)
+        : mKeyStore(keyStore)
+    {
     }
-    send_code(sock, NO_ERROR);
-    send_message(sock, keyBlob.getValue(), keyBlob.getLength());
-    return NO_ERROR_RESPONSE_CODE_SENT;
-}
 
-static ResponseCode insert(KeyStore* keyStore, int, uid_t uid, Value* keyName, Value* val,
-        Value*) {
-    char filename[NAME_MAX];
-    encode_key_for_uid(filename, uid, keyName);
-    Blob keyBlob(val->value, val->length, NULL, 0, TYPE_GENERIC);
-    return keyStore->put(filename, &keyBlob);
-}
-
-static ResponseCode del(KeyStore* keyStore, int, uid_t uid, Value* keyName, Value*, Value*) {
-    char filename[NAME_MAX];
-    encode_key_for_uid(filename, uid, keyName);
-    Blob keyBlob;
-    ResponseCode responseCode = keyStore->get(filename, &keyBlob, TYPE_GENERIC);
-    if (responseCode != NO_ERROR) {
-        return responseCode;
+    void binderDied(const wp<IBinder>&) {
+        ALOGE("binder death detected");
     }
-    return (unlink(filename) && errno != ENOENT) ? SYSTEM_ERROR : NO_ERROR;
-}
 
-static ResponseCode exist(KeyStore*, int, uid_t uid, Value* keyName, Value*, Value*) {
-    char filename[NAME_MAX];
-    encode_key_for_uid(filename, uid, keyName);
-    if (access(filename, R_OK) == -1) {
-        return (errno != ENOENT) ? SYSTEM_ERROR : KEY_NOT_FOUND;
-    }
-    return NO_ERROR;
-}
-
-static ResponseCode saw(KeyStore*, int sock, uid_t uid, Value* keyPrefix, Value*, Value*) {
-    DIR* dir = opendir(".");
-    if (!dir) {
-        return SYSTEM_ERROR;
-    }
-    char filename[NAME_MAX];
-    int n = encode_key_for_uid(filename, uid, keyPrefix);
-    send_code(sock, NO_ERROR);
-
-    struct dirent* file;
-    while ((file = readdir(dir)) != NULL) {
-        if (!strncmp(filename, file->d_name, n)) {
-            const char* p = &file->d_name[n];
-            keyPrefix->length = decode_key(keyPrefix->value, p, strlen(p));
-            send_message(sock, keyPrefix->value, keyPrefix->length);
+    int32_t test() {
+        uid_t uid = IPCThreadState::self()->getCallingUid();
+        if (!has_permission(uid, P_TEST)) {
+            ALOGW("permission denied for %d: test", uid);
+            return ::PERMISSION_DENIED;
         }
-    }
-    closedir(dir);
-    return NO_ERROR_RESPONSE_CODE_SENT;
-}
 
-static ResponseCode reset(KeyStore* keyStore, int, uid_t, Value*, Value*, Value*) {
-    ResponseCode rc = keyStore->reset() ? NO_ERROR : SYSTEM_ERROR;
-
-    const keymaster_device_t* device = keyStore->getDevice();
-    if (device == NULL) {
-        ALOGE("No keymaster device!");
-        return SYSTEM_ERROR;
+        return mKeyStore->getState();
     }
 
-    if (device->delete_all == NULL) {
-        ALOGV("keymaster device doesn't implement delete_all");
-        return rc;
-    }
-
-    if (device->delete_all(device)) {
-        ALOGE("Problem calling keymaster's delete_all");
-        return SYSTEM_ERROR;
-    }
-
-    return rc;
-}
-
-/* Here is the history. To improve the security, the parameters to generate the
- * master key has been changed. To make a seamless transition, we update the
- * file using the same password when the user unlock it for the first time. If
- * any thing goes wrong during the transition, the new file will not overwrite
- * the old one. This avoids permanent damages of the existing data. */
-
-static ResponseCode password(KeyStore* keyStore, int, uid_t, Value* pw, Value*, Value*) {
-    switch (keyStore->getState()) {
-        case STATE_UNINITIALIZED: {
-            // generate master key, encrypt with password, write to file, initialize mMasterKey*.
-            return keyStore->initialize(pw);
+    int32_t get(const String16& name, uint8_t** item, size_t* itemLength) {
+        uid_t uid = IPCThreadState::self()->getCallingUid();
+        if (!has_permission(uid, P_GET)) {
+            ALOGW("permission denied for %d: get", uid);
+            return ::PERMISSION_DENIED;
         }
-        case STATE_NO_ERROR: {
-            // rewrite master key with new password.
-            return keyStore->writeMasterKey(pw);
+        uid = get_keystore_euid(uid);
+
+        State state = checkState();
+        if (state != STATE_NO_ERROR) {
+            ALOGD("calling get in state: %d", state);
+            return state;
         }
-        case STATE_LOCKED: {
-            // read master key, decrypt with password, initialize mMasterKey*.
-            return keyStore->readMasterKey(pw);
+
+        String8 name8(name);
+        char filename[NAME_MAX];
+
+        encode_key_for_uid(filename, uid, name8);
+
+        Blob keyBlob;
+        ResponseCode responseCode = mKeyStore->get(filename, &keyBlob, TYPE_GENERIC);
+        if (responseCode != ::NO_ERROR) {
+            *item = NULL;
+            *itemLength = 0;
+            return responseCode;
         }
-    }
-    return SYSTEM_ERROR;
-}
 
-static ResponseCode lock(KeyStore* keyStore, int, uid_t, Value*, Value*, Value*) {
-    keyStore->lock();
-    return NO_ERROR;
-}
+        *item = (uint8_t*) malloc(keyBlob.getLength());
+        memcpy(*item, keyBlob.getValue(), keyBlob.getLength());
+        *itemLength = keyBlob.getLength();
 
-static ResponseCode unlock(KeyStore* keyStore, int sock, uid_t uid, Value* pw, Value* unused,
-        Value* unused2) {
-    return password(keyStore, sock, uid, pw, unused, unused2);
-}
-
-static ResponseCode zero(KeyStore* keyStore, int, uid_t, Value*, Value*, Value*) {
-    return keyStore->isEmpty() ? KEY_NOT_FOUND : NO_ERROR;
-}
-
-static ResponseCode generate(KeyStore* keyStore, int, uid_t uid, Value* keyName, Value*,
-        Value*) {
-    char filename[NAME_MAX];
-    uint8_t* data;
-    size_t dataLength;
-    int rc;
-
-    const keymaster_device_t* device = keyStore->getDevice();
-    if (device == NULL) {
-        return SYSTEM_ERROR;
+        return ::NO_ERROR;
     }
 
-    if (device->generate_keypair == NULL) {
-        return SYSTEM_ERROR;
+    int32_t insert(const String16& name, const uint8_t* item, size_t itemLength) {
+        uid_t uid = IPCThreadState::self()->getCallingUid();
+        if (!has_permission(uid, P_INSERT)) {
+            ALOGW("permission denied for %d: insert", uid);
+            return ::PERMISSION_DENIED;
+        }
+        uid = get_keystore_euid(uid);
+
+        State state = checkState();
+        if (state != STATE_NO_ERROR) {
+            ALOGD("calling insert in state: %d", state);
+            return state;
+        }
+
+        String8 name8(name);
+        char filename[NAME_MAX];
+
+        encode_key_for_uid(filename, uid, name8);
+
+        Blob keyBlob(item, itemLength, NULL, 0, ::TYPE_GENERIC);
+        return mKeyStore->put(filename, &keyBlob);
     }
 
-    keymaster_rsa_keygen_params_t rsa_params;
-    rsa_params.modulus_size = 2048;
-    rsa_params.public_exponent = 0x10001;
+    int32_t del(const String16& name) {
+        uid_t uid = IPCThreadState::self()->getCallingUid();
+        if (!has_permission(uid, P_DELETE)) {
+            ALOGW("permission denied for %d: del", uid);
+            return ::PERMISSION_DENIED;
+        }
+        uid = get_keystore_euid(uid);
 
-    rc = device->generate_keypair(device, TYPE_RSA, &rsa_params, &data, &dataLength);
-    if (rc) {
-        return SYSTEM_ERROR;
+        String8 name8(name);
+        char filename[NAME_MAX];
+
+        encode_key_for_uid(filename, uid, name8);
+
+        Blob keyBlob;
+        ResponseCode responseCode = mKeyStore->get(filename, &keyBlob, TYPE_GENERIC);
+        if (responseCode != ::NO_ERROR) {
+            return responseCode;
+        }
+        return (unlink(filename) && errno != ENOENT) ? ::SYSTEM_ERROR : ::NO_ERROR;
     }
 
-    encode_key_for_uid(filename, uid, keyName);
+    int32_t exist(const String16& name) {
+        uid_t uid = IPCThreadState::self()->getCallingUid();
+        if (!has_permission(uid, P_EXIST)) {
+            ALOGW("permission denied for %d: exist", uid);
+            return ::PERMISSION_DENIED;
+        }
+        uid = get_keystore_euid(uid);
 
-    Blob keyBlob(data, dataLength, NULL, 0, TYPE_KEY_PAIR);
-    free(data);
+        String8 name8(name);
+        char filename[NAME_MAX];
 
-    return keyStore->put(filename, &keyBlob);
-}
+        encode_key_for_uid(filename, uid, name8);
 
-static ResponseCode import(KeyStore* keyStore, int, uid_t uid, Value* keyName, Value* key,
-        Value*) {
-    char filename[NAME_MAX];
-
-    encode_key_for_uid(filename, uid, keyName);
-
-    return keyStore->importKey(key, filename);
-}
-
-/*
- * TODO: The abstraction between things stored in hardware and regular blobs
- * of data stored on the filesystem should be moved down to keystore itself.
- * Unfortunately the Java code that calls this has naming conventions that it
- * knows about. Ideally keystore shouldn't be used to store random blobs of
- * data.
- *
- * Until that happens, it's necessary to have a separate "get_pubkey" and
- * "del_key" since the Java code doesn't really communicate what it's
- * intentions are.
- */
-static ResponseCode get_pubkey(KeyStore* keyStore, int sock, uid_t uid, Value* keyName, Value*, Value*) {
-    Blob keyBlob;
-    ALOGV("get_pubkey '%s' from uid %d", ValueString(keyName).c_str(), uid);
-
-    ResponseCode responseCode = get_key_for_name(keyStore, &keyBlob, keyName, uid, TYPE_KEY_PAIR);
-    if (responseCode != NO_ERROR) {
-        return responseCode;
+        if (access(filename, R_OK) == -1) {
+            return (errno != ENOENT) ? ::SYSTEM_ERROR : ::KEY_NOT_FOUND;
+        }
+        return ::NO_ERROR;
     }
 
-    const keymaster_device_t* device = keyStore->getDevice();
-    if (device == NULL) {
-        return SYSTEM_ERROR;
-    }
+    int32_t saw(const String16& prefix, Vector<String16>* matches) {
+        uid_t uid = IPCThreadState::self()->getCallingUid();
+        if (!has_permission(uid, P_SAW)) {
+            ALOGW("permission denied for %d: saw", uid);
+            return ::PERMISSION_DENIED;
+        }
+        uid = get_keystore_euid(uid);
 
-    if (device->get_keypair_public == NULL) {
-        ALOGE("device has no get_keypair_public implementation!");
-        return SYSTEM_ERROR;
-    }
+        DIR* dir = opendir(".");
+        if (!dir) {
+            return ::SYSTEM_ERROR;
+        }
 
-    uint8_t* data = NULL;
-    size_t dataLength;
+        const String8 prefix8(prefix);
+        char filename[NAME_MAX];
 
-    int rc = device->get_keypair_public(device, keyBlob.getValue(), keyBlob.getLength(), &data,
-            &dataLength);
-    if (rc) {
-        return SYSTEM_ERROR;
-    }
+        int n = encode_key_for_uid(filename, uid, prefix8);
 
-    send_code(sock, NO_ERROR);
-    send_message(sock, data, dataLength);
-    free(data);
+        struct dirent* file;
+        while ((file = readdir(dir)) != NULL) {
+            if (!strncmp(filename, file->d_name, n)) {
+                const char* p = &file->d_name[n];
+                size_t plen = strlen(p);
 
-    return NO_ERROR_RESPONSE_CODE_SENT;
-}
-
-static ResponseCode del_key(KeyStore* keyStore, int, uid_t uid, Value* keyName, Value*,
-        Value*) {
-    char filename[NAME_MAX];
-    encode_key_for_uid(filename, uid, keyName);
-    Blob keyBlob;
-    ResponseCode responseCode = keyStore->get(filename, &keyBlob, TYPE_KEY_PAIR);
-    if (responseCode != NO_ERROR) {
-        return responseCode;
-    }
-
-    ResponseCode rc = NO_ERROR;
-
-    const keymaster_device_t* device = keyStore->getDevice();
-    if (device == NULL) {
-        rc = SYSTEM_ERROR;
-    } else {
-        // A device doesn't have to implement delete_keypair.
-        if (device->delete_keypair != NULL) {
-            if (device->delete_keypair(device, keyBlob.getValue(), keyBlob.getLength())) {
-                rc = SYSTEM_ERROR;
+                size_t extra = decode_key_length(p, plen);
+                char *match = (char*) malloc(extra + 1);
+                if (match != NULL) {
+                    decode_key(match, p, plen);
+                    matches->push(String16(match, extra));
+                    free(match);
+                } else {
+                    ALOGW("could not allocate match of size %zd", extra);
+                }
             }
         }
+        closedir(dir);
+
+        return ::NO_ERROR;
     }
 
-    if (rc != NO_ERROR) {
+    int32_t reset() {
+        uid_t uid = IPCThreadState::self()->getCallingUid();
+        if (!has_permission(uid, P_RESET)) {
+            ALOGW("permission denied for %d: reset", uid);
+            return ::PERMISSION_DENIED;
+        }
+
+        ResponseCode rc = mKeyStore->reset() ? ::NO_ERROR : ::SYSTEM_ERROR;
+
+        const keymaster_device_t* device = mKeyStore->getDevice();
+        if (device == NULL) {
+            ALOGE("No keymaster device!");
+            return ::SYSTEM_ERROR;
+        }
+
+        if (device->delete_all == NULL) {
+            ALOGV("keymaster device doesn't implement delete_all");
+            return rc;
+        }
+
+        if (device->delete_all(device)) {
+            ALOGE("Problem calling keymaster's delete_all");
+            return ::SYSTEM_ERROR;
+        }
+
         return rc;
     }
 
-    return (unlink(filename) && errno != ENOENT) ? SYSTEM_ERROR : NO_ERROR;
-}
+    /*
+     * Here is the history. To improve the security, the parameters to generate the
+     * master key has been changed. To make a seamless transition, we update the
+     * file using the same password when the user unlock it for the first time. If
+     * any thing goes wrong during the transition, the new file will not overwrite
+     * the old one. This avoids permanent damages of the existing data.
+     */
+    int32_t password(const String16& password) {
+        uid_t uid = IPCThreadState::self()->getCallingUid();
+        if (!has_permission(uid, P_PASSWORD)) {
+            ALOGW("permission denied for %d: password", uid);
+            return ::PERMISSION_DENIED;
+        }
 
-static ResponseCode sign(KeyStore* keyStore, int sock, uid_t uid, Value* keyName, Value* data,
-        Value*) {
-    ALOGV("sign %s from uid %d", ValueString(keyName).c_str(), uid);
-    Blob keyBlob;
-    int rc;
+        const String8 password8(password);
 
-    ResponseCode responseCode = get_key_for_name(keyStore, &keyBlob, keyName, uid, TYPE_KEY_PAIR);
-    if (responseCode != NO_ERROR) {
-        return responseCode;
+        switch (mKeyStore->getState()) {
+            case ::STATE_UNINITIALIZED: {
+                // generate master key, encrypt with password, write to file, initialize mMasterKey*.
+                return mKeyStore->initialize(password8);
+            }
+            case ::STATE_NO_ERROR: {
+                // rewrite master key with new password.
+                return mKeyStore->writeMasterKey(password8);
+            }
+            case ::STATE_LOCKED: {
+                // read master key, decrypt with password, initialize mMasterKey*.
+                return mKeyStore->readMasterKey(password8);
+            }
+        }
+        return ::SYSTEM_ERROR;
     }
 
-    uint8_t* signedData;
-    size_t signedDataLength;
+    int32_t lock() {
+        uid_t uid = IPCThreadState::self()->getCallingUid();
+        if (!has_permission(uid, P_LOCK)) {
+            ALOGW("permission denied for %d: lock", uid);
+            return ::PERMISSION_DENIED;
+        }
 
-    const keymaster_device_t* device = keyStore->getDevice();
-    if (device == NULL) {
-        ALOGE("no keymaster device; cannot sign");
-        return SYSTEM_ERROR;
+        State state = checkState();
+        if (state != STATE_NO_ERROR) {
+            ALOGD("calling lock in state: %d", state);
+            return state;
+        }
+
+        mKeyStore->lock();
+        return ::NO_ERROR;
     }
 
-    if (device->sign_data == NULL) {
-        ALOGE("device doesn't implement signing");
-        return SYSTEM_ERROR;
+    int32_t unlock(const String16& pw) {
+        uid_t uid = IPCThreadState::self()->getCallingUid();
+        if (!has_permission(uid, P_UNLOCK)) {
+            ALOGW("permission denied for %d: unlock", uid);
+            return ::PERMISSION_DENIED;
+        }
+
+        State state = checkState();
+        if (state != STATE_LOCKED) {
+            ALOGD("calling unlock when not locked");
+            return state;
+        }
+
+        const String8 password8(pw);
+        return password(pw);
     }
 
-    keymaster_rsa_sign_params_t params;
-    params.digest_type = DIGEST_NONE;
-    params.padding_type = PADDING_NONE;
+    int32_t zero() {
+        uid_t uid = IPCThreadState::self()->getCallingUid();
+        if (!has_permission(uid, P_ZERO)) {
+            ALOGW("permission denied for %d: zero", uid);
+            return -1;
+        }
 
-    rc = device->sign_data(device, &params, keyBlob.getValue(), keyBlob.getLength(),
-            data->value, data->length, &signedData, &signedDataLength);
-    if (rc) {
-        ALOGW("device couldn't sign data");
-        return SYSTEM_ERROR;
+        return mKeyStore->isEmpty() ? ::KEY_NOT_FOUND : ::NO_ERROR;
     }
 
-    send_code(sock, NO_ERROR);
-    send_message(sock, signedData, signedDataLength);
-    return NO_ERROR_RESPONSE_CODE_SENT;
-}
+    int32_t generate(const String16& name) {
+        uid_t uid = IPCThreadState::self()->getCallingUid();
+        if (!has_permission(uid, P_INSERT)) {
+            ALOGW("permission denied for %d: generate", uid);
+            return ::PERMISSION_DENIED;
+        }
+        uid = get_keystore_euid(uid);
 
-static ResponseCode verify(KeyStore* keyStore, int, uid_t uid, Value* keyName, Value* data,
-        Value* signature) {
-    Blob keyBlob;
-    int rc;
+        State state = checkState();
+        if (state != STATE_NO_ERROR) {
+            ALOGD("calling generate in state: %d", state);
+            return state;
+        }
 
-    ResponseCode responseCode = get_key_for_name(keyStore, &keyBlob, keyName, uid, TYPE_KEY_PAIR);
-    if (responseCode != NO_ERROR) {
-        return responseCode;
+        String8 name8(name);
+        char filename[NAME_MAX];
+
+        uint8_t* data;
+        size_t dataLength;
+        int rc;
+
+        const keymaster_device_t* device = mKeyStore->getDevice();
+        if (device == NULL) {
+            return ::SYSTEM_ERROR;
+        }
+
+        if (device->generate_keypair == NULL) {
+            return ::SYSTEM_ERROR;
+        }
+
+        keymaster_rsa_keygen_params_t rsa_params;
+        rsa_params.modulus_size = 2048;
+        rsa_params.public_exponent = 0x10001;
+
+        rc = device->generate_keypair(device, TYPE_RSA, &rsa_params, &data, &dataLength);
+        if (rc) {
+            return ::SYSTEM_ERROR;
+        }
+
+        encode_key_for_uid(filename, uid, name8);
+
+        Blob keyBlob(data, dataLength, NULL, 0, TYPE_KEY_PAIR);
+        free(data);
+
+        return mKeyStore->put(filename, &keyBlob);
     }
 
-    const keymaster_device_t* device = keyStore->getDevice();
-    if (device == NULL) {
-        return SYSTEM_ERROR;
+    int32_t import(const String16& name, const uint8_t* data, size_t length) {
+        uid_t uid = IPCThreadState::self()->getCallingUid();
+        if (!has_permission(uid, P_INSERT)) {
+            ALOGW("permission denied for %d: import", uid);
+            return ::PERMISSION_DENIED;
+        }
+        uid = get_keystore_euid(uid);
+
+        State state = checkState();
+        if (state != STATE_NO_ERROR) {
+            ALOGD("calling import in state: %d", state);
+            return state;
+        }
+
+        String8 name8(name);
+        char filename[NAME_MAX];
+
+        encode_key_for_uid(filename, uid, name8);
+
+        return mKeyStore->importKey(data, length, filename);
     }
 
-    if (device->verify_data == NULL) {
-        return SYSTEM_ERROR;
+    int32_t sign(const String16& name, const uint8_t* data, size_t length, uint8_t** out,
+            size_t* outLength) {
+        uid_t uid = IPCThreadState::self()->getCallingUid();
+        if (!has_permission(uid, P_SIGN)) {
+            ALOGW("permission denied for %d: saw", uid);
+            return ::PERMISSION_DENIED;
+        }
+        uid = get_keystore_euid(uid);
+
+        State state = checkState();
+        if (state != STATE_NO_ERROR) {
+            ALOGD("calling sign in state: %d", state);
+            return state;
+        }
+
+        Blob keyBlob;
+        String8 name8(name);
+
+        ALOGV("sign %s from uid %d", name8.string(), uid);
+        int rc;
+
+        ResponseCode responseCode = get_key_for_name(mKeyStore, &keyBlob, name8, uid, ::TYPE_KEY_PAIR);
+        if (responseCode != ::NO_ERROR) {
+            return responseCode;
+        }
+
+        const keymaster_device_t* device = mKeyStore->getDevice();
+        if (device == NULL) {
+            ALOGE("no keymaster device; cannot sign");
+            return ::SYSTEM_ERROR;
+        }
+
+        if (device->sign_data == NULL) {
+            ALOGE("device doesn't implement signing");
+            return ::SYSTEM_ERROR;
+        }
+
+        keymaster_rsa_sign_params_t params;
+        params.digest_type = DIGEST_NONE;
+        params.padding_type = PADDING_NONE;
+
+        rc = device->sign_data(device, &params, keyBlob.getValue(), keyBlob.getLength(),
+                data, length, out, outLength);
+        if (rc) {
+            ALOGW("device couldn't sign data");
+            return ::SYSTEM_ERROR;
+        }
+
+        return ::NO_ERROR;
     }
 
-    keymaster_rsa_sign_params_t params;
-    params.digest_type = DIGEST_NONE;
-    params.padding_type = PADDING_NONE;
+    int32_t verify(const String16& name, const uint8_t* data, size_t dataLength,
+            const uint8_t* signature, size_t signatureLength) {
+        uid_t uid = IPCThreadState::self()->getCallingUid();
+        if (!has_permission(uid, P_VERIFY)) {
+            ALOGW("permission denied for %d: verify", uid);
+            return ::PERMISSION_DENIED;
+        }
+        uid = get_keystore_euid(uid);
 
-    rc = device->verify_data(device, &params, keyBlob.getValue(), keyBlob.getLength(),
-            data->value, data->length, signature->value, signature->length);
-    if (rc) {
-        return SYSTEM_ERROR;
-    } else {
-        return NO_ERROR;
-    }
-}
+        State state = checkState();
+        if (state != STATE_NO_ERROR) {
+            ALOGD("calling verify in state: %d", state);
+            return state;
+        }
 
-static ResponseCode grant(KeyStore* keyStore, int, uid_t uid, Value* keyName,
-        Value* granteeData, Value*) {
-    char filename[NAME_MAX];
-    encode_key_for_uid(filename, uid, keyName);
-    if (access(filename, R_OK) == -1) {
-        return (errno != ENOENT) ? SYSTEM_ERROR : KEY_NOT_FOUND;
-    }
+        Blob keyBlob;
+        String8 name8(name);
+        int rc;
 
-    keyStore->addGrant(filename, granteeData);
-    return NO_ERROR;
-}
+        ResponseCode responseCode = get_key_for_name(mKeyStore, &keyBlob, name8, uid, TYPE_KEY_PAIR);
+        if (responseCode != ::NO_ERROR) {
+            return responseCode;
+        }
 
-static ResponseCode ungrant(KeyStore* keyStore, int, uid_t uid, Value* keyName,
-        Value* granteeData, Value*) {
-    char filename[NAME_MAX];
-    encode_key_for_uid(filename, uid, keyName);
-    if (access(filename, R_OK) == -1) {
-        return (errno != ENOENT) ? SYSTEM_ERROR : KEY_NOT_FOUND;
-    }
+        const keymaster_device_t* device = mKeyStore->getDevice();
+        if (device == NULL) {
+            return ::SYSTEM_ERROR;
+        }
 
-    return keyStore->removeGrant(filename, granteeData) ? NO_ERROR : KEY_NOT_FOUND;
-}
+        if (device->verify_data == NULL) {
+            return ::SYSTEM_ERROR;
+        }
 
-static ResponseCode getmtime(KeyStore*, int sock, uid_t uid, Value* keyName,
-        Value*, Value*) {
-    char filename[NAME_MAX];
-    encode_key_for_uid(filename, uid, keyName);
-    if (access(filename, R_OK) == -1) {
-        return (errno != ENOENT) ? SYSTEM_ERROR : KEY_NOT_FOUND;
-    }
+        keymaster_rsa_sign_params_t params;
+        params.digest_type = DIGEST_NONE;
+        params.padding_type = PADDING_NONE;
 
-    int fd = open(filename, O_NOFOLLOW, O_RDONLY);
-    if (fd < 0) {
-        return SYSTEM_ERROR;
-    }
-
-    struct stat s;
-    int ret = fstat(fd, &s);
-    close(fd);
-    if (ret == -1) {
-        return SYSTEM_ERROR;
-    }
-
-    uint8_t *data;
-    int dataLength = asprintf(reinterpret_cast<char**>(&data), "%lu", s.st_mtime);
-    if (dataLength < 0) {
-        return SYSTEM_ERROR;
-    }
-
-    send_code(sock, NO_ERROR);
-    send_message(sock, data, dataLength);
-    free(data);
-
-    return NO_ERROR_RESPONSE_CODE_SENT;
-}
-
-/* Here are the permissions, actions, users, and the main function. */
-enum perm {
-    P_TEST     = 1 << TEST,
-    P_GET      = 1 << GET,
-    P_INSERT   = 1 << INSERT,
-    P_DELETE   = 1 << DELETE,
-    P_EXIST    = 1 << EXIST,
-    P_SAW      = 1 << SAW,
-    P_RESET    = 1 << RESET,
-    P_PASSWORD = 1 << PASSWORD,
-    P_LOCK     = 1 << LOCK,
-    P_UNLOCK   = 1 << UNLOCK,
-    P_ZERO     = 1 << ZERO,
-    P_SIGN     = 1 << SIGN,
-    P_VERIFY   = 1 << VERIFY,
-    P_GRANT    = 1 << GRANT,
-};
-
-static const int MAX_PARAM = 3;
-
-static const State STATE_ANY = (State) 0;
-
-static struct action {
-    ResponseCode (*run)(KeyStore* keyStore, int sock, uid_t uid, Value* param1, Value* param2,
-            Value* param3);
-    uint8_t code;
-    State state;
-    uint32_t perm;
-    int lengths[MAX_PARAM];
-} actions[] = {
-    {test,       CommandCodes[TEST],       STATE_ANY,      P_TEST,     {0, 0, 0}},
-    {get,        CommandCodes[GET],        STATE_NO_ERROR, P_GET,      {KEY_SIZE, 0, 0}},
-    {insert,     CommandCodes[INSERT],     STATE_NO_ERROR, P_INSERT,   {KEY_SIZE, VALUE_SIZE, 0}},
-    {del,        CommandCodes[DELETE],     STATE_ANY,      P_DELETE,   {KEY_SIZE, 0, 0}},
-    {exist,      CommandCodes[EXIST],      STATE_ANY,      P_EXIST,    {KEY_SIZE, 0, 0}},
-    {saw,        CommandCodes[SAW],        STATE_ANY,      P_SAW,      {KEY_SIZE, 0, 0}},
-    {reset,      CommandCodes[RESET],      STATE_ANY,      P_RESET,    {0, 0, 0}},
-    {password,   CommandCodes[PASSWORD],   STATE_ANY,      P_PASSWORD, {PASSWORD_SIZE, 0, 0}},
-    {lock,       CommandCodes[LOCK],       STATE_NO_ERROR, P_LOCK,     {0, 0, 0}},
-    {unlock,     CommandCodes[UNLOCK],     STATE_LOCKED,   P_UNLOCK,   {PASSWORD_SIZE, 0, 0}},
-    {zero,       CommandCodes[ZERO],       STATE_ANY,      P_ZERO,     {0, 0, 0}},
-    {generate,   CommandCodes[GENERATE],   STATE_NO_ERROR, P_INSERT,   {KEY_SIZE, 0, 0}},
-    {import,     CommandCodes[IMPORT],     STATE_NO_ERROR, P_INSERT,   {KEY_SIZE, VALUE_SIZE, 0}},
-    {sign,       CommandCodes[SIGN],       STATE_NO_ERROR, P_SIGN,     {KEY_SIZE, VALUE_SIZE, 0}},
-    {verify,     CommandCodes[VERIFY],     STATE_NO_ERROR, P_VERIFY,   {KEY_SIZE, VALUE_SIZE, VALUE_SIZE}},
-    {get_pubkey, CommandCodes[GET_PUBKEY], STATE_NO_ERROR, P_GET,      {KEY_SIZE, 0, 0}},
-    {del_key,    CommandCodes[DEL_KEY],    STATE_ANY,      P_DELETE,   {KEY_SIZE, 0, 0}},
-    {grant,      CommandCodes[GRANT],      STATE_NO_ERROR, P_GRANT,    {KEY_SIZE, KEY_SIZE, 0}},
-    {ungrant,    CommandCodes[UNGRANT],    STATE_NO_ERROR, P_GRANT,    {KEY_SIZE, KEY_SIZE, 0}},
-    {getmtime,   CommandCodes[GETMTIME],   STATE_ANY,      P_SAW,      {KEY_SIZE, 0, 0}},
-    {NULL,       0,                        STATE_ANY,      0,          {0, 0, 0}},
-};
-
-static struct user {
-    uid_t uid;
-    uid_t euid;
-    uint32_t perms;
-} users[] = {
-    {AID_SYSTEM,  (uid_t)(~0), (uint32_t)(~0)},
-    {AID_VPN,     AID_SYSTEM,  P_GET | P_SIGN | P_VERIFY },
-    {AID_WIFI,    AID_SYSTEM,  P_GET | P_SIGN | P_VERIFY },
-    {AID_ROOT,    AID_SYSTEM,  P_GET},
-    {(uid_t)(~0), (uid_t)(~0), P_TEST | P_GET | P_INSERT | P_DELETE | P_EXIST | P_SAW |
-                               P_SIGN | P_VERIFY},
-};
-
-static ResponseCode process(KeyStore* keyStore, int sock, uid_t uid, int8_t code) {
-    struct user* user = users;
-    struct action* action = actions;
-    int i;
-
-    while (~user->uid && user->uid != (uid % AID_USER)) {
-        ++user;
-    }
-    while (action->code && action->code != code) {
-        ++action;
-    }
-    if (!action->code) {
-        return UNDEFINED_ACTION;
-    }
-    if (!(action->perm & user->perms)) {
-        return PERMISSION_DENIED;
-    }
-    if (action->state != STATE_ANY && action->state != keyStore->getState()) {
-        return (ResponseCode) keyStore->getState();
-    }
-    if (~user->euid) {
-        uid = user->euid;
-    }
-    Value params[MAX_PARAM];
-    for (i = 0; i < MAX_PARAM && action->lengths[i] != 0; ++i) {
-        params[i].length = recv_message(sock, params[i].value, action->lengths[i]);
-        if (params[i].length < 0) {
-            return PROTOCOL_ERROR;
+        rc = device->verify_data(device, &params, keyBlob.getValue(), keyBlob.getLength(),
+                data, dataLength, signature, signatureLength);
+        if (rc) {
+            return ::SYSTEM_ERROR;
+        } else {
+            return ::NO_ERROR;
         }
     }
-    if (!recv_end_of_file(sock)) {
-        return PROTOCOL_ERROR;
+
+    /*
+     * TODO: The abstraction between things stored in hardware and regular blobs
+     * of data stored on the filesystem should be moved down to keystore itself.
+     * Unfortunately the Java code that calls this has naming conventions that it
+     * knows about. Ideally keystore shouldn't be used to store random blobs of
+     * data.
+     *
+     * Until that happens, it's necessary to have a separate "get_pubkey" and
+     * "del_key" since the Java code doesn't really communicate what it's
+     * intentions are.
+     */
+    int32_t get_pubkey(const String16& name, uint8_t** pubkey, size_t* pubkeyLength) {
+        uid_t uid = IPCThreadState::self()->getCallingUid();
+        if (!has_permission(uid, P_GET)) {
+            ALOGW("permission denied for %d: get_pubkey", uid);
+            return ::PERMISSION_DENIED;
+        }
+        uid = get_keystore_euid(uid);
+
+        State state = checkState();
+        if (state != STATE_NO_ERROR) {
+            ALOGD("calling get_pubkey in state: %d", state);
+            return state;
+        }
+
+        Blob keyBlob;
+        String8 name8(name);
+
+        ALOGV("get_pubkey '%s' from uid %d", name8.string(), uid);
+
+        ResponseCode responseCode = get_key_for_name(mKeyStore, &keyBlob, name8, uid,
+                TYPE_KEY_PAIR);
+        if (responseCode != ::NO_ERROR) {
+            return responseCode;
+        }
+
+        const keymaster_device_t* device = mKeyStore->getDevice();
+        if (device == NULL) {
+            return ::SYSTEM_ERROR;
+        }
+
+        if (device->get_keypair_public == NULL) {
+            ALOGE("device has no get_keypair_public implementation!");
+            return ::SYSTEM_ERROR;
+        }
+
+        int rc = device->get_keypair_public(device, keyBlob.getValue(), keyBlob.getLength(), pubkey,
+                pubkeyLength);
+        if (rc) {
+            return ::SYSTEM_ERROR;
+        }
+
+        return ::NO_ERROR;
     }
-    return action->run(keyStore, sock, uid, &params[0], &params[1], &params[2]);
-}
+
+    int32_t del_key(const String16& name) {
+        uid_t uid = IPCThreadState::self()->getCallingUid();
+        if (!has_permission(uid, P_DELETE)) {
+            ALOGW("permission denied for %d: del_key", uid);
+            return ::PERMISSION_DENIED;
+        }
+        uid = get_keystore_euid(uid);
+
+        String8 name8(name);
+        char filename[NAME_MAX];
+
+        encode_key_for_uid(filename, uid, name8);
+
+        Blob keyBlob;
+        ResponseCode responseCode = mKeyStore->get(filename, &keyBlob, ::TYPE_KEY_PAIR);
+        if (responseCode != ::NO_ERROR) {
+            return responseCode;
+        }
+
+        ResponseCode rc = ::NO_ERROR;
+
+        const keymaster_device_t* device = mKeyStore->getDevice();
+        if (device == NULL) {
+            rc = ::SYSTEM_ERROR;
+        } else {
+            // A device doesn't have to implement delete_keypair.
+            if (device->delete_keypair != NULL) {
+                if (device->delete_keypair(device, keyBlob.getValue(), keyBlob.getLength())) {
+                    rc = ::SYSTEM_ERROR;
+                }
+            }
+        }
+
+        if (rc != ::NO_ERROR) {
+            return rc;
+        }
+
+        return (unlink(filename) && errno != ENOENT) ? ::SYSTEM_ERROR : ::NO_ERROR;
+    }
+
+    int32_t grant(const String16& name, int32_t granteeUid) {
+        uid_t uid = IPCThreadState::self()->getCallingUid();
+        if (!has_permission(uid, P_GRANT)) {
+            ALOGW("permission denied for %d: grant", uid);
+            return ::PERMISSION_DENIED;
+        }
+        uid = get_keystore_euid(uid);
+
+        State state = checkState();
+        if (state != STATE_NO_ERROR) {
+            ALOGD("calling grant in state: %d", state);
+            return state;
+        }
+
+        String8 name8(name);
+        char filename[NAME_MAX];
+
+        encode_key_for_uid(filename, uid, name8);
+
+        if (access(filename, R_OK) == -1) {
+            return (errno != ENOENT) ? ::SYSTEM_ERROR : ::KEY_NOT_FOUND;
+        }
+
+        mKeyStore->addGrant(filename, granteeUid);
+        return ::NO_ERROR;
+    }
+
+    int32_t ungrant(const String16& name, int32_t granteeUid) {
+        uid_t uid = IPCThreadState::self()->getCallingUid();
+        if (!has_permission(uid, P_GRANT)) {
+            ALOGW("permission denied for %d: ungrant", uid);
+            return ::PERMISSION_DENIED;
+        }
+        uid = get_keystore_euid(uid);
+
+        State state = checkState();
+        if (state != STATE_NO_ERROR) {
+            ALOGD("calling ungrant in state: %d", state);
+            return state;
+        }
+
+        String8 name8(name);
+        char filename[NAME_MAX];
+
+        encode_key_for_uid(filename, uid, name8);
+
+        if (access(filename, R_OK) == -1) {
+            return (errno != ENOENT) ? ::SYSTEM_ERROR : ::KEY_NOT_FOUND;
+        }
+
+        return mKeyStore->removeGrant(filename, granteeUid) ? ::NO_ERROR : ::KEY_NOT_FOUND;
+    }
+
+    int64_t getmtime(const String16& name) {
+        uid_t uid = IPCThreadState::self()->getCallingUid();
+        if (!has_permission(uid, P_GET)) {
+            ALOGW("permission denied for %d: getmtime", uid);
+            return ::PERMISSION_DENIED;
+        }
+        uid = get_keystore_euid(uid);
+
+        String8 name8(name);
+        char filename[NAME_MAX];
+
+        encode_key_for_uid(filename, uid, name8);
+
+        if (access(filename, R_OK) == -1) {
+            return (errno != ENOENT) ? ::SYSTEM_ERROR : ::KEY_NOT_FOUND;
+        }
+
+        int fd = open(filename, O_NOFOLLOW, O_RDONLY);
+        if (fd < 0) {
+            return ::SYSTEM_ERROR;
+        }
+
+        struct stat s;
+        int ret = fstat(fd, &s);
+        close(fd);
+        if (ret == -1) {
+            return ::SYSTEM_ERROR;
+        }
+
+        return s.st_mtime;
+    }
+
+private:
+    inline State checkState() {
+        return mKeyStore->getState();
+    }
+
+    ::KeyStore* mKeyStore;
+};
+
+}; // namespace android
 
 int main(int argc, char* argv[]) {
-    int controlSocket = android_get_control_socket("keystore");
     if (argc < 2) {
         ALOGE("A directory must be specified!");
         return 1;
@@ -1430,48 +1604,21 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    if (listen(controlSocket, 3) == -1) {
-        ALOGE("listen: %s", strerror(errno));
-        return 1;
-    }
-
-    signal(SIGPIPE, SIG_IGN);
-
     KeyStore keyStore(&entropy, dev);
-    int sock;
-    while ((sock = accept(controlSocket, NULL, 0)) != -1) {
-        struct timeval tv;
-        tv.tv_sec = 3;
-        setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-        setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-
-        struct ucred cred;
-        socklen_t size = sizeof(cred);
-        int credResult = getsockopt(sock, SOL_SOCKET, SO_PEERCRED, &cred, &size);
-        if (credResult != 0) {
-            ALOGW("getsockopt: %s", strerror(errno));
-        } else {
-            int8_t request;
-            if (recv_code(sock, &request)) {
-                State old_state = keyStore.getState();
-                ResponseCode response = process(&keyStore, sock, cred.uid, request);
-                if (response == NO_ERROR_RESPONSE_CODE_SENT) {
-                    response = NO_ERROR;
-                } else {
-                    send_code(sock, response);
-                }
-                ALOGI("uid: %d action: %c -> %d state: %d -> %d retry: %d",
-                     cred.uid,
-                     request, response,
-                     old_state, keyStore.getState(),
-                     keyStore.getRetry());
-            }
-        }
-        close(sock);
+    android::sp<android::IServiceManager> sm = android::defaultServiceManager();
+    android::sp<android::KeyStoreProxy> proxy = new android::KeyStoreProxy(&keyStore);
+    android::status_t ret = sm->addService(android::String16("android.security.keystore"), proxy);
+    if (ret != android::OK) {
+        ALOGE("Couldn't register binder service!");
+        return -1;
     }
-    ALOGE("accept: %s", strerror(errno));
+
+    /*
+     * We're the only thread in existence, so we're just going to process
+     * Binder transaction as a single-threaded program.
+     */
+    android::IPCThreadState::self()->joinThreadPool();
 
     keymaster_device_release(dev);
-
     return 1;
 }

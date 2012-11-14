@@ -23,8 +23,6 @@
  *
  */
 
-#include <keystore.h>
-
 #include <utils/UniquePtr.h>
 
 #include <sys/socket.h>
@@ -40,8 +38,11 @@
 #define LOG_TAG "OpenSSL-keystore"
 #include <cutils/log.h>
 
-#include <keystore_client.h>
+#include <binder/IServiceManager.h>
+#include <keystore/keystore.h>
+#include <keystore/IKeystoreService.h>
 
+using namespace android;
 
 #define DYNAMIC_ENGINE
 #define KEYSTORE_ENGINE_ID   "keystore"
@@ -160,21 +161,33 @@ int keystore_rsa_priv_enc(int flen, const unsigned char* from, unsigned char* to
         return 0;
     }
 
-    Keystore_Reply reply;
-    if (keystore_cmd(CommandCodes[SIGN], &reply, 2, strlen(reinterpret_cast<const char*>(key_id)),
-            key_id, static_cast<size_t>(num), reinterpret_cast<const uint8_t*>(padded.get()))
-            != NO_ERROR) {
-        ALOGE("There was an error during rsa_mod_exp");
+    sp<IServiceManager> sm = defaultServiceManager();
+    sp<IBinder> binder = sm->getService(String16("android.security.keystore"));
+    sp<IKeystoreService> service = interface_cast<IKeystoreService>(binder);
+
+    if (service == NULL) {
+        ALOGE("could not contact keystore");
         return 0;
     }
 
-    const size_t replyLen = reply.length();
-    if (replyLen <= 0) {
+    uint8_t* reply = NULL;
+    size_t replyLen;
+    int32_t ret = service->sign(String16(reinterpret_cast<const char*>(key_id)), padded.get(),
+            num, &reply, &replyLen);
+    if (ret < 0) {
+        ALOGW("There was an error during rsa_mod_exp: could not connect");
+        free(reply);
+        return 0;
+    } else if (ret != 0) {
+        ALOGW("Error during rsa_mod_exp from keystore: %d", ret);
+        free(reply);
+        return 0;
+    } else if (replyLen <= 0) {
         ALOGW("No valid signature returned");
         return 0;
     }
 
-    memcpy(to, reply.get(), replyLen);
+    memcpy(to, reply, replyLen);
 
     ALOGV("rsa=%p keystore_rsa_sign => returning %p len %llu", rsa, to,
             (unsigned long long) replyLen);
@@ -219,14 +232,31 @@ static EVP_PKEY* keystore_loadkey(ENGINE* e, const char* key_id, UI_METHOD* ui_m
     ALOGV("keystore_loadkey(%p, \"%s\", %p, %p)", e, key_id, ui_method, callback_data);
 #endif
 
-    Keystore_Reply reply;
-    if (keystore_cmd(CommandCodes[GET_PUBKEY], &reply, 1, strlen(key_id), key_id) != NO_ERROR) {
-        ALOGV("Cannot get public key for %s", key_id);
+    sp<IServiceManager> sm = defaultServiceManager();
+    sp<IBinder> binder = sm->getService(String16("android.security.keystore"));
+    sp<IKeystoreService> service = interface_cast<IKeystoreService>(binder);
+
+    if (service == NULL) {
+        ALOGE("could not contact keystore");
+        return 0;
+    }
+
+    uint8_t *pubkey = NULL;
+    size_t pubkeyLen;
+    int32_t ret = service->get_pubkey(String16(key_id), &pubkey, &pubkeyLen);
+    if (ret < 0) {
+        ALOGW("could not contact keystore");
+        free(pubkey);
+        return NULL;
+    } else if (ret != 0) {
+        ALOGW("keystore reports error: %d", ret);
+        free(pubkey);
         return NULL;
     }
 
-    const unsigned char* tmp = reinterpret_cast<const unsigned char*>(reply.get());
-    Unique_EVP_PKEY pkey(d2i_PUBKEY(NULL, &tmp, reply.length()));
+    const unsigned char* tmp = reinterpret_cast<const unsigned char*>(pubkey);
+    Unique_EVP_PKEY pkey(d2i_PUBKEY(NULL, &tmp, pubkeyLen));
+    free(pubkey);
     if (pkey.get() == NULL) {
         ALOGW("Cannot convert pubkey");
         return NULL;
