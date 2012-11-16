@@ -23,6 +23,7 @@ LOCAL_C_INCLUDES := external/openssl/include
 LOCAL_SHARED_LIBRARIES := libcutils libcrypto libhardware libkeystore_binder libutils libbinder
 LOCAL_MODULE := keystore
 LOCAL_MODULE_TAGS := optional
+LOCAL_ADDITIONAL_DEPENDENCIES := $(LOCAL_PATH)/Android.mk
 include $(BUILD_EXECUTABLE)
 
 include $(CLEAR_VARS)
@@ -32,6 +33,7 @@ LOCAL_C_INCLUDES := external/openssl/include
 LOCAL_SHARED_LIBRARIES := libcutils libcrypto libkeystore_binder libutils libbinder
 LOCAL_MODULE := keystore_cli
 LOCAL_MODULE_TAGS := debug
+LOCAL_ADDITIONAL_DEPENDENCIES := $(LOCAL_PATH)/Android.mk
 include $(BUILD_EXECUTABLE)
 
 # Library for keystore clients
@@ -43,4 +45,5 @@ LOCAL_MODULE := libkeystore_binder
 LOCAL_MODULE_TAGS := optional
 LOCAL_C_INCLUDES := $(LOCAL_PATH)/include
 LOCAL_EXPORT_C_INCLUDE_DIRS := $(LOCAL_PATH)/include
+LOCAL_ADDITIONAL_DEPENDENCIES := $(LOCAL_PATH)/Android.mk
 include $(BUILD_SHARED_LIBRARY)
