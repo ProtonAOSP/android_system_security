@@ -32,4 +32,6 @@ LOCAL_SHARED_LIBRARIES := libcrypto liblog libkeystore_binder
 
 LOCAL_MODULE_TAGS := optional
 
+LOCAL_ADDITIONAL_DEPENDENCIES := $(LOCAL_PATH)/Android.mk
+
 include $(BUILD_SHARED_LIBRARY)

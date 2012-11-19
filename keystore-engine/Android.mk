@@ -37,4 +37,6 @@ LOCAL_SHARED_LIBRARIES += \
 	libbinder \
 	libkeystore_binder
 
+LOCAL_ADDITIONAL_DEPENDENCIES := $(LOCAL_PATH)/Android.mk
+
 include $(BUILD_SHARED_LIBRARY)
