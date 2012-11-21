@@ -296,7 +296,7 @@ static size_t readFully(int fd, uint8_t* data, size_t size) {
     size_t remaining = size;
     while (remaining > 0) {
         ssize_t n = TEMP_FAILURE_RETRY(read(fd, data, remaining));
-        if (n < 0) {
+        if (n <= 0) {
             return size - remaining;
         }
         data += n;
