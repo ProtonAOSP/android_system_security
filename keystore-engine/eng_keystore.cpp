@@ -125,7 +125,7 @@ int keyhandle_dup(CRYPTO_EX_DATA* to, CRYPTO_EX_DATA*, void *ptrRef, int idx, lo
 
 int keystore_rsa_priv_enc(int flen, const unsigned char* from, unsigned char* to, RSA* rsa,
         int padding) {
-    ALOGV("keystore_rsa_sign(%d, %p, %p, %p, %d)", flen, from, to, rsa, padding);
+    ALOGV("keystore_rsa_priv_enc(%d, %p, %p, %p, %d)", flen, from, to, rsa, padding);
 
     int num = RSA_size(rsa);
     UniquePtr<uint8_t> padded(new uint8_t[num]);
@@ -175,11 +175,11 @@ int keystore_rsa_priv_enc(int flen, const unsigned char* from, unsigned char* to
     int32_t ret = service->sign(String16(reinterpret_cast<const char*>(key_id)), padded.get(),
             num, &reply, &replyLen);
     if (ret < 0) {
-        ALOGW("There was an error during rsa_mod_exp: could not connect");
+        ALOGW("There was an error during signing: could not connect");
         free(reply);
         return 0;
     } else if (ret != 0) {
-        ALOGW("Error during rsa_mod_exp from keystore: %d", ret);
+        ALOGW("Error during signing from keystore: %d", ret);
         free(reply);
         return 0;
     } else if (replyLen <= 0) {
@@ -188,18 +188,87 @@ int keystore_rsa_priv_enc(int flen, const unsigned char* from, unsigned char* to
     }
 
     memcpy(to, reply, replyLen);
+    free(reply);
 
-    ALOGV("rsa=%p keystore_rsa_sign => returning %p len %llu", rsa, to,
+    ALOGV("rsa=%p keystore_rsa_priv_enc => returning %p len %llu", rsa, to,
             (unsigned long long) replyLen);
     return static_cast<int>(replyLen);
 }
 
+int keystore_rsa_priv_dec(int flen, const unsigned char* from, unsigned char* to, RSA* rsa,
+        int padding) {
+    ALOGV("keystore_rsa_priv_dec(%d, %p, %p, %p, %d)", flen, from, to, rsa, padding);
+
+    uint8_t* key_id = reinterpret_cast<uint8_t*>(RSA_get_ex_data(rsa, rsa_key_handle));
+    if (key_id == NULL) {
+        ALOGE("key had no key_id!");
+        return 0;
+    }
+
+    sp<IServiceManager> sm = defaultServiceManager();
+    sp<IBinder> binder = sm->getService(String16("android.security.keystore"));
+    sp<IKeystoreService> service = interface_cast<IKeystoreService>(binder);
+
+    if (service == NULL) {
+        ALOGE("could not contact keystore");
+        return 0;
+    }
+
+    int num = RSA_size(rsa);
+
+    uint8_t* reply = NULL;
+    size_t replyLen;
+    int32_t ret = service->sign(String16(reinterpret_cast<const char*>(key_id)), from,
+            flen, &reply, &replyLen);
+    if (ret < 0) {
+        ALOGW("There was an error during rsa_mod_exp: could not connect");
+        return 0;
+    } else if (ret != 0) {
+        ALOGW("Error during sign from keystore: %d", ret);
+        return 0;
+    } else if (replyLen <= 0) {
+        ALOGW("No valid signature returned");
+        return 0;
+    }
+
+    /* Trim off the top zero if it's there */
+    uint8_t* alignedReply;
+    if (*reply == 0x00) {
+        alignedReply = reply + 1;
+        replyLen--;
+    } else {
+        alignedReply = reply;
+    }
+
+    int outSize;
+    switch (padding) {
+    case RSA_PKCS1_PADDING:
+        outSize = RSA_padding_check_PKCS1_type_2(to, num, alignedReply, replyLen, num);
+        break;
+    case RSA_X931_PADDING:
+        outSize = RSA_padding_check_X931(to, num, alignedReply, replyLen, num);
+        break;
+    case RSA_NO_PADDING:
+        outSize = RSA_padding_check_none(to, num, alignedReply, replyLen, num);
+        break;
+    default:
+        ALOGE("Unknown padding type: %d", padding);
+        outSize = -1;
+        break;
+    }
+
+    free(reply);
+
+    ALOGV("rsa=%p keystore_rsa_priv_dec => returning %p len %llu", rsa, to, outSize);
+    return outSize;
+}
+
 static RSA_METHOD keystore_rsa_meth = {
         KEYSTORE_ENGINE_NAME,
-        NULL, /* rsa_pub_enc */
+        NULL, /* rsa_pub_enc (wrap) */
         NULL, /* rsa_pub_dec (verification) */
         keystore_rsa_priv_enc, /* rsa_priv_enc (signing) */
-        NULL, /* rsa_priv_dec */
+        keystore_rsa_priv_dec, /* rsa_priv_dec (unwrap) */
         NULL, /* rsa_mod_exp */
         NULL, /* bn_mod_exp */
         NULL, /* init */
@@ -216,7 +285,6 @@ static int register_rsa_methods() {
 
     keystore_rsa_meth.rsa_pub_enc = rsa_meth->rsa_pub_enc;
     keystore_rsa_meth.rsa_pub_dec = rsa_meth->rsa_pub_dec;
-    keystore_rsa_meth.rsa_priv_dec = rsa_meth->rsa_priv_dec;
     keystore_rsa_meth.rsa_mod_exp = rsa_meth->rsa_mod_exp;
     keystore_rsa_meth.bn_mod_exp = rsa_meth->bn_mod_exp;
 
