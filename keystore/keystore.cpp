@@ -1555,7 +1555,7 @@ public:
         uid_t uid = IPCThreadState::self()->getCallingUid();
         if (!has_permission(uid, P_GET)) {
             ALOGW("permission denied for %d: getmtime", uid);
-            return ::PERMISSION_DENIED;
+            return -1L;
         }
         uid = get_keystore_euid(uid);
 
@@ -1565,22 +1565,25 @@ public:
         encode_key_for_uid(filename, uid, name8);
 
         if (access(filename, R_OK) == -1) {
-            return (errno != ENOENT) ? ::SYSTEM_ERROR : ::KEY_NOT_FOUND;
+            ALOGW("could not access %s for getmtime", filename);
+            return -1L;
         }
 
         int fd = TEMP_FAILURE_RETRY(open(filename, O_NOFOLLOW, O_RDONLY));
         if (fd < 0) {
-            return ::SYSTEM_ERROR;
+            ALOGW("could not open %s for getmtime", filename);
+            return -1L;
         }
 
         struct stat s;
         int ret = fstat(fd, &s);
         close(fd);
         if (ret == -1) {
-            return ::SYSTEM_ERROR;
+            ALOGW("could not stat %s for getmtime", filename);
+            return -1L;
         }
 
-        return s.st_mtime;
+        return static_cast<int64_t>(s.st_mtime);
     }
 
 private:
