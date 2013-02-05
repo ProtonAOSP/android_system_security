@@ -636,10 +636,14 @@ status_t BnKeystoreService::onTransact(
             size_t outSize = 0;
             int32_t ret = sign(name, (const uint8_t*) in, (size_t) inSize, (uint8_t**) &out, &outSize);
             reply->writeNoException();
-            reply->writeInt32(outSize);
-            void* buf = reply->writeInplace(outSize);
-            memcpy(buf, out, outSize);
-            free(out);
+            if (outSize > 0 && out != NULL) {
+                reply->writeInt32(outSize);
+                void* buf = reply->writeInplace(outSize);
+                memcpy(buf, out, outSize);
+                free(out);
+            } else {
+                reply->writeInt32(0);
+            }
             reply->writeInt32(ret);
             return NO_ERROR;
         } break;
@@ -675,13 +679,17 @@ status_t BnKeystoreService::onTransact(
             size_t outSize = 0;
             int32_t ret = get_pubkey(name, (unsigned char**) &out, &outSize);
             reply->writeNoException();
-            reply->writeInt32(outSize);
-            void* buf = reply->writeInplace(outSize);
-            memcpy(buf, out, outSize);
-            free(out);
+            if (outSize > 0 && out != NULL) {
+                reply->writeInt32(outSize);
+                void* buf = reply->writeInplace(outSize);
+                memcpy(buf, out, outSize);
+                free(out);
+            } else {
+                reply->writeInt32(0);
+            }
             reply->writeInt32(ret);
             return NO_ERROR;
-        }
+        } break;
         case DEL_KEY: {
             CHECK_INTERFACE(IKeystoreService, data, reply);
             String16 name = data.readString16();
