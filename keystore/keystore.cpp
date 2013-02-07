@@ -88,49 +88,6 @@ struct PKCS8_PRIV_KEY_INFO_Delete {
 typedef UniquePtr<PKCS8_PRIV_KEY_INFO, PKCS8_PRIV_KEY_INFO_Delete> Unique_PKCS8_PRIV_KEY_INFO;
 
 
-struct Value {
-    Value(const uint8_t* orig, int origLen) {
-        assert(origLen <= VALUE_SIZE);
-        memcpy(value, orig, origLen);
-        length = origLen;
-    }
-
-    Value() {
-    }
-
-    int length;
-    uint8_t value[VALUE_SIZE];
-};
-
-class ValueString {
-public:
-    ValueString(const Value* orig) {
-        assert(length <= VALUE_SIZE);
-        length = orig->length;
-        value = new char[length + 1];
-        memcpy(value, orig->value, length);
-        value[length] = '\0';
-    }
-
-    ~ValueString() {
-        delete[] value;
-    }
-
-    const char* c_str() const {
-        return value;
-    }
-
-    char* release() {
-        char* ret = value;
-        value = NULL;
-        return ret;
-    }
-
-private:
-    char* value;
-    size_t length;
-};
-
 static int keymaster_device_initialize(keymaster_device_t** dev) {
     int rc;
 
@@ -858,13 +815,6 @@ private:
         return NULL;
     }
 
-    bool convertToUid(const Value* uidValue, uid_t* uid) const {
-        ValueString uidString(uidValue);
-        char* end = NULL;
-        *uid = strtol(uidString.c_str(), &end, 10);
-        return *end == '\0';
-    }
-
     /**
      * Upgrade code. This will upgrade the key from the current version
      * to whatever is newest.
@@ -923,15 +873,14 @@ private:
             return SYSTEM_ERROR;
         }
 
-        Value pkcs8key;
-        pkcs8key.length = len;
-        uint8_t* tmp = pkcs8key.value;
+        UniquePtr<unsigned char[]> pkcs8key(new unsigned char[len]);
+        uint8_t* tmp = pkcs8key.get();
         if (i2d_PKCS8_PRIV_KEY_INFO(pkcs8.get(), &tmp) != len) {
             ALOGE("Couldn't convert to PKCS#8");
             return SYSTEM_ERROR;
         }
 
-        ResponseCode rc = importKey(pkcs8key.value, pkcs8key.length, filename);
+        ResponseCode rc = importKey(pkcs8key.get(), len, filename);
         if (rc != NO_ERROR) {
             return rc;
         }
