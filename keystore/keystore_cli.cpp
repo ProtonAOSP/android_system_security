@@ -76,6 +76,29 @@ static const char* responses[] = {
         } \
     } while (0)
 
+#define SINGLE_ARG_PLUS_UID_INT_RETURN(cmd) \
+    do { \
+        if (strcmp(argv[1], #cmd) == 0) { \
+            if (argc < 3) { \
+                fprintf(stderr, "Usage: %s " #cmd " <name> <uid>\n", argv[0]); \
+                return 1; \
+            } \
+            int uid = -1; \
+            if (argc > 3) { \
+                uid = atoi(argv[3]); \
+                fprintf(stderr, "Running as uid %d\n", uid); \
+            } \
+            int32_t ret = service->cmd(String16(argv[2]), uid); \
+            if (ret < 0) { \
+                fprintf(stderr, "%s: could not connect: %d\n", argv[0], ret); \
+                return 1; \
+            } else { \
+                printf(#cmd ": %s (%d)\n", responses[ret], ret); \
+                return 0; \
+            } \
+        } \
+    } while (0)
+
 #define STING_ARG_DATA_STDIN_INT_RETURN(cmd) \
     do { \
         if (strcmp(argv[1], #cmd) == 0) { \
@@ -122,9 +145,9 @@ static const char* responses[] = {
         } \
     } while (0)
 
-static int saw(sp<IKeystoreService> service, const String16& name) {
+static int saw(sp<IKeystoreService> service, const String16& name, int uid) {
     Vector<String16> matches;
-    int32_t ret = service->saw(name, &matches);
+    int32_t ret = service->saw(name, uid, &matches);
     if (ret < 0) {
         fprintf(stderr, "saw: could not connect: %d\n", ret);
         return 1;
@@ -166,12 +189,13 @@ int main(int argc, char* argv[])
 
     // TODO: insert
 
-    SINGLE_ARG_INT_RETURN(del);
+    SINGLE_ARG_PLUS_UID_INT_RETURN(del);
 
-    SINGLE_ARG_INT_RETURN(exist);
+    SINGLE_ARG_PLUS_UID_INT_RETURN(exist);
 
     if (strcmp(argv[1], "saw") == 0) {
-        return saw(service, argc < 3 ? String16("") : String16(argv[2]));
+        return saw(service, argc < 3 ? String16("") : String16(argv[2]),
+                argc < 4 ? -1 : atoi(argv[3]));
     }
 
     NO_ARG_INT_RETURN(reset);
@@ -184,11 +208,11 @@ int main(int argc, char* argv[])
 
     NO_ARG_INT_RETURN(zero);
 
-    SINGLE_ARG_INT_RETURN(generate);
+    SINGLE_ARG_PLUS_UID_INT_RETURN(generate);
 
     SINGLE_ARG_DATA_RETURN(get_pubkey);
 
-    SINGLE_ARG_INT_RETURN(del_key);
+    SINGLE_ARG_PLUS_UID_INT_RETURN(del_key);
 
     // TODO: grant
 

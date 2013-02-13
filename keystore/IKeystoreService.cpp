@@ -89,7 +89,7 @@ public:
         return 0;
     }
 
-    virtual int32_t insert(const String16& name, const uint8_t* item, size_t itemLength)
+    virtual int32_t insert(const String16& name, const uint8_t* item, size_t itemLength, int uid)
     {
         Parcel data, reply;
         data.writeInterfaceToken(IKeystoreService::getInterfaceDescriptor());
@@ -97,6 +97,7 @@ public:
         data.writeInt32(itemLength);
         void* buf = data.writeInplace(itemLength);
         memcpy(buf, item, itemLength);
+        data.writeInt32(uid);
         status_t status = remote()->transact(BnKeystoreService::INSERT, data, &reply);
         if (status != NO_ERROR) {
             ALOGD("import() could not contact remote: %d\n", status);
@@ -111,11 +112,12 @@ public:
         return ret;
     }
 
-    virtual int32_t del(const String16& name)
+    virtual int32_t del(const String16& name, int uid)
     {
         Parcel data, reply;
         data.writeInterfaceToken(IKeystoreService::getInterfaceDescriptor());
         data.writeString16(name);
+        data.writeInt32(uid);
         status_t status = remote()->transact(BnKeystoreService::DEL, data, &reply);
         if (status != NO_ERROR) {
             ALOGD("del() could not contact remote: %d\n", status);
@@ -130,11 +132,12 @@ public:
         return ret;
     }
 
-    virtual int32_t exist(const String16& name)
+    virtual int32_t exist(const String16& name, int uid)
     {
         Parcel data, reply;
         data.writeInterfaceToken(IKeystoreService::getInterfaceDescriptor());
         data.writeString16(name);
+        data.writeInt32(uid);
         status_t status = remote()->transact(BnKeystoreService::EXIST, data, &reply);
         if (status != NO_ERROR) {
             ALOGD("exist() could not contact remote: %d\n", status);
@@ -149,11 +152,12 @@ public:
         return ret;
     }
 
-    virtual int32_t saw(const String16& name, Vector<String16>* matches)
+    virtual int32_t saw(const String16& name, int uid, Vector<String16>* matches)
     {
         Parcel data, reply;
         data.writeInterfaceToken(IKeystoreService::getInterfaceDescriptor());
         data.writeString16(name);
+        data.writeInt32(uid);
         status_t status = remote()->transact(BnKeystoreService::SAW, data, &reply);
         if (status != NO_ERROR) {
             ALOGD("saw() could not contact remote: %d\n", status);
@@ -264,11 +268,12 @@ public:
         return ret;
     }
 
-    virtual int32_t generate(const String16& name)
+    virtual int32_t generate(const String16& name, int uid)
     {
         Parcel data, reply;
         data.writeInterfaceToken(IKeystoreService::getInterfaceDescriptor());
         data.writeString16(name);
+        data.writeInt32(uid);
         status_t status = remote()->transact(BnKeystoreService::GENERATE, data, &reply);
         if (status != NO_ERROR) {
             ALOGD("generate() could not contact remote: %d\n", status);
@@ -283,7 +288,7 @@ public:
         return ret;
     }
 
-    virtual int32_t import(const String16& name, const uint8_t* key, size_t keyLength)
+    virtual int32_t import(const String16& name, const uint8_t* key, size_t keyLength, int uid)
     {
         Parcel data, reply;
         data.writeInterfaceToken(IKeystoreService::getInterfaceDescriptor());
@@ -291,6 +296,7 @@ public:
         data.writeInt32(keyLength);
         void* buf = data.writeInplace(keyLength);
         memcpy(buf, key, keyLength);
+        data.writeInt32(uid);
         status_t status = remote()->transact(BnKeystoreService::IMPORT, data, &reply);
         if (status != NO_ERROR) {
             ALOGD("import() could not contact remote: %d\n", status);
@@ -403,11 +409,12 @@ public:
         return 0;
      }
 
-    virtual int32_t del_key(const String16& name)
+    virtual int32_t del_key(const String16& name, int uid)
     {
         Parcel data, reply;
         data.writeInterfaceToken(IKeystoreService::getInterfaceDescriptor());
         data.writeString16(name);
+        data.writeInt32(uid);
         status_t status = remote()->transact(BnKeystoreService::DEL_KEY, data, &reply);
         if (status != NO_ERROR) {
             ALOGD("del_key() could not contact remote: %d\n", status);
@@ -525,7 +532,8 @@ status_t BnKeystoreService::onTransact(
                 in = NULL;
                 inSize = 0;
             }
-            int32_t ret = insert(name, (const uint8_t*) in, (size_t) inSize);
+            int uid = data.readInt32();
+            int32_t ret = insert(name, (const uint8_t*) in, (size_t) inSize, uid);
             reply->writeNoException();
             reply->writeInt32(ret);
             return NO_ERROR;
@@ -533,7 +541,8 @@ status_t BnKeystoreService::onTransact(
         case DEL: {
             CHECK_INTERFACE(IKeystoreService, data, reply);
             String16 name = data.readString16();
-            int32_t ret = del(name);
+            int uid = data.readInt32();
+            int32_t ret = del(name, uid);
             reply->writeNoException();
             reply->writeInt32(ret);
             return NO_ERROR;
@@ -541,7 +550,8 @@ status_t BnKeystoreService::onTransact(
         case EXIST: {
             CHECK_INTERFACE(IKeystoreService, data, reply);
             String16 name = data.readString16();
-            int32_t ret = exist(name);
+            int uid = data.readInt32();
+            int32_t ret = exist(name, uid);
             reply->writeNoException();
             reply->writeInt32(ret);
             return NO_ERROR;
@@ -549,8 +559,9 @@ status_t BnKeystoreService::onTransact(
         case SAW: {
             CHECK_INTERFACE(IKeystoreService, data, reply);
             String16 name = data.readString16();
+            int uid = data.readInt32();
             Vector<String16> matches;
-            int32_t ret = saw(name, &matches);
+            int32_t ret = saw(name, uid, &matches);
             reply->writeNoException();
             reply->writeInt32(matches.size());
             Vector<String16>::const_iterator it = matches.begin();
@@ -600,7 +611,8 @@ status_t BnKeystoreService::onTransact(
         case GENERATE: {
             CHECK_INTERFACE(IKeystoreService, data, reply);
             String16 name = data.readString16();
-            int32_t ret = generate(name);
+            int uid = data.readInt32();
+            int32_t ret = generate(name, uid);
             reply->writeNoException();
             reply->writeInt32(ret);
             return NO_ERROR;
@@ -616,7 +628,8 @@ status_t BnKeystoreService::onTransact(
                 in = NULL;
                 inSize = 0;
             }
-            int32_t ret = import(name, (const uint8_t*) in, (size_t) inSize);
+            int uid = data.readInt32();
+            int32_t ret = import(name, (const uint8_t*) in, (size_t) inSize, uid);
             reply->writeNoException();
             reply->writeInt32(ret);
             return NO_ERROR;
@@ -693,7 +706,8 @@ status_t BnKeystoreService::onTransact(
         case DEL_KEY: {
             CHECK_INTERFACE(IKeystoreService, data, reply);
             String16 name = data.readString16();
-            int32_t ret = del_key(name);
+            int uid = data.readInt32();
+            int32_t ret = del_key(name, uid);
             reply->writeNoException();
             reply->writeInt32(ret);
             return NO_ERROR;
