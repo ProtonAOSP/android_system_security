@@ -978,13 +978,17 @@ public:
         return ::NO_ERROR;
     }
 
-    int32_t insert(const String16& name, const uint8_t* item, size_t itemLength) {
+    int32_t insert(const String16& name, const uint8_t* item, size_t itemLength, int uid) {
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
         if (!has_permission(callingUid, P_INSERT)) {
             ALOGW("permission denied for %d: insert", callingUid);
             return ::PERMISSION_DENIED;
         }
         callingUid = get_keystore_euid(callingUid);
+
+        if (uid != -1) {
+            return ::PERMISSION_DENIED;
+        }
 
         State state = checkState();
         if (state != STATE_NO_ERROR) {
@@ -1001,13 +1005,17 @@ public:
         return mKeyStore->put(filename, &keyBlob);
     }
 
-    int32_t del(const String16& name) {
+    int32_t del(const String16& name, int uid) {
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
         if (!has_permission(callingUid, P_DELETE)) {
             ALOGW("permission denied for %d: del", callingUid);
             return ::PERMISSION_DENIED;
         }
         callingUid = get_keystore_euid(callingUid);
+
+        if (uid != -1) {
+            return ::PERMISSION_DENIED;
+        }
 
         String8 name8(name);
         char filename[NAME_MAX];
@@ -1022,13 +1030,17 @@ public:
         return (unlink(filename) && errno != ENOENT) ? ::SYSTEM_ERROR : ::NO_ERROR;
     }
 
-    int32_t exist(const String16& name) {
+    int32_t exist(const String16& name, int uid) {
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
         if (!has_permission(callingUid, P_EXIST)) {
             ALOGW("permission denied for %d: exist", callingUid);
             return ::PERMISSION_DENIED;
         }
         callingUid = get_keystore_euid(callingUid);
+
+        if (uid != -1) {
+            return ::PERMISSION_DENIED;
+        }
 
         String8 name8(name);
         char filename[NAME_MAX];
@@ -1041,13 +1053,17 @@ public:
         return ::NO_ERROR;
     }
 
-    int32_t saw(const String16& prefix, Vector<String16>* matches) {
+    int32_t saw(const String16& prefix, int uid, Vector<String16>* matches) {
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
         if (!has_permission(callingUid, P_SAW)) {
             ALOGW("permission denied for %d: saw", callingUid);
             return ::PERMISSION_DENIED;
         }
         callingUid = get_keystore_euid(callingUid);
+
+        if (uid != -1) {
+            return ::PERMISSION_DENIED;
+        }
 
         DIR* dir = opendir(".");
         if (!dir) {
@@ -1186,13 +1202,17 @@ public:
         return mKeyStore->isEmpty() ? ::KEY_NOT_FOUND : ::NO_ERROR;
     }
 
-    int32_t generate(const String16& name) {
+    int32_t generate(const String16& name, int uid) {
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
         if (!has_permission(callingUid, P_INSERT)) {
             ALOGW("permission denied for %d: generate", callingUid);
             return ::PERMISSION_DENIED;
         }
         callingUid = get_keystore_euid(callingUid);
+
+        if (uid != -1) {
+            return ::PERMISSION_DENIED;
+        }
 
         State state = checkState();
         if (state != STATE_NO_ERROR) {
@@ -1233,13 +1253,17 @@ public:
         return mKeyStore->put(filename, &keyBlob);
     }
 
-    int32_t import(const String16& name, const uint8_t* data, size_t length) {
+    int32_t import(const String16& name, const uint8_t* data, size_t length, int uid) {
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
         if (!has_permission(callingUid, P_INSERT)) {
             ALOGW("permission denied for %d: import", callingUid);
             return ::PERMISSION_DENIED;
         }
         callingUid = get_keystore_euid(callingUid);
+
+        if (uid != -1) {
+            return ::PERMISSION_DENIED;
+        }
 
         State state = checkState();
         if (state != STATE_NO_ERROR) {
@@ -1408,13 +1432,17 @@ public:
         return ::NO_ERROR;
     }
 
-    int32_t del_key(const String16& name) {
+    int32_t del_key(const String16& name, int uid) {
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
         if (!has_permission(callingUid, P_DELETE)) {
             ALOGW("permission denied for %d: del_key", callingUid);
             return ::PERMISSION_DENIED;
         }
         callingUid = get_keystore_euid(callingUid);
+
+        if (uid != -1) {
+            return ::PERMISSION_DENIED;
+        }
 
         String8 name8(name);
         char filename[NAME_MAX];

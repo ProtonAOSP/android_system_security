@@ -57,13 +57,13 @@ public:
 
     virtual int32_t get(const String16& name, uint8_t** item, size_t* itemLength) = 0;
 
-    virtual int32_t insert(const String16& name, const uint8_t* item, size_t itemLength) = 0;
+    virtual int32_t insert(const String16& name, const uint8_t* item, size_t itemLength, int uid) = 0;
 
-    virtual int32_t del(const String16& name) = 0;
+    virtual int32_t del(const String16& name, int uid) = 0;
 
-    virtual int32_t exist(const String16& name) = 0;
+    virtual int32_t exist(const String16& name, int uid) = 0;
 
-    virtual int32_t saw(const String16& name, Vector<String16>* matches) = 0;
+    virtual int32_t saw(const String16& name, int uid, Vector<String16>* matches) = 0;
 
     virtual int32_t reset() = 0;
 
@@ -75,9 +75,9 @@ public:
 
     virtual int32_t zero() = 0;
 
-    virtual int32_t generate(const String16& name) = 0;
+    virtual int32_t generate(const String16& name, int uid) = 0;
 
-    virtual int32_t import(const String16& name, const uint8_t* data, size_t length) = 0;
+    virtual int32_t import(const String16& name, const uint8_t* data, size_t length, int uid) = 0;
 
     virtual int32_t sign(const String16& name, const uint8_t* data, size_t length, uint8_t** out,
             size_t* outLength) = 0;
@@ -87,7 +87,7 @@ public:
 
     virtual int32_t get_pubkey(const String16& name, uint8_t** pubkey, size_t* pubkeyLength) = 0;
 
-    virtual int32_t del_key(const String16& name) = 0;
+    virtual int32_t del_key(const String16& name, int uid) = 0;
 
     virtual int32_t grant(const String16& name, int32_t granteeUid) = 0;
 
