@@ -655,7 +655,7 @@ status_t BnKeystoreService::onTransact(
                 memcpy(buf, out, outSize);
                 free(out);
             } else {
-                reply->writeInt32(0);
+                reply->writeInt32(-1);
             }
             reply->writeInt32(ret);
             return NO_ERROR;
@@ -698,7 +698,7 @@ status_t BnKeystoreService::onTransact(
                 memcpy(buf, out, outSize);
                 free(out);
             } else {
-                reply->writeInt32(0);
+                reply->writeInt32(-1);
             }
             reply->writeInt32(ret);
             return NO_ERROR;
