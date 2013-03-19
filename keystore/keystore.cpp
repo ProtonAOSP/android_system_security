@@ -171,6 +171,11 @@ static bool has_permission(uid_t uid, perm_t perm) {
     return DEFAULT_PERMS & perm;
 }
 
+/**
+ * Returns the UID that the callingUid should act as. This is here for
+ * legacy support of the WiFi and VPN systems and should be removed
+ * when WiFi can operate in its own namespace.
+ */
 static uid_t get_keystore_euid(uid_t uid) {
     for (size_t i = 0; i < sizeof(user_euids)/sizeof(user_euids[0]); i++) {
         struct user_euid user = user_euids[i];
@@ -180,6 +185,21 @@ static uid_t get_keystore_euid(uid_t uid) {
     }
 
     return uid;
+}
+
+/**
+ * Returns true if the callingUid is allowed to interact in the targetUid's
+ * namespace.
+ */
+static bool is_granted_to(uid_t callingUid, uid_t targetUid) {
+    for (size_t i = 0; i < sizeof(user_euids)/sizeof(user_euids[0]); i++) {
+        struct user_euid user = user_euids[i];
+        if (user.euid == callingUid && user.uid == targetUid) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 /* Here is the encoding of keys. This is necessary in order to allow arbitrary
@@ -901,10 +921,10 @@ static ResponseCode get_key_for_name(KeyStore* keyStore, Blob* keyBlob,
         return responseCode;
     }
 
-    // If this is the Wifi or VPN user, they actually want system
-    // UID keys.
-    if (uid == AID_WIFI || uid == AID_VPN) {
-        encode_key_for_uid(filename, AID_SYSTEM, keyName);
+    // If this is one of the legacy UID->UID mappings, use it.
+    uid_t euid = get_keystore_euid(uid);
+    if (euid != uid) {
+        encode_key_for_uid(filename, euid, keyName);
         responseCode = keyStore->get(filename, keyBlob, type);
         if (responseCode == NO_ERROR) {
             return responseCode;
@@ -949,7 +969,6 @@ public:
             ALOGW("permission denied for %d: get", callingUid);
             return ::PERMISSION_DENIED;
         }
-        callingUid = get_keystore_euid(callingUid);
 
         State state = mKeyStore->getState();
         if (!isKeystoreUnlocked(state)) {
@@ -959,11 +978,10 @@ public:
 
         String8 name8(name);
         char filename[NAME_MAX];
-
-        encode_key_for_uid(filename, callingUid, name8);
-
         Blob keyBlob;
-        ResponseCode responseCode = mKeyStore->get(filename, &keyBlob, TYPE_GENERIC);
+
+        ResponseCode responseCode = get_key_for_name(mKeyStore, &keyBlob, name8, callingUid,
+                TYPE_GENERIC);
         if (responseCode != ::NO_ERROR) {
             ALOGW("Could not read %s", filename);
             *item = NULL;
@@ -978,15 +996,16 @@ public:
         return ::NO_ERROR;
     }
 
-    int32_t insert(const String16& name, const uint8_t* item, size_t itemLength, int uid) {
+    int32_t insert(const String16& name, const uint8_t* item, size_t itemLength, int targetUid) {
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
         if (!has_permission(callingUid, P_INSERT)) {
             ALOGW("permission denied for %d: insert", callingUid);
             return ::PERMISSION_DENIED;
         }
-        callingUid = get_keystore_euid(callingUid);
 
-        if (uid != -1) {
+        if (targetUid == -1) {
+            targetUid = callingUid;
+        } else if (!is_granted_to(callingUid, targetUid)) {
             return ::PERMISSION_DENIED;
         }
 
@@ -999,28 +1018,29 @@ public:
         String8 name8(name);
         char filename[NAME_MAX];
 
-        encode_key_for_uid(filename, callingUid, name8);
+        encode_key_for_uid(filename, targetUid, name8);
 
         Blob keyBlob(item, itemLength, NULL, 0, ::TYPE_GENERIC);
         return mKeyStore->put(filename, &keyBlob);
     }
 
-    int32_t del(const String16& name, int uid) {
+    int32_t del(const String16& name, int targetUid) {
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
         if (!has_permission(callingUid, P_DELETE)) {
             ALOGW("permission denied for %d: del", callingUid);
             return ::PERMISSION_DENIED;
         }
-        callingUid = get_keystore_euid(callingUid);
 
-        if (uid != -1) {
+        if (targetUid == -1) {
+            targetUid = callingUid;
+        } else if (!is_granted_to(callingUid, targetUid)) {
             return ::PERMISSION_DENIED;
         }
 
         String8 name8(name);
         char filename[NAME_MAX];
 
-        encode_key_for_uid(filename, callingUid, name8);
+        encode_key_for_uid(filename, targetUid, name8);
 
         Blob keyBlob;
         ResponseCode responseCode = mKeyStore->get(filename, &keyBlob, TYPE_GENERIC);
@@ -1030,22 +1050,23 @@ public:
         return (unlink(filename) && errno != ENOENT) ? ::SYSTEM_ERROR : ::NO_ERROR;
     }
 
-    int32_t exist(const String16& name, int uid) {
+    int32_t exist(const String16& name, int targetUid) {
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
         if (!has_permission(callingUid, P_EXIST)) {
             ALOGW("permission denied for %d: exist", callingUid);
             return ::PERMISSION_DENIED;
         }
-        callingUid = get_keystore_euid(callingUid);
 
-        if (uid != -1) {
+        if (targetUid == -1) {
+            targetUid = callingUid;
+        } else if (!is_granted_to(callingUid, targetUid)) {
             return ::PERMISSION_DENIED;
         }
 
         String8 name8(name);
         char filename[NAME_MAX];
 
-        encode_key_for_uid(filename, callingUid, name8);
+        encode_key_for_uid(filename, targetUid, name8);
 
         if (access(filename, R_OK) == -1) {
             return (errno != ENOENT) ? ::SYSTEM_ERROR : ::KEY_NOT_FOUND;
@@ -1053,15 +1074,16 @@ public:
         return ::NO_ERROR;
     }
 
-    int32_t saw(const String16& prefix, int uid, Vector<String16>* matches) {
+    int32_t saw(const String16& prefix, int targetUid, Vector<String16>* matches) {
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
         if (!has_permission(callingUid, P_SAW)) {
             ALOGW("permission denied for %d: saw", callingUid);
             return ::PERMISSION_DENIED;
         }
-        callingUid = get_keystore_euid(callingUid);
 
-        if (uid != -1) {
+        if (targetUid == -1) {
+            targetUid = callingUid;
+        } else if (!is_granted_to(callingUid, targetUid)) {
             return ::PERMISSION_DENIED;
         }
 
@@ -1073,7 +1095,7 @@ public:
         const String8 prefix8(prefix);
         char filename[NAME_MAX];
 
-        int n = encode_key_for_uid(filename, callingUid, prefix8);
+        int n = encode_key_for_uid(filename, targetUid, prefix8);
 
         struct dirent* file;
         while ((file = readdir(dir)) != NULL) {
@@ -1202,15 +1224,16 @@ public:
         return mKeyStore->isEmpty() ? ::KEY_NOT_FOUND : ::NO_ERROR;
     }
 
-    int32_t generate(const String16& name, int uid) {
+    int32_t generate(const String16& name, int targetUid) {
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
         if (!has_permission(callingUid, P_INSERT)) {
             ALOGW("permission denied for %d: generate", callingUid);
             return ::PERMISSION_DENIED;
         }
-        callingUid = get_keystore_euid(callingUid);
 
-        if (uid != -1) {
+        if (targetUid == -1) {
+            targetUid = callingUid;
+        } else if (!is_granted_to(callingUid, targetUid)) {
             return ::PERMISSION_DENIED;
         }
 
@@ -1245,7 +1268,7 @@ public:
             return ::SYSTEM_ERROR;
         }
 
-        encode_key_for_uid(filename, callingUid, name8);
+        encode_key_for_uid(filename, targetUid, name8);
 
         Blob keyBlob(data, dataLength, NULL, 0, TYPE_KEY_PAIR);
         free(data);
@@ -1253,15 +1276,16 @@ public:
         return mKeyStore->put(filename, &keyBlob);
     }
 
-    int32_t import(const String16& name, const uint8_t* data, size_t length, int uid) {
+    int32_t import(const String16& name, const uint8_t* data, size_t length, int targetUid) {
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
         if (!has_permission(callingUid, P_INSERT)) {
             ALOGW("permission denied for %d: import", callingUid);
             return ::PERMISSION_DENIED;
         }
-        callingUid = get_keystore_euid(callingUid);
 
-        if (uid != -1) {
+        if (targetUid == -1) {
+            targetUid = callingUid;
+        } else if (!is_granted_to(callingUid, targetUid)) {
             return ::PERMISSION_DENIED;
         }
 
@@ -1274,7 +1298,7 @@ public:
         String8 name8(name);
         char filename[NAME_MAX];
 
-        encode_key_for_uid(filename, callingUid, name8);
+        encode_key_for_uid(filename, targetUid, name8);
 
         return mKeyStore->importKey(data, length, filename);
     }
@@ -1286,7 +1310,6 @@ public:
             ALOGW("permission denied for %d: saw", callingUid);
             return ::PERMISSION_DENIED;
         }
-        callingUid = get_keystore_euid(callingUid);
 
         State state = mKeyStore->getState();
         if (!isKeystoreUnlocked(state)) {
@@ -1338,7 +1361,6 @@ public:
             ALOGW("permission denied for %d: verify", callingUid);
             return ::PERMISSION_DENIED;
         }
-        callingUid = get_keystore_euid(callingUid);
 
         State state = mKeyStore->getState();
         if (!isKeystoreUnlocked(state)) {
@@ -1350,7 +1372,8 @@ public:
         String8 name8(name);
         int rc;
 
-        ResponseCode responseCode = get_key_for_name(mKeyStore, &keyBlob, name8, callingUid, TYPE_KEY_PAIR);
+        ResponseCode responseCode = get_key_for_name(mKeyStore, &keyBlob, name8, callingUid,
+                TYPE_KEY_PAIR);
         if (responseCode != ::NO_ERROR) {
             return responseCode;
         }
@@ -1394,7 +1417,6 @@ public:
             ALOGW("permission denied for %d: get_pubkey", callingUid);
             return ::PERMISSION_DENIED;
         }
-        callingUid = get_keystore_euid(callingUid);
 
         State state = mKeyStore->getState();
         if (!isKeystoreUnlocked(state)) {
@@ -1432,22 +1454,23 @@ public:
         return ::NO_ERROR;
     }
 
-    int32_t del_key(const String16& name, int uid) {
+    int32_t del_key(const String16& name, int targetUid) {
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
         if (!has_permission(callingUid, P_DELETE)) {
             ALOGW("permission denied for %d: del_key", callingUid);
             return ::PERMISSION_DENIED;
         }
-        callingUid = get_keystore_euid(callingUid);
 
-        if (uid != -1) {
+        if (targetUid == -1) {
+            targetUid = callingUid;
+        } else if (!is_granted_to(callingUid, targetUid)) {
             return ::PERMISSION_DENIED;
         }
 
         String8 name8(name);
         char filename[NAME_MAX];
 
-        encode_key_for_uid(filename, callingUid, name8);
+        encode_key_for_uid(filename, targetUid, name8);
 
         Blob keyBlob;
         ResponseCode responseCode = mKeyStore->get(filename, &keyBlob, ::TYPE_KEY_PAIR);
@@ -1482,7 +1505,6 @@ public:
             ALOGW("permission denied for %d: grant", callingUid);
             return ::PERMISSION_DENIED;
         }
-        callingUid = get_keystore_euid(callingUid);
 
         State state = mKeyStore->getState();
         if (!isKeystoreUnlocked(state)) {
@@ -1509,7 +1531,6 @@ public:
             ALOGW("permission denied for %d: ungrant", callingUid);
             return ::PERMISSION_DENIED;
         }
-        callingUid = get_keystore_euid(callingUid);
 
         State state = mKeyStore->getState();
         if (!isKeystoreUnlocked(state)) {
@@ -1535,7 +1556,6 @@ public:
             ALOGW("permission denied for %d: getmtime", callingUid);
             return -1L;
         }
-        callingUid = get_keystore_euid(callingUid);
 
         String8 name8(name);
         char filename[NAME_MAX];
