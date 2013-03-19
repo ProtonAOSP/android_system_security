@@ -951,8 +951,8 @@ public:
         }
         callingUid = get_keystore_euid(callingUid);
 
-        State state = checkState();
-        if (state != STATE_NO_ERROR) {
+        State state = mKeyStore->getState();
+        if (!isKeystoreUnlocked(state)) {
             ALOGD("calling get in state: %d", state);
             return state;
         }
@@ -990,8 +990,8 @@ public:
             return ::PERMISSION_DENIED;
         }
 
-        State state = checkState();
-        if (state != STATE_NO_ERROR) {
+        State state = mKeyStore->getState();
+        if (!isKeystoreUnlocked(state)) {
             ALOGD("calling insert in state: %d", state);
             return state;
         }
@@ -1165,8 +1165,8 @@ public:
             return ::PERMISSION_DENIED;
         }
 
-        State state = checkState();
-        if (state != STATE_NO_ERROR) {
+        State state = mKeyStore->getState();
+        if (state != ::STATE_NO_ERROR) {
             ALOGD("calling lock in state: %d", state);
             return state;
         }
@@ -1182,8 +1182,8 @@ public:
             return ::PERMISSION_DENIED;
         }
 
-        State state = checkState();
-        if (state != STATE_LOCKED) {
+        State state = mKeyStore->getState();
+        if (state != ::STATE_LOCKED) {
             ALOGD("calling unlock when not locked");
             return state;
         }
@@ -1214,8 +1214,8 @@ public:
             return ::PERMISSION_DENIED;
         }
 
-        State state = checkState();
-        if (state != STATE_NO_ERROR) {
+        State state = mKeyStore->getState();
+        if (!isKeystoreUnlocked(state)) {
             ALOGD("calling generate in state: %d", state);
             return state;
         }
@@ -1265,8 +1265,8 @@ public:
             return ::PERMISSION_DENIED;
         }
 
-        State state = checkState();
-        if (state != STATE_NO_ERROR) {
+        State state = mKeyStore->getState();
+        if (!isKeystoreUnlocked(state)) {
             ALOGD("calling import in state: %d", state);
             return state;
         }
@@ -1288,8 +1288,8 @@ public:
         }
         callingUid = get_keystore_euid(callingUid);
 
-        State state = checkState();
-        if (state != STATE_NO_ERROR) {
+        State state = mKeyStore->getState();
+        if (!isKeystoreUnlocked(state)) {
             ALOGD("calling sign in state: %d", state);
             return state;
         }
@@ -1340,8 +1340,8 @@ public:
         }
         callingUid = get_keystore_euid(callingUid);
 
-        State state = checkState();
-        if (state != STATE_NO_ERROR) {
+        State state = mKeyStore->getState();
+        if (!isKeystoreUnlocked(state)) {
             ALOGD("calling verify in state: %d", state);
             return state;
         }
@@ -1396,8 +1396,8 @@ public:
         }
         callingUid = get_keystore_euid(callingUid);
 
-        State state = checkState();
-        if (state != STATE_NO_ERROR) {
+        State state = mKeyStore->getState();
+        if (!isKeystoreUnlocked(state)) {
             ALOGD("calling get_pubkey in state: %d", state);
             return state;
         }
@@ -1484,8 +1484,8 @@ public:
         }
         callingUid = get_keystore_euid(callingUid);
 
-        State state = checkState();
-        if (state != STATE_NO_ERROR) {
+        State state = mKeyStore->getState();
+        if (!isKeystoreUnlocked(state)) {
             ALOGD("calling grant in state: %d", state);
             return state;
         }
@@ -1511,8 +1511,8 @@ public:
         }
         callingUid = get_keystore_euid(callingUid);
 
-        State state = checkState();
-        if (state != STATE_NO_ERROR) {
+        State state = mKeyStore->getState();
+        if (!isKeystoreUnlocked(state)) {
             ALOGD("calling ungrant in state: %d", state);
             return state;
         }
@@ -1565,8 +1565,15 @@ public:
     }
 
 private:
-    inline State checkState() {
-        return mKeyStore->getState();
+    inline bool isKeystoreUnlocked(State state) {
+        switch (state) {
+        case ::STATE_NO_ERROR:
+            return true;
+        case ::STATE_UNINITIALIZED:
+        case ::STATE_LOCKED:
+            return false;
+        }
+        return false;
     }
 
     ::KeyStore* mKeyStore;
