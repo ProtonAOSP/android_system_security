@@ -136,6 +136,7 @@ typedef enum {
     P_SIGN     = 1 << 11,
     P_VERIFY   = 1 << 12,
     P_GRANT    = 1 << 13,
+    P_MIGRATE  = 1 << 14,
 } perm_t;
 
 static struct user_euid {
@@ -1582,6 +1583,51 @@ public:
         }
 
         return static_cast<int64_t>(s.st_mtime);
+    }
+
+    int32_t migrate(const String16& name, int32_t targetUid) {
+        uid_t callingUid = IPCThreadState::self()->getCallingUid();
+        if (!has_permission(callingUid, P_MIGRATE)) {
+            ALOGW("permission denied for %d: migrate", callingUid);
+            return -1L;
+        }
+
+        State state = mKeyStore->getState();
+        if (!isKeystoreUnlocked(state)) {
+            ALOGD("calling migrate in state: %d", state);
+            return state;
+        }
+
+        if (!is_granted_to(callingUid, targetUid)) {
+            ALOGD("migrate not granted: %d -> %d", callingUid, targetUid);
+            return ::PERMISSION_DENIED;
+        }
+
+        String8 source8(name);
+        char source[NAME_MAX];
+
+        encode_key_for_uid(source, callingUid, source8);
+
+        if (access(source, W_OK) == -1) {
+            return (errno != ENOENT) ? ::SYSTEM_ERROR : ::KEY_NOT_FOUND;
+        }
+
+        String8 target8(name);
+        char target[NAME_MAX];
+
+        encode_key_for_uid(target, targetUid, target8);
+
+        // Make sure the target doesn't exist
+        if (access(target, R_OK) == 0 || errno != ENOENT) {
+            ALOGD("migrate target already exists: %s", strerror(errno));
+            return ::SYSTEM_ERROR;
+        }
+
+        if (rename(source, target)) {
+            ALOGD("migrate could not rename: %s", strerror(errno));
+            return ::SYSTEM_ERROR;
+        }
+        return ::NO_ERROR;
     }
 
 private:
