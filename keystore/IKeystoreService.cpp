@@ -487,6 +487,26 @@ public:
         }
         return ret;
     }
+
+    virtual int32_t migrate(const String16& name, int32_t targetUid)
+    {
+        Parcel data, reply;
+        data.writeInterfaceToken(IKeystoreService::getInterfaceDescriptor());
+        data.writeString16(name);
+        data.writeInt32(targetUid);
+        status_t status = remote()->transact(BnKeystoreService::MIGRATE, data, &reply);
+        if (status != NO_ERROR) {
+            ALOGD("migrate() could not contact remote: %d\n", status);
+            return -1;
+        }
+        int32_t err = reply.readExceptionCode();
+        int32_t ret = reply.readInt32();
+        if (err < 0) {
+            ALOGD("migrate() caught exception %d\n", err);
+            return -1;
+        }
+        return ret;
+    }
 };
 
 IMPLEMENT_META_INTERFACE(KeystoreService, "android.security.keystore");
@@ -736,6 +756,15 @@ status_t BnKeystoreService::onTransact(
             int64_t ret = getmtime(name);
             reply->writeNoException();
             reply->writeInt64(ret);
+            return NO_ERROR;
+        } break;
+        case MIGRATE: {
+            CHECK_INTERFACE(IKeystoreService, data, reply);
+            String16 name = data.readString16();
+            int32_t targetUid = data.readInt32();
+            int32_t ret = migrate(name, targetUid);
+            reply->writeNoException();
+            reply->writeInt32(ret);
             return NO_ERROR;
         } break;
         default:

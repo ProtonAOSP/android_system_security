@@ -49,6 +49,7 @@ public:
         GRANT = IBinder::FIRST_CALL_TRANSACTION + 17,
         UNGRANT = IBinder::FIRST_CALL_TRANSACTION + 18,
         GETMTIME = IBinder::FIRST_CALL_TRANSACTION + 19,
+        MIGRATE = IBinder::FIRST_CALL_TRANSACTION + 20,
     };
 
     DECLARE_META_INTERFACE(KeystoreService);
@@ -94,6 +95,8 @@ public:
     virtual int32_t ungrant(const String16& name, int32_t granteeUid) = 0;
 
     virtual int64_t getmtime(const String16& name) = 0;
+
+    virtual int32_t migrate(const String16& name, int32_t targetUid) = 0;
 };
 
 // ----------------------------------------------------------------------------
