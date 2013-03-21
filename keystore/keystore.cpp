@@ -122,21 +122,21 @@ static void keymaster_device_release(keymaster_device_t* dev) {
 
 /* Here are the permissions, actions, users, and the main function. */
 typedef enum {
-    P_TEST     = 1 << 0,
-    P_GET      = 1 << 1,
-    P_INSERT   = 1 << 2,
-    P_DELETE   = 1 << 3,
-    P_EXIST    = 1 << 4,
-    P_SAW      = 1 << 5,
-    P_RESET    = 1 << 6,
-    P_PASSWORD = 1 << 7,
-    P_LOCK     = 1 << 8,
-    P_UNLOCK   = 1 << 9,
-    P_ZERO     = 1 << 10,
-    P_SIGN     = 1 << 11,
-    P_VERIFY   = 1 << 12,
-    P_GRANT    = 1 << 13,
-    P_MIGRATE  = 1 << 14,
+    P_TEST      = 1 << 0,
+    P_GET       = 1 << 1,
+    P_INSERT    = 1 << 2,
+    P_DELETE    = 1 << 3,
+    P_EXIST     = 1 << 4,
+    P_SAW       = 1 << 5,
+    P_RESET     = 1 << 6,
+    P_PASSWORD  = 1 << 7,
+    P_LOCK      = 1 << 8,
+    P_UNLOCK    = 1 << 9,
+    P_ZERO      = 1 << 10,
+    P_SIGN      = 1 << 11,
+    P_VERIFY    = 1 << 12,
+    P_GRANT     = 1 << 13,
+    P_DUPLICATE = 1 << 14,
 } perm_t;
 
 static struct user_euid {
@@ -361,6 +361,7 @@ struct __attribute__((packed)) blob {
 };
 
 typedef enum {
+    TYPE_ANY = 0, // meta type that matches anything
     TYPE_GENERIC = 1,
     TYPE_MASTER_KEY = 2,
     TYPE_KEY_PAIR = 3,
@@ -682,7 +683,7 @@ public:
             upgrade(filename, keyBlob, version, type);
         }
 
-        if (keyBlob->getType() != type) {
+        if (type != TYPE_ANY && keyBlob->getType() != type) {
             ALOGW("key found but type doesn't match: %d vs %d", keyBlob->getType(), type);
             return KEY_NOT_FOUND;
         }
@@ -1585,49 +1586,66 @@ public:
         return static_cast<int64_t>(s.st_mtime);
     }
 
-    int32_t migrate(const String16& name, int32_t targetUid) {
+    int32_t duplicate(const String16& srcKey, int32_t srcUid, const String16& destKey,
+            int32_t destUid) {
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        if (!has_permission(callingUid, P_MIGRATE)) {
-            ALOGW("permission denied for %d: migrate", callingUid);
+        if (!has_permission(callingUid, P_DUPLICATE)) {
+            ALOGW("permission denied for %d: duplicate", callingUid);
             return -1L;
         }
 
         State state = mKeyStore->getState();
         if (!isKeystoreUnlocked(state)) {
-            ALOGD("calling migrate in state: %d", state);
+            ALOGD("calling duplicate in state: %d", state);
             return state;
         }
 
-        if (!is_granted_to(callingUid, targetUid)) {
-            ALOGD("migrate not granted: %d -> %d", callingUid, targetUid);
+        if (srcUid == -1 || static_cast<uid_t>(srcUid) == callingUid) {
+            srcUid = callingUid;
+        } else if (!is_granted_to(callingUid, srcUid)) {
+            ALOGD("migrate not granted from source: %d -> %d", callingUid, srcUid);
             return ::PERMISSION_DENIED;
         }
 
-        String8 source8(name);
+        if (destUid == -1) {
+            destUid = callingUid;
+        }
+
+        if (srcUid != destUid) {
+            if (static_cast<uid_t>(srcUid) != callingUid) {
+                ALOGD("can only duplicate from caller to other or to same uid: "
+                      "calling=%d, srcUid=%d, destUid=%d", callingUid, srcUid, destUid);
+                return ::PERMISSION_DENIED;
+            }
+
+            if (!is_granted_to(callingUid, destUid)) {
+                ALOGD("duplicate not granted to dest: %d -> %d", callingUid, destUid);
+                return ::PERMISSION_DENIED;
+            }
+        }
+
+        String8 source8(srcKey);
         char source[NAME_MAX];
 
-        encode_key_for_uid(source, callingUid, source8);
+        encode_key_for_uid(source, srcUid, source8);
 
-        if (access(source, W_OK) == -1) {
-            return (errno != ENOENT) ? ::SYSTEM_ERROR : ::KEY_NOT_FOUND;
-        }
-
-        String8 target8(name);
+        String8 target8(destKey);
         char target[NAME_MAX];
 
-        encode_key_for_uid(target, targetUid, target8);
+        encode_key_for_uid(target, destUid, target8);
 
-        // Make sure the target doesn't exist
-        if (access(target, R_OK) == 0 || errno != ENOENT) {
-            ALOGD("migrate target already exists: %s", strerror(errno));
+        if (access(target, W_OK) != -1 || errno != ENOENT) {
+            ALOGD("destination already exists: %s", target);
             return ::SYSTEM_ERROR;
         }
 
-        if (rename(source, target)) {
-            ALOGD("migrate could not rename: %s", strerror(errno));
-            return ::SYSTEM_ERROR;
+        Blob keyBlob;
+        ResponseCode responseCode = mKeyStore->get(source, &keyBlob, TYPE_ANY);
+        if (responseCode != ::NO_ERROR) {
+            return responseCode;
         }
-        return ::NO_ERROR;
+
+        return mKeyStore->put(target, &keyBlob);
     }
 
 private:
