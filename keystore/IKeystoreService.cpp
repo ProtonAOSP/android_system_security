@@ -488,21 +488,24 @@ public:
         return ret;
     }
 
-    virtual int32_t migrate(const String16& name, int32_t targetUid)
+    virtual int32_t duplicate(const String16& srcKey, int32_t srcUid, const String16& destKey,
+            int32_t destUid)
     {
         Parcel data, reply;
         data.writeInterfaceToken(IKeystoreService::getInterfaceDescriptor());
-        data.writeString16(name);
-        data.writeInt32(targetUid);
-        status_t status = remote()->transact(BnKeystoreService::MIGRATE, data, &reply);
+        data.writeString16(srcKey);
+        data.writeInt32(srcUid);
+        data.writeString16(destKey);
+        data.writeInt32(destUid);
+        status_t status = remote()->transact(BnKeystoreService::DUPLICATE, data, &reply);
         if (status != NO_ERROR) {
-            ALOGD("migrate() could not contact remote: %d\n", status);
+            ALOGD("duplicate() could not contact remote: %d\n", status);
             return -1;
         }
         int32_t err = reply.readExceptionCode();
         int32_t ret = reply.readInt32();
         if (err < 0) {
-            ALOGD("migrate() caught exception %d\n", err);
+            ALOGD("duplicate() caught exception %d\n", err);
             return -1;
         }
         return ret;
@@ -758,11 +761,13 @@ status_t BnKeystoreService::onTransact(
             reply->writeInt64(ret);
             return NO_ERROR;
         } break;
-        case MIGRATE: {
+        case DUPLICATE: {
             CHECK_INTERFACE(IKeystoreService, data, reply);
-            String16 name = data.readString16();
-            int32_t targetUid = data.readInt32();
-            int32_t ret = migrate(name, targetUid);
+            String16 srcKey = data.readString16();
+            int32_t srcUid = data.readInt32();
+            String16 destKey = data.readString16();
+            int32_t destUid = data.readInt32();
+            int32_t ret = duplicate(srcKey, srcUid, destKey, destUid);
             reply->writeNoException();
             reply->writeInt32(ret);
             return NO_ERROR;
