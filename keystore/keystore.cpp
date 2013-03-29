@@ -742,6 +742,10 @@ public:
         return put(filename, &keyBlob);
     }
 
+    bool isHardwareBacked() const {
+        return (mDevice->flags & KEYMASTER_SOFTWARE_ONLY) != 0;
+    }
+
 private:
     static const char* MASTER_KEY_FILE;
     static const int MASTER_KEY_SIZE_BYTES = 16;
@@ -1646,6 +1650,10 @@ public:
         }
 
         return mKeyStore->put(target, &keyBlob);
+    }
+
+    int32_t is_hardware_backed() {
+        return mKeyStore->isHardwareBacked() ? 1 : 0;
     }
 
 private:

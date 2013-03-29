@@ -50,6 +50,7 @@ public:
         UNGRANT = IBinder::FIRST_CALL_TRANSACTION + 18,
         GETMTIME = IBinder::FIRST_CALL_TRANSACTION + 19,
         DUPLICATE = IBinder::FIRST_CALL_TRANSACTION + 20,
+        IS_HARDWARE_BACKED = IBinder::FIRST_CALL_TRANSACTION + 21,
     };
 
     DECLARE_META_INTERFACE(KeystoreService);
@@ -98,6 +99,8 @@ public:
 
     virtual int32_t duplicate(const String16& srcKey, int32_t srcUid, const String16& destKey,
             int32_t destUid) = 0;
+
+    virtual int32_t is_hardware_backed() = 0;
 };
 
 // ----------------------------------------------------------------------------

@@ -510,6 +510,24 @@ public:
         }
         return ret;
     }
+
+    virtual int32_t is_hardware_backed()
+    {
+        Parcel data, reply;
+        data.writeInterfaceToken(IKeystoreService::getInterfaceDescriptor());
+        status_t status = remote()->transact(BnKeystoreService::IS_HARDWARE_BACKED, data, &reply);
+        if (status != NO_ERROR) {
+            ALOGD("is_hardware_backed() could not contact remote: %d\n", status);
+            return -1;
+        }
+        int32_t err = reply.readExceptionCode();
+        int32_t ret = reply.readInt32();
+        if (err < 0) {
+            ALOGD("is_hardware_backed() caught exception %d\n", err);
+            return -1;
+        }
+        return ret;
+    }
 };
 
 IMPLEMENT_META_INTERFACE(KeystoreService, "android.security.keystore");
@@ -772,6 +790,13 @@ status_t BnKeystoreService::onTransact(
             reply->writeInt32(ret);
             return NO_ERROR;
         } break;
+        case IS_HARDWARE_BACKED: {
+            CHECK_INTERFACE(IKeystoreService, data, reply);
+            int32_t ret = is_hardware_backed();
+            reply->writeNoException();
+            reply->writeInt32(ret);
+            return NO_ERROR;
+        }
         default:
             return BBinder::onTransact(code, data, reply, flags);
     }
