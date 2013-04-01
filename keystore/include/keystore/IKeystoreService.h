@@ -51,6 +51,7 @@ public:
         GETMTIME = IBinder::FIRST_CALL_TRANSACTION + 19,
         DUPLICATE = IBinder::FIRST_CALL_TRANSACTION + 20,
         IS_HARDWARE_BACKED = IBinder::FIRST_CALL_TRANSACTION + 21,
+        CLEAR_UID = IBinder::FIRST_CALL_TRANSACTION + 22,
     };
 
     DECLARE_META_INTERFACE(KeystoreService);
@@ -101,6 +102,8 @@ public:
             int32_t destUid) = 0;
 
     virtual int32_t is_hardware_backed() = 0;
+
+    virtual int32_t clear_uid(int64_t uid) = 0;
 };
 
 // ----------------------------------------------------------------------------
