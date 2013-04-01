@@ -137,6 +137,7 @@ typedef enum {
     P_VERIFY    = 1 << 12,
     P_GRANT     = 1 << 13,
     P_DUPLICATE = 1 << 14,
+    P_CLEAR_UID = 1 << 15,
 } perm_t;
 
 static struct user_euid {
@@ -1654,6 +1655,70 @@ public:
 
     int32_t is_hardware_backed() {
         return mKeyStore->isHardwareBacked() ? 1 : 0;
+    }
+
+    int32_t clear_uid(int64_t targetUid) {
+        uid_t callingUid = IPCThreadState::self()->getCallingUid();
+        if (!has_permission(callingUid, P_CLEAR_UID)) {
+            ALOGW("permission denied for %d: clear_uid", callingUid);
+            return ::PERMISSION_DENIED;
+        }
+
+        State state = mKeyStore->getState();
+        if (!isKeystoreUnlocked(state)) {
+            ALOGD("calling clear_uid in state: %d", state);
+            return state;
+        }
+
+        const keymaster_device_t* device = mKeyStore->getDevice();
+        if (device == NULL) {
+            return ::SYSTEM_ERROR;
+        }
+
+        DIR* dir = opendir(".");
+        if (!dir) {
+            return ::SYSTEM_ERROR;
+        }
+
+        char filename[NAME_MAX];
+        int n = snprintf(filename, NAME_MAX, "%u_", static_cast<uid_t>(targetUid));
+        char *end = &filename[n];
+
+        ResponseCode rc = ::NO_ERROR;
+
+        struct dirent* file;
+        while ((file = readdir(dir)) != NULL) {
+            if (strncmp(filename, file->d_name, n)) {
+                continue;
+            }
+
+            String8 file8(&file->d_name[n]);
+            encode_key(end, file8);
+
+            Blob keyBlob;
+            if (mKeyStore->get(filename, &keyBlob, ::TYPE_ANY) != ::NO_ERROR) {
+                ALOGW("couldn't open %s", filename);
+                continue;
+            }
+
+            if (keyBlob.getType() == ::TYPE_KEY_PAIR) {
+                // A device doesn't have to implement delete_keypair.
+                if (device->delete_keypair != NULL) {
+                    if (device->delete_keypair(device, keyBlob.getValue(), keyBlob.getLength())) {
+                        rc = ::SYSTEM_ERROR;
+                        ALOGW("device couldn't remove %s", filename);
+                    }
+                }
+            }
+
+            if (unlink(filename) && errno != ENOENT) {
+                rc = ::SYSTEM_ERROR;
+                ALOGW("couldn't unlink %s", filename);
+            }
+        }
+        closedir(dir);
+
+        return rc;
     }
 
 private:

@@ -528,6 +528,25 @@ public:
         }
         return ret;
     }
+
+    virtual int32_t clear_uid(int64_t uid)
+    {
+        Parcel data, reply;
+        data.writeInterfaceToken(IKeystoreService::getInterfaceDescriptor());
+        data.writeInt64(uid);
+        status_t status = remote()->transact(BnKeystoreService::CLEAR_UID, data, &reply);
+        if (status != NO_ERROR) {
+            ALOGD("clear_uid() could not contact remote: %d\n", status);
+            return -1;
+        }
+        int32_t err = reply.readExceptionCode();
+        int32_t ret = reply.readInt32();
+        if (err < 0) {
+            ALOGD("clear_uid() caught exception %d\n", err);
+            return -1;
+        }
+        return ret;
+    }
 };
 
 IMPLEMENT_META_INTERFACE(KeystoreService, "android.security.keystore");
@@ -793,6 +812,14 @@ status_t BnKeystoreService::onTransact(
         case IS_HARDWARE_BACKED: {
             CHECK_INTERFACE(IKeystoreService, data, reply);
             int32_t ret = is_hardware_backed();
+            reply->writeNoException();
+            reply->writeInt32(ret);
+            return NO_ERROR;
+        }
+        case CLEAR_UID: {
+            CHECK_INTERFACE(IKeystoreService, data, reply);
+            int64_t uid = data.readInt64();
+            int32_t ret = clear_uid(uid);
             reply->writeNoException();
             reply->writeInt32(ret);
             return NO_ERROR;
