@@ -364,7 +364,7 @@ private:
  * can be found in blob.length. The description is stored after the secret in
  * plaintext, and its size is specified in blob.info. The total size of the two
  * parts must be no more than VALUE_SIZE bytes. The first field is the version,
- * the second is the blob's type, and the third byte is reserved. Fields other
+ * the second is the blob's type, and the third byte is flags. Fields other
  * than blob.info, blob.length, and blob.value are modified by encryptBlob()
  * and decryptBlob(). Thus they should not be accessed from outside. */
 
@@ -385,7 +385,7 @@ private:
 struct __attribute__((packed)) blob {
     uint8_t version;
     uint8_t type;
-    uint8_t reserved;
+    uint8_t flags;
     uint8_t info;
     uint8_t vector[AES_BLOCK_SIZE];
     uint8_t encrypted[0]; // Marks offset to encrypted data.
@@ -402,7 +402,7 @@ typedef enum {
     TYPE_KEY_PAIR = 3,
 } BlobType;
 
-static const uint8_t CURRENT_BLOB_VERSION = 1;
+static const uint8_t CURRENT_BLOB_VERSION = 2;
 
 class Blob {
 public:
@@ -416,6 +416,8 @@ public:
 
         mBlob.version = CURRENT_BLOB_VERSION;
         mBlob.type = uint8_t(type);
+
+        mBlob.flags = KEYSTORE_FLAG_NONE;
     }
 
     Blob(blob b) {
@@ -444,6 +446,22 @@ public:
         return mBlob.version;
     }
 
+    bool isEncrypted() const {
+        if (mBlob.version < 2) {
+            return true;
+        }
+
+        return mBlob.flags & KEYSTORE_FLAG_ENCRYPTED;
+    }
+
+    void setEncrypted(bool encrypted) {
+        if (encrypted) {
+            mBlob.flags |= KEYSTORE_FLAG_ENCRYPTED;
+        } else {
+            mBlob.flags &= ~KEYSTORE_FLAG_ENCRYPTED;
+        }
+    }
+
     void setVersion(uint8_t version) {
         mBlob.version = version;
     }
@@ -456,10 +474,18 @@ public:
         mBlob.type = uint8_t(type);
     }
 
-    ResponseCode encryptBlob(const char* filename, AES_KEY *aes_key, Entropy* entropy) {
-        if (!entropy->generate_random_data(mBlob.vector, AES_BLOCK_SIZE)) {
-            ALOGW("Could not read random data for: %s", filename);
-            return SYSTEM_ERROR;
+    ResponseCode writeBlob(const char* filename, AES_KEY *aes_key, State state, Entropy* entropy) {
+        ALOGV("writing blob %s", filename);
+        if (isEncrypted()) {
+            if (state != STATE_NO_ERROR) {
+                ALOGD("couldn't insert encrypted blob while not unlocked");
+                return LOCKED;
+            }
+
+            if (!entropy->generate_random_data(mBlob.vector, AES_BLOCK_SIZE)) {
+                ALOGW("Could not read random data for: %s", filename);
+                return SYSTEM_ERROR;
+            }
         }
 
         // data includes the value and the value's length
@@ -475,14 +501,16 @@ public:
         memset(mBlob.value + mBlob.length, 0, digestedLength - dataLength);
 
         mBlob.length = htonl(mBlob.length);
-        MD5(mBlob.digested, digestedLength, mBlob.digest);
 
-        uint8_t vector[AES_BLOCK_SIZE];
-        memcpy(vector, mBlob.vector, AES_BLOCK_SIZE);
-        AES_cbc_encrypt(mBlob.encrypted, mBlob.encrypted, encryptedLength,
-                        aes_key, vector, AES_ENCRYPT);
+        if (isEncrypted()) {
+            MD5(mBlob.digested, digestedLength, mBlob.digest);
 
-        mBlob.reserved = 0;
+            uint8_t vector[AES_BLOCK_SIZE];
+            memcpy(vector, mBlob.vector, AES_BLOCK_SIZE);
+            AES_cbc_encrypt(mBlob.encrypted, mBlob.encrypted, encryptedLength,
+                            aes_key, vector, AES_ENCRYPT);
+        }
+
         size_t headerLength = (mBlob.encrypted - (uint8_t*) &mBlob);
         size_t fileLength = encryptedLength + headerLength + mBlob.info;
 
@@ -509,7 +537,8 @@ public:
         return NO_ERROR;
     }
 
-    ResponseCode decryptBlob(const char* filename, AES_KEY *aes_key) {
+    ResponseCode readBlob(const char* filename, AES_KEY *aes_key, State state) {
+        ALOGV("reading blob %s", filename);
         int in = TEMP_FAILURE_RETRY(open(filename, O_RDONLY));
         if (in < 0) {
             return (errno == ENOENT) ? KEY_NOT_FOUND : SYSTEM_ERROR;
@@ -521,22 +550,37 @@ public:
         if (close(in) != 0) {
             return SYSTEM_ERROR;
         }
+
+        if (isEncrypted() && (state != STATE_NO_ERROR)) {
+            return LOCKED;
+        }
+
         size_t headerLength = (mBlob.encrypted - (uint8_t*) &mBlob);
         if (fileLength < headerLength) {
             return VALUE_CORRUPTED;
         }
 
         ssize_t encryptedLength = fileLength - (headerLength + mBlob.info);
-        if (encryptedLength < 0 || encryptedLength % AES_BLOCK_SIZE != 0) {
+        if (encryptedLength < 0) {
             return VALUE_CORRUPTED;
         }
-        AES_cbc_encrypt(mBlob.encrypted, mBlob.encrypted, encryptedLength, aes_key,
-                        mBlob.vector, AES_DECRYPT);
-        size_t digestedLength = encryptedLength - MD5_DIGEST_LENGTH;
-        uint8_t computedDigest[MD5_DIGEST_LENGTH];
-        MD5(mBlob.digested, digestedLength, computedDigest);
-        if (memcmp(mBlob.digest, computedDigest, MD5_DIGEST_LENGTH) != 0) {
-            return VALUE_CORRUPTED;
+
+        ssize_t digestedLength;
+        if (isEncrypted()) {
+            if (encryptedLength % AES_BLOCK_SIZE != 0) {
+                return VALUE_CORRUPTED;
+            }
+
+            AES_cbc_encrypt(mBlob.encrypted, mBlob.encrypted, encryptedLength, aes_key,
+                            mBlob.vector, AES_DECRYPT);
+            digestedLength = encryptedLength - MD5_DIGEST_LENGTH;
+            uint8_t computedDigest[MD5_DIGEST_LENGTH];
+            MD5(mBlob.digested, digestedLength, computedDigest);
+            if (memcmp(mBlob.digest, computedDigest, MD5_DIGEST_LENGTH) != 0) {
+                return VALUE_CORRUPTED;
+            }
+        } else {
+            digestedLength = encryptedLength;
         }
 
         ssize_t maxValueLength = digestedLength - sizeof(mBlob.length);
@@ -634,7 +678,7 @@ public:
         AES_KEY passwordAesKey;
         AES_set_encrypt_key(passwordKey, MASTER_KEY_SIZE_BITS, &passwordAesKey);
         Blob masterKeyBlob(mMasterKey, sizeof(mMasterKey), mSalt, sizeof(mSalt), TYPE_MASTER_KEY);
-        return masterKeyBlob.encryptBlob(mMasterKeyFile, &passwordAesKey, entropy);
+        return masterKeyBlob.writeBlob(mMasterKeyFile, &passwordAesKey, STATE_NO_ERROR, entropy);
     }
 
     ResponseCode readMasterKey(const android::String8& pw, Entropy* entropy) {
@@ -662,9 +706,10 @@ public:
         AES_KEY passwordAesKey;
         AES_set_decrypt_key(passwordKey, MASTER_KEY_SIZE_BITS, &passwordAesKey);
         Blob masterKeyBlob(rawBlob);
-        ResponseCode response = masterKeyBlob.decryptBlob(mMasterKeyFile, &passwordAesKey);
+        ResponseCode response = masterKeyBlob.readBlob(mMasterKeyFile, &passwordAesKey,
+                STATE_NO_ERROR);
         if (response == SYSTEM_ERROR) {
-            return SYSTEM_ERROR;
+            return response;
         }
         if (response == NO_ERROR && masterKeyBlob.getLength() == MASTER_KEY_SIZE_BYTES) {
             // if salt was missing, generate one and write a new master key file with the salt.
@@ -929,7 +974,8 @@ public:
 
     ResponseCode get(const char* filename, Blob* keyBlob, const BlobType type, uid_t uid) {
         UserState* userState = getUserState(uid);
-        ResponseCode rc = keyBlob->decryptBlob(filename, userState->getDecryptionKey());
+        ResponseCode rc = keyBlob->readBlob(filename, userState->getDecryptionKey(),
+                userState->getState());
         if (rc != NO_ERROR) {
             return rc;
         }
@@ -942,8 +988,8 @@ public:
              */
             if (upgradeBlob(filename, keyBlob, version, type, uid)) {
                 if ((rc = this->put(filename, keyBlob, uid)) != NO_ERROR
-                        || (rc = keyBlob->decryptBlob(filename, userState->getDecryptionKey()))
-                                != NO_ERROR) {
+                        || (rc = keyBlob->readBlob(filename, userState->getDecryptionKey(),
+                                userState->getState())) != NO_ERROR) {
                     return rc;
                 }
             }
@@ -959,7 +1005,8 @@ public:
 
     ResponseCode put(const char* filename, Blob* keyBlob, uid_t uid) {
         UserState* userState = getUserState(uid);
-        return keyBlob->encryptBlob(filename, userState->getEncryptionKey(), mEntropy);
+        return keyBlob->writeBlob(filename, userState->getEncryptionKey(), userState->getState(),
+                mEntropy);
     }
 
     void addGrant(const char* filename, uid_t granteeUid) {
@@ -989,7 +1036,8 @@ public:
         return getGrant(filename, uid) != NULL;
     }
 
-    ResponseCode importKey(const uint8_t* key, size_t keyLen, const char* filename, uid_t uid) {
+    ResponseCode importKey(const uint8_t* key, size_t keyLen, const char* filename, uid_t uid,
+            int32_t flags) {
         uint8_t* data;
         size_t dataLength;
         int rc;
@@ -1007,6 +1055,8 @@ public:
 
         Blob keyBlob(data, dataLength, NULL, 0, TYPE_KEY_PAIR);
         free(data);
+
+        keyBlob.setEncrypted(flags & KEYSTORE_FLAG_ENCRYPTED);
 
         return put(filename, &keyBlob, uid);
     }
@@ -1154,6 +1204,15 @@ private:
             updated = true;
         }
 
+        /* From V1 -> V2: All old keys were encrypted */
+        if (version == 1) {
+            ALOGV("upgrading to version 2");
+
+            blob->setEncrypted(true);
+            version = 2;
+            updated = true;
+        }
+
         /*
          * If we've updated, set the key blob to the right version
          * and write it.
@@ -1200,7 +1259,8 @@ private:
             return SYSTEM_ERROR;
         }
 
-        ResponseCode rc = importKey(pkcs8key.get(), len, filename, uid);
+        ResponseCode rc = importKey(pkcs8key.get(), len, filename, uid,
+                blob->isEncrypted() ? KEYSTORE_FLAG_ENCRYPTED : KEYSTORE_FLAG_NONE);
         if (rc != NO_ERROR) {
             return rc;
         }
@@ -1342,12 +1402,6 @@ public:
             return ::PERMISSION_DENIED;
         }
 
-        State state = mKeyStore->getState(callingUid);
-        if (!isKeystoreUnlocked(state)) {
-            ALOGD("calling get in state: %d", state);
-            return state;
-        }
-
         String8 name8(name);
         Blob keyBlob;
 
@@ -1367,23 +1421,24 @@ public:
         return ::NO_ERROR;
     }
 
-    int32_t insert(const String16& name, const uint8_t* item, size_t itemLength, int targetUid) {
+    int32_t insert(const String16& name, const uint8_t* item, size_t itemLength, int targetUid,
+            int32_t flags) {
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
         if (!has_permission(callingUid, P_INSERT)) {
             ALOGW("permission denied for %d: insert", callingUid);
             return ::PERMISSION_DENIED;
         }
 
+        State state = mKeyStore->getState(callingUid);
+        if ((flags & KEYSTORE_FLAG_ENCRYPTED) && !isKeystoreUnlocked(state)) {
+            ALOGD("calling get in state: %d", state);
+            return state;
+        }
+
         if (targetUid == -1) {
             targetUid = callingUid;
         } else if (!is_granted_to(callingUid, targetUid)) {
             return ::PERMISSION_DENIED;
-        }
-
-        State state = mKeyStore->getState(callingUid);
-        if (!isKeystoreUnlocked(state)) {
-            ALOGD("calling insert in state: %d", state);
-            return state;
         }
 
         String8 name8(name);
@@ -1601,7 +1656,7 @@ public:
         return mKeyStore->isEmpty(callingUid) ? ::KEY_NOT_FOUND : ::NO_ERROR;
     }
 
-    int32_t generate(const String16& name, int targetUid) {
+    int32_t generate(const String16& name, int targetUid, int32_t flags) {
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
         if (!has_permission(callingUid, P_INSERT)) {
             ALOGW("permission denied for %d: generate", callingUid);
@@ -1615,8 +1670,8 @@ public:
         }
 
         State state = mKeyStore->getState(callingUid);
-        if (!isKeystoreUnlocked(state)) {
-            ALOGD("calling generate in state: %d", state);
+        if ((flags & KEYSTORE_FLAG_ENCRYPTED) && !isKeystoreUnlocked(state)) {
+            ALOGW("calling generate in state: %d", state);
             return state;
         }
 
@@ -1651,7 +1706,8 @@ public:
         return mKeyStore->put(filename.string(), &keyBlob, callingUid);
     }
 
-    int32_t import(const String16& name, const uint8_t* data, size_t length, int targetUid) {
+    int32_t import(const String16& name, const uint8_t* data, size_t length, int targetUid,
+            int32_t flags) {
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
         if (!has_permission(callingUid, P_INSERT)) {
             ALOGW("permission denied for %d: import", callingUid);
@@ -1665,7 +1721,7 @@ public:
         }
 
         State state = mKeyStore->getState(callingUid);
-        if (!isKeystoreUnlocked(state)) {
+        if ((flags & KEYSTORE_FLAG_ENCRYPTED) && !isKeystoreUnlocked(state)) {
             ALOGD("calling import in state: %d", state);
             return state;
         }
@@ -1673,7 +1729,7 @@ public:
         String8 name8(name);
         String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, callingUid));
 
-        return mKeyStore->importKey(data, length, filename.string(), callingUid);
+        return mKeyStore->importKey(data, length, filename.string(), callingUid, flags);
     }
 
     int32_t sign(const String16& name, const uint8_t* data, size_t length, uint8_t** out,
@@ -1682,12 +1738,6 @@ public:
         if (!has_permission(callingUid, P_SIGN)) {
             ALOGW("permission denied for %d: saw", callingUid);
             return ::PERMISSION_DENIED;
-        }
-
-        State state = mKeyStore->getState(callingUid);
-        if (!isKeystoreUnlocked(state)) {
-            ALOGD("calling sign in state: %d", state);
-            return state;
         }
 
         Blob keyBlob;
@@ -1789,12 +1839,6 @@ public:
         if (!has_permission(callingUid, P_GET)) {
             ALOGW("permission denied for %d: get_pubkey", callingUid);
             return ::PERMISSION_DENIED;
-        }
-
-        State state = mKeyStore->getState(callingUid);
-        if (!isKeystoreUnlocked(state)) {
-            ALOGD("calling get_pubkey in state: %d", state);
-            return state;
         }
 
         Blob keyBlob;
