@@ -681,7 +681,16 @@ public:
 
         const uint8_t version = keyBlob->getVersion();
         if (version < CURRENT_BLOB_VERSION) {
-            upgrade(filename, keyBlob, version, type);
+            /* If we upgrade the key, we need to write it to disk again. Then
+             * it must be read it again since the blob is encrypted each time
+             * it's written.
+             */
+            if (upgrade(filename, keyBlob, version, type)) {
+                if ((rc = this->put(filename, keyBlob)) != NO_ERROR
+                        || (rc = keyBlob->readBlob(filename, &mMasterKeyDecryption)) != NO_ERROR) {
+                    return rc;
+                }
+            }
         }
 
         if (type != TYPE_ANY && keyBlob->getType() != type) {
@@ -846,7 +855,7 @@ private:
      * Upgrade code. This will upgrade the key from the current version
      * to whatever is newest.
      */
-    void upgrade(const char* filename, Blob* blob, const uint8_t oldVersion, const BlobType type) {
+    bool upgrade(const char* filename, Blob* blob, const uint8_t oldVersion, const BlobType type) {
         bool updated = false;
         uint8_t version = oldVersion;
 
@@ -865,12 +874,13 @@ private:
         /*
          * If we've updated, set the key blob to the right version
          * and write it.
-         * */
+         */
         if (updated) {
             ALOGV("updated and writing file %s", filename);
             blob->setVersion(version);
-            this->put(filename, blob);
         }
+
+        return updated;
     }
 
     /**
