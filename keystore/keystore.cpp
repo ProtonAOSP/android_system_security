@@ -687,7 +687,7 @@ public:
              */
             if (upgrade(filename, keyBlob, version, type)) {
                 if ((rc = this->put(filename, keyBlob)) != NO_ERROR
-                        || (rc = keyBlob->readBlob(filename, &mMasterKeyDecryption)) != NO_ERROR) {
+                        || (rc = keyBlob->decryptBlob(filename, &mMasterKeyDecryption)) != NO_ERROR) {
                     return rc;
                 }
             }
