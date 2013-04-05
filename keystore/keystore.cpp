@@ -753,7 +753,7 @@ public:
     }
 
     bool isHardwareBacked() const {
-        return (mDevice->flags & KEYMASTER_SOFTWARE_ONLY) != 0;
+        return (mDevice->flags & KEYMASTER_SOFTWARE_ONLY) == 0;
     }
 
 private:
