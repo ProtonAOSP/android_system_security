@@ -2078,7 +2078,7 @@ public:
                 }
             }
 
-            if (unlinkat(dirfd(dir), filename.string(), 0) && errno != ENOENT) {
+            if (unlinkat(dirfd(dir), file->d_name, 0) && errno != ENOENT) {
                 rc = ::SYSTEM_ERROR;
                 ALOGW("couldn't unlink %s", filename.string());
             }
