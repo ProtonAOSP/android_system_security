@@ -89,7 +89,8 @@ public:
         return 0;
     }
 
-    virtual int32_t insert(const String16& name, const uint8_t* item, size_t itemLength, int uid)
+    virtual int32_t insert(const String16& name, const uint8_t* item, size_t itemLength, int uid,
+            int32_t flags)
     {
         Parcel data, reply;
         data.writeInterfaceToken(IKeystoreService::getInterfaceDescriptor());
@@ -98,6 +99,7 @@ public:
         void* buf = data.writeInplace(itemLength);
         memcpy(buf, item, itemLength);
         data.writeInt32(uid);
+        data.writeInt32(flags);
         status_t status = remote()->transact(BnKeystoreService::INSERT, data, &reply);
         if (status != NO_ERROR) {
             ALOGD("import() could not contact remote: %d\n", status);
@@ -268,12 +270,13 @@ public:
         return ret;
     }
 
-    virtual int32_t generate(const String16& name, int uid)
+    virtual int32_t generate(const String16& name, int uid, int32_t flags)
     {
         Parcel data, reply;
         data.writeInterfaceToken(IKeystoreService::getInterfaceDescriptor());
         data.writeString16(name);
         data.writeInt32(uid);
+        data.writeInt32(flags);
         status_t status = remote()->transact(BnKeystoreService::GENERATE, data, &reply);
         if (status != NO_ERROR) {
             ALOGD("generate() could not contact remote: %d\n", status);
@@ -288,7 +291,8 @@ public:
         return ret;
     }
 
-    virtual int32_t import(const String16& name, const uint8_t* key, size_t keyLength, int uid)
+    virtual int32_t import(const String16& name, const uint8_t* key, size_t keyLength, int uid,
+            int flags)
     {
         Parcel data, reply;
         data.writeInterfaceToken(IKeystoreService::getInterfaceDescriptor());
@@ -297,6 +301,7 @@ public:
         void* buf = data.writeInplace(keyLength);
         memcpy(buf, key, keyLength);
         data.writeInt32(uid);
+        data.writeInt32(flags);
         status_t status = remote()->transact(BnKeystoreService::IMPORT, data, &reply);
         if (status != NO_ERROR) {
             ALOGD("import() could not contact remote: %d\n", status);
@@ -593,7 +598,8 @@ status_t BnKeystoreService::onTransact(
                 inSize = 0;
             }
             int uid = data.readInt32();
-            int32_t ret = insert(name, (const uint8_t*) in, (size_t) inSize, uid);
+            int32_t flags = data.readInt32();
+            int32_t ret = insert(name, (const uint8_t*) in, (size_t) inSize, uid, flags);
             reply->writeNoException();
             reply->writeInt32(ret);
             return NO_ERROR;
@@ -672,7 +678,8 @@ status_t BnKeystoreService::onTransact(
             CHECK_INTERFACE(IKeystoreService, data, reply);
             String16 name = data.readString16();
             int uid = data.readInt32();
-            int32_t ret = generate(name, uid);
+            int32_t flags = data.readInt32();
+            int32_t ret = generate(name, uid, flags);
             reply->writeNoException();
             reply->writeInt32(ret);
             return NO_ERROR;
@@ -689,7 +696,8 @@ status_t BnKeystoreService::onTransact(
                 inSize = 0;
             }
             int uid = data.readInt32();
-            int32_t ret = import(name, (const uint8_t*) in, (size_t) inSize, uid);
+            int32_t flags = data.readInt32();
+            int32_t ret = import(name, (const uint8_t*) in, (size_t) inSize, uid, flags);
             reply->writeNoException();
             reply->writeInt32(ret);
             return NO_ERROR;
