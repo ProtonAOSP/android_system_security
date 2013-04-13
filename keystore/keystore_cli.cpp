@@ -208,7 +208,7 @@ int main(int argc, char* argv[])
 
     NO_ARG_INT_RETURN(zero);
 
-    SINGLE_ARG_PLUS_UID_INT_RETURN(generate);
+    // TODO: generate
 
     SINGLE_ARG_DATA_RETURN(get_pubkey);
 

@@ -43,6 +43,14 @@ enum ResponseCode {
     SIGNATURE_INVALID = 14,
 };
 
+/*
+ * All the flags for import and insert calls.
+ */
+enum {
+    KEYSTORE_FLAG_NONE = 0,
+    KEYSTORE_FLAG_ENCRYPTED = 1,
+};
+
 /**
  * Returns the size of the softkey magic header value for measuring
  * and allocating purposes.
