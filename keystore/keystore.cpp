@@ -1727,7 +1727,7 @@ public:
         }
 
         String8 name8(name);
-        String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, callingUid));
+        String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, targetUid));
 
         return mKeyStore->importKey(data, length, filename.string(), callingUid, flags);
     }
