@@ -905,19 +905,19 @@ public:
     }
 
     android::String8 getKeyName(const android::String8& keyName) {
-        char encoded[encode_key_length(keyName)];
+        char encoded[encode_key_length(keyName) + 1];	// add 1 for null char
         encode_key(encoded, keyName);
         return android::String8(encoded);
     }
 
     android::String8 getKeyNameForUid(const android::String8& keyName, uid_t uid) {
-        char encoded[encode_key_length(keyName)];
+        char encoded[encode_key_length(keyName) + 1];	// add 1 for null char
         encode_key(encoded, keyName);
         return android::String8::format("%u_%s", uid, encoded);
     }
 
     android::String8 getKeyNameForUidWithDir(const android::String8& keyName, uid_t uid) {
-        char encoded[encode_key_length(keyName)];
+        char encoded[encode_key_length(keyName) + 1];	// add 1 for null char
         encode_key(encoded, keyName);
         return android::String8::format("%s/%u_%s", getUserState(uid)->getUserDirName(), uid,
                 encoded);
