@@ -22,7 +22,10 @@ LOCAL_MODULE_TAGS := optional
 
 LOCAL_MODULE_PATH := $(TARGET_OUT_SHARED_LIBRARIES)/ssl/engines
 
-LOCAL_SRC_FILES := eng_keystore.cpp
+LOCAL_SRC_FILES := \
+	eng_keystore.cpp \
+	keyhandle.cpp \
+	rsa_meth.cpp
 
 LOCAL_CFLAGS := -fvisibility=hidden -Wall -Werror
 
