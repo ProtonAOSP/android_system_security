@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2012 The Android Open Source Project
+ * Copyright 2012 The Android Open Source Project
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -42,11 +42,13 @@
 #include <keystore/keystore.h>
 #include <keystore/IKeystoreService.h>
 
+#include "methods.h"
+
 using namespace android;
 
 #define DYNAMIC_ENGINE
-#define KEYSTORE_ENGINE_ID   "keystore"
-#define KEYSTORE_ENGINE_NAME "Android keystore engine"
+const char* kKeystoreEngineId = "keystore";
+static const char* kKeystoreEngineDesc = "Android keystore engine";
 
 /**
  * Many OpenSSL APIs take ownership of an argument on success but don't free the argument
@@ -70,226 +72,6 @@ struct EVP_PKEY_Delete {
 };
 typedef UniquePtr<EVP_PKEY, EVP_PKEY_Delete> Unique_EVP_PKEY;
 
-struct RSA_Delete {
-    void operator()(RSA* p) const {
-        RSA_free(p);
-    }
-};
-typedef UniquePtr<RSA, RSA_Delete> Unique_RSA;
-
-
-/*
- * RSA ex_data index for keystore's key handle.
- */
-static int rsa_key_handle;
-
-/*
- * Only initialize the rsa_key_handle once.
- */
-static pthread_once_t rsa_key_handle_control = PTHREAD_ONCE_INIT;
-
-
-/**
- * Makes sure the ex_data for the keyhandle is initially set to NULL.
- */
-int keyhandle_new(void*, void*, CRYPTO_EX_DATA* ad, int idx, long, void*) {
-    return CRYPTO_set_ex_data(ad, idx, NULL);
-}
-
-/**
- * Frees a previously allocated keyhandle stored in ex_data.
- */
-void keyhandle_free(void *, void *ptr, CRYPTO_EX_DATA*, int, long, void*) {
-    char* keyhandle = reinterpret_cast<char*>(ptr);
-    if (keyhandle != NULL) {
-        free(keyhandle);
-    }
-}
-
-/**
- * Duplicates a keyhandle stored in ex_data in case we copy a key.
- */
-int keyhandle_dup(CRYPTO_EX_DATA* to, CRYPTO_EX_DATA*, void *ptrRef, int idx, long, void *) {
-    // This appears to be a bug in OpenSSL.
-    void** ptr = reinterpret_cast<void**>(ptrRef);
-    char* keyhandle = reinterpret_cast<char*>(*ptr);
-    if (keyhandle != NULL) {
-        char* keyhandle_copy = strdup(keyhandle);
-        *ptr = keyhandle_copy;
-
-        // Call this in case OpenSSL is fixed in the future.
-        (void) CRYPTO_set_ex_data(to, idx, keyhandle_copy);
-    }
-    return 1;
-}
-
-int keystore_rsa_priv_enc(int flen, const unsigned char* from, unsigned char* to, RSA* rsa,
-        int padding) {
-    ALOGV("keystore_rsa_priv_enc(%d, %p, %p, %p, %d)", flen, from, to, rsa, padding);
-
-    int num = RSA_size(rsa);
-    UniquePtr<uint8_t> padded(new uint8_t[num]);
-    if (padded.get() == NULL) {
-        ALOGE("could not allocate padded signature");
-        return 0;
-    }
-
-    switch (padding) {
-    case RSA_PKCS1_PADDING:
-        if (!RSA_padding_add_PKCS1_type_1(padded.get(), num, from, flen)) {
-            return 0;
-        }
-        break;
-    case RSA_X931_PADDING:
-        if (!RSA_padding_add_X931(padded.get(), num, from, flen)) {
-            return 0;
-        }
-        break;
-    case RSA_NO_PADDING:
-        if (!RSA_padding_add_none(padded.get(), num, from, flen)) {
-            return 0;
-        }
-        break;
-    default:
-        ALOGE("Unknown padding type: %d", padding);
-        return 0;
-    }
-
-    uint8_t* key_id = reinterpret_cast<uint8_t*>(RSA_get_ex_data(rsa, rsa_key_handle));
-    if (key_id == NULL) {
-        ALOGE("key had no key_id!");
-        return 0;
-    }
-
-    sp<IServiceManager> sm = defaultServiceManager();
-    sp<IBinder> binder = sm->getService(String16("android.security.keystore"));
-    sp<IKeystoreService> service = interface_cast<IKeystoreService>(binder);
-
-    if (service == NULL) {
-        ALOGE("could not contact keystore");
-        return 0;
-    }
-
-    uint8_t* reply = NULL;
-    size_t replyLen;
-    int32_t ret = service->sign(String16(reinterpret_cast<const char*>(key_id)), padded.get(),
-            num, &reply, &replyLen);
-    if (ret < 0) {
-        ALOGW("There was an error during signing: could not connect");
-        free(reply);
-        return 0;
-    } else if (ret != 0) {
-        ALOGW("Error during signing from keystore: %d", ret);
-        free(reply);
-        return 0;
-    } else if (replyLen <= 0) {
-        ALOGW("No valid signature returned");
-        return 0;
-    }
-
-    memcpy(to, reply, replyLen);
-    free(reply);
-
-    ALOGV("rsa=%p keystore_rsa_priv_enc => returning %p len %llu", rsa, to,
-            (unsigned long long) replyLen);
-    return static_cast<int>(replyLen);
-}
-
-int keystore_rsa_priv_dec(int flen, const unsigned char* from, unsigned char* to, RSA* rsa,
-        int padding) {
-    ALOGV("keystore_rsa_priv_dec(%d, %p, %p, %p, %d)", flen, from, to, rsa, padding);
-
-    uint8_t* key_id = reinterpret_cast<uint8_t*>(RSA_get_ex_data(rsa, rsa_key_handle));
-    if (key_id == NULL) {
-        ALOGE("key had no key_id!");
-        return 0;
-    }
-
-    sp<IServiceManager> sm = defaultServiceManager();
-    sp<IBinder> binder = sm->getService(String16("android.security.keystore"));
-    sp<IKeystoreService> service = interface_cast<IKeystoreService>(binder);
-
-    if (service == NULL) {
-        ALOGE("could not contact keystore");
-        return 0;
-    }
-
-    int num = RSA_size(rsa);
-
-    uint8_t* reply = NULL;
-    size_t replyLen;
-    int32_t ret = service->sign(String16(reinterpret_cast<const char*>(key_id)), from,
-            flen, &reply, &replyLen);
-    if (ret < 0) {
-        ALOGW("There was an error during rsa_mod_exp: could not connect");
-        return 0;
-    } else if (ret != 0) {
-        ALOGW("Error during sign from keystore: %d", ret);
-        return 0;
-    } else if (replyLen <= 0) {
-        ALOGW("No valid signature returned");
-        return 0;
-    }
-
-    /* Trim off the top zero if it's there */
-    uint8_t* alignedReply;
-    if (*reply == 0x00) {
-        alignedReply = reply + 1;
-        replyLen--;
-    } else {
-        alignedReply = reply;
-    }
-
-    int outSize;
-    switch (padding) {
-    case RSA_PKCS1_PADDING:
-        outSize = RSA_padding_check_PKCS1_type_2(to, num, alignedReply, replyLen, num);
-        break;
-    case RSA_X931_PADDING:
-        outSize = RSA_padding_check_X931(to, num, alignedReply, replyLen, num);
-        break;
-    case RSA_NO_PADDING:
-        outSize = RSA_padding_check_none(to, num, alignedReply, replyLen, num);
-        break;
-    default:
-        ALOGE("Unknown padding type: %d", padding);
-        outSize = -1;
-        break;
-    }
-
-    free(reply);
-
-    ALOGV("rsa=%p keystore_rsa_priv_dec => returning %p len %llu", rsa, to, outSize);
-    return outSize;
-}
-
-static RSA_METHOD keystore_rsa_meth = {
-        KEYSTORE_ENGINE_NAME,
-        NULL, /* rsa_pub_enc (wrap) */
-        NULL, /* rsa_pub_dec (verification) */
-        keystore_rsa_priv_enc, /* rsa_priv_enc (signing) */
-        keystore_rsa_priv_dec, /* rsa_priv_dec (unwrap) */
-        NULL, /* rsa_mod_exp */
-        NULL, /* bn_mod_exp */
-        NULL, /* init */
-        NULL, /* finish */
-        RSA_FLAG_EXT_PKEY | RSA_FLAG_NO_BLINDING, /* flags */
-        NULL, /* app_data */
-        NULL, /* rsa_sign */
-        NULL, /* rsa_verify */
-        NULL, /* rsa_keygen */
-};
-
-static int register_rsa_methods() {
-    const RSA_METHOD* rsa_meth = RSA_PKCS1_SSLeay();
-
-    keystore_rsa_meth.rsa_pub_enc = rsa_meth->rsa_pub_enc;
-    keystore_rsa_meth.rsa_pub_dec = rsa_meth->rsa_pub_dec;
-    keystore_rsa_meth.rsa_mod_exp = rsa_meth->rsa_mod_exp;
-    keystore_rsa_meth.bn_mod_exp = rsa_meth->bn_mod_exp;
-
-    return 1;
-}
 
 static EVP_PKEY* keystore_loadkey(ENGINE* e, const char* key_id, UI_METHOD* ui_method,
         void* callback_data) {
@@ -332,23 +114,7 @@ static EVP_PKEY* keystore_loadkey(ENGINE* e, const char* key_id, UI_METHOD* ui_m
 
     switch (EVP_PKEY_type(pkey->type)) {
     case EVP_PKEY_RSA: {
-        Unique_RSA rsa(EVP_PKEY_get1_RSA(pkey.get()));
-        if (!RSA_set_ex_data(rsa.get(), rsa_key_handle, reinterpret_cast<void*>(strdup(key_id)))) {
-            ALOGW("Could not set ex_data for loaded RSA key");
-            return NULL;
-        }
-
-        RSA_set_method(rsa.get(), &keystore_rsa_meth);
-        RSA_blinding_off(rsa.get());
-
-        /*
-         * This should probably be an OpenSSL API, but EVP_PKEY_free calls
-         * ENGINE_finish(), so we need to call ENGINE_init() here.
-         */
-        ENGINE_init(e);
-        rsa->engine = e;
-        rsa->flags |= RSA_FLAG_EXT_PKEY;
-
+        rsa_pkey_setup(e, pkey.get(), key_id);
         break;
     }
     default:
@@ -363,20 +129,11 @@ static const ENGINE_CMD_DEFN keystore_cmd_defns[] = {
     {0, NULL, NULL, 0}
 };
 
-/**
- * Called to initialize RSA's ex_data for the key_id handle. This should
- * only be called when protected by a lock.
- */
-static void init_rsa_key_handle() {
-    rsa_key_handle = RSA_get_ex_new_index(0, NULL, keyhandle_new, keyhandle_dup,
-            keyhandle_free);
-}
-
 static int keystore_engine_setup(ENGINE* e) {
     ALOGV("keystore_engine_setup");
 
-    if (!ENGINE_set_id(e, KEYSTORE_ENGINE_ID)
-            || !ENGINE_set_name(e, KEYSTORE_ENGINE_NAME)
+    if (!ENGINE_set_id(e, kKeystoreEngineId)
+            || !ENGINE_set_name(e, kKeystoreEngineDesc)
             || !ENGINE_set_load_privkey_function(e, keystore_loadkey)
             || !ENGINE_set_load_pubkey_function(e, keystore_loadkey)
             || !ENGINE_set_flags(e, 0)
@@ -385,16 +142,8 @@ static int keystore_engine_setup(ENGINE* e) {
         return 0;
     }
 
-    if (!ENGINE_set_RSA(e, &keystore_rsa_meth)
-            || !register_rsa_methods()) {
-        ALOGE("Could not set up keystore RSA methods");
-        return 0;
-    }
-
-    /* We need a handle in the RSA keys as well for keygen if it's not already initialized. */
-    pthread_once(&rsa_key_handle_control, init_rsa_key_handle);
-    if (rsa_key_handle < 0) {
-        ALOGE("Could not set up RSA ex_data index");
+    if (!rsa_register(e)) {
+        ALOGE("RSA registration failed");
         return 0;
     }
 
@@ -423,7 +172,7 @@ static int keystore_bind_fn(ENGINE *e, const char *id) {
         return 0;
     }
 
-    if (strcmp(id, KEYSTORE_ENGINE_ID)) {
+    if (strcmp(id, kKeystoreEngineId)) {
         return 0;
     }
 
