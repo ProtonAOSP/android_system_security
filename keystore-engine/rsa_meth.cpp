@@ -38,34 +38,8 @@
 #include "methods.h"
 
 
-/*
- * RSA ex_data index for keystore's key handle.
- */
-static int rsa_key_handle;
-
-/*
- * Only initialize the rsa_key_handle once.
- */
-static pthread_once_t rsa_key_handle_control = PTHREAD_ONCE_INIT;
-
-struct RSA_Delete {
-    void operator()(RSA* p) const {
-        RSA_free(p);
-    }
-};
-typedef UniquePtr<RSA, RSA_Delete> Unique_RSA;
-
-
 using namespace android;
 
-/**
- * Called to initialize RSA's ex_data for the key_id handle. This should
- * only be called when protected by a lock.
- */
-static void init_rsa_key_handle() {
-    rsa_key_handle = RSA_get_ex_new_index(0, NULL, keyhandle_new, keyhandle_dup,
-            keyhandle_free);
-}
 
 int keystore_rsa_priv_enc(int flen, const unsigned char* from, unsigned char* to, RSA* rsa,
         int padding) {
@@ -246,8 +220,9 @@ int rsa_pkey_setup(ENGINE *e, EVP_PKEY *pkey, const char *key_id) {
     RSA_blinding_off(rsa.get());
 
     /*
-     * This should probably be an OpenSSL API, but EVP_PKEY_free calls
-     * ENGINE_finish(), so we need to call ENGINE_init() here.
+     * "RSA_set_ENGINE()" should probably be an OpenSSL API. Since it isn't,
+     * and EVP_PKEY_free() calls ENGINE_finish(), we need to call ENGINE_init()
+     * here.
      */
     ENGINE_init(e);
     rsa->engine = e;
@@ -260,13 +235,6 @@ int rsa_register(ENGINE* e) {
     if (!ENGINE_set_RSA(e, &keystore_rsa_meth)
             || !register_rsa_methods()) {
         ALOGE("Could not set up keystore RSA methods");
-        return 0;
-    }
-
-    /* We need a handle in the RSA keys as well for keygen if it's not already initialized. */
-    pthread_once(&rsa_key_handle_control, init_rsa_key_handle);
-    if (rsa_key_handle < 0) {
-        ALOGE("Could not set up RSA ex_data index");
         return 0;
     }
 

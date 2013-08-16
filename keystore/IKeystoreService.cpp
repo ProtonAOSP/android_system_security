@@ -29,6 +29,21 @@
 
 namespace android {
 
+KeystoreArg::KeystoreArg(const void* data, size_t len)
+    : mData(data), mSize(len) {
+}
+
+KeystoreArg::~KeystoreArg() {
+}
+
+const void *KeystoreArg::data() const {
+    return mData;
+}
+
+size_t KeystoreArg::size() const {
+    return mSize;
+}
+
 class BpKeystoreService: public BpInterface<IKeystoreService>
 {
 public:
@@ -270,13 +285,24 @@ public:
         return ret;
     }
 
-    virtual int32_t generate(const String16& name, int uid, int32_t flags)
+    virtual int32_t generate(const String16& name, int32_t uid, int32_t keyType, int32_t keySize,
+            int32_t flags, Vector<sp<KeystoreArg> >* args)
     {
         Parcel data, reply;
         data.writeInterfaceToken(IKeystoreService::getInterfaceDescriptor());
         data.writeString16(name);
         data.writeInt32(uid);
+        data.writeInt32(keyType);
+        data.writeInt32(keySize);
         data.writeInt32(flags);
+        data.writeInt32(args->size());
+        for (Vector<sp<KeystoreArg> >::iterator it = args->begin(); it != args->end(); ++it) {
+            sp<KeystoreArg> item = *it;
+            size_t keyLength = item->size();
+            data.writeInt32(keyLength);
+            void* buf = data.writeInplace(keyLength);
+            memcpy(buf, item->data(), keyLength);
+        }
         status_t status = remote()->transact(BnKeystoreService::GENERATE, data, &reply);
         if (status != NO_ERROR) {
             ALOGD("generate() could not contact remote: %d\n", status);
@@ -677,9 +703,24 @@ status_t BnKeystoreService::onTransact(
         case GENERATE: {
             CHECK_INTERFACE(IKeystoreService, data, reply);
             String16 name = data.readString16();
-            int uid = data.readInt32();
+            int32_t uid = data.readInt32();
+            int32_t keyType = data.readInt32();
+            int32_t keySize = data.readInt32();
             int32_t flags = data.readInt32();
-            int32_t ret = generate(name, uid, flags);
+            Vector<sp<KeystoreArg> > args;
+            ssize_t numArgs = data.readInt32();
+            if (numArgs > 0) {
+                for (size_t i = 0; i < (size_t) numArgs; i++) {
+                    ssize_t inSize = data.readInt32();
+                    if (inSize >= 0 && (size_t) inSize <= data.dataAvail()) {
+                        sp<KeystoreArg> arg = new KeystoreArg(data.readInplace(inSize), inSize);
+                        args.push_back(arg);
+                    } else {
+                        args.push_back(NULL);
+                    }
+                }
+            }
+            int32_t ret = generate(name, uid, keyType, keySize, flags, &args);
             reply->writeNoException();
             reply->writeInt32(ret);
             return NO_ERROR;

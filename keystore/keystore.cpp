@@ -56,6 +56,8 @@
 
 #include <keystore/keystore.h>
 
+#include "defaults.h"
+
 /* KeyStore is a secured storage for key-value pairs. In this implementation,
  * each file stores one key-value pair. Keys are encoded in file names, and
  * values are encrypted with checksums. The encryption key is protected by a
@@ -66,6 +68,13 @@
 #define VALUE_SIZE      32768
 #define PASSWORD_SIZE   VALUE_SIZE
 
+
+struct BIGNUM_Delete {
+    void operator()(BIGNUM* p) const {
+        BN_free(p);
+    }
+};
+typedef UniquePtr<BIGNUM, BIGNUM_Delete> Unique_BIGNUM;
 
 struct BIO_Delete {
     void operator()(BIO* p) const {
@@ -1656,7 +1665,8 @@ public:
         return mKeyStore->isEmpty(callingUid) ? ::KEY_NOT_FOUND : ::NO_ERROR;
     }
 
-    int32_t generate(const String16& name, int targetUid, int32_t flags) {
+    int32_t generate(const String16& name, int32_t targetUid, int32_t keyType, int32_t keySize,
+            int32_t flags, Vector<sp<KeystoreArg> >* args) {
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
         if (!has_permission(callingUid, P_INSERT)) {
             ALOGW("permission denied for %d: generate", callingUid);
@@ -1688,11 +1698,97 @@ public:
             return ::SYSTEM_ERROR;
         }
 
-        keymaster_rsa_keygen_params_t rsa_params;
-        rsa_params.modulus_size = 2048;
-        rsa_params.public_exponent = 0x10001;
+        if (keyType == EVP_PKEY_DSA && device->client_version >= 2) {
+            keymaster_dsa_keygen_params_t dsa_params;
+            memset(&dsa_params, '\0', sizeof(dsa_params));
 
-        rc = device->generate_keypair(device, TYPE_RSA, &rsa_params, &data, &dataLength);
+            if (keySize == -1) {
+                keySize = DSA_DEFAULT_KEY_SIZE;
+            } else if ((keySize % 64) != 0 || keySize < DSA_MIN_KEY_SIZE
+                    || keySize > DSA_MAX_KEY_SIZE) {
+                ALOGI("invalid key size %d", keySize);
+                return ::SYSTEM_ERROR;
+            }
+            dsa_params.key_size = keySize;
+
+            if (args->size() == 3) {
+                sp<KeystoreArg> gArg = args->itemAt(0);
+                sp<KeystoreArg> pArg = args->itemAt(1);
+                sp<KeystoreArg> qArg = args->itemAt(2);
+
+                if (gArg != NULL && pArg != NULL && qArg != NULL) {
+                    dsa_params.generator = reinterpret_cast<const uint8_t*>(gArg->data());
+                    dsa_params.generator_len = gArg->size();
+
+                    dsa_params.prime_p = reinterpret_cast<const uint8_t*>(pArg->data());
+                    dsa_params.prime_p_len = pArg->size();
+
+                    dsa_params.prime_q = reinterpret_cast<const uint8_t*>(qArg->data());
+                    dsa_params.prime_q_len = qArg->size();
+                } else {
+                    ALOGI("not all DSA parameters were read");
+                    return ::SYSTEM_ERROR;
+                }
+            } else if (args->size() != 0) {
+                ALOGI("DSA args must be 3");
+                return ::SYSTEM_ERROR;
+            }
+
+            rc = device->generate_keypair(device, TYPE_DSA, &dsa_params, &data, &dataLength);
+        } else if (keyType == EVP_PKEY_EC && device->client_version >= 2) {
+            keymaster_ec_keygen_params_t ec_params;
+            memset(&ec_params, '\0', sizeof(ec_params));
+
+            if (keySize == -1) {
+                keySize = EC_DEFAULT_KEY_SIZE;
+            } else if (keySize < EC_MIN_KEY_SIZE || keySize > EC_MAX_KEY_SIZE) {
+                ALOGI("invalid key size %d", keySize);
+                return ::SYSTEM_ERROR;
+            }
+            ec_params.field_size = keySize;
+
+            rc = device->generate_keypair(device, TYPE_EC, &ec_params, &data, &dataLength);
+        } else if (keyType == EVP_PKEY_RSA) {
+            keymaster_rsa_keygen_params_t rsa_params;
+            memset(&rsa_params, '\0', sizeof(rsa_params));
+            rsa_params.public_exponent = RSA_DEFAULT_EXPONENT;
+
+            if (keySize == -1) {
+                keySize = RSA_DEFAULT_KEY_SIZE;
+            } else if (keySize < RSA_MIN_KEY_SIZE || keySize > RSA_MAX_KEY_SIZE) {
+                ALOGI("invalid key size %d", keySize);
+                return ::SYSTEM_ERROR;
+            }
+            rsa_params.modulus_size = keySize;
+
+            if (args->size() > 1) {
+                ALOGI("invalid number of arguments: %d", args->size());
+                return ::SYSTEM_ERROR;
+            } else if (args->size() == 1) {
+                sp<KeystoreArg> pubExpBlob = args->itemAt(0);
+                if (pubExpBlob != NULL) {
+                    Unique_BIGNUM pubExpBn(
+                            BN_bin2bn(reinterpret_cast<const unsigned char*>(pubExpBlob->data()),
+                                    pubExpBlob->size(), NULL));
+                    if (pubExpBn.get() == NULL) {
+                        ALOGI("Could not convert public exponent to BN");
+                        return ::SYSTEM_ERROR;
+                    }
+                    unsigned long pubExp = BN_get_word(pubExpBn.get());
+                    if (pubExp == 0xFFFFFFFFL) {
+                        ALOGI("cannot represent public exponent as a long value");
+                        return ::SYSTEM_ERROR;
+                    }
+                    rsa_params.public_exponent = pubExp;
+                }
+            }
+
+            rc = device->generate_keypair(device, TYPE_RSA, &rsa_params, &data, &dataLength);
+        } else {
+            ALOGW("Unsupported key type %d", keyType);
+            rc = -1;
+        }
+
         if (rc) {
             return ::SYSTEM_ERROR;
         }
