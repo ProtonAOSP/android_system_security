@@ -26,10 +26,44 @@
 /* For ENGINE method registration purposes. */
 extern const char* kKeystoreEngineId;
 
+extern int dsa_key_handle;
+extern int rsa_key_handle;
+
+struct DSA_Delete {
+    void operator()(DSA* p) const {
+        DSA_free(p);
+    }
+};
+typedef UniquePtr<DSA, struct DSA_Delete> Unique_DSA;
+
+struct EC_KEY_Delete {
+    void operator()(EC_KEY* p) const {
+        EC_KEY_free(p);
+    }
+};
+typedef UniquePtr<EC_KEY, EC_KEY_Delete> Unique_EC_KEY;
+
+struct RSA_Delete {
+    void operator()(RSA* p) const {
+        RSA_free(p);
+    }
+};
+typedef UniquePtr<RSA, struct RSA_Delete> Unique_RSA;
+
+
 /* Keyhandles for ENGINE metadata */
 int keyhandle_new(void*, void*, CRYPTO_EX_DATA* ad, int idx, long, void*);
 void keyhandle_free(void *, void *ptr, CRYPTO_EX_DATA*, int, long, void*);
 int keyhandle_dup(CRYPTO_EX_DATA* to, CRYPTO_EX_DATA*, void *ptrRef, int idx, long, void *);
+
+/* For EC_EX_DATA stuff */
+void *ex_data_dup(void *);
+void ex_data_free(void *);
+void ex_data_clear_free(void *);
+
+/* DSA */
+int dsa_register(ENGINE *);
+int dsa_pkey_setup(ENGINE *, EVP_PKEY*, const char*);
 
 /* RSA */
 int rsa_register(ENGINE *);

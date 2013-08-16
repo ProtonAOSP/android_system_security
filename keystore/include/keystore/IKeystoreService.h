@@ -23,6 +23,19 @@
 
 namespace android {
 
+class KeystoreArg : public RefBase {
+public:
+    KeystoreArg(const void *data, size_t len);
+    ~KeystoreArg();
+
+    const void* data() const;
+    size_t size() const;
+
+private:
+    const void* mData;
+    size_t mSize;
+};
+
 /*
  * This must be kept manually in sync with frameworks/base's IKeystoreService.java
  */
@@ -79,7 +92,8 @@ public:
 
     virtual int32_t zero() = 0;
 
-    virtual int32_t generate(const String16& name, int uid, int32_t flags) = 0;
+    virtual int32_t generate(const String16& name, int32_t uid, int32_t keyType, int32_t keySize,
+            int32_t flags, Vector<sp<KeystoreArg> >* args) = 0;
 
     virtual int32_t import(const String16& name, const uint8_t* data, size_t length, int uid,
             int32_t flags) = 0;

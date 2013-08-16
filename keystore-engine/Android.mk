@@ -25,6 +25,7 @@ LOCAL_MODULE_PATH := $(TARGET_OUT_SHARED_LIBRARIES)/ssl/engines
 LOCAL_SRC_FILES := \
 	eng_keystore.cpp \
 	keyhandle.cpp \
+	dsa_meth.cpp \
 	rsa_meth.cpp
 
 LOCAL_CFLAGS := -fvisibility=hidden -Wall -Werror

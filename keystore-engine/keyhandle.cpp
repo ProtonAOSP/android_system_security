@@ -58,3 +58,19 @@ int keyhandle_dup(CRYPTO_EX_DATA* to, CRYPTO_EX_DATA*, void *ptrRef, int idx, lo
     }
     return 1;
 }
+
+void *ex_data_dup(void *data) {
+    char* keyhandle = reinterpret_cast<char*>(data);
+    return strdup(keyhandle);
+}
+
+void ex_data_free(void *data) {
+    char* keyhandle = reinterpret_cast<char*>(data);
+    free(keyhandle);
+}
+
+void ex_data_clear_free(void *data) {
+    char* keyhandle = reinterpret_cast<char*>(data);
+    memset(data, '\0', strlen(keyhandle));
+    free(keyhandle);
+}
