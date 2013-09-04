@@ -48,7 +48,8 @@ enum ResponseCode {
  */
 enum {
     KEYSTORE_FLAG_NONE = 0,
-    KEYSTORE_FLAG_ENCRYPTED = 1,
+    KEYSTORE_FLAG_ENCRYPTED = 1 << 0,
+    KEYSTORE_FLAG_FALLBACK = 1 << 1,
 };
 
 /**

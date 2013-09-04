@@ -26,9 +26,11 @@
  *
  * 4-byte SOFT_KEY_MAGIC
  *
- * 4-byte 32-bit integer big endian for public_key_length
+ * 4-byte 32-bit integer big endian for public_key_length. This may be zero
+ *     length which indicates the public key should be derived from the
+ *     private key.
  *
- * public_key_length bytes of public key
+ * public_key_length bytes of public key (may be empty)
  *
  * 4-byte 32-bit integer big endian for private_key_length
  *
