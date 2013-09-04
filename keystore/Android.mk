@@ -20,7 +20,15 @@ include $(CLEAR_VARS)
 LOCAL_CFLAGS := -Wall -Wextra -Werror
 LOCAL_SRC_FILES := keystore.cpp keyblob_utils.cpp
 LOCAL_C_INCLUDES := external/openssl/include
-LOCAL_SHARED_LIBRARIES := libcutils libcrypto libhardware libkeystore_binder libutils liblog libbinder
+LOCAL_SHARED_LIBRARIES := \
+	libbinder \
+	libcutils \
+	libcrypto \
+	libhardware \
+	libkeystore_binder \
+	liblog \
+	libsoftkeymaster \
+	libutils
 LOCAL_MODULE := keystore
 LOCAL_MODULE_TAGS := optional
 LOCAL_ADDITIONAL_DEPENDENCIES := $(LOCAL_PATH)/Android.mk
