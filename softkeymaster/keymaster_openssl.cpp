@@ -194,7 +194,6 @@ static EVP_PKEY* unwrap_key(const uint8_t* keyBlob, const size_t keyBlobLength) 
         ALOGE("public key length encoding error: size=%ld, end=%d", publicLen, end - p);
         return NULL;
     }
-    const uint8_t *pubKey = p;
 
     p += publicLen;
     if (end - p < 2) {
@@ -378,11 +377,10 @@ static int generate_rsa_keypair(EVP_PKEY* pkey, const keymaster_rsa_keygen_param
     return 0;
 }
 
-static int openssl_generate_keypair(const keymaster_device_t* dev,
+__attribute__ ((visibility ("default")))
+int openssl_generate_keypair(const keymaster_device_t*,
         const keymaster_keypair_t key_type, const void* key_params,
         uint8_t** keyBlob, size_t* keyBlobLength) {
-    ssize_t privateLen, publicLen;
-
     Unique_EVP_PKEY pkey(EVP_PKEY_new());
     if (pkey.get() == NULL) {
         logOpenSSLError("openssl_generate_keypair");
@@ -416,11 +414,10 @@ static int openssl_generate_keypair(const keymaster_device_t* dev,
     return 0;
 }
 
-static int openssl_import_keypair(const keymaster_device_t* dev,
+__attribute__ ((visibility ("default")))
+int openssl_import_keypair(const keymaster_device_t*,
         const uint8_t* key, const size_t key_length,
         uint8_t** key_blob, size_t* key_blob_length) {
-    int response = -1;
-
     if (key == NULL) {
         ALOGW("input key == NULL");
         return -1;
@@ -450,7 +447,8 @@ static int openssl_import_keypair(const keymaster_device_t* dev,
     return 0;
 }
 
-static int openssl_get_keypair_public(const struct keymaster_device* dev,
+__attribute__ ((visibility ("default")))
+int openssl_get_keypair_public(const struct keymaster_device*,
         const uint8_t* key_blob, const size_t key_blob_length,
         uint8_t** x509_data, size_t* x509_data_length) {
 
@@ -588,16 +586,12 @@ static int sign_rsa(EVP_PKEY* pkey, keymaster_rsa_sign_params_t* sign_params, co
     return 0;
 }
 
-static int openssl_sign_data(const keymaster_device_t* dev,
+__attribute__ ((visibility ("default")))
+int openssl_sign_data(const keymaster_device_t*,
         const void* params,
         const uint8_t* keyBlob, const size_t keyBlobLength,
         const uint8_t* data, const size_t dataLength,
         uint8_t** signedData, size_t* signedDataLength) {
-
-    int result = -1;
-    EVP_MD_CTX ctx;
-    size_t maxSize;
-
     if (data == NULL) {
         ALOGW("input data to sign == NULL");
         return -1;
@@ -711,7 +705,8 @@ static int verify_rsa(EVP_PKEY* pkey, keymaster_rsa_sign_params_t* sign_params,
     return result == 0 ? 0 : -1;
 }
 
-static int openssl_verify_data(const keymaster_device_t* dev,
+__attribute__ ((visibility ("default")))
+int openssl_verify_data(const keymaster_device_t*,
         const void* params,
         const uint8_t* keyBlob, const size_t keyBlobLength,
         const uint8_t* signedData, const size_t signedDataLength,
@@ -728,7 +723,11 @@ static int openssl_verify_data(const keymaster_device_t* dev,
     }
 
     int type = EVP_PKEY_type(pkey->type);
-    if (type == EVP_PKEY_RSA) {
+    if (type == EVP_PKEY_DSA) {
+        keymaster_dsa_sign_params_t* sign_params = (keymaster_dsa_sign_params_t*) params;
+        return verify_dsa(pkey.get(), sign_params, signedData, signedDataLength, signature,
+                signatureLength);
+    } else if (type == EVP_PKEY_RSA) {
         keymaster_rsa_sign_params_t* sign_params = (keymaster_rsa_sign_params_t*) params;
         return verify_rsa(pkey.get(), sign_params, signedData, signedDataLength, signature,
                 signatureLength);
@@ -741,63 +740,3 @@ static int openssl_verify_data(const keymaster_device_t* dev,
         return -1;
     }
 }
-
-/* Close an opened OpenSSL instance */
-static int openssl_close(hw_device_t *dev) {
-    delete dev;
-    return 0;
-}
-
-/*
- * Generic device handling
- */
-static int openssl_open(const hw_module_t* module, const char* name,
-        hw_device_t** device) {
-    if (strcmp(name, KEYSTORE_KEYMASTER) != 0)
-        return -EINVAL;
-
-    Unique_keymaster_device_t dev(new keymaster_device_t);
-    if (dev.get() == NULL)
-        return -ENOMEM;
-
-    dev->common.tag = HARDWARE_DEVICE_TAG;
-    dev->common.version = 1;
-    dev->common.module = (struct hw_module_t*) module;
-    dev->common.close = openssl_close;
-
-    dev->flags = KEYMASTER_SOFTWARE_ONLY;
-
-    dev->generate_keypair = openssl_generate_keypair;
-    dev->import_keypair = openssl_import_keypair;
-    dev->get_keypair_public = openssl_get_keypair_public;
-    dev->delete_keypair = NULL;
-    dev->delete_all = NULL;
-    dev->sign_data = openssl_sign_data;
-    dev->verify_data = openssl_verify_data;
-
-    ERR_load_crypto_strings();
-    ERR_load_BIO_strings();
-
-    *device = reinterpret_cast<hw_device_t*>(dev.release());
-
-    return 0;
-}
-
-static struct hw_module_methods_t keystore_module_methods = {
-    open: openssl_open,
-};
-
-struct keystore_module HAL_MODULE_INFO_SYM
-__attribute__ ((visibility ("default"))) = {
-    common: {
-        tag: HARDWARE_MODULE_TAG,
-        version_major: 1,
-        version_minor: 0,
-        id: KEYSTORE_HARDWARE_MODULE_ID,
-        name: "Keymaster OpenSSL HAL",
-        author: "The Android Open Source Project",
-        methods: &keystore_module_methods,
-        dso: 0,
-        reserved: {},
-    },
-};
