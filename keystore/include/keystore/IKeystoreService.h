@@ -117,7 +117,7 @@ public:
     virtual int32_t duplicate(const String16& srcKey, int32_t srcUid, const String16& destKey,
             int32_t destUid) = 0;
 
-    virtual int32_t is_hardware_backed() = 0;
+    virtual int32_t is_hardware_backed(const String16& keyType) = 0;
 
     virtual int32_t clear_uid(int64_t uid) = 0;
 };

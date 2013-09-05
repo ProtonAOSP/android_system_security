@@ -542,10 +542,11 @@ public:
         return ret;
     }
 
-    virtual int32_t is_hardware_backed()
+    virtual int32_t is_hardware_backed(const String16& keyType)
     {
         Parcel data, reply;
         data.writeInterfaceToken(IKeystoreService::getInterfaceDescriptor());
+        data.writeString16(keyType);
         status_t status = remote()->transact(BnKeystoreService::IS_HARDWARE_BACKED, data, &reply);
         if (status != NO_ERROR) {
             ALOGD("is_hardware_backed() could not contact remote: %d\n", status);
@@ -860,7 +861,8 @@ status_t BnKeystoreService::onTransact(
         } break;
         case IS_HARDWARE_BACKED: {
             CHECK_INTERFACE(IKeystoreService, data, reply);
-            int32_t ret = is_hardware_backed();
+            String16 keyType = data.readString16();
+            int32_t ret = is_hardware_backed(keyType);
             reply->writeNoException();
             reply->writeInt32(ret);
             return NO_ERROR;

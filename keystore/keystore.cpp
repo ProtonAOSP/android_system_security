@@ -1111,8 +1111,19 @@ public:
         return put(filename, &keyBlob, uid);
     }
 
-    bool isHardwareBacked() const {
-        return (mDevice->flags & KEYMASTER_SOFTWARE_ONLY) == 0;
+    bool isHardwareBacked(const android::String16& keyType) const {
+        if (mDevice == NULL) {
+            ALOGW("can't get keymaster device");
+            return false;
+        }
+
+        if (sRSAKeyType == keyType) {
+            return (mDevice->flags & KEYMASTER_SOFTWARE_ONLY) == 0;
+        } else {
+            return (mDevice->flags & KEYMASTER_SOFTWARE_ONLY) == 0
+                    && (mDevice->common.module->module_api_version
+                            >= KEYMASTER_MODULE_API_VERSION_0_2);
+        }
     }
 
     ResponseCode getKeyForName(Blob* keyBlob, const android::String8& keyName, const uid_t uid,
@@ -1207,6 +1218,7 @@ public:
 private:
     static const char* sOldMasterKey;
     static const char* sMetaDataFile;
+    static const android::String16 sRSAKeyType;
     Entropy* mEntropy;
 
     keymaster_device_t* mDevice;
@@ -1422,6 +1434,8 @@ private:
 
 const char* KeyStore::sOldMasterKey = ".masterkey";
 const char* KeyStore::sMetaDataFile = ".metadata";
+
+const android::String16 KeyStore::sRSAKeyType("RSA");
 
 namespace android {
 class KeyStoreProxy : public BnKeystoreService, public IBinder::DeathRecipient {
@@ -2219,8 +2233,8 @@ public:
         return mKeyStore->put(targetFile.string(), &keyBlob, callingUid);
     }
 
-    int32_t is_hardware_backed() {
-        return mKeyStore->isHardwareBacked() ? 1 : 0;
+    int32_t is_hardware_backed(const String16& keyType) {
+        return mKeyStore->isHardwareBacked(keyType) ? 1 : 0;
     }
 
     int32_t clear_uid(int64_t targetUid) {
