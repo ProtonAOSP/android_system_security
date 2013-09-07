@@ -61,6 +61,10 @@ void *ex_data_dup(void *);
 void ex_data_free(void *);
 void ex_data_clear_free(void *);
 
+/* ECDSA */
+int ecdsa_register(ENGINE *);
+int ecdsa_pkey_setup(ENGINE *, EVP_PKEY*, const char*);
+
 /* DSA */
 int dsa_register(ENGINE *);
 int dsa_pkey_setup(ENGINE *, EVP_PKEY*, const char*);

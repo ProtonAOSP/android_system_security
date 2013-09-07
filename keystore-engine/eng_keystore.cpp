@@ -66,11 +66,6 @@ int dsa_key_handle;
  */
 static pthread_once_t key_handle_control = PTHREAD_ONCE_INIT;
 
-/*
- * Used for generic EVP_PKEY* handling (only for EC stuff currently)
- */
-static EVP_PKEY_METHOD* keystore_pkey_ec_methods;
-
 /**
  * Many OpenSSL APIs take ownership of an argument on success but don't free the argument
  * on failure. This means we need to tell our scoped pointers when we've transferred ownership,
@@ -101,33 +96,6 @@ typedef UniquePtr<EVP_PKEY, EVP_PKEY_Delete> Unique_EVP_PKEY;
 static void init_key_handle() {
     rsa_key_handle = RSA_get_ex_new_index(0, NULL, keyhandle_new, keyhandle_dup, keyhandle_free);
     dsa_key_handle = DSA_get_ex_new_index(0, NULL, keyhandle_new, keyhandle_dup, keyhandle_free);
-}
-
-static int pkey_setup(ENGINE *e, EVP_PKEY *pkey, const char *key_id) {
-    int ret = 1;
-    switch (EVP_PKEY_type(pkey->type)) {
-    case EVP_PKEY_EC: {
-        Unique_EC_KEY eckey(EVP_PKEY_get1_EC_KEY(pkey));
-        void* oldData = EC_KEY_insert_key_method_data(eckey.get(),
-                reinterpret_cast<void*>(strdup(key_id)), ex_data_dup, ex_data_free,
-                ex_data_clear_free);
-        if (oldData != NULL) {
-            free(oldData);
-        }
-    } break;
-    default:
-        ALOGW("Unsupported key type during setup %d", EVP_PKEY_type(pkey->type));
-        return 0;
-    }
-
-    if (ret != 1) {
-        return ret;
-    }
-
-    ENGINE_init(e);
-    pkey->engine = e;
-
-    return 1;
 }
 
 static EVP_PKEY* keystore_loadkey(ENGINE* e, const char* key_id, UI_METHOD* ui_method,
@@ -179,7 +147,7 @@ static EVP_PKEY* keystore_loadkey(ENGINE* e, const char* key_id, UI_METHOD* ui_m
         break;
     }
     case EVP_PKEY_EC: {
-        pkey_setup(e, pkey.get(), key_id);
+        ecdsa_pkey_setup(e, pkey.get(), key_id);
         break;
     }
     default:
@@ -194,107 +162,11 @@ static const ENGINE_CMD_DEFN keystore_cmd_defns[] = {
     {0, NULL, NULL, 0}
 };
 
-static uint8_t* get_key_id(EVP_PKEY* pkey) {
-    switch (EVP_PKEY_type(pkey->type)) {
-    case EVP_PKEY_EC: {
-        Unique_EC_KEY eckey(EVP_PKEY_get1_EC_KEY(pkey));
-        return reinterpret_cast<uint8_t*>(EC_KEY_get_key_method_data(eckey.get(),
-                ex_data_dup, ex_data_free, ex_data_clear_free));
-    } break;
-    }
-
-    return NULL;
-}
-
-static int keystore_pkey_sign(EVP_PKEY_CTX *ctx, unsigned char *sig, size_t *siglen,
-        const unsigned char *tbs, size_t tbs_len) {
-    EVP_PKEY* pkey = EVP_PKEY_CTX_get0_pkey(ctx);
-
-    const uint8_t* key_id = get_key_id(pkey);
-    if (key_id == NULL) {
-        ALOGW("key_id is empty");
-        return 0;
-    }
-
-    sp<IServiceManager> sm = defaultServiceManager();
-    sp<IBinder> binder = sm->getService(String16("android.security.keystore"));
-    sp<IKeystoreService> service = interface_cast<IKeystoreService>(binder);
-
-    if (service == NULL) {
-        ALOGE("could not contact keystore");
-        return 0;
-    }
-
-    uint8_t* reply = NULL;
-    size_t replyLen;
-    int32_t ret = service->sign(String16(reinterpret_cast<const char*>(key_id)), tbs, tbs_len,
-            &reply, &replyLen);
-    if (ret < 0) {
-        ALOGW("There was an error during signing: could not connect");
-        free(reply);
-        return 0;
-    } else if (ret != 0) {
-        ALOGW("Error during signing from keystore: %d", ret);
-        free(reply);
-        return 0;
-    } else if (replyLen <= 0) {
-        ALOGW("No valid signature returned");
-        return 0;
-    }
-
-    memcpy(sig, reply, replyLen);
-    free(reply);
-    *siglen = replyLen;
-
-    return 1;
-}
-
-static int register_pkey_methods(EVP_PKEY_METHOD** meth, int nid) {
-    *meth = EVP_PKEY_meth_new(nid, 0);
-    if (*meth == NULL) {
-        ALOGE("Failure allocating PKEY methods for NID %d", nid);
-        return 0;
-    }
-
-    const EVP_PKEY_METHOD* orig = EVP_PKEY_meth_find(nid);
-    EVP_PKEY_meth_copy(*meth, orig);
-
-    EVP_PKEY_meth_set_sign(*meth, NULL, keystore_pkey_sign);
-
-    return 1;
-}
-
-static int keystore_nids[] = {
-    EVP_PKEY_EC,
-};
-
-static int keystore_pkey_meths(ENGINE*, EVP_PKEY_METHOD** meth, const int **nids, int nid) {
-    if (meth == NULL) {
-        *nids = keystore_nids;
-        return sizeof(keystore_nids) / sizeof(keystore_nids[0]);
-    }
-
-    switch (nid) {
-    case EVP_PKEY_EC:
-        *meth = keystore_pkey_ec_methods;
-        return 1;
-    }
-
-    *meth = NULL;
-    return 0;
-}
-
 static int keystore_engine_setup(ENGINE* e) {
     ALOGV("keystore_engine_setup");
 
-    if (!register_pkey_methods(&keystore_pkey_ec_methods, EVP_PKEY_EC)) {
-        ALOGE("Could not set up keystore engine");
-        return 0;
-    }
-
     if (!ENGINE_set_id(e, kKeystoreEngineId)
             || !ENGINE_set_name(e, kKeystoreEngineDesc)
-            || !ENGINE_set_pkey_meths(e, keystore_pkey_meths)
             || !ENGINE_set_load_privkey_function(e, keystore_loadkey)
             || !ENGINE_set_load_pubkey_function(e, keystore_loadkey)
             || !ENGINE_set_flags(e, 0)
@@ -312,6 +184,9 @@ static int keystore_engine_setup(ENGINE* e) {
 
     if (!dsa_register(e)) {
         ALOGE("DSA registration failed");
+        return 0;
+    } else if (!ecdsa_register(e)) {
+        ALOGE("ECDSA registration failed");
         return 0;
     } else if (!rsa_register(e)) {
         ALOGE("RSA registration failed");
