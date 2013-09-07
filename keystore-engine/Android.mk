@@ -25,13 +25,15 @@ LOCAL_MODULE_PATH := $(TARGET_OUT_SHARED_LIBRARIES)/ssl/engines
 LOCAL_SRC_FILES := \
 	eng_keystore.cpp \
 	keyhandle.cpp \
+	ecdsa_meth.cpp \
 	dsa_meth.cpp \
 	rsa_meth.cpp
 
 LOCAL_CFLAGS := -fvisibility=hidden -Wall -Werror
 
 LOCAL_C_INCLUDES += \
-	external/openssl/include
+	external/openssl/include \
+	external/openssl
 
 LOCAL_SHARED_LIBRARIES += \
 	libcrypto \
