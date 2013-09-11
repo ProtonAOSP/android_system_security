@@ -44,8 +44,8 @@
 
 #include <keymaster/softkeymaster.h>
 
+#include <UniquePtr.h>
 #include <utils/String8.h>
-#include <utils/UniquePtr.h>
 #include <utils/Vector.h>
 
 #include <keystore/IKeystoreService.h>

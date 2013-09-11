@@ -26,7 +26,7 @@
 
 #include <openssl/err.h>
 
-#include <utils/UniquePtr.h>
+#include <UniquePtr.h>
 
 // For debugging
 //#define LOG_NDEBUG 0
