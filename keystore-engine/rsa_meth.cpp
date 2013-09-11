@@ -23,7 +23,7 @@
  *
  */
 
-#include <utils/UniquePtr.h>
+#include <UniquePtr.h>
 
 //#define LOG_NDEBUG 0
 #define LOG_TAG "OpenSSL-keystore-rsa"

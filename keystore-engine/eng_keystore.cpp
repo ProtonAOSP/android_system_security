@@ -23,7 +23,7 @@
  *
  */
 
-#include <utils/UniquePtr.h>
+#include <UniquePtr.h>
 
 #include <sys/socket.h>
 #include <stdarg.h>
