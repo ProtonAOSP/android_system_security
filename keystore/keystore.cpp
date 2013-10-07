@@ -421,7 +421,11 @@ public:
         mBlob.version = CURRENT_BLOB_VERSION;
         mBlob.type = uint8_t(type);
 
-        mBlob.flags = KEYSTORE_FLAG_NONE;
+        if (type == TYPE_MASTER_KEY) {
+            mBlob.flags = KEYSTORE_FLAG_ENCRYPTED;
+        } else {
+            mBlob.flags = KEYSTORE_FLAG_NONE;
+        }
     }
 
     Blob(blob b) {
@@ -1492,6 +1496,8 @@ public:
         String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, targetUid));
 
         Blob keyBlob(item, itemLength, NULL, 0, ::TYPE_GENERIC);
+        keyBlob.setEncrypted(flags & KEYSTORE_FLAG_ENCRYPTED);
+
         return mKeyStore->put(filename.string(), &keyBlob, callingUid);
     }
 
@@ -1848,6 +1854,7 @@ public:
         Blob keyBlob(data, dataLength, NULL, 0, TYPE_KEY_PAIR);
         free(data);
 
+        keyBlob.setEncrypted(flags & KEYSTORE_FLAG_ENCRYPTED);
         keyBlob.setFallback(isFallback);
 
         return mKeyStore->put(filename.string(), &keyBlob, callingUid);
