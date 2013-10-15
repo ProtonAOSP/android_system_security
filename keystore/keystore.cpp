@@ -1509,7 +1509,7 @@ public:
         String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, targetUid));
 
         Blob keyBlob(item, itemLength, NULL, 0, ::TYPE_GENERIC);
-        return mKeyStore->put(filename.string(), &keyBlob, callingUid);
+        return mKeyStore->put(filename.string(), &keyBlob, targetUid);
     }
 
     int32_t del(const String16& name, int targetUid) {
@@ -1530,7 +1530,7 @@ public:
 
         Blob keyBlob;
         ResponseCode responseCode = mKeyStore->get(filename.string(), &keyBlob, TYPE_GENERIC,
-                callingUid);
+                targetUid);
         if (responseCode != ::NO_ERROR) {
             return responseCode;
         }
@@ -1884,7 +1884,7 @@ public:
             return ::PERMISSION_DENIED;
         }
 
-        State state = mKeyStore->getState(callingUid);
+        State state = mKeyStore->getState(targetUid);
         if ((flags & KEYSTORE_FLAG_ENCRYPTED) && !isKeystoreUnlocked(state)) {
             ALOGD("calling import in state: %d", state);
             return state;
@@ -1893,7 +1893,7 @@ public:
         String8 name8(name);
         String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, targetUid));
 
-        return mKeyStore->importKey(data, length, filename.string(), callingUid, flags);
+        return mKeyStore->importKey(data, length, filename.string(), targetUid, flags);
     }
 
     int32_t sign(const String16& name, const uint8_t* data, size_t length, uint8_t** out,
@@ -2065,11 +2065,11 @@ public:
         }
 
         String8 name8(name);
-        String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, callingUid));
+        String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, targetUid));
 
         Blob keyBlob;
         ResponseCode responseCode = mKeyStore->get(filename.string(), &keyBlob, ::TYPE_KEY_PAIR,
-                callingUid);
+                targetUid);
         if (responseCode != ::NO_ERROR) {
             return responseCode;
         }
@@ -2216,7 +2216,7 @@ public:
         String8 sourceFile(mKeyStore->getKeyNameForUidWithDir(source8, srcUid));
 
         String8 target8(destKey);
-        String8 targetFile(mKeyStore->getKeyNameForUidWithDir(target8, srcUid));
+        String8 targetFile(mKeyStore->getKeyNameForUidWithDir(target8, destUid));
 
         if (access(targetFile.string(), W_OK) != -1 || errno != ENOENT) {
             ALOGD("destination already exists: %s", targetFile.string());
@@ -2225,19 +2225,20 @@ public:
 
         Blob keyBlob;
         ResponseCode responseCode = mKeyStore->get(sourceFile.string(), &keyBlob, TYPE_ANY,
-                callingUid);
+                srcUid);
         if (responseCode != ::NO_ERROR) {
             return responseCode;
         }
 
-        return mKeyStore->put(targetFile.string(), &keyBlob, callingUid);
+        return mKeyStore->put(targetFile.string(), &keyBlob, destUid);
     }
 
     int32_t is_hardware_backed(const String16& keyType) {
         return mKeyStore->isHardwareBacked(keyType) ? 1 : 0;
     }
 
-    int32_t clear_uid(int64_t targetUid) {
+    int32_t clear_uid(int64_t targetUid64) {
+        uid_t targetUid = static_cast<uid_t>(targetUid64);
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
         if (!has_permission(callingUid, P_CLEAR_UID)) {
             ALOGW("permission denied for %d: clear_uid", callingUid);
@@ -2250,13 +2251,19 @@ public:
             return state;
         }
 
+        if (targetUid64 == -1) {
+            targetUid = callingUid;
+        } else if (!is_granted_to(callingUid, targetUid)) {
+            return ::PERMISSION_DENIED;
+        }
+
         const keymaster_device_t* device = mKeyStore->getDevice();
         if (device == NULL) {
             ALOGW("can't get keymaster device");
             return ::SYSTEM_ERROR;
         }
 
-        UserState* userState = mKeyStore->getUserState(callingUid);
+        UserState* userState = mKeyStore->getUserState(targetUid);
         DIR* dir = opendir(userState->getUserDirName());
         if (!dir) {
             ALOGW("can't open user directory: %s", strerror(errno));
@@ -2264,7 +2271,7 @@ public:
         }
 
         char prefix[NAME_MAX];
-        int n = snprintf(prefix, NAME_MAX, "%u_", static_cast<uid_t>(targetUid));
+        int n = snprintf(prefix, NAME_MAX, "%u_", targetUid);
 
         ResponseCode rc = ::NO_ERROR;
 
@@ -2286,7 +2293,7 @@ public:
 
             String8 filename(String8::format("%s/%s", userState->getUserDirName(), file->d_name));
             Blob keyBlob;
-            if (mKeyStore->get(filename.string(), &keyBlob, ::TYPE_ANY, callingUid)
+            if (mKeyStore->get(filename.string(), &keyBlob, ::TYPE_ANY, targetUid)
                     != ::NO_ERROR) {
                 ALOGW("couldn't open %s", filename.string());
                 continue;
