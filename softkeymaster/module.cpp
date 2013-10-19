@@ -78,20 +78,20 @@ static int openssl_open(const hw_module_t* module, const char* name,
 }
 
 static struct hw_module_methods_t keystore_module_methods = {
-    open: openssl_open,
+    .open = openssl_open,
 };
 
 struct keystore_module HAL_MODULE_INFO_SYM
 __attribute__ ((visibility ("default"))) = {
-    common: {
-        tag: HARDWARE_MODULE_TAG,
-        module_api_version: KEYMASTER_MODULE_API_VERSION_0_2,
-        hal_api_version: HARDWARE_HAL_API_VERSION,
-        id: KEYSTORE_HARDWARE_MODULE_ID,
-        name: "Keymaster OpenSSL HAL",
-        author: "The Android Open Source Project",
-        methods: &keystore_module_methods,
-        dso: 0,
-        reserved: {},
+    .common = {
+        .tag = HARDWARE_MODULE_TAG,
+        .module_api_version = KEYMASTER_MODULE_API_VERSION_0_2,
+        .hal_api_version = HARDWARE_HAL_API_VERSION,
+        .id = KEYSTORE_HARDWARE_MODULE_ID,
+        .name = "Keymaster OpenSSL HAL",
+        .author = "The Android Open Source Project",
+        .methods = &keystore_module_methods,
+        .dso = 0,
+        .reserved = {},
     },
 };
