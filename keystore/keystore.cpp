@@ -272,13 +272,6 @@ static int encode_key(char* out, const android::String8& keyName) {
     return length;
 }
 
-static int encode_key_for_uid(char* out, uid_t uid, const android::String8& keyName) {
-    int n = snprintf(out, NAME_MAX, "%u_", uid);
-    out += n;
-
-    return n + encode_key(out, keyName);
-}
-
 /*
  * Converts from the "escaped" format on disk to actual name.
  * This will be smaller than the input string.
@@ -428,7 +421,11 @@ public:
         mBlob.version = CURRENT_BLOB_VERSION;
         mBlob.type = uint8_t(type);
 
-        mBlob.flags = KEYSTORE_FLAG_NONE;
+        if (type == TYPE_MASTER_KEY) {
+            mBlob.flags = KEYSTORE_FLAG_ENCRYPTED;
+        } else {
+            mBlob.flags = KEYSTORE_FLAG_NONE;
+        }
     }
 
     Blob(blob b) {
@@ -1128,17 +1125,7 @@ public:
 
     ResponseCode getKeyForName(Blob* keyBlob, const android::String8& keyName, const uid_t uid,
             const BlobType type) {
-        char filename[NAME_MAX];
-        encode_key_for_uid(filename, uid, keyName);
-
-        UserState* userState = getUserState(uid);
-        android::String8 filepath8;
-
-        filepath8 = android::String8::format("%s/%s", userState->getUserDirName(), filename);
-        if (filepath8.string() == NULL) {
-            ALOGW("can't create filepath for key %s", filename);
-            return SYSTEM_ERROR;
-        }
+        android::String8 filepath8(getKeyNameForUidWithDir(keyName, uid));
 
         ResponseCode responseCode = get(filepath8.string(), keyBlob, type, uid);
         if (responseCode == NO_ERROR) {
@@ -1148,8 +1135,7 @@ public:
         // If this is one of the legacy UID->UID mappings, use it.
         uid_t euid = get_keystore_euid(uid);
         if (euid != uid) {
-            encode_key_for_uid(filename, euid, keyName);
-            filepath8 = android::String8::format("%s/%s", userState->getUserDirName(), filename);
+            filepath8 = getKeyNameForUidWithDir(keyName, euid);
             responseCode = get(filepath8.string(), keyBlob, type, uid);
             if (responseCode == NO_ERROR) {
                 return responseCode;
@@ -1157,13 +1143,14 @@ public:
         }
 
         // They might be using a granted key.
-        encode_key(filename, keyName);
+        android::String8 filename8 = getKeyName(keyName);
         char* end;
-        strtoul(filename, &end, 10);
+        strtoul(filename8.string(), &end, 10);
         if (end[0] != '_' || end[1] == 0) {
             return KEY_NOT_FOUND;
         }
-        filepath8 = android::String8::format("%s/%s", userState->getUserDirName(), filename);
+        filepath8 = android::String8::format("%s/%s", getUserState(uid)->getUserDirName(),
+                filename8.string());
         if (!hasGrant(filepath8.string(), uid)) {
             return responseCode;
         }
@@ -1509,6 +1496,8 @@ public:
         String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, targetUid));
 
         Blob keyBlob(item, itemLength, NULL, 0, ::TYPE_GENERIC);
+        keyBlob.setEncrypted(flags & KEYSTORE_FLAG_ENCRYPTED);
+
         return mKeyStore->put(filename.string(), &keyBlob, targetUid);
     }
 
@@ -1865,6 +1854,7 @@ public:
         Blob keyBlob(data, dataLength, NULL, 0, TYPE_KEY_PAIR);
         free(data);
 
+        keyBlob.setEncrypted(flags & KEYSTORE_FLAG_ENCRYPTED);
         keyBlob.setFallback(isFallback);
 
         return mKeyStore->put(filename.string(), &keyBlob, callingUid);
