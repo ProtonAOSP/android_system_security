@@ -1817,7 +1817,7 @@ public:
             rsa_params.modulus_size = keySize;
 
             if (args->size() > 1) {
-                ALOGI("invalid number of arguments: %d", args->size());
+                ALOGI("invalid number of arguments: %zu", args->size());
                 return ::SYSTEM_ERROR;
             } else if (args->size() == 1) {
                 sp<KeystoreArg> pubExpBlob = args->itemAt(0);

@@ -191,7 +191,7 @@ static EVP_PKEY* unwrap_key(const uint8_t* keyBlob, const size_t keyBlobLength) 
         publicLen = (publicLen << 8) | *p++;
     }
     if (p + publicLen > end) {
-        ALOGE("public key length encoding error: size=%ld, end=%d", publicLen, end - p);
+        ALOGE("public key length encoding error: size=%ld, end=%td", publicLen, end - p);
         return NULL;
     }
 
@@ -204,7 +204,7 @@ static EVP_PKEY* unwrap_key(const uint8_t* keyBlob, const size_t keyBlobLength) 
         privateLen = (privateLen << 8) | *p++;
     }
     if (p + privateLen > end) {
-        ALOGE("private key length encoding error: size=%ld, end=%d", privateLen, end - p);
+        ALOGE("private key length encoding error: size=%ld, end=%td", privateLen, end - p);
         return NULL;
     }
 
