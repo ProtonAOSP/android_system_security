@@ -20,7 +20,7 @@ LOCAL_MODULE := libkeystore
 
 LOCAL_MODULE_TAGS := optional
 
-LOCAL_MODULE_PATH := $(TARGET_OUT_SHARED_LIBRARIES)/ssl/engines
+LOCAL_MODULE_RELATIVE_PATH := ssl/engines
 
 LOCAL_SRC_FILES := \
 	eng_keystore.cpp \
