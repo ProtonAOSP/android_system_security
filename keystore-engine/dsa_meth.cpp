@@ -93,7 +93,7 @@ static DSA_SIG* keystore_dsa_do_sign(const unsigned char *dgst, int dlen, DSA *d
         return 0;
     }
 
-    ALOGV("keystore_dsa_do_sign(%p, %d, %p) => returning %p len %llu", dgst, dlen, dsa,
+    ALOGV("keystore_dsa_do_sign(%p, %d, %p) => returning %p len %zu", dgst, dlen, dsa,
             dsa_sig.get(), replyLen);
     return dsa_sig.release();
 }

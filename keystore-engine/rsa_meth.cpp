@@ -177,7 +177,7 @@ int keystore_rsa_priv_dec(int flen, const unsigned char* from, unsigned char* to
 
     free(reply);
 
-    ALOGV("rsa=%p keystore_rsa_priv_dec => returning %p len %llu", rsa, to, outSize);
+    ALOGV("rsa=%p keystore_rsa_priv_dec => returning %p len %d", rsa, to, outSize);
     return outSize;
 }
 
