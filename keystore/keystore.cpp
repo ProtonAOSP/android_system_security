@@ -880,14 +880,14 @@ public:
         for (android::Vector<grant_t*>::iterator it(mGrants.begin());
                 it != mGrants.end(); it++) {
             delete *it;
-            mGrants.erase(it);
         }
+        mGrants.clear();
 
         for (android::Vector<UserState*>::iterator it(mMasterKeys.begin());
                 it != mMasterKeys.end(); it++) {
             delete *it;
-            mMasterKeys.erase(it);
         }
+        mMasterKeys.clear();
     }
 
     keymaster_device_t* getDevice() const {
