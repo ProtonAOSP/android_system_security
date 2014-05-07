@@ -1779,7 +1779,7 @@ public:
                 return ::SYSTEM_ERROR;
             }
 
-            if (device->common.module->module_api_version >= KEYMASTER_MODULE_API_VERSION_0_2) {
+            if (isKeyTypeSupported(device, TYPE_DSA)) {
                 rc = device->generate_keypair(device, TYPE_DSA, &dsa_params, &data, &dataLength);
             } else {
                 isFallback = true;
@@ -1797,7 +1797,7 @@ public:
             }
             ec_params.field_size = keySize;
 
-            if (device->common.module->module_api_version >= KEYMASTER_MODULE_API_VERSION_0_2) {
+            if (isKeyTypeSupported(device, TYPE_EC)) {
                 rc = device->generate_keypair(device, TYPE_EC, &ec_params, &data, &dataLength);
             } else {
                 isFallback = true;
@@ -2319,6 +2319,33 @@ private:
             return false;
         }
         return false;
+    }
+
+    bool isKeyTypeSupported(const keymaster_device_t* device, keymaster_keypair_t keyType) {
+        const int32_t device_api = device->common.module->module_api_version;
+        if (device_api == KEYMASTER_MODULE_API_VERSION_0_2) {
+            switch (keyType) {
+                case TYPE_RSA:
+                case TYPE_DSA:
+                case TYPE_EC:
+                    return true;
+                default:
+                    return false;
+            }
+        } else if (device_api >= KEYMASTER_MODULE_API_VERSION_0_3) {
+            switch (keyType) {
+                case TYPE_RSA:
+                    return true;
+                case TYPE_DSA:
+                    return device->flags & KEYMASTER_SUPPORTS_DSA;
+                case TYPE_EC:
+                    return device->flags & KEYMASTER_SUPPORTS_EC;
+                default:
+                    return false;
+            }
+        } else {
+            return keyType == TYPE_RSA;
+        }
     }
 
     ::KeyStore* mKeyStore;
