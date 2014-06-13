@@ -92,8 +92,10 @@ typedef UniquePtr<keymaster_device_t> Unique_keymaster_device_t;
  * scoped pointers when we've transferred ownership, without
  * triggering a warning by not using the result of release().
  */
-#define OWNERSHIP_TRANSFERRED(obj)                                                                 \
-    typeof(obj.release()) _dummy __attribute__((unused)) = obj.release()
+template <typename T, typename Delete_T>
+inline void release_because_ownership_transferred(UniquePtr<T, Delete_T>& p) {
+    T* val __attribute__((unused)) = p.release();
+}
 
 /*
  * Checks this thread's OpenSSL error queue and logs if
@@ -274,7 +276,7 @@ static int generate_dsa_keypair(EVP_PKEY* pkey, const keymaster_dsa_keygen_param
         logOpenSSLError("generate_dsa_keypair");
         return -1;
     }
-    OWNERSHIP_TRANSFERRED(dsa);
+    release_because_ownership_transferred(dsa);
 
     return 0;
 }
@@ -331,7 +333,7 @@ static int generate_ec_keypair(EVP_PKEY* pkey, const keymaster_ec_keygen_params_
         logOpenSSLError("generate_ec_keypair");
         return -1;
     }
-    OWNERSHIP_TRANSFERRED(eckey);
+    release_because_ownership_transferred(eckey);
 
     return 0;
 }
@@ -365,7 +367,7 @@ static int generate_rsa_keypair(EVP_PKEY* pkey, const keymaster_rsa_keygen_param
         logOpenSSLError("generate_rsa_keypair");
         return -1;
     }
-    OWNERSHIP_TRANSFERRED(rsa);
+    release_because_ownership_transferred(rsa);
 
     return 0;
 }
@@ -431,7 +433,7 @@ __attribute__((visibility("default"))) int openssl_import_keypair(const keymaste
         logOpenSSLError("openssl_import_keypair");
         return -1;
     }
-    OWNERSHIP_TRANSFERRED(pkcs8);
+    release_because_ownership_transferred(pkcs8);
 
     if (wrap_key(pkey.get(), EVP_PKEY_type(pkey->type), key_blob, key_blob_length)) {
         return -1;
