@@ -31,7 +31,7 @@
 #include <UniquePtr.h>
 
 // For debugging
-//#define LOG_NDEBUG 0
+// #define LOG_NDEBUG 0
 
 #define LOG_TAG "OpenSSLKeyMaster"
 #include <cutils/log.h>
@@ -81,13 +81,13 @@ typedef UniquePtr<RSA, RSA_Delete> Unique_RSA;
 typedef UniquePtr<keymaster_device_t> Unique_keymaster_device_t;
 
 /**
- * Many OpenSSL APIs take ownership of an argument on success but don't free the argument
- * on failure. This means we need to tell our scoped pointers when we've transferred ownership,
- * without triggering a warning by not using the result of release().
+ * Many OpenSSL APIs take ownership of an argument on success but
+ * don't free the argument on failure. This means we need to tell our
+ * scoped pointers when we've transferred ownership, without
+ * triggering a warning by not using the result of release().
  */
-#define OWNERSHIP_TRANSFERRED(obj) \
-    typeof (obj.release()) _dummy __attribute__((unused)) = obj.release()
-
+#define OWNERSHIP_TRANSFERRED(obj)                                                                 \
+    typeof(obj.release()) _dummy __attribute__((unused)) = obj.release()
 
 /*
  * Checks this thread's OpenSSL error queue and logs if
@@ -108,8 +108,8 @@ static void logOpenSSLError(const char* location) {
 
 static int wrap_key(EVP_PKEY* pkey, int type, uint8_t** keyBlob, size_t* keyBlobLength) {
     /*
-     *  Find the length of each size. Public key is not needed anymore but must be kept for
-     * alignment purposes.
+     * Find the length of each size. Public key is not needed anymore
+     * but must be kept for alignment purposes.
      */
     int publicLen = 0;
     int privateLen = i2d_PrivateKey(pkey, NULL);
@@ -120,8 +120,8 @@ static int wrap_key(EVP_PKEY* pkey, int type, uint8_t** keyBlob, size_t* keyBlob
     }
 
     /* int type + int size + private key data + int size + public key data */
-    *keyBlobLength = get_softkey_header_size() + sizeof(int) + sizeof(int) + privateLen
-            + sizeof(int) + publicLen;
+    *keyBlobLength = get_softkey_header_size() + sizeof(type) + sizeof(publicLen) + privateLen +
+                     sizeof(privateLen) + publicLen;
 
     UniquePtr<unsigned char> derData(new unsigned char[*keyBlobLength]);
     if (derData.get() == NULL) {
@@ -134,18 +134,18 @@ static int wrap_key(EVP_PKEY* pkey, int type, uint8_t** keyBlob, size_t* keyBlob
     p = add_softkey_header(p, *keyBlobLength);
 
     /* Write key type to allocated buffer */
-    for (int i = sizeof(int) - 1; i >= 0; i--) {
-        *p++ = (type >> (8*i)) & 0xFF;
+    for (int i = sizeof(type) - 1; i >= 0; i--) {
+        *p++ = (type >> (8 * i)) & 0xFF;
     }
 
     /* Write public key to allocated buffer */
-    for (int i = sizeof(int) - 1; i >= 0; i--) {
-        *p++ = (publicLen >> (8*i)) & 0xFF;
+    for (int i = sizeof(publicLen) - 1; i >= 0; i--) {
+        *p++ = (publicLen >> (8 * i)) & 0xFF;
     }
 
     /* Write private key to allocated buffer */
-    for (int i = sizeof(int) - 1; i >= 0; i--) {
-        *p++ = (privateLen >> (8*i)) & 0xFF;
+    for (int i = sizeof(privateLen) - 1; i >= 0; i--) {
+        *p++ = (privateLen >> (8 * i)) & 0xFF;
     }
     if (i2d_PrivateKey(pkey, &p) != privateLen) {
         logOpenSSLError("wrap_key");
@@ -161,17 +161,16 @@ static EVP_PKEY* unwrap_key(const uint8_t* keyBlob, const size_t keyBlobLength) 
     long publicLen = 0;
     long privateLen = 0;
     const uint8_t* p = keyBlob;
-    const uint8_t *const end = keyBlob + keyBlobLength;
+    const uint8_t* const end = keyBlob + keyBlobLength;
 
     if (keyBlob == NULL) {
         ALOGE("supplied key blob was NULL");
         return NULL;
     }
 
-    // Should be large enough for:
-    // int32 magic, int32 type, int32 pubLen, char* pub, int32 privLen, char* priv
-    if (keyBlobLength < (get_softkey_header_size() + sizeof(int) + sizeof(int) + 1
-            + sizeof(int) + 1)) {
+    int type = 0;
+    if (keyBlobLength < (get_softkey_header_size() + sizeof(type) + sizeof(publicLen) + 1 +
+                         sizeof(privateLen) + 1)) {
         ALOGE("key blob appears to be truncated");
         return NULL;
     }
@@ -182,12 +181,11 @@ static EVP_PKEY* unwrap_key(const uint8_t* keyBlob, const size_t keyBlobLength) 
     }
     p += get_softkey_header_size();
 
-    int type = 0;
-    for (size_t i = 0; i < sizeof(int); i++) {
+    for (size_t i = 0; i < sizeof(type); i++) {
         type = (type << 8) | *p++;
     }
 
-    for (size_t i = 0; i < sizeof(int); i++) {
+    for (size_t i = 0; i < sizeof(type); i++) {
         publicLen = (publicLen << 8) | *p++;
     }
     if (p + publicLen > end) {
@@ -200,7 +198,7 @@ static EVP_PKEY* unwrap_key(const uint8_t* keyBlob, const size_t keyBlobLength) 
         ALOGE("private key truncated");
         return NULL;
     }
-    for (size_t i = 0; i < sizeof(int); i++) {
+    for (size_t i = 0; i < sizeof(type); i++) {
         privateLen = (privateLen << 8) | *p++;
     }
     if (p + privateLen > end) {
@@ -223,8 +221,7 @@ static EVP_PKEY* unwrap_key(const uint8_t* keyBlob, const size_t keyBlobLength) 
     return pkey.release();
 }
 
-static int generate_dsa_keypair(EVP_PKEY* pkey, const keymaster_dsa_keygen_params_t* dsa_params)
-{
+static int generate_dsa_keypair(EVP_PKEY* pkey, const keymaster_dsa_keygen_params_t* dsa_params) {
     if (dsa_params->key_size < 512) {
         ALOGI("Requested DSA key size is too small (<512)");
         return -1;
@@ -232,37 +229,28 @@ static int generate_dsa_keypair(EVP_PKEY* pkey, const keymaster_dsa_keygen_param
 
     Unique_DSA dsa(DSA_new());
 
-    if (dsa_params->generator_len == 0 ||
-            dsa_params->prime_p_len == 0 ||
-            dsa_params->prime_q_len == 0 ||
-            dsa_params->generator == NULL||
-            dsa_params->prime_p == NULL ||
-            dsa_params->prime_q == NULL) {
+    if (dsa_params->generator_len == 0 || dsa_params->prime_p_len == 0 ||
+        dsa_params->prime_q_len == 0 || dsa_params->generator == NULL ||
+        dsa_params->prime_p == NULL || dsa_params->prime_q == NULL) {
         if (DSA_generate_parameters_ex(dsa.get(), dsa_params->key_size, NULL, 0, NULL, NULL,
-                NULL) != 1) {
+                                       NULL) != 1) {
             logOpenSSLError("generate_dsa_keypair");
             return -1;
         }
     } else {
-        dsa->g = BN_bin2bn(dsa_params->generator,
-                dsa_params->generator_len,
-                NULL);
+        dsa->g = BN_bin2bn(dsa_params->generator, dsa_params->generator_len, NULL);
         if (dsa->g == NULL) {
             logOpenSSLError("generate_dsa_keypair");
             return -1;
         }
 
-        dsa->p = BN_bin2bn(dsa_params->prime_p,
-                   dsa_params->prime_p_len,
-                   NULL);
+        dsa->p = BN_bin2bn(dsa_params->prime_p, dsa_params->prime_p_len, NULL);
         if (dsa->p == NULL) {
             logOpenSSLError("generate_dsa_keypair");
             return -1;
         }
 
-        dsa->q = BN_bin2bn(dsa_params->prime_q,
-                   dsa_params->prime_q_len,
-                   NULL);
+        dsa->q = BN_bin2bn(dsa_params->prime_q, dsa_params->prime_q_len, NULL);
         if (dsa->q == NULL) {
             logOpenSSLError("generate_dsa_keypair");
             return -1;
@@ -283,8 +271,7 @@ static int generate_dsa_keypair(EVP_PKEY* pkey, const keymaster_dsa_keygen_param
     return 0;
 }
 
-static int generate_ec_keypair(EVP_PKEY* pkey, const keymaster_ec_keygen_params_t* ec_params)
-{
+static int generate_ec_keypair(EVP_PKEY* pkey, const keymaster_ec_keygen_params_t* ec_params) {
     EC_GROUP* group;
     switch (ec_params->field_size) {
     case 192:
@@ -327,8 +314,7 @@ static int generate_ec_keypair(EVP_PKEY* pkey, const keymaster_ec_keygen_params_
         return -1;
     }
 
-    if (EC_KEY_generate_key(eckey.get()) != 1
-            || EC_KEY_check_key(eckey.get()) < 0) {
+    if (EC_KEY_generate_key(eckey.get()) != 1 || EC_KEY_check_key(eckey.get()) < 0) {
         logOpenSSLError("generate_ec_keypair");
         return -1;
     }
@@ -342,8 +328,7 @@ static int generate_ec_keypair(EVP_PKEY* pkey, const keymaster_ec_keygen_params_
     return 0;
 }
 
-static int generate_rsa_keypair(EVP_PKEY* pkey, const keymaster_rsa_keygen_params_t* rsa_params)
-{
+static int generate_rsa_keypair(EVP_PKEY* pkey, const keymaster_rsa_keygen_params_t* rsa_params) {
     Unique_BIGNUM bn(BN_new());
     if (bn.get() == NULL) {
         logOpenSSLError("generate_rsa_keypair");
@@ -362,8 +347,8 @@ static int generate_rsa_keypair(EVP_PKEY* pkey, const keymaster_rsa_keygen_param
         return -1;
     }
 
-    if (!RSA_generate_key_ex(rsa.get(), rsa_params->modulus_size, bn.get(), NULL)
-            || RSA_check_key(rsa.get()) < 0) {
+    if (!RSA_generate_key_ex(rsa.get(), rsa_params->modulus_size, bn.get(), NULL) ||
+        RSA_check_key(rsa.get()) < 0) {
         logOpenSSLError("generate_rsa_keypair");
         return -1;
     }
@@ -377,10 +362,9 @@ static int generate_rsa_keypair(EVP_PKEY* pkey, const keymaster_rsa_keygen_param
     return 0;
 }
 
-__attribute__ ((visibility ("default")))
-int openssl_generate_keypair(const keymaster_device_t*,
-        const keymaster_keypair_t key_type, const void* key_params,
-        uint8_t** keyBlob, size_t* keyBlobLength) {
+__attribute__((visibility("default"))) int openssl_generate_keypair(
+    const keymaster_device_t*, const keymaster_keypair_t key_type, const void* key_params,
+    uint8_t** keyBlob, size_t* keyBlobLength) {
     Unique_EVP_PKEY pkey(EVP_PKEY_new());
     if (pkey.get() == NULL) {
         logOpenSSLError("openssl_generate_keypair");
@@ -392,15 +376,15 @@ int openssl_generate_keypair(const keymaster_device_t*,
         return -1;
     } else if (key_type == TYPE_DSA) {
         const keymaster_dsa_keygen_params_t* dsa_params =
-                (const keymaster_dsa_keygen_params_t*) key_params;
+            (const keymaster_dsa_keygen_params_t*)key_params;
         generate_dsa_keypair(pkey.get(), dsa_params);
     } else if (key_type == TYPE_EC) {
         const keymaster_ec_keygen_params_t* ec_params =
-                (const keymaster_ec_keygen_params_t*) key_params;
+            (const keymaster_ec_keygen_params_t*)key_params;
         generate_ec_keypair(pkey.get(), ec_params);
     } else if (key_type == TYPE_RSA) {
         const keymaster_rsa_keygen_params_t* rsa_params =
-                (const keymaster_rsa_keygen_params_t*) key_params;
+            (const keymaster_rsa_keygen_params_t*)key_params;
         generate_rsa_keypair(pkey.get(), rsa_params);
     } else {
         ALOGW("Unsupported key type %d", key_type);
@@ -414,10 +398,11 @@ int openssl_generate_keypair(const keymaster_device_t*,
     return 0;
 }
 
-__attribute__ ((visibility ("default")))
-int openssl_import_keypair(const keymaster_device_t*,
-        const uint8_t* key, const size_t key_length,
-        uint8_t** key_blob, size_t* key_blob_length) {
+__attribute__((visibility("default"))) int openssl_import_keypair(const keymaster_device_t*,
+                                                                  const uint8_t* key,
+                                                                  const size_t key_length,
+                                                                  uint8_t** key_blob,
+                                                                  size_t* key_blob_length) {
     if (key == NULL) {
         ALOGW("input key == NULL");
         return -1;
@@ -447,10 +432,9 @@ int openssl_import_keypair(const keymaster_device_t*,
     return 0;
 }
 
-__attribute__ ((visibility ("default")))
-int openssl_get_keypair_public(const struct keymaster_device*,
-        const uint8_t* key_blob, const size_t key_blob_length,
-        uint8_t** x509_data, size_t* x509_data_length) {
+__attribute__((visibility("default"))) int openssl_get_keypair_public(
+    const struct keymaster_device*, const uint8_t* key_blob, const size_t key_blob_length,
+    uint8_t** x509_data, size_t* x509_data_length) {
 
     if (x509_data == NULL || x509_data_length == NULL) {
         ALOGW("output public key buffer == NULL");
@@ -488,7 +472,7 @@ int openssl_get_keypair_public(const struct keymaster_device*,
 }
 
 static int sign_dsa(EVP_PKEY* pkey, keymaster_dsa_sign_params_t* sign_params, const uint8_t* data,
-        const size_t dataLength, uint8_t** signedData, size_t* signedDataLength) {
+                    const size_t dataLength, uint8_t** signedData, size_t* signedDataLength) {
     if (sign_params->digest_type != DIGEST_NONE) {
         ALOGW("Cannot handle digest type %d", sign_params->digest_type);
         return -1;
@@ -520,7 +504,7 @@ static int sign_dsa(EVP_PKEY* pkey, keymaster_dsa_sign_params_t* sign_params, co
 }
 
 static int sign_ec(EVP_PKEY* pkey, keymaster_ec_sign_params_t* sign_params, const uint8_t* data,
-        const size_t dataLength, uint8_t** signedData, size_t* signedDataLength) {
+                   const size_t dataLength, uint8_t** signedData, size_t* signedDataLength) {
     if (sign_params->digest_type != DIGEST_NONE) {
         ALOGW("Cannot handle digest type %d", sign_params->digest_type);
         return -1;
@@ -551,9 +535,8 @@ static int sign_ec(EVP_PKEY* pkey, keymaster_ec_sign_params_t* sign_params, cons
     return 0;
 }
 
-
 static int sign_rsa(EVP_PKEY* pkey, keymaster_rsa_sign_params_t* sign_params, const uint8_t* data,
-        const size_t dataLength, uint8_t** signedData, size_t* signedDataLength) {
+                    const size_t dataLength, uint8_t** signedData, size_t* signedDataLength) {
     if (sign_params->digest_type != DIGEST_NONE) {
         ALOGW("Cannot handle digest type %d", sign_params->digest_type);
         return -1;
@@ -586,12 +569,10 @@ static int sign_rsa(EVP_PKEY* pkey, keymaster_rsa_sign_params_t* sign_params, co
     return 0;
 }
 
-__attribute__ ((visibility ("default")))
-int openssl_sign_data(const keymaster_device_t*,
-        const void* params,
-        const uint8_t* keyBlob, const size_t keyBlobLength,
-        const uint8_t* data, const size_t dataLength,
-        uint8_t** signedData, size_t* signedDataLength) {
+__attribute__((visibility("default"))) int openssl_sign_data(
+    const keymaster_device_t*, const void* params, const uint8_t* keyBlob,
+    const size_t keyBlobLength, const uint8_t* data, const size_t dataLength, uint8_t** signedData,
+    size_t* signedDataLength) {
     if (data == NULL) {
         ALOGW("input data to sign == NULL");
         return -1;
@@ -607,14 +588,20 @@ int openssl_sign_data(const keymaster_device_t*,
 
     int type = EVP_PKEY_type(pkey->type);
     if (type == EVP_PKEY_DSA) {
-        keymaster_dsa_sign_params_t* sign_params = (keymaster_dsa_sign_params_t*) params;
-        return sign_dsa(pkey.get(), sign_params, data, dataLength, signedData, signedDataLength);
+        const keymaster_dsa_sign_params_t* sign_params =
+            reinterpret_cast<const keymaster_dsa_sign_params_t*>(params);
+        return sign_dsa(pkey.get(), const_cast<keymaster_dsa_sign_params_t*>(sign_params), data,
+                        dataLength, signedData, signedDataLength);
     } else if (type == EVP_PKEY_EC) {
-        keymaster_ec_sign_params_t* sign_params = (keymaster_ec_sign_params_t*) params;
-        return sign_ec(pkey.get(), sign_params, data, dataLength, signedData, signedDataLength);
+        const keymaster_ec_sign_params_t* sign_params =
+            reinterpret_cast<const keymaster_ec_sign_params_t*>(params);
+        return sign_ec(pkey.get(), const_cast<keymaster_ec_sign_params_t*>(sign_params), data,
+                       dataLength, signedData, signedDataLength);
     } else if (type == EVP_PKEY_RSA) {
-        keymaster_rsa_sign_params_t* sign_params = (keymaster_rsa_sign_params_t*) params;
-        return sign_rsa(pkey.get(), sign_params, data, dataLength, signedData, signedDataLength);
+        const keymaster_rsa_sign_params_t* sign_params =
+            reinterpret_cast<const keymaster_rsa_sign_params_t*>(params);
+        return sign_rsa(pkey.get(), const_cast<keymaster_rsa_sign_params_t*>(sign_params), data,
+                        dataLength, signedData, signedDataLength);
     } else {
         ALOGW("Unsupported key type");
         return -1;
@@ -622,8 +609,8 @@ int openssl_sign_data(const keymaster_device_t*,
 }
 
 static int verify_dsa(EVP_PKEY* pkey, keymaster_dsa_sign_params_t* sign_params,
-        const uint8_t* signedData, const size_t signedDataLength, const uint8_t* signature,
-        const size_t signatureLength) {
+                      const uint8_t* signedData, const size_t signedDataLength,
+                      const uint8_t* signature, const size_t signatureLength) {
     if (sign_params->digest_type != DIGEST_NONE) {
         ALOGW("Cannot handle digest type %d", sign_params->digest_type);
         return -1;
@@ -644,8 +631,8 @@ static int verify_dsa(EVP_PKEY* pkey, keymaster_dsa_sign_params_t* sign_params,
 }
 
 static int verify_ec(EVP_PKEY* pkey, keymaster_ec_sign_params_t* sign_params,
-        const uint8_t* signedData, const size_t signedDataLength, const uint8_t* signature,
-        const size_t signatureLength) {
+                     const uint8_t* signedData, const size_t signedDataLength,
+                     const uint8_t* signature, const size_t signatureLength) {
     if (sign_params->digest_type != DIGEST_NONE) {
         ALOGW("Cannot handle digest type %d", sign_params->digest_type);
         return -1;
@@ -657,7 +644,8 @@ static int verify_ec(EVP_PKEY* pkey, keymaster_ec_sign_params_t* sign_params,
         return -1;
     }
 
-    if (ECDSA_verify(0, signedData, signedDataLength, signature, signatureLength, eckey.get()) <= 0) {
+    if (ECDSA_verify(0, signedData, signedDataLength, signature, signatureLength, eckey.get()) <=
+        0) {
         logOpenSSLError("openssl_verify_ec");
         return -1;
     }
@@ -666,8 +654,8 @@ static int verify_ec(EVP_PKEY* pkey, keymaster_ec_sign_params_t* sign_params,
 }
 
 static int verify_rsa(EVP_PKEY* pkey, keymaster_rsa_sign_params_t* sign_params,
-        const uint8_t* signedData, const size_t signedDataLength, const uint8_t* signature,
-        const size_t signatureLength) {
+                      const uint8_t* signedData, const size_t signedDataLength,
+                      const uint8_t* signature, const size_t signatureLength) {
     if (sign_params->digest_type != DIGEST_NONE) {
         ALOGW("Cannot handle digest type %d", sign_params->digest_type);
         return -1;
@@ -705,12 +693,10 @@ static int verify_rsa(EVP_PKEY* pkey, keymaster_rsa_sign_params_t* sign_params,
     return result == 0 ? 0 : -1;
 }
 
-__attribute__ ((visibility ("default")))
-int openssl_verify_data(const keymaster_device_t*,
-        const void* params,
-        const uint8_t* keyBlob, const size_t keyBlobLength,
-        const uint8_t* signedData, const size_t signedDataLength,
-        const uint8_t* signature, const size_t signatureLength) {
+__attribute__((visibility("default"))) int openssl_verify_data(
+    const keymaster_device_t*, const void* params, const uint8_t* keyBlob,
+    const size_t keyBlobLength, const uint8_t* signedData, const size_t signedDataLength,
+    const uint8_t* signature, const size_t signatureLength) {
 
     if (signedData == NULL || signature == NULL) {
         ALOGW("data or signature buffers == NULL");
@@ -724,17 +710,20 @@ int openssl_verify_data(const keymaster_device_t*,
 
     int type = EVP_PKEY_type(pkey->type);
     if (type == EVP_PKEY_DSA) {
-        keymaster_dsa_sign_params_t* sign_params = (keymaster_dsa_sign_params_t*) params;
-        return verify_dsa(pkey.get(), sign_params, signedData, signedDataLength, signature,
-                signatureLength);
+        const keymaster_dsa_sign_params_t* sign_params =
+            reinterpret_cast<const keymaster_dsa_sign_params_t*>(params);
+        return verify_dsa(pkey.get(), const_cast<keymaster_dsa_sign_params_t*>(sign_params),
+                          signedData, signedDataLength, signature, signatureLength);
     } else if (type == EVP_PKEY_RSA) {
-        keymaster_rsa_sign_params_t* sign_params = (keymaster_rsa_sign_params_t*) params;
-        return verify_rsa(pkey.get(), sign_params, signedData, signedDataLength, signature,
-                signatureLength);
+        const keymaster_rsa_sign_params_t* sign_params =
+            reinterpret_cast<const keymaster_rsa_sign_params_t*>(params);
+        return verify_rsa(pkey.get(), const_cast<keymaster_rsa_sign_params_t*>(sign_params),
+                          signedData, signedDataLength, signature, signatureLength);
     } else if (type == EVP_PKEY_EC) {
-        keymaster_ec_sign_params_t* sign_params = (keymaster_ec_sign_params_t*) params;
-        return verify_ec(pkey.get(), sign_params, signedData, signedDataLength, signature,
-                signatureLength);
+        const keymaster_ec_sign_params_t* sign_params =
+            reinterpret_cast<const keymaster_ec_sign_params_t*>(params);
+        return verify_ec(pkey.get(), const_cast<keymaster_ec_sign_params_t*>(sign_params),
+                         signedData, signedDataLength, signature, signatureLength);
     } else {
         ALOGW("Unsupported key type %d", type);
         return -1;
