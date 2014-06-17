@@ -29,7 +29,7 @@
 #include <UniquePtr.h>
 
 // For debugging
-//#define LOG_NDEBUG 0
+// #define LOG_NDEBUG 0
 
 #define LOG_TAG "OpenSSLKeyMaster"
 #include <cutils/log.h>
@@ -37,7 +37,7 @@
 typedef UniquePtr<keymaster_device_t> Unique_keymaster_device_t;
 
 /* Close an opened OpenSSL instance */
-static int openssl_close(hw_device_t *dev) {
+static int openssl_close(hw_device_t* dev) {
     delete dev;
     return 0;
 }
@@ -45,8 +45,7 @@ static int openssl_close(hw_device_t *dev) {
 /*
  * Generic device handling
  */
-static int openssl_open(const hw_module_t* module, const char* name,
-        hw_device_t** device) {
+static int openssl_open(const hw_module_t* module, const char* name, hw_device_t** device) {
     if (strcmp(name, KEYSTORE_KEYMASTER) != 0)
         return -EINVAL;
 
@@ -56,7 +55,7 @@ static int openssl_open(const hw_module_t* module, const char* name,
 
     dev->common.tag = HARDWARE_DEVICE_TAG;
     dev->common.version = 1;
-    dev->common.module = (struct hw_module_t*) module;
+    dev->common.module = (struct hw_module_t*)module;
     dev->common.close = openssl_close;
 
     dev->flags = KEYMASTER_SOFTWARE_ONLY;
@@ -81,8 +80,7 @@ static struct hw_module_methods_t keystore_module_methods = {
     .open = openssl_open,
 };
 
-struct keystore_module HAL_MODULE_INFO_SYM
-__attribute__ ((visibility ("default"))) = {
+struct keystore_module HAL_MODULE_INFO_SYM __attribute__((visibility("default"))) = {
     .common = {
         .tag = HARDWARE_MODULE_TAG,
         .module_api_version = KEYMASTER_MODULE_API_VERSION_0_2,
