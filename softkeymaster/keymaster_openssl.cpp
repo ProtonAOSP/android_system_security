@@ -78,6 +78,12 @@ struct RSA_Delete {
 };
 typedef UniquePtr<RSA, RSA_Delete> Unique_RSA;
 
+struct Malloc_Free {
+    void operator()(void* p) const {
+        free(p);
+    }
+};
+
 typedef UniquePtr<keymaster_device_t> Unique_keymaster_device_t;
 
 /**
@@ -86,8 +92,10 @@ typedef UniquePtr<keymaster_device_t> Unique_keymaster_device_t;
  * scoped pointers when we've transferred ownership, without
  * triggering a warning by not using the result of release().
  */
-#define OWNERSHIP_TRANSFERRED(obj)                                                                 \
-    typeof(obj.release()) _dummy __attribute__((unused)) = obj.release()
+template <typename T, typename Delete_T>
+inline void release_because_ownership_transferred(UniquePtr<T, Delete_T>& p) {
+    T* val __attribute__((unused)) = p.release();
+}
 
 /*
  * Checks this thread's OpenSSL error queue and logs if
@@ -123,7 +131,9 @@ static int wrap_key(EVP_PKEY* pkey, int type, uint8_t** keyBlob, size_t* keyBlob
     *keyBlobLength = get_softkey_header_size() + sizeof(type) + sizeof(publicLen) + privateLen +
                      sizeof(privateLen) + publicLen;
 
-    UniquePtr<unsigned char> derData(new unsigned char[*keyBlobLength]);
+    // derData will be returned to the caller, so allocate it with malloc.
+    UniquePtr<unsigned char, Malloc_Free> derData(
+        static_cast<unsigned char*>(malloc(*keyBlobLength)));
     if (derData.get() == NULL) {
         ALOGE("could not allocate memory for key blob");
         return -1;
@@ -266,7 +276,7 @@ static int generate_dsa_keypair(EVP_PKEY* pkey, const keymaster_dsa_keygen_param
         logOpenSSLError("generate_dsa_keypair");
         return -1;
     }
-    OWNERSHIP_TRANSFERRED(dsa);
+    release_because_ownership_transferred(dsa);
 
     return 0;
 }
@@ -323,7 +333,7 @@ static int generate_ec_keypair(EVP_PKEY* pkey, const keymaster_ec_keygen_params_
         logOpenSSLError("generate_ec_keypair");
         return -1;
     }
-    OWNERSHIP_TRANSFERRED(eckey);
+    release_because_ownership_transferred(eckey);
 
     return 0;
 }
@@ -357,7 +367,7 @@ static int generate_rsa_keypair(EVP_PKEY* pkey, const keymaster_rsa_keygen_param
         logOpenSSLError("generate_rsa_keypair");
         return -1;
     }
-    OWNERSHIP_TRANSFERRED(rsa);
+    release_because_ownership_transferred(rsa);
 
     return 0;
 }
@@ -423,7 +433,7 @@ __attribute__((visibility("default"))) int openssl_import_keypair(const keymaste
         logOpenSSLError("openssl_import_keypair");
         return -1;
     }
-    OWNERSHIP_TRANSFERRED(pkcs8);
+    release_because_ownership_transferred(pkcs8);
 
     if (wrap_key(pkey.get(), EVP_PKEY_type(pkey->type), key_blob, key_blob_length)) {
         return -1;
@@ -452,7 +462,7 @@ __attribute__((visibility("default"))) int openssl_get_keypair_public(
         return -1;
     }
 
-    UniquePtr<uint8_t> key(static_cast<uint8_t*>(malloc(len)));
+    UniquePtr<uint8_t, Malloc_Free> key(static_cast<uint8_t*>(malloc(len)));
     if (key.get() == NULL) {
         ALOGE("Could not allocate memory for public key data");
         return -1;
@@ -485,7 +495,7 @@ static int sign_dsa(EVP_PKEY* pkey, keymaster_dsa_sign_params_t* sign_params, co
     }
 
     unsigned int dsaSize = DSA_size(dsa.get());
-    UniquePtr<uint8_t> signedDataPtr(reinterpret_cast<uint8_t*>(malloc(dsaSize)));
+    UniquePtr<uint8_t, Malloc_Free> signedDataPtr(reinterpret_cast<uint8_t*>(malloc(dsaSize)));
     if (signedDataPtr.get() == NULL) {
         logOpenSSLError("openssl_sign_dsa");
         return -1;
@@ -517,7 +527,7 @@ static int sign_ec(EVP_PKEY* pkey, keymaster_ec_sign_params_t* sign_params, cons
     }
 
     unsigned int ecdsaSize = ECDSA_size(eckey.get());
-    UniquePtr<uint8_t> signedDataPtr(reinterpret_cast<uint8_t*>(malloc(ecdsaSize)));
+    UniquePtr<uint8_t, Malloc_Free> signedDataPtr(reinterpret_cast<uint8_t*>(malloc(ecdsaSize)));
     if (signedDataPtr.get() == NULL) {
         logOpenSSLError("openssl_sign_ec");
         return -1;
@@ -551,7 +561,7 @@ static int sign_rsa(EVP_PKEY* pkey, keymaster_rsa_sign_params_t* sign_params, co
         return -1;
     }
 
-    UniquePtr<uint8_t> signedDataPtr(reinterpret_cast<uint8_t*>(malloc(dataLength)));
+    UniquePtr<uint8_t, Malloc_Free> signedDataPtr(reinterpret_cast<uint8_t*>(malloc(dataLength)));
     if (signedDataPtr.get() == NULL) {
         logOpenSSLError("openssl_sign_rsa");
         return -1;
@@ -673,7 +683,7 @@ static int verify_rsa(EVP_PKEY* pkey, keymaster_rsa_sign_params_t* sign_params,
         return -1;
     }
 
-    UniquePtr<uint8_t> dataPtr(reinterpret_cast<uint8_t*>(malloc(signedDataLength)));
+    UniquePtr<uint8_t[]> dataPtr(new uint8_t[signedDataLength]);
     if (dataPtr.get() == NULL) {
         logOpenSSLError("openssl_verify_data");
         return -1;
