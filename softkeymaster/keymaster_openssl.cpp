@@ -71,6 +71,13 @@ struct EC_KEY_Delete {
 };
 typedef UniquePtr<EC_KEY, EC_KEY_Delete> Unique_EC_KEY;
 
+struct EC_GROUP_Delete {
+    void operator()(EC_GROUP* p) const {
+        EC_GROUP_free(p);
+    }
+};
+typedef UniquePtr<EC_GROUP, EC_GROUP_Delete> Unique_EC_GROUP;
+
 struct RSA_Delete {
     void operator()(RSA* p) const {
         RSA_free(p);
@@ -282,35 +289,34 @@ static int generate_dsa_keypair(EVP_PKEY* pkey, const keymaster_dsa_keygen_param
 }
 
 static int generate_ec_keypair(EVP_PKEY* pkey, const keymaster_ec_keygen_params_t* ec_params) {
-    EC_GROUP* group;
+    Unique_EC_GROUP group;
     switch (ec_params->field_size) {
     case 192:
-        group = EC_GROUP_new_by_curve_name(NID_X9_62_prime192v1);
+        group.reset(EC_GROUP_new_by_curve_name(NID_X9_62_prime192v1));
         break;
     case 224:
-        group = EC_GROUP_new_by_curve_name(NID_secp224r1);
+        group.reset(EC_GROUP_new_by_curve_name(NID_secp224r1));
         break;
     case 256:
-        group = EC_GROUP_new_by_curve_name(NID_X9_62_prime256v1);
+        group.reset(EC_GROUP_new_by_curve_name(NID_X9_62_prime256v1));
         break;
     case 384:
-        group = EC_GROUP_new_by_curve_name(NID_secp384r1);
+        group.reset(EC_GROUP_new_by_curve_name(NID_secp384r1));
         break;
     case 521:
-        group = EC_GROUP_new_by_curve_name(NID_secp521r1);
+        group.reset(EC_GROUP_new_by_curve_name(NID_secp521r1));
         break;
     default:
-        group = NULL;
         break;
     }
 
-    if (group == NULL) {
+    if (group.get() == NULL) {
         logOpenSSLError("generate_ec_keypair");
         return -1;
     }
 
-    EC_GROUP_set_point_conversion_form(group, POINT_CONVERSION_UNCOMPRESSED);
-    EC_GROUP_set_asn1_flag(group, OPENSSL_EC_NAMED_CURVE);
+    EC_GROUP_set_point_conversion_form(group.get(), POINT_CONVERSION_UNCOMPRESSED);
+    EC_GROUP_set_asn1_flag(group.get(), OPENSSL_EC_NAMED_CURVE);
 
     /* initialize EC key */
     Unique_EC_KEY eckey(EC_KEY_new());
@@ -319,7 +325,7 @@ static int generate_ec_keypair(EVP_PKEY* pkey, const keymaster_ec_keygen_params_
         return -1;
     }
 
-    if (EC_KEY_set_group(eckey.get(), group) != 1) {
+    if (EC_KEY_set_group(eckey.get(), group.get()) != 1) {
         logOpenSSLError("generate_ec_keypair");
         return -1;
     }
