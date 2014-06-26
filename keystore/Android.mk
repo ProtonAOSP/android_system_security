@@ -28,7 +28,8 @@ LOCAL_SHARED_LIBRARIES := \
 	libkeystore_binder \
 	liblog \
 	libsoftkeymaster \
-	libutils
+	libutils \
+	libselinux
 LOCAL_MODULE := keystore
 LOCAL_MODULE_TAGS := optional
 LOCAL_ADDITIONAL_DEPENDENCIES := $(LOCAL_PATH)/Android.mk
