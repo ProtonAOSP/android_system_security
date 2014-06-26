@@ -33,6 +33,7 @@
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <arpa/inet.h>
+#include <string.h>
 
 #include <openssl/aes.h>
 #include <openssl/bio.h>
@@ -57,6 +58,8 @@
 #include <private/android_filesystem_config.h>
 
 #include <keystore/keystore.h>
+
+#include <selinux/android.h>
 
 #include "defaults.h"
 
@@ -152,6 +155,26 @@ typedef enum {
     P_CLEAR_UID = 1 << 15,
 } perm_t;
 
+/* perm_labels associcated with keystore_key SELinux class verbs. */
+const char *perm_labels[] = {
+    "test",
+    "get",
+    "insert",
+    "delete",
+    "exist",
+    "saw",
+    "reset",
+    "password",
+    "lock",
+    "unlock",
+    "zero",
+    "sign",
+    "verify",
+    "grant",
+    "duplicate",
+    "clear_uid"
+};
+
 static struct user_euid {
     uid_t uid;
     uid_t euid;
@@ -174,6 +197,18 @@ static struct user_perm {
 static const perm_t DEFAULT_PERMS = static_cast<perm_t>(P_TEST | P_GET | P_INSERT | P_DELETE | P_EXIST | P_SAW | P_SIGN
         | P_VERIFY);
 
+static char *tctx;
+
+static const char *get_perm_label(perm_t perm) {
+    unsigned int index = ffs(perm);
+    if (index > 0 && index <= (sizeof(perm_labels) / sizeof(perm_labels[0]))) {
+        return perm_labels[index - 1];
+    } else {
+        ALOGE("Keystore: Failed to retrieve permission label.\n");
+        abort();
+    }
+}
+
 /**
  * Returns the app ID (in the Android multi-user sense) for the current
  * UNIX UID.
@@ -190,21 +225,39 @@ static uid_t get_user_id(uid_t uid) {
     return uid / AID_USER;
 }
 
-
-static bool has_permission(uid_t uid, perm_t perm) {
+static bool has_permission(uid_t uid, perm_t perm, pid_t spid) {
     // All system users are equivalent for multi-user support.
     if (get_app_id(uid) == AID_SYSTEM) {
         uid = AID_SYSTEM;
     }
 
+    char *sctx = NULL;
+    const char *selinux_class = "keystore_key";
+    const char *str_perm = get_perm_label(perm);
+
+    if (!str_perm) {
+        return false;
+    }
+
+    if (getpidcon(spid, &sctx) != 0) {
+        ALOGE("SELinux: Failed to get source pid context.\n");
+        return false;
+    }
+
     for (size_t i = 0; i < sizeof(user_perms)/sizeof(user_perms[0]); i++) {
         struct user_perm user = user_perms[i];
         if (user.uid == uid) {
-            return user.perms & perm;
+            bool result = (user.perms & perm) && (selinux_check_access(sctx,
+                        tctx, selinux_class, str_perm, NULL) == 0);
+            freecon(sctx);
+            return result;
         }
     }
 
-    return DEFAULT_PERMS & perm;
+    bool result = (DEFAULT_PERMS & perm) && (selinux_check_access(sctx,
+            tctx, selinux_class, str_perm, NULL) == 0);
+    freecon(sctx);
+    return result;
 }
 
 /**
@@ -1438,7 +1491,8 @@ public:
 
     int32_t test() {
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        if (!has_permission(callingUid, P_TEST)) {
+        pid_t spid = IPCThreadState::self()->getCallingPid();
+        if (!has_permission(callingUid, P_TEST, spid)) {
             ALOGW("permission denied for %d: test", callingUid);
             return ::PERMISSION_DENIED;
         }
@@ -1448,14 +1502,14 @@ public:
 
     int32_t get(const String16& name, uint8_t** item, size_t* itemLength) {
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        if (!has_permission(callingUid, P_GET)) {
+        pid_t spid = IPCThreadState::self()->getCallingPid();
+        if (!has_permission(callingUid, P_GET, spid)) {
             ALOGW("permission denied for %d: get", callingUid);
             return ::PERMISSION_DENIED;
         }
 
         String8 name8(name);
         Blob keyBlob;
-
         ResponseCode responseCode = mKeyStore->getKeyForName(&keyBlob, name8, callingUid,
                 TYPE_GENERIC);
         if (responseCode != ::NO_ERROR) {
@@ -1475,7 +1529,8 @@ public:
     int32_t insert(const String16& name, const uint8_t* item, size_t itemLength, int targetUid,
             int32_t flags) {
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        if (!has_permission(callingUid, P_INSERT)) {
+        pid_t spid = IPCThreadState::self()->getCallingPid();
+        if (!has_permission(callingUid, P_INSERT, spid)) {
             ALOGW("permission denied for %d: insert", callingUid);
             return ::PERMISSION_DENIED;
         }
@@ -1503,7 +1558,8 @@ public:
 
     int32_t del(const String16& name, int targetUid) {
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        if (!has_permission(callingUid, P_DELETE)) {
+        pid_t spid = IPCThreadState::self()->getCallingPid();
+        if (!has_permission(callingUid, P_DELETE, spid)) {
             ALOGW("permission denied for %d: del", callingUid);
             return ::PERMISSION_DENIED;
         }
@@ -1528,7 +1584,8 @@ public:
 
     int32_t exist(const String16& name, int targetUid) {
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        if (!has_permission(callingUid, P_EXIST)) {
+        pid_t spid = IPCThreadState::self()->getCallingPid();
+        if (!has_permission(callingUid, P_EXIST, spid)) {
             ALOGW("permission denied for %d: exist", callingUid);
             return ::PERMISSION_DENIED;
         }
@@ -1550,7 +1607,8 @@ public:
 
     int32_t saw(const String16& prefix, int targetUid, Vector<String16>* matches) {
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        if (!has_permission(callingUid, P_SAW)) {
+        pid_t spid = IPCThreadState::self()->getCallingPid();
+        if (!has_permission(callingUid, P_SAW, spid)) {
             ALOGW("permission denied for %d: saw", callingUid);
             return ::PERMISSION_DENIED;
         }
@@ -1606,7 +1664,8 @@ public:
 
     int32_t reset() {
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        if (!has_permission(callingUid, P_RESET)) {
+        pid_t spid = IPCThreadState::self()->getCallingPid();
+        if (!has_permission(callingUid, P_RESET, spid)) {
             ALOGW("permission denied for %d: reset", callingUid);
             return ::PERMISSION_DENIED;
         }
@@ -1641,7 +1700,8 @@ public:
      */
     int32_t password(const String16& password) {
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        if (!has_permission(callingUid, P_PASSWORD)) {
+        pid_t spid = IPCThreadState::self()->getCallingPid();
+        if (!has_permission(callingUid, P_PASSWORD, spid)) {
             ALOGW("permission denied for %d: password", callingUid);
             return ::PERMISSION_DENIED;
         }
@@ -1667,7 +1727,8 @@ public:
 
     int32_t lock() {
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        if (!has_permission(callingUid, P_LOCK)) {
+        pid_t spid = IPCThreadState::self()->getCallingPid();
+        if (!has_permission(callingUid, P_LOCK, spid)) {
             ALOGW("permission denied for %d: lock", callingUid);
             return ::PERMISSION_DENIED;
         }
@@ -1684,7 +1745,8 @@ public:
 
     int32_t unlock(const String16& pw) {
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        if (!has_permission(callingUid, P_UNLOCK)) {
+        pid_t spid = IPCThreadState::self()->getCallingPid();
+        if (!has_permission(callingUid, P_UNLOCK, spid)) {
             ALOGW("permission denied for %d: unlock", callingUid);
             return ::PERMISSION_DENIED;
         }
@@ -1701,7 +1763,8 @@ public:
 
     int32_t zero() {
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        if (!has_permission(callingUid, P_ZERO)) {
+        pid_t spid = IPCThreadState::self()->getCallingPid();
+        if (!has_permission(callingUid, P_ZERO, spid)) {
             ALOGW("permission denied for %d: zero", callingUid);
             return -1;
         }
@@ -1712,7 +1775,8 @@ public:
     int32_t generate(const String16& name, int32_t targetUid, int32_t keyType, int32_t keySize,
             int32_t flags, Vector<sp<KeystoreArg> >* args) {
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        if (!has_permission(callingUid, P_INSERT)) {
+        pid_t spid = IPCThreadState::self()->getCallingPid();
+        if (!has_permission(callingUid, P_INSERT, spid)) {
             ALOGW("permission denied for %d: generate", callingUid);
             return ::PERMISSION_DENIED;
         }
@@ -1863,7 +1927,8 @@ public:
     int32_t import(const String16& name, const uint8_t* data, size_t length, int targetUid,
             int32_t flags) {
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        if (!has_permission(callingUid, P_INSERT)) {
+        pid_t spid = IPCThreadState::self()->getCallingPid();
+        if (!has_permission(callingUid, P_INSERT, spid)) {
             ALOGW("permission denied for %d: import", callingUid);
             return ::PERMISSION_DENIED;
         }
@@ -1889,7 +1954,8 @@ public:
     int32_t sign(const String16& name, const uint8_t* data, size_t length, uint8_t** out,
             size_t* outLength) {
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        if (!has_permission(callingUid, P_SIGN)) {
+        pid_t spid = IPCThreadState::self()->getCallingPid();
+        if (!has_permission(callingUid, P_SIGN, spid)) {
             ALOGW("permission denied for %d: saw", callingUid);
             return ::PERMISSION_DENIED;
         }
@@ -1939,7 +2005,8 @@ public:
     int32_t verify(const String16& name, const uint8_t* data, size_t dataLength,
             const uint8_t* signature, size_t signatureLength) {
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        if (!has_permission(callingUid, P_VERIFY)) {
+        pid_t spid = IPCThreadState::self()->getCallingPid();
+        if (!has_permission(callingUid, P_VERIFY, spid)) {
             ALOGW("permission denied for %d: verify", callingUid);
             return ::PERMISSION_DENIED;
         }
@@ -2000,7 +2067,8 @@ public:
      */
     int32_t get_pubkey(const String16& name, uint8_t** pubkey, size_t* pubkeyLength) {
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        if (!has_permission(callingUid, P_GET)) {
+        pid_t spid = IPCThreadState::self()->getCallingPid();
+        if (!has_permission(callingUid, P_GET, spid)) {
             ALOGW("permission denied for %d: get_pubkey", callingUid);
             return ::PERMISSION_DENIED;
         }
@@ -2043,7 +2111,8 @@ public:
 
     int32_t del_key(const String16& name, int targetUid) {
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        if (!has_permission(callingUid, P_DELETE)) {
+        pid_t spid = IPCThreadState::self()->getCallingPid();
+        if (!has_permission(callingUid, P_DELETE, spid)) {
             ALOGW("permission denied for %d: del_key", callingUid);
             return ::PERMISSION_DENIED;
         }
@@ -2087,7 +2156,8 @@ public:
 
     int32_t grant(const String16& name, int32_t granteeUid) {
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        if (!has_permission(callingUid, P_GRANT)) {
+        pid_t spid = IPCThreadState::self()->getCallingPid();
+        if (!has_permission(callingUid, P_GRANT, spid)) {
             ALOGW("permission denied for %d: grant", callingUid);
             return ::PERMISSION_DENIED;
         }
@@ -2111,7 +2181,8 @@ public:
 
     int32_t ungrant(const String16& name, int32_t granteeUid) {
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        if (!has_permission(callingUid, P_GRANT)) {
+        pid_t spid = IPCThreadState::self()->getCallingPid();
+        if (!has_permission(callingUid, P_GRANT, spid)) {
             ALOGW("permission denied for %d: ungrant", callingUid);
             return ::PERMISSION_DENIED;
         }
@@ -2134,7 +2205,8 @@ public:
 
     int64_t getmtime(const String16& name) {
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        if (!has_permission(callingUid, P_GET)) {
+        pid_t spid = IPCThreadState::self()->getCallingPid();
+        if (!has_permission(callingUid, P_GET, spid)) {
             ALOGW("permission denied for %d: getmtime", callingUid);
             return -1L;
         }
@@ -2167,7 +2239,8 @@ public:
     int32_t duplicate(const String16& srcKey, int32_t srcUid, const String16& destKey,
             int32_t destUid) {
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        if (!has_permission(callingUid, P_DUPLICATE)) {
+        pid_t spid = IPCThreadState::self()->getCallingPid();
+        if (!has_permission(callingUid, P_DUPLICATE, spid)) {
             ALOGW("permission denied for %d: duplicate", callingUid);
             return -1L;
         }
@@ -2230,7 +2303,8 @@ public:
     int32_t clear_uid(int64_t targetUid64) {
         uid_t targetUid = static_cast<uid_t>(targetUid64);
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        if (!has_permission(callingUid, P_CLEAR_UID)) {
+        pid_t spid = IPCThreadState::self()->getCallingPid();
+        if (!has_permission(callingUid, P_CLEAR_UID, spid)) {
             ALOGW("permission denied for %d: clear_uid", callingUid);
             return ::PERMISSION_DENIED;
         }
@@ -2374,6 +2448,14 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    union selinux_callback cb;
+    cb.func_log = selinux_log_callback;
+    selinux_set_callback(SELINUX_CB_LOG, cb);
+    if (getcon(&tctx) != 0) {
+        ALOGE("SELinux: Could not acquire target context. Aborting keystore.\n");
+        return -1;
+    }
+
     KeyStore keyStore(&entropy, dev);
     keyStore.initialize();
     android::sp<android::IServiceManager> sm = android::defaultServiceManager();
@@ -2391,5 +2473,6 @@ int main(int argc, char* argv[]) {
     android::IPCThreadState::self()->joinThreadPool();
 
     keymaster_device_release(dev);
+
     return 1;
 }
