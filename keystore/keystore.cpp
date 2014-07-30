@@ -298,6 +298,15 @@ static bool is_granted_to(uid_t callingUid, uid_t targetUid) {
     return false;
 }
 
+/**
+ * Allow the system to perform some privileged tasks that have to do with
+ * system maintenance. This should not be used for any function that uses
+ * the keys in any way (e.g., signing).
+ */
+static bool is_self_or_system(uid_t callingUid, uid_t targetUid) {
+    return callingUid == targetUid || callingUid == AID_SYSTEM;
+}
+
 /* Here is the encoding of keys. This is necessary in order to allow arbitrary
  * characters in keys. Characters in [0-~] are not encoded. Others are encoded
  * into two bytes. The first byte is one of [+-.] which represents the first
@@ -2317,15 +2326,10 @@ public:
             return ::PERMISSION_DENIED;
         }
 
-        State state = mKeyStore->getState(callingUid);
-        if (!isKeystoreUnlocked(state)) {
-            ALOGD("calling clear_uid in state: %d", state);
-            return state;
-        }
-
         if (targetUid64 == -1) {
             targetUid = callingUid;
-        } else if (!is_granted_to(callingUid, targetUid)) {
+        } else if (!is_self_or_system(callingUid, targetUid)) {
+            ALOGW("permission denied for %d: clear_uid %d", callingUid, targetUid);
             return ::PERMISSION_DENIED;
         }
 
