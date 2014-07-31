@@ -851,19 +851,7 @@ public:
             }
 
             // Skip anything that starts with a "."
-            if (file->d_name[0] == '.') {
-                continue;
-            }
-
-            // Find the current file's UID.
-            char* end;
-            unsigned long thisUid = strtoul(file->d_name, &end, 10);
-            if (end[0] != '_' || end[1] == 0) {
-                continue;
-            }
-
-            // Skip if this is not our user.
-            if (get_user_id(thisUid) != mUserId) {
+            if (file->d_name[0] == '.' && strcmp(".masterkey", file->d_name)) {
                 continue;
             }
 
