@@ -970,14 +970,12 @@ public:
     }
 
     ResponseCode writeMasterKey(const android::String8& pw, uid_t uid) {
-        uid_t user_id = get_user_id(uid);
-        UserState* userState = getUserState(user_id);
+        UserState* userState = getUserState(uid);
         return userState->writeMasterKey(pw, mEntropy);
     }
 
     ResponseCode readMasterKey(const android::String8& pw, uid_t uid) {
-        uid_t user_id = get_user_id(uid);
-        UserState* userState = getUserState(user_id);
+        UserState* userState = getUserState(uid);
         return userState->readMasterKey(pw, mEntropy);
     }
 
