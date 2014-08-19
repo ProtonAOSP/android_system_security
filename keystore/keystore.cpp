@@ -136,22 +136,25 @@ static void keymaster_device_release(keymaster_device_t* dev) {
 
 /* Here are the permissions, actions, users, and the main function. */
 typedef enum {
-    P_TEST      = 1 << 0,
-    P_GET       = 1 << 1,
-    P_INSERT    = 1 << 2,
-    P_DELETE    = 1 << 3,
-    P_EXIST     = 1 << 4,
-    P_SAW       = 1 << 5,
-    P_RESET     = 1 << 6,
-    P_PASSWORD  = 1 << 7,
-    P_LOCK      = 1 << 8,
-    P_UNLOCK    = 1 << 9,
-    P_ZERO      = 1 << 10,
-    P_SIGN      = 1 << 11,
-    P_VERIFY    = 1 << 12,
-    P_GRANT     = 1 << 13,
-    P_DUPLICATE = 1 << 14,
-    P_CLEAR_UID = 1 << 15,
+    P_TEST          = 1 << 0,
+    P_GET           = 1 << 1,
+    P_INSERT        = 1 << 2,
+    P_DELETE        = 1 << 3,
+    P_EXIST         = 1 << 4,
+    P_SAW           = 1 << 5,
+    P_RESET         = 1 << 6,
+    P_PASSWORD      = 1 << 7,
+    P_LOCK          = 1 << 8,
+    P_UNLOCK        = 1 << 9,
+    P_ZERO          = 1 << 10,
+    P_SIGN          = 1 << 11,
+    P_VERIFY        = 1 << 12,
+    P_GRANT         = 1 << 13,
+    P_DUPLICATE     = 1 << 14,
+    P_CLEAR_UID     = 1 << 15,
+    P_RESET_UID     = 1 << 16,
+    P_SYNC_UID      = 1 << 17,
+    P_PASSWORD_UID  = 1 << 18,
 } perm_t;
 
 static struct user_euid {
@@ -180,7 +183,10 @@ const char *perm_labels[] = {
     "verify",
     "grant",
     "duplicate",
-    "clear_uid"
+    "clear_uid",
+    "reset_uid",
+    "sync_uid",
+    "password_uid",
 };
 
 static struct user_perm {
@@ -761,6 +767,18 @@ public:
         return ::NO_ERROR;
     }
 
+    ResponseCode copyMasterKey(UserState* src) {
+        if (mState != STATE_UNINITIALIZED) {
+            return ::SYSTEM_ERROR;
+        }
+        if (src->getState() != STATE_NO_ERROR) {
+            return ::SYSTEM_ERROR;
+        }
+        memcpy(mMasterKey, src->mMasterKey, MASTER_KEY_SIZE_BYTES);
+        setupMasterKeys();
+        return ::NO_ERROR;
+    }
+
     ResponseCode writeMasterKey(const android::String8& pw, Entropy* entropy) {
         uint8_t passwordKey[MASTER_KEY_SIZE_BYTES];
         generateKeyFromPassword(passwordKey, MASTER_KEY_SIZE_BYTES, pw, mSalt);
@@ -969,10 +987,17 @@ public:
         return userState->initialize(pw, mEntropy);
     }
 
+    ResponseCode copyMasterKey(uid_t src, uid_t uid) {
+        UserState *userState = getUserState(uid);
+        UserState *initState = getUserState(src);
+        return userState->copyMasterKey(initState);
+    }
+
     ResponseCode writeMasterKey(const android::String8& pw, uid_t uid) {
         UserState* userState = getUserState(uid);
         return userState->writeMasterKey(pw, mEntropy);
     }
+
 
     ResponseCode readMasterKey(const android::String8& pw, uid_t uid) {
         UserState* userState = getUserState(uid);
@@ -2379,6 +2404,71 @@ public:
         closedir(dir);
 
         return rc;
+    }
+
+    int32_t reset_uid(int32_t uid) {
+        uid_t callingUid = IPCThreadState::self()->getCallingUid();
+        pid_t spid = IPCThreadState::self()->getCallingPid();
+        if (!has_permission(callingUid, P_RESET_UID, spid)) {
+            ALOGW("permission denied for %d: reset_uid %d", callingUid, uid);
+            return ::PERMISSION_DENIED;
+        }
+        if (callingUid != AID_SYSTEM) {
+            ALOGW("permission denied for %d: reset_uid %d", callingUid, uid);
+            return ::PERMISSION_DENIED;
+        }
+
+        return mKeyStore->reset(uid) ? ::NO_ERROR : ::SYSTEM_ERROR;
+    }
+
+    int32_t sync_uid(int32_t sourceUid, int32_t targetUid) {
+        uid_t callingUid = IPCThreadState::self()->getCallingUid();
+        pid_t spid = IPCThreadState::self()->getCallingPid();
+        if (!has_permission(callingUid, P_SYNC_UID, spid)) {
+            ALOGW("permission denied for %d: sync_uid %d -> %d", callingUid, sourceUid, targetUid);
+            return ::PERMISSION_DENIED;
+        }
+        if (callingUid != AID_SYSTEM) {
+            ALOGW("permission denied for %d: sync_uid %d -> %d", callingUid, sourceUid, targetUid);
+            return ::PERMISSION_DENIED;
+        }
+        if (sourceUid == targetUid) {
+            return ::SYSTEM_ERROR;
+        }
+
+        // Initialise user keystore with existing master key held in-memory
+        return mKeyStore->copyMasterKey(sourceUid, targetUid);
+    }
+
+    int32_t password_uid(const String16& pw, int32_t targetUid) {
+        uid_t callingUid = IPCThreadState::self()->getCallingUid();
+        pid_t spid = IPCThreadState::self()->getCallingPid();
+        if (!has_permission(callingUid, P_PASSWORD_UID, spid)) {
+            ALOGW("permission denied for %d: password_uid %d", callingUid, targetUid);
+            return ::PERMISSION_DENIED;
+        }
+        if (callingUid != AID_SYSTEM) {
+            ALOGW("permission denied for %d: password_uid %d", callingUid, targetUid);
+            return ::PERMISSION_DENIED;
+        }
+
+        const String8 password8(pw);
+
+        switch (mKeyStore->getState(targetUid)) {
+            case ::STATE_UNINITIALIZED: {
+                // generate master key, encrypt with password, write to file, initialize mMasterKey*.
+                return mKeyStore->initializeUser(password8, targetUid);
+            }
+            case ::STATE_NO_ERROR: {
+                // rewrite master key with new password.
+                return mKeyStore->writeMasterKey(password8, targetUid);
+            }
+            case ::STATE_LOCKED: {
+                // read master key, decrypt with password, initialize mMasterKey*.
+                return mKeyStore->readMasterKey(password8, targetUid);
+            }
+        }
+        return ::SYSTEM_ERROR;
     }
 
 private:

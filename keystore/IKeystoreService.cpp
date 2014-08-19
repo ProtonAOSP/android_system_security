@@ -579,6 +579,65 @@ public:
         }
         return ret;
     }
+
+    virtual int32_t reset_uid(int32_t uid) {
+        Parcel data, reply;
+        data.writeInterfaceToken(IKeystoreService::getInterfaceDescriptor());
+        data.writeInt32(uid);
+        status_t status = remote()->transact(BnKeystoreService::RESET_UID, data, &reply);
+        if (status != NO_ERROR) {
+            ALOGD("reset_uid() could not contact remote: %d\n", status);
+            return -1;
+        }
+        int32_t err = reply.readExceptionCode();
+        int32_t ret = reply.readInt32();
+        if (err < 0) {
+            ALOGD("reset_uid() caught exception %d\n", err);
+            return -1;
+        }
+        return ret;
+
+    }
+
+    virtual int32_t sync_uid(int32_t sourceUid, int32_t targetUid)
+    {
+        Parcel data, reply;
+        data.writeInterfaceToken(IKeystoreService::getInterfaceDescriptor());
+        data.writeInt32(sourceUid);
+        data.writeInt32(targetUid);
+        status_t status = remote()->transact(BnKeystoreService::SYNC_UID, data, &reply);
+        if (status != NO_ERROR) {
+            ALOGD("sync_uid() could not contact remote: %d\n", status);
+            return -1;
+        }
+        int32_t err = reply.readExceptionCode();
+        int32_t ret = reply.readInt32();
+        if (err < 0) {
+            ALOGD("sync_uid() caught exception %d\n", err);
+            return -1;
+        }
+        return ret;
+    }
+
+    virtual int32_t password_uid(const String16& password, int32_t uid)
+    {
+        Parcel data, reply;
+        data.writeInterfaceToken(IKeystoreService::getInterfaceDescriptor());
+        data.writeString16(password);
+        data.writeInt32(uid);
+        status_t status = remote()->transact(BnKeystoreService::PASSWORD_UID, data, &reply);
+        if (status != NO_ERROR) {
+            ALOGD("password_uid() could not contact remote: %d\n", status);
+            return -1;
+        }
+        int32_t err = reply.readExceptionCode();
+        int32_t ret = reply.readInt32();
+        if (err < 0) {
+            ALOGD("password_uid() caught exception %d\n", err);
+            return -1;
+        }
+        return ret;
+    }
 };
 
 IMPLEMENT_META_INTERFACE(KeystoreService, "android.security.keystore");
@@ -871,6 +930,32 @@ status_t BnKeystoreService::onTransact(
             CHECK_INTERFACE(IKeystoreService, data, reply);
             int64_t uid = data.readInt64();
             int32_t ret = clear_uid(uid);
+            reply->writeNoException();
+            reply->writeInt32(ret);
+            return NO_ERROR;
+        }
+        case RESET_UID: {
+            CHECK_INTERFACE(IKeystoreService, data, reply);
+            int32_t uid = data.readInt32();
+            int32_t ret = reset_uid(uid);
+            reply->writeNoException();
+            reply->writeInt32(ret);
+            return NO_ERROR;
+        }
+        case SYNC_UID: {
+            CHECK_INTERFACE(IKeystoreService, data, reply);
+            int32_t sourceUid = data.readInt32();
+            int32_t targetUid = data.readInt32();
+            int32_t ret = sync_uid(sourceUid, targetUid);
+            reply->writeNoException();
+            reply->writeInt32(ret);
+            return NO_ERROR;
+        }
+        case PASSWORD_UID: {
+            CHECK_INTERFACE(IKeystoreService, data, reply);
+            String16 password = data.readString16();
+            int32_t uid = data.readInt32();
+            int32_t ret = password_uid(password, uid);
             reply->writeNoException();
             reply->writeInt32(ret);
             return NO_ERROR;
