@@ -65,6 +65,9 @@ public:
         DUPLICATE = IBinder::FIRST_CALL_TRANSACTION + 20,
         IS_HARDWARE_BACKED = IBinder::FIRST_CALL_TRANSACTION + 21,
         CLEAR_UID = IBinder::FIRST_CALL_TRANSACTION + 22,
+        RESET_UID = IBinder::FIRST_CALL_TRANSACTION + 23,
+        SYNC_UID = IBinder::FIRST_CALL_TRANSACTION + 24,
+        PASSWORD_UID = IBinder::FIRST_CALL_TRANSACTION + 25,
     };
 
     DECLARE_META_INTERFACE(KeystoreService);
@@ -120,6 +123,12 @@ public:
     virtual int32_t is_hardware_backed(const String16& keyType) = 0;
 
     virtual int32_t clear_uid(int64_t uid) = 0;
+
+    virtual int32_t reset_uid(int32_t uid) = 0;
+
+    virtual int32_t sync_uid(int32_t sourceUid, int32_t targetUid) = 0;
+
+    virtual int32_t password_uid(const String16& password, int32_t uid) = 0;
 };
 
 // ----------------------------------------------------------------------------
