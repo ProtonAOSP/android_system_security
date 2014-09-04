@@ -225,7 +225,7 @@ static uid_t get_user_id(uid_t uid) {
     return uid / AID_USER;
 }
 
-static bool keystore_selinux_check_access(uid_t uid, perm_t perm, pid_t spid) {
+static bool keystore_selinux_check_access(uid_t /*uid*/, perm_t perm, pid_t spid) {
     if (!ks_is_selinux_enabled) {
         return true;
     }
