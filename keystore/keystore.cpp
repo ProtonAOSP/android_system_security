@@ -1032,20 +1032,17 @@ public:
 
     bool isEmpty(uid_t uid) const {
         const UserState* userState = getUserState(uid);
-        if (userState == NULL) {
+        if (userState == NULL || userState->getState() == STATE_UNINITIALIZED) {
             return true;
         }
 
         DIR* dir = opendir(userState->getUserDirName());
-        struct dirent* file;
         if (!dir) {
             return true;
         }
+
         bool result = true;
-
-        char filename[NAME_MAX];
-        int n = snprintf(filename, sizeof(filename), "%u_", uid);
-
+        struct dirent* file;
         while ((file = readdir(dir)) != NULL) {
             // We only care about files.
             if (file->d_type != DT_REG) {
@@ -1057,10 +1054,8 @@ public:
                 continue;
             }
 
-            if (!strncmp(file->d_name, filename, n)) {
-                result = false;
-                break;
-            }
+            result = false;
+            break;
         }
         closedir(dir);
         return result;
