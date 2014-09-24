@@ -998,7 +998,6 @@ public:
         return userState->writeMasterKey(pw, mEntropy);
     }
 
-
     ResponseCode readMasterKey(const android::String8& pw, uid_t uid) {
         UserState* userState = getUserState(uid);
         return userState->readMasterKey(pw, mEntropy);
@@ -1024,7 +1023,20 @@ public:
     }
 
     bool reset(uid_t uid) {
+        android::String8 prefix("");
+        android::Vector<android::String16> aliases;
+        if (saw(prefix, &aliases, uid) != ::NO_ERROR) {
+            return ::SYSTEM_ERROR;
+        }
+
         UserState* userState = getUserState(uid);
+        for (uint32_t i = 0; i < aliases.size(); i++) {
+            android::String8 filename(aliases[i]);
+            filename = android::String8::format("%s/%s", userState->getUserDirName(),
+                    getKeyName(filename).string());
+            del(filename, ::TYPE_ANY, uid);
+        }
+
         userState->zeroizeMasterKeysInMemory();
         userState->setState(STATE_UNINITIALIZED);
         return userState->reset();
@@ -1119,6 +1131,71 @@ public:
         UserState* userState = getUserState(uid);
         return keyBlob->writeBlob(filename, userState->getEncryptionKey(), userState->getState(),
                 mEntropy);
+    }
+
+    ResponseCode del(const char *filename, const BlobType type, uid_t uid) {
+        Blob keyBlob;
+        ResponseCode rc = get(filename, &keyBlob, type, uid);
+        if (rc != ::NO_ERROR) {
+            return rc;
+        }
+
+        if (keyBlob.getType() == ::TYPE_KEY_PAIR) {
+            // A device doesn't have to implement delete_keypair.
+            if (mDevice->delete_keypair != NULL && !keyBlob.isFallback()) {
+                if (mDevice->delete_keypair(mDevice, keyBlob.getValue(), keyBlob.getLength())) {
+                    rc = ::SYSTEM_ERROR;
+                }
+            }
+        }
+        if (rc != ::NO_ERROR) {
+            return rc;
+        }
+
+        return (unlink(filename) && errno != ENOENT) ? ::SYSTEM_ERROR : ::NO_ERROR;
+    }
+
+    ResponseCode saw(const android::String8& prefix, android::Vector<android::String16> *matches,
+            uid_t uid) {
+
+        UserState* userState = getUserState(uid);
+        size_t n = prefix.length();
+
+        DIR* dir = opendir(userState->getUserDirName());
+        if (!dir) {
+            ALOGW("can't open directory for user: %s", strerror(errno));
+            return ::SYSTEM_ERROR;
+        }
+
+        struct dirent* file;
+        while ((file = readdir(dir)) != NULL) {
+            // We only care about files.
+            if (file->d_type != DT_REG) {
+                continue;
+            }
+
+            // Skip anything that starts with a "."
+            if (file->d_name[0] == '.') {
+                continue;
+            }
+
+            if (!strncmp(prefix.string(), file->d_name, n)) {
+                const char* p = &file->d_name[n];
+                size_t plen = strlen(p);
+
+                size_t extra = decode_key_length(p, plen);
+                char *match = (char*) malloc(extra + 1);
+                if (match != NULL) {
+                    decode_key(match, p, plen);
+                    matches->push(android::String16(match, extra));
+                    free(match);
+                } else {
+                    ALOGW("could not allocate match of size %zd", extra);
+                }
+            }
+        }
+        closedir(dir);
+        return ::NO_ERROR;
     }
 
     void addGrant(const char* filename, uid_t granteeUid) {
@@ -1595,14 +1672,7 @@ public:
 
         String8 name8(name);
         String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, targetUid));
-
-        Blob keyBlob;
-        ResponseCode responseCode = mKeyStore->get(filename.string(), &keyBlob, TYPE_GENERIC,
-                targetUid);
-        if (responseCode != ::NO_ERROR) {
-            return responseCode;
-        }
-        return (unlink(filename) && errno != ENOENT) ? ::SYSTEM_ERROR : ::NO_ERROR;
+        return mKeyStore->del(filename.string(), ::TYPE_GENERIC, targetUid);
     }
 
     int32_t exist(const String16& name, int targetUid) {
@@ -1642,46 +1712,12 @@ public:
             return ::PERMISSION_DENIED;
         }
 
-        UserState* userState = mKeyStore->getUserState(targetUid);
-        DIR* dir = opendir(userState->getUserDirName());
-        if (!dir) {
-            ALOGW("can't open directory for user: %s", strerror(errno));
-            return ::SYSTEM_ERROR;
-        }
-
         const String8 prefix8(prefix);
         String8 filename(mKeyStore->getKeyNameForUid(prefix8, targetUid));
-        size_t n = filename.length();
 
-        struct dirent* file;
-        while ((file = readdir(dir)) != NULL) {
-            // We only care about files.
-            if (file->d_type != DT_REG) {
-                continue;
-            }
-
-            // Skip anything that starts with a "."
-            if (file->d_name[0] == '.') {
-                continue;
-            }
-
-            if (!strncmp(filename.string(), file->d_name, n)) {
-                const char* p = &file->d_name[n];
-                size_t plen = strlen(p);
-
-                size_t extra = decode_key_length(p, plen);
-                char *match = (char*) malloc(extra + 1);
-                if (match != NULL) {
-                    decode_key(match, p, plen);
-                    matches->push(String16(match, extra));
-                    free(match);
-                } else {
-                    ALOGW("could not allocate match of size %zd", extra);
-                }
-            }
+        if (mKeyStore->saw(filename, matches, targetUid) != ::NO_ERROR) {
+            return ::SYSTEM_ERROR;
         }
-        closedir(dir);
-
         return ::NO_ERROR;
     }
 
@@ -1693,25 +1729,7 @@ public:
             return ::PERMISSION_DENIED;
         }
 
-        ResponseCode rc = mKeyStore->reset(callingUid) ? ::NO_ERROR : ::SYSTEM_ERROR;
-
-        const keymaster_device_t* device = mKeyStore->getDevice();
-        if (device == NULL) {
-            ALOGE("No keymaster device!");
-            return ::SYSTEM_ERROR;
-        }
-
-        if (device->delete_all == NULL) {
-            ALOGV("keymaster device doesn't implement delete_all");
-            return rc;
-        }
-
-        if (device->delete_all(device)) {
-            ALOGE("Problem calling keymaster's delete_all");
-            return ::SYSTEM_ERROR;
-        }
-
-        return rc;
+        return mKeyStore->reset(callingUid) ? ::NO_ERROR : ::SYSTEM_ERROR;
     }
 
     /*
@@ -2148,33 +2166,7 @@ public:
 
         String8 name8(name);
         String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, targetUid));
-
-        Blob keyBlob;
-        ResponseCode responseCode = mKeyStore->get(filename.string(), &keyBlob, ::TYPE_KEY_PAIR,
-                targetUid);
-        if (responseCode != ::NO_ERROR) {
-            return responseCode;
-        }
-
-        ResponseCode rc = ::NO_ERROR;
-
-        const keymaster_device_t* device = mKeyStore->getDevice();
-        if (device == NULL) {
-            rc = ::SYSTEM_ERROR;
-        } else {
-            // A device doesn't have to implement delete_keypair.
-            if (device->delete_keypair != NULL && !keyBlob.isFallback()) {
-                if (device->delete_keypair(device, keyBlob.getValue(), keyBlob.getLength())) {
-                    rc = ::SYSTEM_ERROR;
-                }
-            }
-        }
-
-        if (rc != ::NO_ERROR) {
-            return rc;
-        }
-
-        return (unlink(filename) && errno != ENOENT) ? ::SYSTEM_ERROR : ::NO_ERROR;
+        return mKeyStore->del(filename.string(), ::TYPE_KEY_PAIR, targetUid);
     }
 
     int32_t grant(const String16& name, int32_t granteeUid) {
@@ -2345,75 +2337,34 @@ public:
             return ::SYSTEM_ERROR;
         }
 
-        UserState* userState = mKeyStore->getUserState(targetUid);
-        DIR* dir = opendir(userState->getUserDirName());
-        if (!dir) {
-            ALOGW("can't open user directory: %s", strerror(errno));
+        String8 prefix = String8::format("%u_", targetUid);
+        Vector<String16> aliases;
+        if (mKeyStore->saw(prefix, &aliases, targetUid) != ::NO_ERROR) {
             return ::SYSTEM_ERROR;
         }
 
-        char prefix[NAME_MAX];
-        int n = snprintf(prefix, NAME_MAX, "%u_", targetUid);
-
-        ResponseCode rc = ::NO_ERROR;
-
-        struct dirent* file;
-        while ((file = readdir(dir)) != NULL) {
-            // We only care about files.
-            if (file->d_type != DT_REG) {
-                continue;
-            }
-
-            // Skip anything that starts with a "."
-            if (file->d_name[0] == '.') {
-                continue;
-            }
-
-            if (strncmp(prefix, file->d_name, n)) {
-                continue;
-            }
-
-            String8 filename(String8::format("%s/%s", userState->getUserDirName(), file->d_name));
-            Blob keyBlob;
-            if (mKeyStore->get(filename.string(), &keyBlob, ::TYPE_ANY, targetUid)
-                    != ::NO_ERROR) {
-                ALOGW("couldn't open %s", filename.string());
-                continue;
-            }
-
-            if (keyBlob.getType() == ::TYPE_KEY_PAIR) {
-                // A device doesn't have to implement delete_keypair.
-                if (device->delete_keypair != NULL && !keyBlob.isFallback()) {
-                    if (device->delete_keypair(device, keyBlob.getValue(), keyBlob.getLength())) {
-                        rc = ::SYSTEM_ERROR;
-                        ALOGW("device couldn't remove %s", filename.string());
-                    }
-                }
-            }
-
-            if (unlinkat(dirfd(dir), file->d_name, 0) && errno != ENOENT) {
-                rc = ::SYSTEM_ERROR;
-                ALOGW("couldn't unlink %s", filename.string());
-            }
+        for (uint32_t i = 0; i < aliases.size(); i++) {
+            String8 name8(aliases[i]);
+            String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, targetUid));
+            mKeyStore->del(filename.string(), ::TYPE_ANY, targetUid);
         }
-        closedir(dir);
-
-        return rc;
+        return ::NO_ERROR;
     }
 
-    int32_t reset_uid(int32_t uid) {
+    int32_t reset_uid(int32_t targetUid) {
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
         pid_t spid = IPCThreadState::self()->getCallingPid();
+
         if (!has_permission(callingUid, P_RESET_UID, spid)) {
-            ALOGW("permission denied for %d: reset_uid %d", callingUid, uid);
+            ALOGW("permission denied for %d: reset_uid %d", callingUid, targetUid);
             return ::PERMISSION_DENIED;
         }
-        if (callingUid != AID_SYSTEM) {
-            ALOGW("permission denied for %d: reset_uid %d", callingUid, uid);
+        if (!is_self_or_system(callingUid, targetUid)) {
+            ALOGW("permission denied for %d: reset_uid %d", callingUid, targetUid);
             return ::PERMISSION_DENIED;
         }
 
-        return mKeyStore->reset(uid) ? ::NO_ERROR : ::SYSTEM_ERROR;
+        return mKeyStore->reset(targetUid) ? ::NO_ERROR : ::SYSTEM_ERROR;
     }
 
     int32_t sync_uid(int32_t sourceUid, int32_t targetUid) {
