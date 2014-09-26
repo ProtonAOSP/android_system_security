@@ -1162,11 +1162,14 @@ public:
         bool isFallback = false;
         rc = mDevice->import_keypair(mDevice, key, keyLen, &data, &dataLength);
         if (rc) {
-            // If this is an old device HAL, try to fall back to an old version
-            if (mDevice->common.module->module_api_version < KEYMASTER_MODULE_API_VERSION_0_2) {
-                rc = openssl_import_keypair(mDevice, key, keyLen, &data, &dataLength);
-                isFallback = true;
-            }
+            /*
+             * Maybe the device doesn't support this type of key. Try to use the
+             * software fallback keymaster implementation. This is a little bit
+             * lazier than checking the PKCS#8 key type, but the software
+             * implementation will do that anyway.
+             */
+            rc = openssl_import_keypair(mDevice, key, keyLen, &data, &dataLength);
+            isFallback = true;
 
             if (rc) {
                 ALOGE("Error while importing keypair: %d", rc);
