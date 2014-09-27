@@ -118,7 +118,7 @@ static void logOpenSSLError(const char* location) {
     }
 
     ERR_clear_error();
-    ERR_remove_state(0);
+    ERR_remove_thread_state(NULL);
 }
 
 static int wrap_key(EVP_PKEY* pkey, int type, uint8_t** keyBlob, size_t* keyBlobLength) {
@@ -291,9 +291,6 @@ static int generate_dsa_keypair(EVP_PKEY* pkey, const keymaster_dsa_keygen_param
 static int generate_ec_keypair(EVP_PKEY* pkey, const keymaster_ec_keygen_params_t* ec_params) {
     Unique_EC_GROUP group;
     switch (ec_params->field_size) {
-    case 192:
-        group.reset(EC_GROUP_new_by_curve_name(NID_X9_62_prime192v1));
-        break;
     case 224:
         group.reset(EC_GROUP_new_by_curve_name(NID_secp224r1));
         break;
@@ -316,7 +313,9 @@ static int generate_ec_keypair(EVP_PKEY* pkey, const keymaster_ec_keygen_params_
     }
 
     EC_GROUP_set_point_conversion_form(group.get(), POINT_CONVERSION_UNCOMPRESSED);
+#if !defined(OPENSSL_IS_BORINGSSL)
     EC_GROUP_set_asn1_flag(group.get(), OPENSSL_EC_NAMED_CURVE);
+#endif
 
     /* initialize EC key */
     Unique_EC_KEY eckey(EC_KEY_new());
