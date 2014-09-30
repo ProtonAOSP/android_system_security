@@ -15,25 +15,33 @@
 LOCAL_PATH := $(call my-dir)
 
 include $(CLEAR_VARS)
+include $(TOP)/external/openssl/flavor.mk
 
-LOCAL_MODULE := libkeystore
+ifeq ($(OPENSSL_FLAVOR),BoringSSL)
+  LOCAL_MODULE := libkeystore-engine
 
-LOCAL_MODULE_TAGS := optional
+  LOCAL_SRC_FILES := \
+	android_engine.cpp
 
-LOCAL_MODULE_RELATIVE_PATH := ssl/engines
+  LOCAL_C_INCLUDES += \
+	external/openssl/src/include
+else
+  LOCAL_MODULE := libkeystore
 
-LOCAL_SRC_FILES := \
+  LOCAL_SRC_FILES := \
 	eng_keystore.cpp \
 	keyhandle.cpp \
 	ecdsa_meth.cpp \
 	dsa_meth.cpp \
 	rsa_meth.cpp
 
-LOCAL_CFLAGS := -fvisibility=hidden -Wall -Werror
-
-LOCAL_C_INCLUDES += \
+  LOCAL_C_INCLUDES += \
 	external/openssl/include \
 	external/openssl
+endif
+
+LOCAL_MODULE_TAGS := optional
+LOCAL_CFLAGS := -fvisibility=hidden -Wall -Werror
 
 LOCAL_SHARED_LIBRARIES += \
 	libcrypto \
