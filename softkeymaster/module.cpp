@@ -58,7 +58,7 @@ static int openssl_open(const hw_module_t* module, const char* name, hw_device_t
     dev->common.module = (struct hw_module_t*)module;
     dev->common.close = openssl_close;
 
-    dev->flags = KEYMASTER_SOFTWARE_ONLY;
+    dev->flags = KEYMASTER_SOFTWARE_ONLY | KEYMASTER_BLOBS_ARE_STANDALONE;
 
     dev->generate_keypair = openssl_generate_keypair;
     dev->import_keypair = openssl_import_keypair;
