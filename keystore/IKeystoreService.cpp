@@ -29,6 +29,8 @@
 
 namespace android {
 
+const ssize_t MAX_GENERATE_ARGS = 3;
+
 KeystoreArg::KeystoreArg(const void* data, size_t len)
     : mData(data), mSize(len) {
 }
@@ -769,6 +771,9 @@ status_t BnKeystoreService::onTransact(
             int32_t flags = data.readInt32();
             Vector<sp<KeystoreArg> > args;
             ssize_t numArgs = data.readInt32();
+	    if (numArgs > MAX_GENERATE_ARGS) {
+		return BAD_VALUE;
+	    }
             if (numArgs > 0) {
                 for (size_t i = 0; i < (size_t) numArgs; i++) {
                     ssize_t inSize = data.readInt32();
