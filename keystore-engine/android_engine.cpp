@@ -220,6 +220,7 @@ const struct rsa_meth_st keystore_rsa_method = {
   RSA_FLAG_CACHE_PUBLIC | RSA_FLAG_OPAQUE | RSA_FLAG_EXT_PKEY,
 
   NULL /* keygen */,
+  NULL /* supports_digest */,
 };
 
 const char* ecdsa_get_key_id(const EC_KEY* ec_key) {
