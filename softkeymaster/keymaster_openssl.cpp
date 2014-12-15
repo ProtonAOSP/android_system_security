@@ -312,8 +312,8 @@ static int generate_ec_keypair(EVP_PKEY* pkey, const keymaster_ec_keygen_params_
         return -1;
     }
 
-    EC_GROUP_set_point_conversion_form(group.get(), POINT_CONVERSION_UNCOMPRESSED);
 #if !defined(OPENSSL_IS_BORINGSSL)
+    EC_GROUP_set_point_conversion_form(group.get(), POINT_CONVERSION_UNCOMPRESSED);
     EC_GROUP_set_asn1_flag(group.get(), OPENSSL_EC_NAMED_CURVE);
 #endif
 
