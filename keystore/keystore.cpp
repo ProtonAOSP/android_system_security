@@ -126,6 +126,22 @@ out:
     return rc;
 }
 
+static int fallback_keymaster_device_initialize(keymaster_device_t** dev) {
+    int rc;
+    rc = openssl_open(reinterpret_cast<hw_module_t*>(&softkeymaster_module),
+                      KEYSTORE_KEYMASTER,
+                      reinterpret_cast<hw_device_t**>(dev));
+    if (rc) {
+        ALOGE("could not open softkeymaster device (%s)",
+              strerror(-rc));
+        goto out;
+    }
+    return 0;
+out:
+    *dev = NULL;
+    return rc;
+}
+
 static void keymaster_device_release(keymaster_device_t* dev) {
     keymaster_close(dev);
 }
@@ -944,9 +960,10 @@ typedef struct {
 
 class KeyStore {
 public:
-    KeyStore(Entropy* entropy, keymaster_device_t* device)
+    KeyStore(Entropy* entropy, keymaster_device_t* device, keymaster_device_t* fallback)
         : mEntropy(entropy)
         , mDevice(device)
+        , mFallbackDevice(fallback)
     {
         memset(&mMetaData, '\0', sizeof(mMetaData));
     }
@@ -965,8 +982,16 @@ public:
         mMasterKeys.clear();
     }
 
-    keymaster_device_t* getDevice() const {
+    keymaster_device_t *getDevice() const {
         return mDevice;
+    }
+
+    keymaster_device_t *getFallbackDevice() const {
+        return mFallbackDevice;
+    }
+
+    keymaster_device_t *getDeviceForBlob(const Blob& blob) const {
+        return blob.isFallback() ? mFallbackDevice: mDevice;
     }
 
     ResponseCode initialize() {
@@ -1245,7 +1270,7 @@ public:
              * lazier than checking the PKCS#8 key type, but the software
              * implementation will do that anyway.
              */
-            rc = openssl_import_keypair(mDevice, key, keyLen, &data, &dataLength);
+            rc = mFallbackDevice->import_keypair(mDevice, key, keyLen, &data, &dataLength);
             isFallback = true;
 
             if (rc) {
@@ -1364,6 +1389,7 @@ private:
     Entropy* mEntropy;
 
     keymaster_device_t* mDevice;
+    keymaster_device_t* mFallbackDevice;
 
     android::Vector<UserState*> mMasterKeys;
 
@@ -1843,6 +1869,7 @@ public:
         bool isFallback = false;
 
         const keymaster_device_t* device = mKeyStore->getDevice();
+        const keymaster_device_t* fallback = mKeyStore->getFallbackDevice();
         if (device == NULL) {
             return ::SYSTEM_ERROR;
         }
@@ -1891,7 +1918,8 @@ public:
                 rc = device->generate_keypair(device, TYPE_DSA, &dsa_params, &data, &dataLength);
             } else {
                 isFallback = true;
-                rc = openssl_generate_keypair(device, TYPE_DSA, &dsa_params, &data, &dataLength);
+                rc = fallback->generate_keypair(fallback, TYPE_DSA, &dsa_params, &data,
+                                                &dataLength);
             }
         } else if (keyType == EVP_PKEY_EC) {
             keymaster_ec_keygen_params_t ec_params;
@@ -1909,7 +1937,7 @@ public:
                 rc = device->generate_keypair(device, TYPE_EC, &ec_params, &data, &dataLength);
             } else {
                 isFallback = true;
-                rc = openssl_generate_keypair(device, TYPE_EC, &ec_params, &data, &dataLength);
+                rc = fallback->generate_keypair(fallback, TYPE_EC, &ec_params, &data, &dataLength);
             }
         } else if (keyType == EVP_PKEY_RSA) {
             keymaster_rsa_keygen_params_t rsa_params;
@@ -2016,7 +2044,7 @@ public:
             return responseCode;
         }
 
-        const keymaster_device_t* device = mKeyStore->getDevice();
+        const keymaster_device_t* device = mKeyStore->getDeviceForBlob(keyBlob);
         if (device == NULL) {
             ALOGE("no keymaster device; cannot sign");
             return ::SYSTEM_ERROR;
@@ -2030,14 +2058,8 @@ public:
         keymaster_rsa_sign_params_t params;
         params.digest_type = DIGEST_NONE;
         params.padding_type = PADDING_NONE;
-
-        if (keyBlob.isFallback()) {
-            rc = openssl_sign_data(device, &params, keyBlob.getValue(), keyBlob.getLength(), data,
-                    length, out, outLength);
-        } else {
-            rc = device->sign_data(device, &params, keyBlob.getValue(), keyBlob.getLength(), data,
-                    length, out, outLength);
-        }
+        rc = device->sign_data(device, &params, keyBlob.getValue(), keyBlob.getLength(), data,
+                length, out, outLength);
         if (rc) {
             ALOGW("device couldn't sign data");
             return ::SYSTEM_ERROR;
@@ -2071,7 +2093,7 @@ public:
             return responseCode;
         }
 
-        const keymaster_device_t* device = mKeyStore->getDevice();
+        const keymaster_device_t* device = mKeyStore->getDeviceForBlob(keyBlob);
         if (device == NULL) {
             return ::SYSTEM_ERROR;
         }
@@ -2084,13 +2106,8 @@ public:
         params.digest_type = DIGEST_NONE;
         params.padding_type = PADDING_NONE;
 
-        if (keyBlob.isFallback()) {
-            rc = openssl_verify_data(device, &params, keyBlob.getValue(), keyBlob.getLength(), data,
-                    dataLength, signature, signatureLength);
-        } else {
-            rc = device->verify_data(device, &params, keyBlob.getValue(), keyBlob.getLength(), data,
-                    dataLength, signature, signatureLength);
-        }
+        rc = device->verify_data(device, &params, keyBlob.getValue(), keyBlob.getLength(), data,
+                dataLength, signature, signatureLength);
         if (rc) {
             return ::SYSTEM_ERROR;
         } else {
@@ -2128,7 +2145,7 @@ public:
             return responseCode;
         }
 
-        const keymaster_device_t* device = mKeyStore->getDevice();
+        const keymaster_device_t* device = mKeyStore->getDeviceForBlob(keyBlob);
         if (device == NULL) {
             return ::SYSTEM_ERROR;
         }
@@ -2139,13 +2156,8 @@ public:
         }
 
         int rc;
-        if (keyBlob.isFallback()) {
-            rc = openssl_get_keypair_public(device, keyBlob.getValue(), keyBlob.getLength(), pubkey,
-                    pubkeyLength);
-        } else {
-            rc = device->get_keypair_public(device, keyBlob.getValue(), keyBlob.getLength(), pubkey,
-                    pubkeyLength);
-        }
+        rc = device->get_keypair_public(device, keyBlob.getValue(), keyBlob.getLength(), pubkey,
+                pubkeyLength);
         if (rc) {
             return ::SYSTEM_ERROR;
         }
@@ -2485,6 +2497,12 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    keymaster_device_t* fallback;
+    if (fallback_keymaster_device_initialize(&fallback)) {
+        ALOGE("software keymaster could not be initialized; exiting");
+        return 1;
+    }
+
     ks_is_selinux_enabled = is_selinux_enabled();
     if (ks_is_selinux_enabled) {
         union selinux_callback cb;
@@ -2498,7 +2516,7 @@ int main(int argc, char* argv[]) {
         ALOGI("SELinux: Keystore SELinux is disabled.\n");
     }
 
-    KeyStore keyStore(&entropy, dev);
+    KeyStore keyStore(&entropy, dev, fallback);
     keyStore.initialize();
     android::sp<android::IServiceManager> sm = android::defaultServiceManager();
     android::sp<android::KeyStoreProxy> proxy = new android::KeyStoreProxy(&keyStore);
