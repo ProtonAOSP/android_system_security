@@ -297,6 +297,7 @@ public:
         data.writeInt32(keyType);
         data.writeInt32(keySize);
         data.writeInt32(flags);
+        data.writeInt32(1);
         data.writeInt32(args->size());
         for (Vector<sp<KeystoreArg> >::iterator it = args->begin(); it != args->end(); ++it) {
             sp<KeystoreArg> item = *it;
@@ -642,7 +643,7 @@ public:
     }
 };
 
-IMPLEMENT_META_INTERFACE(KeystoreService, "android.security.keystore");
+IMPLEMENT_META_INTERFACE(KeystoreService, "android.security.IKeystoreService");
 
 // ----------------------------------------------------------------------
 
@@ -770,18 +771,22 @@ status_t BnKeystoreService::onTransact(
             int32_t keySize = data.readInt32();
             int32_t flags = data.readInt32();
             Vector<sp<KeystoreArg> > args;
-            ssize_t numArgs = data.readInt32();
-	    if (numArgs > MAX_GENERATE_ARGS) {
-		return BAD_VALUE;
-	    }
-            if (numArgs > 0) {
-                for (size_t i = 0; i < (size_t) numArgs; i++) {
-                    ssize_t inSize = data.readInt32();
-                    if (inSize >= 0 && (size_t) inSize <= data.dataAvail()) {
-                        sp<KeystoreArg> arg = new KeystoreArg(data.readInplace(inSize), inSize);
-                        args.push_back(arg);
-                    } else {
-                        args.push_back(NULL);
+            int32_t argsPresent = data.readInt32();
+            if (argsPresent == 1) {
+                ssize_t numArgs = data.readInt32();
+                if (numArgs > MAX_GENERATE_ARGS) {
+                    return BAD_VALUE;
+                }
+                if (numArgs > 0) {
+                    for (size_t i = 0; i < (size_t) numArgs; i++) {
+                        ssize_t inSize = data.readInt32();
+                        if (inSize >= 0 && (size_t) inSize <= data.dataAvail()) {
+                            sp<KeystoreArg> arg = new KeystoreArg(data.readInplace(inSize),
+                                                                  inSize);
+                            args.push_back(arg);
+                        } else {
+                            args.push_back(NULL);
+                        }
                     }
                 }
             }
