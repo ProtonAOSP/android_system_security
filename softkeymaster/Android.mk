@@ -21,9 +21,7 @@ endif
 LOCAL_MODULE := keystore.default
 LOCAL_MODULE_RELATIVE_PATH := hw
 LOCAL_SRC_FILES := module.cpp
-LOCAL_C_INCLUDES := \
-	system/security/keystore \
-	external/openssl/include
+LOCAL_C_INCLUDES := system/security/keystore
 LOCAL_CFLAGS = -fvisibility=hidden -Wall -Werror
 LOCAL_SHARED_LIBRARIES := libcrypto liblog libkeystore_binder libsoftkeymaster
 LOCAL_MODULE_TAGS := optional
@@ -36,9 +34,7 @@ LOCAL_MULTILIB := 32
 endif
 LOCAL_MODULE := libsoftkeymaster
 LOCAL_SRC_FILES := keymaster_openssl.cpp
-LOCAL_C_INCLUDES := \
-	system/security/keystore \
-	external/openssl/include
+LOCAL_C_INCLUDES := system/security/keystore
 LOCAL_CFLAGS = -fvisibility=hidden -Wall -Werror
 LOCAL_SHARED_LIBRARIES := libcrypto liblog libkeystore_binder
 LOCAL_MODULE_TAGS := optional
