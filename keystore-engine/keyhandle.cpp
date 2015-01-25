@@ -25,6 +25,8 @@
 
 #include <openssl/engine.h>
 
+#include <string.h>
+
 /**
  * Makes sure the ex_data for the keyhandle is initially set to NULL.
  */
