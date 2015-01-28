@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <string.h>
 #include <sys/types.h>
 #include <unistd.h>
 
