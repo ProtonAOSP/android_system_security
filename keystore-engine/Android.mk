@@ -15,16 +15,18 @@
 LOCAL_PATH := $(call my-dir)
 
 include $(CLEAR_VARS)
-include $(TOP)/external/openssl/flavor.mk
 
+
+ifneq (,$(wildcard $(TOP)/external/boringssl/flavor.mk))
+	include $(TOP)/external/boringssl/flavor.mk
+else
+	include $(TOP)/external/openssl/flavor.mk
+endif
 ifeq ($(OPENSSL_FLAVOR),BoringSSL)
   LOCAL_MODULE := libkeystore-engine
 
   LOCAL_SRC_FILES := \
 	android_engine.cpp
-
-  LOCAL_C_INCLUDES += \
-	external/openssl/src/include
 else
   LOCAL_MODULE := libkeystore
 
