@@ -40,5 +40,6 @@ int openssl_verify_data(const keymaster_device_t* dev, const void* params, const
 
 int openssl_open(const hw_module_t* module, const char* name, hw_device_t** device);
 
-struct keystore_module softkeymaster_module;
+extern struct keystore_module softkeymaster_module;
+
 #endif  // SOFTKEYMASTER_INCLUDE_KEYMASTER_SOFTKEYMASTER_H_
