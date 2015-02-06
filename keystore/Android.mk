@@ -31,9 +31,11 @@ LOCAL_SHARED_LIBRARIES := \
 	liblog \
 	libsoftkeymaster \
 	libutils \
-	libselinux
+	libselinux \
+	libsoftkeymasterdevice
 LOCAL_MODULE := keystore
 LOCAL_MODULE_TAGS := optional
+LOCAL_C_INCLUES := system/keymaster/
 LOCAL_ADDITIONAL_DEPENDENCIES := $(LOCAL_PATH)/Android.mk
 include $(BUILD_EXECUTABLE)
 
@@ -56,7 +58,7 @@ LOCAL_MULTILIB := 32
 endif
 LOCAL_CFLAGS := -Wall -Wextra -Werror
 LOCAL_SRC_FILES := IKeystoreService.cpp keystore_get.cpp keyblob_utils.cpp
-LOCAL_SHARED_LIBRARIES := libbinder libutils liblog
+LOCAL_SHARED_LIBRARIES := libbinder libutils liblog libsoftkeymasterdevice
 LOCAL_MODULE := libkeystore_binder
 LOCAL_MODULE_TAGS := optional
 LOCAL_C_INCLUDES := $(LOCAL_PATH)/include
