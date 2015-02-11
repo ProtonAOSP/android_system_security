@@ -2536,11 +2536,41 @@ public:
         return mKeyStore->put(filename.string(), &keyBlob, uid);
     }
 
-    int32_t getKeyCharacteristics(const String16& /*name*/,
-                                  const keymaster_blob_t& /*clientId*/,
-                                  const keymaster_blob_t& /*appData*/,
-                                  KeyCharacteristics* /*outCharacteristics*/) {
-        return KM_ERROR_UNIMPLEMENTED;
+    int32_t getKeyCharacteristics(const String16& name,
+                                  const keymaster_blob_t& clientId,
+                                  const keymaster_blob_t& appData,
+                                  KeyCharacteristics* outCharacteristics) {
+
+        if (!outCharacteristics) {
+            return KM_ERROR_UNEXPECTED_NULL_POINTER;
+        }
+
+        uid_t callingUid = IPCThreadState::self()->getCallingUid();
+
+        Blob keyBlob;
+        String8 name8(name);
+        int rc;
+
+        ResponseCode responseCode = mKeyStore->getKeyForName(&keyBlob, name8, callingUid,
+                TYPE_KEYMASTER_10);
+        if (responseCode != ::NO_ERROR) {
+            return responseCode;
+        }
+        keymaster_key_blob_t key;
+        key.key_material_size = keyBlob.getLength();
+        key.key_material = keyBlob.getValue();
+        keymaster1_device_t* dev = mKeyStore->getDeviceForBlob(keyBlob);
+        keymaster_key_characteristics_t *out = NULL;
+        if (!dev->get_key_characteristics) {
+            ALOGW("device does not implement get_key_characteristics");
+            return KM_ERROR_UNIMPLEMENTED;
+        }
+        rc = dev->get_key_characteristics(dev, &key, &clientId, &appData, &out);
+        if (out) {
+            outCharacteristics->characteristics = *out;
+            free(out);
+        }
+        return rc ? rc : ::NO_ERROR;
     }
 
     int32_t importKey(const String16& /*name*/, const KeymasterArguments& /*params*/,
