@@ -217,10 +217,11 @@ public:
                        OperationResult* result) = 0;
 
     virtual void update(const sp<IBinder>& token, const KeymasterArguments& params,
-                        uint8_t* data, size_t dataLength, OperationResult* result) = 0;
+                        const uint8_t* data, size_t dataLength, OperationResult* result) = 0;
 
     virtual void finish(const sp<IBinder>& token, const KeymasterArguments& params,
-                        uint8_t* signature, size_t signatureLength, OperationResult* result) = 0;
+                        const uint8_t* signature, size_t signatureLength,
+                        OperationResult* result) = 0;
 
     virtual int32_t abort(const sp<IBinder>& handle) = 0;
 
