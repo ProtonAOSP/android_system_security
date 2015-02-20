@@ -1271,7 +1271,7 @@ public:
              * lazier than checking the PKCS#8 key type, but the software
              * implementation will do that anyway.
              */
-            rc = mFallbackDevice->import_keypair(mDevice, key, keyLen, &data, &dataLength);
+            rc = mFallbackDevice->import_keypair(mFallbackDevice, key, keyLen, &data, &dataLength);
             isFallback = true;
 
             if (rc) {
