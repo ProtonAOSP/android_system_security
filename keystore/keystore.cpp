@@ -504,6 +504,7 @@ class Blob {
 public:
     Blob(const uint8_t* value, int32_t valueLength, const uint8_t* info, uint8_t infoLength,
             BlobType type) {
+        memset(&mBlob, 0, sizeof(mBlob));
         mBlob.length = valueLength;
         memcpy(mBlob.value, value, valueLength);
 
@@ -524,7 +525,9 @@ public:
         mBlob = b;
     }
 
-    Blob() {}
+    Blob() {
+        memset(&mBlob, 0, sizeof(mBlob));
+    }
 
     const uint8_t* getValue() const {
         return mBlob.value;
