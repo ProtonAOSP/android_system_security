@@ -20,7 +20,7 @@
 #include <keystore/keystore.h>
 
 #include <hardware/hardware.h>
-#include <hardware/keymaster.h>
+#include <hardware/keymaster0.h>
 
 #include <openssl/evp.h>
 #include <openssl/bio.h>
@@ -37,61 +37,45 @@
 #include <cutils/log.h>
 
 struct BIGNUM_Delete {
-    void operator()(BIGNUM* p) const {
-        BN_free(p);
-    }
+    void operator()(BIGNUM* p) const { BN_free(p); }
 };
 typedef UniquePtr<BIGNUM, BIGNUM_Delete> Unique_BIGNUM;
 
 struct EVP_PKEY_Delete {
-    void operator()(EVP_PKEY* p) const {
-        EVP_PKEY_free(p);
-    }
+    void operator()(EVP_PKEY* p) const { EVP_PKEY_free(p); }
 };
 typedef UniquePtr<EVP_PKEY, EVP_PKEY_Delete> Unique_EVP_PKEY;
 
 struct PKCS8_PRIV_KEY_INFO_Delete {
-    void operator()(PKCS8_PRIV_KEY_INFO* p) const {
-        PKCS8_PRIV_KEY_INFO_free(p);
-    }
+    void operator()(PKCS8_PRIV_KEY_INFO* p) const { PKCS8_PRIV_KEY_INFO_free(p); }
 };
 typedef UniquePtr<PKCS8_PRIV_KEY_INFO, PKCS8_PRIV_KEY_INFO_Delete> Unique_PKCS8_PRIV_KEY_INFO;
 
 struct DSA_Delete {
-    void operator()(DSA* p) const {
-        DSA_free(p);
-    }
+    void operator()(DSA* p) const { DSA_free(p); }
 };
 typedef UniquePtr<DSA, DSA_Delete> Unique_DSA;
 
 struct EC_KEY_Delete {
-    void operator()(EC_KEY* p) const {
-        EC_KEY_free(p);
-    }
+    void operator()(EC_KEY* p) const { EC_KEY_free(p); }
 };
 typedef UniquePtr<EC_KEY, EC_KEY_Delete> Unique_EC_KEY;
 
 struct EC_GROUP_Delete {
-    void operator()(EC_GROUP* p) const {
-        EC_GROUP_free(p);
-    }
+    void operator()(EC_GROUP* p) const { EC_GROUP_free(p); }
 };
 typedef UniquePtr<EC_GROUP, EC_GROUP_Delete> Unique_EC_GROUP;
 
 struct RSA_Delete {
-    void operator()(RSA* p) const {
-        RSA_free(p);
-    }
+    void operator()(RSA* p) const { RSA_free(p); }
 };
 typedef UniquePtr<RSA, RSA_Delete> Unique_RSA;
 
 struct Malloc_Free {
-    void operator()(void* p) const {
-        free(p);
-    }
+    void operator()(void* p) const { free(p); }
 };
 
-typedef UniquePtr<keymaster_device_t> Unique_keymaster_device_t;
+typedef UniquePtr<keymaster0_device_t> Unique_keymaster_device_t;
 
 /**
  * Many OpenSSL APIs take ownership of an argument on success but
@@ -378,7 +362,7 @@ static int generate_rsa_keypair(EVP_PKEY* pkey, const keymaster_rsa_keygen_param
 }
 
 __attribute__((visibility("default"))) int openssl_generate_keypair(
-    const keymaster_device_t*, const keymaster_keypair_t key_type, const void* key_params,
+    const keymaster0_device_t*, const keymaster_keypair_t key_type, const void* key_params,
     uint8_t** keyBlob, size_t* keyBlobLength) {
     Unique_EVP_PKEY pkey(EVP_PKEY_new());
     if (pkey.get() == NULL) {
@@ -413,7 +397,7 @@ __attribute__((visibility("default"))) int openssl_generate_keypair(
     return 0;
 }
 
-__attribute__((visibility("default"))) int openssl_import_keypair(const keymaster_device_t*,
+__attribute__((visibility("default"))) int openssl_import_keypair(const keymaster0_device_t*,
                                                                   const uint8_t* key,
                                                                   const size_t key_length,
                                                                   uint8_t** key_blob,
@@ -447,10 +431,11 @@ __attribute__((visibility("default"))) int openssl_import_keypair(const keymaste
     return 0;
 }
 
-__attribute__((visibility("default"))) int openssl_get_keypair_public(
-    const struct keymaster_device*, const uint8_t* key_blob, const size_t key_blob_length,
-    uint8_t** x509_data, size_t* x509_data_length) {
-
+__attribute__((visibility("default"))) int openssl_get_keypair_public(const keymaster0_device_t*,
+                                                                      const uint8_t* key_blob,
+                                                                      const size_t key_blob_length,
+                                                                      uint8_t** x509_data,
+                                                                      size_t* x509_data_length) {
     if (x509_data == NULL || x509_data_length == NULL) {
         ALOGW("output public key buffer == NULL");
         return -1;
@@ -585,7 +570,7 @@ static int sign_rsa(EVP_PKEY* pkey, keymaster_rsa_sign_params_t* sign_params, co
 }
 
 __attribute__((visibility("default"))) int openssl_sign_data(
-    const keymaster_device_t*, const void* params, const uint8_t* keyBlob,
+    const keymaster0_device_t*, const void* params, const uint8_t* keyBlob,
     const size_t keyBlobLength, const uint8_t* data, const size_t dataLength, uint8_t** signedData,
     size_t* signedDataLength) {
     if (data == NULL) {
@@ -709,10 +694,9 @@ static int verify_rsa(EVP_PKEY* pkey, keymaster_rsa_sign_params_t* sign_params,
 }
 
 __attribute__((visibility("default"))) int openssl_verify_data(
-    const keymaster_device_t*, const void* params, const uint8_t* keyBlob,
+    const keymaster0_device_t*, const void* params, const uint8_t* keyBlob,
     const size_t keyBlobLength, const uint8_t* signedData, const size_t signedDataLength,
     const uint8_t* signature, const size_t signatureLength) {
-
     if (signedData == NULL || signature == NULL) {
         ALOGW("data or signature buffers == NULL");
         return -1;
@@ -754,12 +738,12 @@ static int openssl_close(hw_device_t* dev) {
 /*
  * Generic device handling
  */
-__attribute__((visibility("default"))) int openssl_open(const hw_module_t* module,
-                                                        const char* name, hw_device_t** device) {
+__attribute__((visibility("default"))) int openssl_open(const hw_module_t* module, const char* name,
+                                                        hw_device_t** device) {
     if (strcmp(name, KEYSTORE_KEYMASTER) != 0)
         return -EINVAL;
 
-    Unique_keymaster_device_t dev(new keymaster_device_t);
+    Unique_keymaster_device_t dev(new keymaster0_device_t);
     if (dev.get() == NULL)
         return -ENOMEM;
 
@@ -791,15 +775,16 @@ static struct hw_module_methods_t keystore_module_methods = {
 };
 
 struct keystore_module softkeymaster_module __attribute__((visibility("default"))) = {
-    .common = {
-        .tag = HARDWARE_MODULE_TAG,
-        .module_api_version = KEYMASTER_MODULE_API_VERSION_0_2,
-        .hal_api_version = HARDWARE_HAL_API_VERSION,
-        .id = KEYSTORE_HARDWARE_MODULE_ID,
-        .name = "Keymaster OpenSSL HAL",
-        .author = "The Android Open Source Project",
-        .methods = &keystore_module_methods,
-        .dso = 0,
-        .reserved = {},
-    },
+    .common =
+        {
+         .tag = HARDWARE_MODULE_TAG,
+         .module_api_version = KEYMASTER_MODULE_API_VERSION_0_2,
+         .hal_api_version = HARDWARE_HAL_API_VERSION,
+         .id = KEYSTORE_HARDWARE_MODULE_ID,
+         .name = "Keymaster OpenSSL HAL",
+         .author = "The Android Open Source Project",
+         .methods = &keystore_module_methods,
+         .dso = 0,
+         .reserved = {},
+        },
 };
