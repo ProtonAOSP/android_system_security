@@ -18,7 +18,7 @@
 #include <keystore/keystore.h>
 
 #include <hardware/hardware.h>
-#include <hardware/keymaster.h>
+#include <hardware/keymaster0.h>
 
 struct keystore_module HAL_MODULE_INFO_SYM __attribute__((visibility("default")))
     = softkeymaster_module;
