@@ -14,9 +14,12 @@
  * limitations under the License.
  */
 
+#include <stdint.h>
 #include <string.h>
 #include <sys/types.h>
 #include <unistd.h>
+
+#include <keystore/keystore.h>
 
 /**
  * When a key is being migrated from a software keymaster implementation
