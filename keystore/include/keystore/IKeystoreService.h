@@ -17,11 +17,9 @@
 #ifndef KEYSTORE_IKEYSTORESERVICE_H
 #define KEYSTORE_IKEYSTORESERVICE_H
 
-#include <hardware/keymaster_defs.h>
 #include <utils/RefBase.h>
 #include <binder/IInterface.h>
 #include <binder/Parcel.h>
-#include <vector>
 
 namespace android {
 
@@ -37,59 +35,6 @@ private:
     const void* mData;
     size_t mSize;
 };
-
-struct MallocDeleter {
-    void operator()(uint8_t* p) { free(p); }
-};
-
-// struct for serializing the results of begin/update/finish
-struct OperationResult {
-    OperationResult();
-    ~OperationResult();
-    void readFromParcel(const Parcel& in);
-    void writeToParcel(Parcel* out) const;
-
-    int resultCode;
-    sp<IBinder> token;
-    int inputConsumed;
-    std::unique_ptr<uint8_t[], MallocDeleter> data;
-    size_t dataLength;
-};
-
-// struct for serializing the results of export
-struct ExportResult {
-    ExportResult();
-    ~ExportResult();
-    void readFromParcel(const Parcel& in);
-    void writeToParcel(Parcel* out) const;
-
-    int resultCode;
-    std::unique_ptr<uint8_t[], MallocDeleter> exportData;
-    size_t dataLength;
-};
-
-// struct for serializing/deserializing a list of keymaster_key_param_t's
-struct KeymasterArguments {
-    KeymasterArguments();
-    ~KeymasterArguments();
-    void readFromParcel(const Parcel& in);
-    void writeToParcel(Parcel* out) const;
-
-    std::vector<keymaster_key_param_t> params;
-};
-
-// struct for serializing keymaster_key_characteristics_t's
-struct KeyCharacteristics {
-    KeyCharacteristics();
-    ~KeyCharacteristics();
-    void readFromParcel(const Parcel& in);
-    void writeToParcel(Parcel* out) const;
-
-    keymaster_key_characteristics_t characteristics;
-};
-
-bool readKeymasterArgumentFromParcel(const Parcel& in, keymaster_key_param_t* out);
-void writeKeymasterArgumentToParcel(const keymaster_key_param_t& param, Parcel* out);
 
 /*
  * This must be kept manually in sync with frameworks/base's IKeystoreService.java
@@ -123,15 +68,6 @@ public:
         RESET_UID = IBinder::FIRST_CALL_TRANSACTION + 23,
         SYNC_UID = IBinder::FIRST_CALL_TRANSACTION + 24,
         PASSWORD_UID = IBinder::FIRST_CALL_TRANSACTION + 25,
-        ADD_RNG_ENTROPY = IBinder::FIRST_CALL_TRANSACTION + 26,
-        GENERATE_KEY = IBinder::FIRST_CALL_TRANSACTION + 27,
-        GET_KEY_CHARACTERISTICS = IBinder::FIRST_CALL_TRANSACTION + 28,
-        IMPORT_KEY = IBinder::FIRST_CALL_TRANSACTION + 29,
-        EXPORT_KEY = IBinder::FIRST_CALL_TRANSACTION + 30,
-        BEGIN = IBinder::FIRST_CALL_TRANSACTION + 31,
-        UPDATE = IBinder::FIRST_CALL_TRANSACTION + 32,
-        FINISH = IBinder::FIRST_CALL_TRANSACTION + 33,
-        ABORT = IBinder::FIRST_CALL_TRANSACTION + 34,
     };
 
     DECLARE_META_INTERFACE(KeystoreService);
@@ -193,37 +129,6 @@ public:
     virtual int32_t sync_uid(int32_t sourceUid, int32_t targetUid) = 0;
 
     virtual int32_t password_uid(const String16& password, int32_t uid) = 0;
-
-    virtual int32_t addRngEntropy(const uint8_t* data, size_t dataLength) = 0;
-
-    virtual int32_t generateKey(const String16& name, const KeymasterArguments& params,
-                                int uid, int flags, KeyCharacteristics* outCharacteristics) = 0;
-    virtual int32_t getKeyCharacteristics(const String16& name,
-                                          const keymaster_blob_t& clientId,
-                                          const keymaster_blob_t& appData,
-                                          KeyCharacteristics* outCharacteristics) = 0;
-    virtual int32_t importKey(const String16& name, const KeymasterArguments&  params,
-                              keymaster_key_format_t format, const uint8_t *keyData,
-                              size_t keyLength, int uid, int flags,
-                              KeyCharacteristics* outCharacteristics) = 0;
-
-    virtual void exportKey(const String16& name, keymaster_key_format_t format,
-                           const keymaster_blob_t& clientId,
-                           const keymaster_blob_t& appData, ExportResult* result) = 0;
-
-    virtual void begin(const sp<IBinder>& apptoken, const String16& name,
-                       keymaster_purpose_t purpose, bool pruneable,
-                       const KeymasterArguments& params, KeymasterArguments* outParams,
-                       OperationResult* result) = 0;
-
-    virtual void update(const sp<IBinder>& token, const KeymasterArguments& params,
-                        uint8_t* data, size_t dataLength, OperationResult* result) = 0;
-
-    virtual void finish(const sp<IBinder>& token, const KeymasterArguments& params,
-                        uint8_t* signature, size_t signatureLength, OperationResult* result) = 0;
-
-    virtual int32_t abort(const sp<IBinder>& handle) = 0;
-
 };
 
 // ----------------------------------------------------------------------------
