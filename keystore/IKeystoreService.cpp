@@ -1077,7 +1077,6 @@ public:
             return;
         }
         int32_t err = reply.readExceptionCode();
-        int32_t ret = reply.readInt32();
         if (err < 0) {
             ALOGD("exportKey() caught exception %d\n", err);
             result->resultCode = KM_ERROR_UNKNOWN_ERROR;
