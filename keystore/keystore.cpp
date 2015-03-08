@@ -2433,6 +2433,56 @@ public:
         return ::SYSTEM_ERROR;
     }
 
+    int32_t addRngEntropy(const uint8_t* /*data*/, size_t /*dataLength*/) {
+        return KM_ERROR_UNIMPLEMENTED;
+    }
+
+    int32_t generateKey(const String16& /*name*/, const KeymasterArguments& /*params*/,
+                        int /*uid*/, int /*flags*/, KeyCharacteristics* /*outCharacteristics*/) {
+        return KM_ERROR_UNIMPLEMENTED;
+    }
+
+    int32_t getKeyCharacteristics(const String16& /*name*/,
+                                  const keymaster_blob_t& /*clientId*/,
+                                  const keymaster_blob_t& /*appData*/,
+                                  KeyCharacteristics* /*outCharacteristics*/) {
+        return KM_ERROR_UNIMPLEMENTED;
+    }
+
+    int32_t importKey(const String16& /*name*/, const KeymasterArguments& /*params*/,
+                                keymaster_key_format_t /*format*/, const uint8_t* /*keyData*/,
+                                size_t /*keyLength*/, int /*uid*/, int /*flags*/,
+                                KeyCharacteristics* /*outCharacteristics*/) {
+        return KM_ERROR_UNIMPLEMENTED;
+    }
+
+    void exportKey(const String16& /*name*/, keymaster_key_format_t /*format*/,
+                           const keymaster_blob_t& /*clientId*/,
+                           const keymaster_blob_t& /*appData*/, ExportResult* result) {
+        result->resultCode = KM_ERROR_UNIMPLEMENTED;
+    }
+
+    void begin(const sp<IBinder>& /*appToken*/, const String16& /*name*/,
+               keymaster_purpose_t /*purpose*/, bool /*pruneable*/,
+               const KeymasterArguments& /*params*/, KeymasterArguments* /*outParams*/,
+               OperationResult* result) {
+        result->resultCode = KM_ERROR_UNIMPLEMENTED;
+    }
+
+    void update(const sp<IBinder>& /*token*/, const KeymasterArguments& /*params*/,
+                uint8_t* /*data*/, size_t /*dataLength*/, OperationResult* result) {
+        result->resultCode = KM_ERROR_UNIMPLEMENTED;
+    }
+
+    void finish(const sp<IBinder>& /*token*/, const KeymasterArguments& /*args*/,
+                uint8_t* /*signature*/, size_t /*signatureLength*/, OperationResult* result) {
+        result->resultCode = KM_ERROR_UNIMPLEMENTED;
+    }
+
+    int32_t abort(const sp<IBinder>& /*token*/) {
+        return KM_ERROR_UNIMPLEMENTED;
+    }
+
 private:
     inline bool isKeystoreUnlocked(State state) {
         switch (state) {
