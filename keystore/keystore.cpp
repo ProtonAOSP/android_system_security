@@ -44,6 +44,7 @@
 #include <hardware/keymaster0.h>
 
 #include <keymaster/softkeymaster.h>
+#include <keymaster/soft_keymaster_device.h>
 
 #include <UniquePtr.h>
 #include <utils/String8.h>
@@ -127,20 +128,12 @@ out:
     return rc;
 }
 
-static int fallback_keymaster_device_initialize(keymaster0_device_t** dev) {
-    int rc;
-    rc = openssl_open(reinterpret_cast<hw_module_t*>(&softkeymaster_module),
-                      KEYSTORE_KEYMASTER,
-                      reinterpret_cast<hw_device_t**>(dev));
-    if (rc) {
-        ALOGE("could not open softkeymaster device (%s)",
-              strerror(-rc));
-        goto out;
-    }
+static int fallback_keymaster_device_initialize(keymaster1_device_t** dev) {
+    keymaster::SoftKeymasterDevice* softkeymaster =
+            new keymaster::SoftKeymasterDevice();
+    // SoftKeymasterDevice is designed to make this cast safe.
+    *dev = reinterpret_cast<keymaster1_device_t*>(softkeymaster);
     return 0;
-out:
-    *dev = NULL;
-    return rc;
 }
 
 static void keymaster_device_release(keymaster0_device_t* dev) {
@@ -961,7 +954,7 @@ typedef struct {
 
 class KeyStore {
 public:
-    KeyStore(Entropy* entropy, keymaster0_device_t* device, keymaster0_device_t* fallback)
+    KeyStore(Entropy* entropy, keymaster1_device_t* device, keymaster1_device_t* fallback)
         : mEntropy(entropy)
         , mDevice(device)
         , mFallbackDevice(fallback)
@@ -983,15 +976,21 @@ public:
         mMasterKeys.clear();
     }
 
-    keymaster0_device_t *getDevice() const {
+    /**
+     * Depending on the hardware keymaster version is this may return a
+     * keymaster0_device_t* cast to a keymaster1_device_t*. All methods from
+     * keymaster0 are safe to call, calls to keymaster1_device_t methods should
+     * be guarded by a check on the device's version.
+     */
+    keymaster1_device_t *getDevice() const {
         return mDevice;
     }
 
-    keymaster0_device_t *getFallbackDevice() const {
+    keymaster1_device_t *getFallbackDevice() const {
         return mFallbackDevice;
     }
 
-    keymaster0_device_t *getDeviceForBlob(const Blob& blob) const {
+    keymaster1_device_t *getDeviceForBlob(const Blob& blob) const {
         return blob.isFallback() ? mFallbackDevice: mDevice;
     }
 
@@ -1389,8 +1388,8 @@ private:
     static const android::String16 sRSAKeyType;
     Entropy* mEntropy;
 
-    keymaster0_device_t* mDevice;
-    keymaster0_device_t* mFallbackDevice;
+    keymaster1_device_t* mDevice;
+    keymaster1_device_t* mFallbackDevice;
 
     android::Vector<UserState*> mMasterKeys;
 
@@ -1869,8 +1868,8 @@ public:
         int rc;
         bool isFallback = false;
 
-        const keymaster0_device_t* device = mKeyStore->getDevice();
-        const keymaster0_device_t* fallback = mKeyStore->getFallbackDevice();
+        const keymaster1_device_t* device = mKeyStore->getDevice();
+        const keymaster1_device_t* fallback = mKeyStore->getFallbackDevice();
         if (device == NULL) {
             return ::SYSTEM_ERROR;
         }
@@ -2045,7 +2044,7 @@ public:
             return responseCode;
         }
 
-        const keymaster0_device_t* device = mKeyStore->getDeviceForBlob(keyBlob);
+        const keymaster1_device_t* device = mKeyStore->getDeviceForBlob(keyBlob);
         if (device == NULL) {
             ALOGE("no keymaster device; cannot sign");
             return ::SYSTEM_ERROR;
@@ -2094,7 +2093,7 @@ public:
             return responseCode;
         }
 
-        const keymaster0_device_t* device = mKeyStore->getDeviceForBlob(keyBlob);
+        const keymaster1_device_t* device = mKeyStore->getDeviceForBlob(keyBlob);
         if (device == NULL) {
             return ::SYSTEM_ERROR;
         }
@@ -2146,7 +2145,7 @@ public:
             return responseCode;
         }
 
-        const keymaster0_device_t* device = mKeyStore->getDeviceForBlob(keyBlob);
+        const keymaster1_device_t* device = mKeyStore->getDeviceForBlob(keyBlob);
         if (device == NULL) {
             return ::SYSTEM_ERROR;
         }
@@ -2347,7 +2346,7 @@ public:
             return ::PERMISSION_DENIED;
         }
 
-        const keymaster0_device_t* device = mKeyStore->getDevice();
+        const keymaster1_device_t* device = mKeyStore->getDevice();
         if (device == NULL) {
             ALOGW("can't get keymaster device");
             return ::SYSTEM_ERROR;
@@ -2495,7 +2494,7 @@ private:
         return false;
     }
 
-    bool isKeyTypeSupported(const keymaster0_device_t* device, keymaster_keypair_t keyType) {
+    bool isKeyTypeSupported(const keymaster1_device_t* device, keymaster_keypair_t keyType) {
         const int32_t device_api = device->common.module->module_api_version;
         if (device_api == KEYMASTER_MODULE_API_VERSION_0_2) {
             switch (keyType) {
@@ -2548,7 +2547,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    keymaster0_device_t* fallback;
+    keymaster1_device_t* fallback;
     if (fallback_keymaster_device_initialize(&fallback)) {
         ALOGE("software keymaster could not be initialized; exiting");
         return 1;
@@ -2567,7 +2566,7 @@ int main(int argc, char* argv[]) {
         ALOGI("SELinux: Keystore SELinux is disabled.\n");
     }
 
-    KeyStore keyStore(&entropy, dev, fallback);
+    KeyStore keyStore(&entropy, reinterpret_cast<keymaster1_device_t*>(dev), fallback);
     keyStore.initialize();
     android::sp<android::IServiceManager> sm = android::defaultServiceManager();
     android::sp<android::KeyStoreProxy> proxy = new android::KeyStoreProxy(&keyStore);
