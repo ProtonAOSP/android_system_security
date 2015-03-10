@@ -2432,8 +2432,25 @@ public:
         return ::SYSTEM_ERROR;
     }
 
-    int32_t addRngEntropy(const uint8_t* /*data*/, size_t /*dataLength*/) {
-        return KM_ERROR_UNIMPLEMENTED;
+    int32_t addRngEntropy(const uint8_t* data, size_t dataLength) {
+        const keymaster1_device_t* device = mKeyStore->getDevice();
+        const keymaster1_device_t* fallback = mKeyStore->getFallbackDevice();
+        int32_t devResult = KM_ERROR_UNIMPLEMENTED;
+        int32_t fallbackResult = KM_ERROR_UNIMPLEMENTED;
+        if (device->common.module->module_api_version >= KEYMASTER_MODULE_API_VERSION_1_0 &&
+                device->add_rng_entropy != NULL) {
+            devResult = device->add_rng_entropy(device, data, dataLength);
+        }
+        if (fallback->add_rng_entropy) {
+            fallbackResult = fallback->add_rng_entropy(fallback, data, dataLength);
+        }
+        if (devResult) {
+            return devResult;
+        }
+        if (fallbackResult) {
+            return fallbackResult;
+        }
+        return ::NO_ERROR;
     }
 
     int32_t generateKey(const String16& /*name*/, const KeymasterArguments& /*params*/,
