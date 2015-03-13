@@ -30,6 +30,8 @@ ifeq ($(OPENSSL_FLAVOR),BoringSSL)
 else
   LOCAL_MODULE := libkeystore
 
+  LOCAL_MODULE_RELATIVE_PATH := ssl/engines
+
   LOCAL_SRC_FILES := \
 	eng_keystore.cpp \
 	keyhandle.cpp \
