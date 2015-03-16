@@ -20,7 +20,7 @@ include $(CLEAR_VARS)
 ifeq ($(USE_32_BIT_KEYSTORE), true)
 LOCAL_MULTILIB := 32
 endif
-LOCAL_CFLAGS := -Wall -Wextra -Werror
+LOCAL_CFLAGS := -Wall -Wextra -Werror -Wunused
 LOCAL_SRC_FILES := keystore.cpp keyblob_utils.cpp
 LOCAL_SHARED_LIBRARIES := \
 	libbinder \
