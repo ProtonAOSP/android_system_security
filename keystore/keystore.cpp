@@ -2484,8 +2484,6 @@ public:
             return ::PERMISSION_DENIED;
         }
 
-        uint8_t* data;
-        size_t dataLength;
         int rc = KM_ERROR_UNIMPLEMENTED;
         bool isFallback = false;
         keymaster_key_blob_t blob;
