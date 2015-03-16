@@ -489,6 +489,7 @@ typedef enum {
     TYPE_GENERIC = 1,
     TYPE_MASTER_KEY = 2,
     TYPE_KEY_PAIR = 3,
+    TYPE_KEYMASTER_10 = 4,
 } BlobType;
 
 static const uint8_t CURRENT_BLOB_VERSION = 2;
@@ -1176,6 +1177,15 @@ public:
                 }
             }
         }
+        if (keyBlob.getType() == ::TYPE_KEYMASTER_10) {
+            keymaster1_device_t* dev = getDeviceForBlob(keyBlob);
+            if (dev->delete_key) {
+                keymaster_key_blob_t blob;
+                blob.key_material = keyBlob.getValue();
+                blob.key_material_size = keyBlob.getLength();
+                dev->delete_key(dev, &blob);
+            }
+        }
         if (rc != ::NO_ERROR) {
             return rc;
         }
@@ -1704,7 +1714,7 @@ public:
 
         String8 name8(name);
         String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, targetUid));
-        return mKeyStore->del(filename.string(), ::TYPE_GENERIC, targetUid);
+        return mKeyStore->del(filename.string(), ::TYPE_ANY, targetUid);
     }
 
     int32_t exist(const String16& name, int targetUid) {
@@ -2456,9 +2466,77 @@ public:
         return ::NO_ERROR;
     }
 
-    int32_t generateKey(const String16& /*name*/, const KeymasterArguments& /*params*/,
-                        int /*uid*/, int /*flags*/, KeyCharacteristics* /*outCharacteristics*/) {
-        return KM_ERROR_UNIMPLEMENTED;
+    int32_t generateKey(const String16& name, const KeymasterArguments& params,
+                        int uid, int flags, KeyCharacteristics* outCharacteristics) {
+        uid_t callingUid = IPCThreadState::self()->getCallingUid();
+        pid_t callingPid = IPCThreadState::self()->getCallingPid();
+        if (!has_permission(callingUid, P_INSERT, callingPid)) {
+            ALOGW("permission denied for %d: generateKey", callingUid);
+            return ::PERMISSION_DENIED;
+        }
+
+        State state = mKeyStore->getState(callingUid);
+        if ((flags & KEYSTORE_FLAG_ENCRYPTED) && !isKeystoreUnlocked(state)) {
+            ALOGW("calling generate in state: %d", state);
+            return state;
+        }
+
+        if (uid == -1) {
+            uid = callingUid;
+        } else if (!is_granted_to(callingUid, uid)) {
+            return ::PERMISSION_DENIED;
+        }
+
+        uint8_t* data;
+        size_t dataLength;
+        int rc = KM_ERROR_UNIMPLEMENTED;
+        bool isFallback = false;
+        keymaster_key_blob_t blob;
+        keymaster_key_characteristics_t *out = NULL;
+
+        const keymaster1_device_t* device = mKeyStore->getDevice();
+        const keymaster1_device_t* fallback = mKeyStore->getFallbackDevice();
+        if (device == NULL) {
+            return ::SYSTEM_ERROR;
+        }
+        // TODO: Seed from Linux RNG either before this or periodically
+        if (device->common.module->module_api_version >= KEYMASTER_MODULE_API_VERSION_1_0 &&
+                device->generate_key != NULL) {
+            rc = device->generate_key(device, params.params.data(), params.params.size(), &blob,
+                                      &out);
+        }
+        // If the HW device didn't support generate_key or generate_key failed
+        // fall back to the software implementation.
+        if (rc && fallback->generate_key != NULL) {
+            isFallback = true;
+            rc = fallback->generate_key(fallback, params.params.data(), params.params.size(),
+                                      &blob,
+                                      &out);
+        }
+
+        if (out) {
+            if (outCharacteristics) {
+                outCharacteristics->characteristics = *out;
+            } else {
+                keymaster_free_characteristics(out);
+            }
+            free(out);
+        }
+
+        if (rc) {
+            return rc;
+        }
+
+        String8 name8(name);
+        String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, uid));
+
+        Blob keyBlob(blob.key_material, blob.key_material_size, NULL, 0, ::TYPE_KEYMASTER_10);
+        keyBlob.setFallback(isFallback);
+        keyBlob.setEncrypted(flags & KEYSTORE_FLAG_ENCRYPTED);
+
+        free(const_cast<uint8_t*>(blob.key_material));
+
+        return mKeyStore->put(filename.string(), &keyBlob, uid);
     }
 
     int32_t getKeyCharacteristics(const String16& /*name*/,
