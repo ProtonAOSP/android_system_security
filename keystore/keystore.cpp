@@ -2642,10 +2642,35 @@ public:
         return mKeyStore->put(filename.string(), &keyBlob, uid);
     }
 
-    void exportKey(const String16& /*name*/, keymaster_key_format_t /*format*/,
-                           const keymaster_blob_t& /*clientId*/,
-                           const keymaster_blob_t& /*appData*/, ExportResult* result) {
-        result->resultCode = KM_ERROR_UNIMPLEMENTED;
+    void exportKey(const String16& name, keymaster_key_format_t format,
+                           const keymaster_blob_t& clientId,
+                           const keymaster_blob_t& appData, ExportResult* result) {
+
+        uid_t callingUid = IPCThreadState::self()->getCallingUid();
+
+        Blob keyBlob;
+        String8 name8(name);
+        int rc;
+
+        ResponseCode responseCode = mKeyStore->getKeyForName(&keyBlob, name8, callingUid,
+                TYPE_KEYMASTER_10);
+        if (responseCode != ::NO_ERROR) {
+            result->resultCode = responseCode;
+            return;
+        }
+        keymaster_key_blob_t key;
+        key.key_material_size = keyBlob.getLength();
+        key.key_material = keyBlob.getValue();
+        keymaster1_device_t* dev = mKeyStore->getDeviceForBlob(keyBlob);
+        if (!dev->export_key) {
+            result->resultCode = KM_ERROR_UNIMPLEMENTED;
+            return;
+        }
+        uint8_t* ptr = NULL;
+        rc = dev->export_key(dev, format, &key, &clientId, &appData,
+                                             &ptr, &result->dataLength);
+        result->exportData.reset(ptr);
+        result->resultCode = rc ? rc : ::NO_ERROR;
     }
 
     void begin(const sp<IBinder>& /*appToken*/, const String16& /*name*/,
