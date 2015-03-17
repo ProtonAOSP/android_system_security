@@ -2574,11 +2574,72 @@ public:
         return rc ? rc : ::NO_ERROR;
     }
 
-    int32_t importKey(const String16& /*name*/, const KeymasterArguments& /*params*/,
-                                keymaster_key_format_t /*format*/, const uint8_t* /*keyData*/,
-                                size_t /*keyLength*/, int /*uid*/, int /*flags*/,
-                                KeyCharacteristics* /*outCharacteristics*/) {
-        return KM_ERROR_UNIMPLEMENTED;
+    int32_t importKey(const String16& name, const KeymasterArguments& params,
+                                keymaster_key_format_t format, const uint8_t *keyData,
+                                size_t keyLength, int uid, int flags,
+                                KeyCharacteristics* outCharacteristics) {
+        uid_t callingUid = IPCThreadState::self()->getCallingUid();
+        pid_t spid = IPCThreadState::self()->getCallingPid();
+        if (!has_permission(callingUid, P_INSERT, spid)) {
+            ALOGW("permission denied for %d: importKey", callingUid);
+            return ::PERMISSION_DENIED;
+        }
+
+        State state = mKeyStore->getState(callingUid);
+        if ((flags & KEYSTORE_FLAG_ENCRYPTED) && !isKeystoreUnlocked(state)) {
+            ALOGW("calling importKey in state: %d", state);
+            return state;
+        }
+
+        if (uid == -1) {
+            uid = callingUid;
+        } else if (!is_granted_to(callingUid, uid)) {
+            ALOGW("not granted to %d %d", callingUid, uid);
+            return ::PERMISSION_DENIED;
+        }
+
+        int rc = KM_ERROR_UNIMPLEMENTED;
+        bool isFallback = false;
+        keymaster_key_blob_t blob;
+        keymaster_key_characteristics_t *out = NULL;
+
+        const keymaster1_device_t* device = mKeyStore->getDevice();
+        const keymaster1_device_t* fallback = mKeyStore->getFallbackDevice();
+        if (device == NULL) {
+            return ::SYSTEM_ERROR;
+        }
+        if (device->common.module->module_api_version >= KEYMASTER_MODULE_API_VERSION_1_0 &&
+                device->import_key != NULL) {
+            rc = device->import_key(device, params.params.data(), params.params.size(),
+                                    format, keyData, keyLength, &blob, &out);
+        }
+        if (rc && fallback->import_key != NULL) {
+            isFallback = true;
+            rc = fallback->import_key(fallback, params.params.data(), params.params.size(),
+                                      format, keyData, keyLength, &blob, &out);
+        }
+        if (out) {
+            if (outCharacteristics) {
+                outCharacteristics->characteristics = *out;
+            } else {
+                keymaster_free_characteristics(out);
+            }
+            free(out);
+        }
+        if (rc) {
+            return rc;
+        }
+
+        String8 name8(name);
+        String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, uid));
+
+        Blob keyBlob(blob.key_material, blob.key_material_size, NULL, 0, ::TYPE_KEYMASTER_10);
+        keyBlob.setFallback(isFallback);
+        keyBlob.setEncrypted(flags & KEYSTORE_FLAG_ENCRYPTED);
+
+        free((void*) blob.key_material);
+
+        return mKeyStore->put(filename.string(), &keyBlob, uid);
     }
 
     void exportKey(const String16& /*name*/, keymaster_key_format_t /*format*/,
