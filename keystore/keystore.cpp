@@ -63,6 +63,7 @@
 #include <selinux/android.h>
 
 #include "defaults.h"
+#include "operation.h"
 
 /* KeyStore is a secured storage for key-value pairs. In this implementation,
  * each file stores one key-value pair. Keys are encoded in file names, and
@@ -1619,12 +1620,16 @@ namespace android {
 class KeyStoreProxy : public BnKeystoreService, public IBinder::DeathRecipient {
 public:
     KeyStoreProxy(KeyStore* keyStore)
-        : mKeyStore(keyStore)
+        : mKeyStore(keyStore),
+          mOperationMap(this)
     {
     }
 
-    void binderDied(const wp<IBinder>&) {
-        ALOGE("binder death detected");
+    void binderDied(const wp<IBinder>& who) {
+        auto operations = mOperationMap.getOperationsForToken(who.unsafe_get());
+        for (auto token: operations) {
+            abort(token);
+        }
     }
 
     int32_t test() {
@@ -2670,25 +2675,122 @@ public:
         result->resultCode = rc ? rc : ::NO_ERROR;
     }
 
-    void begin(const sp<IBinder>& /*appToken*/, const String16& /*name*/,
-               keymaster_purpose_t /*purpose*/, bool /*pruneable*/,
-               const KeymasterArguments& /*params*/, KeymasterArguments* /*outParams*/,
-               OperationResult* result) {
-        result->resultCode = KM_ERROR_UNIMPLEMENTED;
+    void begin(const sp<IBinder>& appToken, const String16& name, keymaster_purpose_t purpose,
+               bool pruneable, const KeymasterArguments& params,
+               KeymasterArguments* outParams, OperationResult* result) {
+        if (!result || !outParams) {
+            ALOGE("Unexpected null arguments to begin()");
+            return;
+        }
+        uid_t callingUid = IPCThreadState::self()->getCallingUid();
+        if (!pruneable && get_app_id(callingUid) != AID_SYSTEM) {
+            ALOGE("Non-system uid %d trying to start non-pruneable operation", callingUid);
+            result->resultCode = ::PERMISSION_DENIED;
+            return;
+        }
+        Blob keyBlob;
+        String8 name8(name);
+        ResponseCode responseCode = mKeyStore->getKeyForName(&keyBlob, name8, callingUid,
+                TYPE_KEYMASTER_10);
+        if (responseCode != ::NO_ERROR) {
+            result->resultCode = responseCode;
+            return;
+        }
+        keymaster_key_blob_t key;
+        key.key_material_size = keyBlob.getLength();
+        key.key_material = keyBlob.getValue();
+        keymaster_key_param_t* out;
+        size_t outSize;
+        keymaster_operation_handle_t handle;
+        keymaster1_device_t* dev = mKeyStore->getDeviceForBlob(keyBlob);
+        // TODO: Check authorization.
+        keymaster_error_t err = dev->begin(dev, purpose, &key, params.params.data(),
+                                           params.params.size(), &out, &outSize,
+                                           &handle);
+
+        // If there are too many operations abort the oldest operation that was
+        // started as pruneable and try again.
+        while (err == KM_ERROR_TOO_MANY_OPERATIONS && mOperationMap.hasPruneableOperation()) {
+            sp<IBinder> oldest = mOperationMap.getOldestPruneableOperation();
+            ALOGD("Ran out of operation handles, trying to prune %p", oldest.get());
+            if (abort(oldest) != ::NO_ERROR) {
+                break;
+            }
+            err = dev->begin(dev, purpose, &key, params.params.data(),
+                             params.params.size(), &out, &outSize,
+                             &handle);
+        }
+        if (err) {
+            result->resultCode = err;
+            return;
+        }
+        if (out) {
+            outParams->params.assign(out, out + outSize);
+            free(out);
+        }
+
+        sp<IBinder> operationToken = mOperationMap.addOperation(handle, dev, appToken, pruneable);
+        result->resultCode = ::NO_ERROR;
+        result->token = operationToken;
     }
 
-    void update(const sp<IBinder>& /*token*/, const KeymasterArguments& /*params*/,
-                uint8_t* /*data*/, size_t /*dataLength*/, OperationResult* result) {
-        result->resultCode = KM_ERROR_UNIMPLEMENTED;
+    void update(const sp<IBinder>& token, const KeymasterArguments& params, const uint8_t* data,
+                size_t dataLength, OperationResult* result) {
+        const keymaster1_device_t* dev;
+        keymaster_operation_handle_t handle;
+        if (!mOperationMap.getOperation(token, &handle, &dev)) {
+            result->resultCode = KM_ERROR_INVALID_OPERATION_HANDLE;
+            return;
+        }
+        uint8_t* output_buf = NULL;
+        size_t output_length = 0;
+        size_t consumed = 0;
+        // TODO: Check authorization.
+        keymaster_error_t err = dev->update(dev, handle, params.params.data(),
+                                            params.params.size(), data, dataLength,
+                                            &consumed, &output_buf, &output_length);
+        result->data.reset(output_buf);
+        result->dataLength = output_length;
+        result->inputConsumed = consumed;
+        result->resultCode = err ? (int32_t) err : ::NO_ERROR;
     }
 
-    void finish(const sp<IBinder>& /*token*/, const KeymasterArguments& /*args*/,
-                uint8_t* /*signature*/, size_t /*signatureLength*/, OperationResult* result) {
-        result->resultCode = KM_ERROR_UNIMPLEMENTED;
+    void finish(const sp<IBinder>& token, const KeymasterArguments& params,
+                const uint8_t* signature, size_t signatureLength, OperationResult* result) {
+        const keymaster1_device_t* dev;
+        keymaster_operation_handle_t handle;
+        if (!mOperationMap.getOperation(token, &handle, &dev)) {
+            result->resultCode = KM_ERROR_INVALID_OPERATION_HANDLE;
+            return;
+        }
+        uint8_t* output_buf = NULL;
+        size_t output_length = 0;
+        // TODO: Check authorization.
+        keymaster_error_t err = dev->finish(dev, handle, params.params.data(),
+                                            params.params.size(), signature, signatureLength,
+                                            &output_buf, &output_length);
+        // Remove the operation regardless of the result
+        mOperationMap.removeOperation(token);
+        result->data.reset(output_buf);
+        result->dataLength = output_length;
+        result->resultCode = err ? (int32_t) err : ::NO_ERROR;
     }
 
-    int32_t abort(const sp<IBinder>& /*token*/) {
-        return KM_ERROR_UNIMPLEMENTED;
+    int32_t abort(const sp<IBinder>& token) {
+        const keymaster1_device_t* dev;
+        keymaster_operation_handle_t handle;
+        if (!mOperationMap.getOperation(token, &handle, &dev)) {
+            return KM_ERROR_INVALID_OPERATION_HANDLE;
+        }
+        mOperationMap.removeOperation(token);
+        if (!dev->abort) {
+            return KM_ERROR_UNIMPLEMENTED;
+        }
+        int32_t rc = dev->abort(dev, handle);
+        if (rc) {
+            return rc;
+        }
+        return ::NO_ERROR;
     }
 
 private:
@@ -2731,6 +2833,7 @@ private:
     }
 
     ::KeyStore* mKeyStore;
+    OperationMap mOperationMap;
 };
 
 }; // namespace android
