@@ -1125,7 +1125,7 @@ public:
     }
 
     virtual void update(const sp<IBinder>& token, const KeymasterArguments& params,
-                        uint8_t* opData, size_t dataLength, OperationResult* result)
+                        const uint8_t* opData, size_t dataLength, OperationResult* result)
     {
         if (!result) {
             return;
@@ -1154,7 +1154,7 @@ public:
     }
 
     virtual void finish(const sp<IBinder>& token, const KeymasterArguments& params,
-                        uint8_t* signature, size_t signatureLength, OperationResult* result)
+                        const uint8_t* signature, size_t signatureLength, OperationResult* result)
     {
         if (!result) {
             return;
