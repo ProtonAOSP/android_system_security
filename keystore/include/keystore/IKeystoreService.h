@@ -51,6 +51,7 @@ struct OperationResult {
 
     int resultCode;
     sp<IBinder> token;
+    keymaster_operation_handle_t handle;
     int inputConsumed;
     std::unique_ptr<uint8_t[], MallocDeleter> data;
     size_t dataLength;

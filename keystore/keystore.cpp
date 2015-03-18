@@ -2732,6 +2732,7 @@ public:
         sp<IBinder> operationToken = mOperationMap.addOperation(handle, dev, appToken, pruneable);
         result->resultCode = ::NO_ERROR;
         result->token = operationToken;
+        result->handle = handle;
     }
 
     void update(const sp<IBinder>& token, const KeymasterArguments& params, const uint8_t* data,
