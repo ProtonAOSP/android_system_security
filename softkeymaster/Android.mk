@@ -34,7 +34,8 @@ LOCAL_MULTILIB := 32
 endif
 LOCAL_MODULE := libsoftkeymaster
 LOCAL_SRC_FILES := keymaster_openssl.cpp
-LOCAL_C_INCLUDES := system/security/keystore
+LOCAL_C_INCLUDES := system/security/keystore \
+	$(LOCAL_PATH)/include
 LOCAL_CFLAGS = -fvisibility=hidden -Wall -Werror
 LOCAL_SHARED_LIBRARIES := libcrypto liblog libkeystore_binder
 LOCAL_MODULE_TAGS := optional
