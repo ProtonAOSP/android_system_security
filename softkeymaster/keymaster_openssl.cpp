@@ -18,6 +18,7 @@
 #include <stdint.h>
 
 #include <keystore/keystore.h>
+#include <keymaster/softkeymaster.h>
 
 #include <hardware/hardware.h>
 #include <hardware/keymaster0.h>
@@ -422,7 +423,6 @@ __attribute__((visibility("default"))) int openssl_import_keypair(const keymaste
         logOpenSSLError("openssl_import_keypair");
         return -1;
     }
-    release_because_ownership_transferred(pkcs8);
 
     if (wrap_key(pkey.get(), EVP_PKEY_type(pkey->type), key_blob, key_blob_length)) {
         return -1;
