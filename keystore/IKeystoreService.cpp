@@ -975,7 +975,6 @@ public:
     {
         Parcel data, reply;
         data.writeInterfaceToken(IKeystoreService::getInterfaceDescriptor());
-        data.writeInt32(bufLength);
         data.writeByteArray(bufLength, buf);
         status_t status = remote()->transact(BnKeystoreService::ADD_RNG_ENTROPY, data, &reply);
         if (status != NO_ERROR) {
@@ -1205,7 +1204,7 @@ public:
         Parcel data, reply;
         data.writeInterfaceToken(IKeystoreService::getInterfaceDescriptor());
         data.writeStrongBinder(token);
-        status_t status = remote()->transact(BnKeystoreService::FINISH, data, &reply);
+        status_t status = remote()->transact(BnKeystoreService::ABORT, data, &reply);
         if (status != NO_ERROR) {
             ALOGD("abort() could not contact remote: %d\n", status);
             return KM_ERROR_UNKNOWN_ERROR;
@@ -1218,6 +1217,45 @@ public:
         }
         return ret;
     }
+
+    virtual bool isOperationAuthorized(const sp<IBinder>& token)
+    {
+        Parcel data, reply;
+        data.writeInterfaceToken(IKeystoreService::getInterfaceDescriptor());
+        data.writeStrongBinder(token);
+        status_t status = remote()->transact(BnKeystoreService::IS_OPERATION_AUTHORIZED, data,
+                                             &reply);
+        if (status != NO_ERROR) {
+            ALOGD("isOperationAuthorized() could not contact remote: %d\n", status);
+            return false;
+        }
+        int32_t err = reply.readExceptionCode();
+        int32_t ret = reply.readInt32();
+        if (err < 0) {
+            ALOGD("isOperationAuthorized() caught exception %d\n", err);
+            return false;
+        }
+        return ret == 1;
+    }
+
+    virtual int32_t addAuthToken(const uint8_t* token, size_t length)
+    {
+        Parcel data, reply;
+        data.writeInterfaceToken(IKeystoreService::getInterfaceDescriptor());
+        data.writeByteArray(length, token);
+        status_t status = remote()->transact(BnKeystoreService::ADD_AUTH_TOKEN, data, &reply);
+        if (status != NO_ERROR) {
+            ALOGD("addAuthToken() could not contact remote: %d\n", status);
+            return -1;
+        }
+        int32_t err = reply.readExceptionCode();
+        int32_t ret = reply.readInt32();
+        if (err < 0) {
+            ALOGD("addAuthToken() caught exception %d\n", err);
+            return -1;
+        }
+        return ret;
+    };
 };
 
 IMPLEMENT_META_INTERFACE(KeystoreService, "android.security.IKeystoreService");
@@ -1684,6 +1722,27 @@ status_t BnKeystoreService::onTransact(
             CHECK_INTERFACE(IKeystoreService, data, reply);
             sp<IBinder> token = data.readStrongBinder();
             int32_t result = abort(token);
+            reply->writeNoException();
+            reply->writeInt32(result);
+
+            return NO_ERROR;
+        }
+        case IS_OPERATION_AUTHORIZED: {
+            CHECK_INTERFACE(IKeystoreService, data, reply);
+            sp<IBinder> token = data.readStrongBinder();
+            bool result = isOperationAuthorized(token);
+            reply->writeNoException();
+            reply->writeInt32(result ? 1 : 0);
+
+            return NO_ERROR;
+        }
+        case ADD_AUTH_TOKEN: {
+            CHECK_INTERFACE(IKeystoreService, data, reply);
+            sp<IBinder> token = data.readStrongBinder();
+            const uint8_t* token_bytes = NULL;
+            size_t size = 0;
+            readByteArray(data, &token_bytes, &size);
+            int32_t result = addAuthToken(token_bytes, size);
             reply->writeNoException();
             reply->writeInt32(result);
 
