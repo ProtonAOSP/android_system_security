@@ -199,8 +199,8 @@ public:
     virtual int32_t generateKey(const String16& name, const KeymasterArguments& params,
                                 int uid, int flags, KeyCharacteristics* outCharacteristics) = 0;
     virtual int32_t getKeyCharacteristics(const String16& name,
-                                          const keymaster_blob_t& clientId,
-                                          const keymaster_blob_t& appData,
+                                          const keymaster_blob_t* clientId,
+                                          const keymaster_blob_t* appData,
                                           KeyCharacteristics* outCharacteristics) = 0;
     virtual int32_t importKey(const String16& name, const KeymasterArguments&  params,
                               keymaster_key_format_t format, const uint8_t *keyData,
@@ -208,8 +208,8 @@ public:
                               KeyCharacteristics* outCharacteristics) = 0;
 
     virtual void exportKey(const String16& name, keymaster_key_format_t format,
-                           const keymaster_blob_t& clientId,
-                           const keymaster_blob_t& appData, ExportResult* result) = 0;
+                           const keymaster_blob_t* clientId,
+                           const keymaster_blob_t* appData, ExportResult* result) = 0;
 
     virtual void begin(const sp<IBinder>& apptoken, const String16& name,
                        keymaster_purpose_t purpose, bool pruneable,

@@ -361,12 +361,18 @@ err:
     return NULL;
 }
 
-static void readKeymasterBlob(const Parcel& in, keymaster_blob_t* blob) {
+static std::unique_ptr<keymaster_blob_t> readKeymasterBlob(const Parcel& in) {
+    std::unique_ptr<keymaster_blob_t> blob;
+    if (in.readInt32() != 1) {
+        blob.reset(NULL);
+        return blob;
+    }
     ssize_t length = in.readInt32();
+    blob.reset(new keymaster_blob_t);
     if (length > 0) {
-        blob->data = (uint8_t*) in.readInplace(length);
+        blob->data = reinterpret_cast<const uint8_t*>(in.readInplace(length));
         if (blob->data) {
-            blob->data_length = (size_t) length;
+            blob->data_length = static_cast<size_t>(length);
         } else {
             blob->data_length = 0;
         }
@@ -374,6 +380,7 @@ static void readKeymasterBlob(const Parcel& in, keymaster_blob_t* blob) {
         blob->data = NULL;
         blob->data_length = 0;
     }
+    return blob;
 }
 
 class BpKeystoreService: public BpInterface<IKeystoreService>
@@ -1018,15 +1025,23 @@ public:
         return ret;
     }
     virtual int32_t getKeyCharacteristics(const String16& name,
-                                          const keymaster_blob_t& clientId,
-                                          const keymaster_blob_t& appData,
+                                          const keymaster_blob_t* clientId,
+                                          const keymaster_blob_t* appData,
                                           KeyCharacteristics* outCharacteristics)
     {
         Parcel data, reply;
         data.writeInterfaceToken(IKeystoreService::getInterfaceDescriptor());
         data.writeString16(name);
-        data.writeByteArray(clientId.data_length, clientId.data);
-        data.writeByteArray(appData.data_length, appData.data);
+        if (clientId) {
+            data.writeByteArray(clientId->data_length, clientId->data);
+        } else {
+            data.writeInt32(-1);
+        }
+        if (appData) {
+            data.writeByteArray(appData->data_length, appData->data);
+        } else {
+            data.writeInt32(-1);
+        }
         status_t status = remote()->transact(BnKeystoreService::GET_KEY_CHARACTERISTICS,
                                              data, &reply);
         if (status != NO_ERROR) {
@@ -1076,8 +1091,8 @@ public:
     }
 
     virtual void exportKey(const String16& name, keymaster_key_format_t format,
-                           const keymaster_blob_t& clientId,
-                           const keymaster_blob_t& appData, ExportResult* result)
+                           const keymaster_blob_t* clientId,
+                           const keymaster_blob_t* appData, ExportResult* result)
     {
         if (!result) {
             return;
@@ -1087,8 +1102,16 @@ public:
         data.writeInterfaceToken(IKeystoreService::getInterfaceDescriptor());
         data.writeString16(name);
         data.writeInt32(format);
-        data.writeByteArray(clientId.data_length, clientId.data);
-        data.writeByteArray(appData.data_length, appData.data);
+        if (clientId) {
+            data.writeByteArray(clientId->data_length, clientId->data);
+        } else {
+            data.writeInt32(-1);
+        }
+        if (appData) {
+            data.writeByteArray(appData->data_length, appData->data);
+        } else {
+            data.writeInt32(-1);
+        }
         status_t status = remote()->transact(BnKeystoreService::EXPORT_KEY, data, &reply);
         if (status != NO_ERROR) {
             ALOGD("exportKey() could not contact remote: %d\n", status);
@@ -1574,11 +1597,11 @@ status_t BnKeystoreService::onTransact(
         case GET_KEY_CHARACTERISTICS: {
             CHECK_INTERFACE(IKeystoreService, data, reply);
             String16 name = data.readString16();
-            keymaster_blob_t clientId, appData;
-            readKeymasterBlob(data, &clientId);
-            readKeymasterBlob(data, &appData);
+            std::unique_ptr<keymaster_blob_t> clientId = readKeymasterBlob(data);
+            std::unique_ptr<keymaster_blob_t> appData = readKeymasterBlob(data);
             KeyCharacteristics outCharacteristics;
-            int ret = getKeyCharacteristics(name, clientId, appData, &outCharacteristics);
+            int ret = getKeyCharacteristics(name, clientId.get(), appData.get(),
+                                            &outCharacteristics);
             reply->writeNoException();
             reply->writeInt32(ret);
             reply->writeInt32(1);
@@ -1612,11 +1635,10 @@ status_t BnKeystoreService::onTransact(
             CHECK_INTERFACE(IKeystoreService, data, reply);
             String16 name = data.readString16();
             keymaster_key_format_t format = static_cast<keymaster_key_format_t>(data.readInt32());
-            keymaster_blob_t clientId, appData;
-            readKeymasterBlob(data, &clientId);
-            readKeymasterBlob(data, &appData);
+            std::unique_ptr<keymaster_blob_t> clientId = readKeymasterBlob(data);
+            std::unique_ptr<keymaster_blob_t> appData = readKeymasterBlob(data);
             ExportResult result;
-            exportKey(name, format, clientId, appData, &result);
+            exportKey(name, format, clientId.get(), appData.get(), &result);
             reply->writeNoException();
             reply->writeInt32(1);
             result.writeToParcel(reply);
