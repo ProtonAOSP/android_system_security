@@ -310,6 +310,24 @@ bool readKeymasterArgumentFromParcel(const Parcel& in, keymaster_key_param_t* ou
     return true;
 }
 
+/**
+ * Read a byte array from in. The data at *data is still owned by the parcel
+ */
+static void readByteArray(const Parcel& in, const uint8_t** data, size_t* length) {
+    ssize_t slength = in.readInt32();
+    if (slength > 0) {
+        *data = reinterpret_cast<const uint8_t*>(in.readInplace(slength));
+        if (*data) {
+            *length = static_cast<size_t>(slength);
+        } else {
+            *length = 0;
+        }
+    } else {
+        *data = NULL;
+        *length = 0;
+    }
+}
+
 // Read a keymaster_key_param_t* from a Parcel for use in a
 // keymaster_key_characteristics_t. This will be free'd by calling
 // keymaster_free_key_characteristics.
@@ -1528,13 +1546,9 @@ status_t BnKeystoreService::onTransact(
         }
         case ADD_RNG_ENTROPY: {
             CHECK_INTERFACE(IKeystoreService, data, reply);
-            size_t size = data.readInt32();
-            uint8_t* bytes;
-            if (size > 0) {
-                bytes = (uint8_t*) data.readInplace(size);
-            } else {
-                bytes = NULL;
-            }
+            const uint8_t* bytes = NULL;
+            size_t size = 0;
+            readByteArray(data, &bytes, &size);
             int32_t ret = addRngEntropy(bytes, size);
             reply->writeNoException();
             reply->writeInt32(ret);
@@ -1579,18 +1593,13 @@ status_t BnKeystoreService::onTransact(
                 args.readFromParcel(data);
             }
             keymaster_key_format_t format = static_cast<keymaster_key_format_t>(data.readInt32());
-            uint8_t* keyData = NULL;
-            ssize_t keyLength = data.readInt32();
-            size_t ukeyLength = (size_t) keyLength;
-            if (keyLength >= 0) {
-                keyData = (uint8_t*) data.readInplace(keyLength);
-            } else {
-                ukeyLength = 0;
-            }
+            const uint8_t* keyData = NULL;
+            size_t keyLength = 0;
+            readByteArray(data, &keyData, &keyLength);
             int32_t uid = data.readInt32();
             int32_t flags = data.readInt32();
             KeyCharacteristics outCharacteristics;
-            int32_t ret = importKey(name, args, format, keyData, ukeyLength, uid, flags,
+            int32_t ret = importKey(name, args, format, keyData, keyLength, uid, flags,
                                     &outCharacteristics);
             reply->writeNoException();
             reply->writeInt32(ret);
@@ -1642,16 +1651,11 @@ status_t BnKeystoreService::onTransact(
             if (data.readInt32() != 0) {
                 args.readFromParcel(data);
             }
-            uint8_t* buf = NULL;
-            ssize_t bufLength = data.readInt32();
-            size_t ubufLength = (size_t) bufLength;
-            if (bufLength > 0) {
-                buf = (uint8_t*) data.readInplace(ubufLength);
-            } else {
-                ubufLength = 0;
-            }
+            const uint8_t* buf = NULL;
+            size_t bufLength = 0;
+            readByteArray(data, &buf, &bufLength);
             OperationResult result;
-            update(token, args, buf, ubufLength, &result);
+            update(token, args, buf, bufLength, &result);
             reply->writeNoException();
             reply->writeInt32(1);
             result.writeToParcel(reply);
@@ -1665,16 +1669,11 @@ status_t BnKeystoreService::onTransact(
             if (data.readInt32() != 0) {
                 args.readFromParcel(data);
             }
-            uint8_t* buf = NULL;
-            ssize_t bufLength = data.readInt32();
-            size_t ubufLength = (size_t) bufLength;
-            if (bufLength > 0) {
-                buf = (uint8_t*) data.readInplace(ubufLength);
-            } else {
-                ubufLength = 0;
-            }
+            const uint8_t* buf = NULL;
+            size_t bufLength = 0;
+            readByteArray(data, &buf, &bufLength);
             OperationResult result;
-            finish(token, args, buf, ubufLength, &result);
+            finish(token, args, buf, bufLength, &result);
             reply->writeNoException();
             reply->writeInt32(1);
             result.writeToParcel(reply);
