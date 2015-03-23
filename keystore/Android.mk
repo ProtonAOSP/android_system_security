@@ -65,3 +65,19 @@ LOCAL_C_INCLUDES := $(LOCAL_PATH)/include
 LOCAL_EXPORT_C_INCLUDE_DIRS := $(LOCAL_PATH)/include
 LOCAL_ADDITIONAL_DEPENDENCIES := $(LOCAL_PATH)/Android.mk
 include $(BUILD_SHARED_LIBRARY)
+
+# Library for unit tests
+include $(CLEAR_VARS)
+ifeq ($(USE_32_BIT_KEYSTORE), true)
+LOCAL_MULTILIB := 32
+endif
+include external/libcxx/libcxx.mk
+LOCAL_CFLAGS := -Wall -Wextra -Werror
+LOCAL_SRC_FILES := auth_token_table.cpp
+LOCAL_MODULE := libkeystore_test
+LOCAL_C_INCLUDES := $(LOCAL_PATH)/include
+LOCAL_STATIC_LIBRARIES := libgtest_main
+LOCAL_SHARED_LIBRARIES := libkeymaster_messages
+LOCAL_EXPORT_C_INCLUDE_DIRS := $(LOCAL_PATH)/include
+LOCAL_ADDITIONAL_DEPENDENCIES := $(LOCAL_PATH)/Android.mk
+include $(BUILD_STATIC_LIBRARY)
