@@ -2543,8 +2543,8 @@ public:
     }
 
     int32_t getKeyCharacteristics(const String16& name,
-                                  const keymaster_blob_t& clientId,
-                                  const keymaster_blob_t& appData,
+                                  const keymaster_blob_t* clientId,
+                                  const keymaster_blob_t* appData,
                                   KeyCharacteristics* outCharacteristics) {
 
         if (!outCharacteristics) {
@@ -2571,7 +2571,7 @@ public:
             ALOGW("device does not implement get_key_characteristics");
             return KM_ERROR_UNIMPLEMENTED;
         }
-        rc = dev->get_key_characteristics(dev, &key, &clientId, &appData, &out);
+        rc = dev->get_key_characteristics(dev, &key, clientId, appData, &out);
         if (out) {
             outCharacteristics->characteristics = *out;
             free(out);
@@ -2648,8 +2648,8 @@ public:
     }
 
     void exportKey(const String16& name, keymaster_key_format_t format,
-                           const keymaster_blob_t& clientId,
-                           const keymaster_blob_t& appData, ExportResult* result) {
+                           const keymaster_blob_t* clientId,
+                           const keymaster_blob_t* appData, ExportResult* result) {
 
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
 
@@ -2672,7 +2672,7 @@ public:
             return;
         }
         uint8_t* ptr = NULL;
-        rc = dev->export_key(dev, format, &key, &clientId, &appData,
+        rc = dev->export_key(dev, format, &key, clientId, appData,
                                              &ptr, &result->dataLength);
         result->exportData.reset(ptr);
         result->resultCode = rc ? rc : ::NO_ERROR;
