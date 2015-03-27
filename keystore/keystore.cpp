@@ -2472,7 +2472,8 @@ public:
     }
 
     int32_t generateKey(const String16& name, const KeymasterArguments& params,
-                        int uid, int flags, KeyCharacteristics* outCharacteristics) {
+                        const uint8_t* entropy, size_t entropyLength, int uid, int flags,
+                        KeyCharacteristics* outCharacteristics) {
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
         pid_t callingPid = IPCThreadState::self()->getCallingPid();
         if (!has_permission(callingUid, P_INSERT, callingPid)) {
@@ -2502,19 +2503,37 @@ public:
         if (device == NULL) {
             return ::SYSTEM_ERROR;
         }
-        // TODO: Seed from Linux RNG either before this or periodically
+        // TODO: Seed from Linux RNG before this.
         if (device->common.module->module_api_version >= KEYMASTER_MODULE_API_VERSION_1_0 &&
                 device->generate_key != NULL) {
-            rc = device->generate_key(device, params.params.data(), params.params.size(), &blob,
-                                      &out);
+            if (!entropy) {
+                rc = KM_ERROR_OK;
+            } else if (device->add_rng_entropy) {
+                rc = device->add_rng_entropy(device, entropy, entropyLength);
+            } else {
+                rc = KM_ERROR_UNIMPLEMENTED;
+            }
+            if (rc == KM_ERROR_OK) {
+                rc = device->generate_key(device, params.params.data(), params.params.size(),
+                                          &blob, &out);
+            }
         }
         // If the HW device didn't support generate_key or generate_key failed
         // fall back to the software implementation.
         if (rc && fallback->generate_key != NULL) {
             isFallback = true;
-            rc = fallback->generate_key(fallback, params.params.data(), params.params.size(),
-                                      &blob,
-                                      &out);
+            if (!entropy) {
+                rc = KM_ERROR_OK;
+            } else if (fallback->add_rng_entropy) {
+                rc = fallback->add_rng_entropy(fallback, entropy, entropyLength);
+            } else {
+                rc = KM_ERROR_UNIMPLEMENTED;
+            }
+            if (rc == KM_ERROR_OK) {
+                rc = fallback->generate_key(fallback, params.params.data(), params.params.size(),
+                                            &blob,
+                                            &out);
+            }
         }
 
         if (out) {
@@ -2679,8 +2698,8 @@ public:
     }
 
     void begin(const sp<IBinder>& appToken, const String16& name, keymaster_purpose_t purpose,
-               bool pruneable, const KeymasterArguments& params,
-               KeymasterArguments* outParams, OperationResult* result) {
+               bool pruneable, const KeymasterArguments& params, const uint8_t* entropy,
+               size_t entropyLength, KeymasterArguments* outParams, OperationResult* result) {
         if (!result || !outParams) {
             ALOGE("Unexpected null arguments to begin()");
             return;
@@ -2706,10 +2725,22 @@ public:
         size_t outSize;
         keymaster_operation_handle_t handle;
         keymaster1_device_t* dev = mKeyStore->getDeviceForBlob(keyBlob);
+        keymaster_error_t err = KM_ERROR_UNIMPLEMENTED;
+        // Add entropy to the device first.
+        if (entropy) {
+            if (dev->add_rng_entropy) {
+                err = dev->add_rng_entropy(dev, entropy, entropyLength);
+            } else {
+                err = KM_ERROR_UNIMPLEMENTED;
+            }
+            if (err) {
+                result->resultCode = err;
+                return;
+            }
+        }
         // TODO: Check authorization.
-        keymaster_error_t err = dev->begin(dev, purpose, &key, params.params.data(),
-                                           params.params.size(), &out, &outSize,
-                                           &handle);
+        err = dev->begin(dev, purpose, &key, params.params.data(), params.params.size(), &out,
+                         &outSize, &handle);
 
         // If there are too many operations abort the oldest operation that was
         // started as pruneable and try again.

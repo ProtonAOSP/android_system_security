@@ -1000,13 +1000,15 @@ public:
     };
 
     virtual int32_t generateKey(const String16& name, const KeymasterArguments& params,
-                                int uid, int flags, KeyCharacteristics* outCharacteristics)
+                                const uint8_t* entropy, size_t entropyLength, int uid, int flags,
+                                KeyCharacteristics* outCharacteristics)
     {
         Parcel data, reply;
         data.writeInterfaceToken(IKeystoreService::getInterfaceDescriptor());
         data.writeString16(name);
         data.writeInt32(1);
         params.writeToParcel(&data);
+        data.writeByteArray(entropyLength, entropy);
         data.writeInt32(uid);
         data.writeInt32(flags);
         status_t status = remote()->transact(BnKeystoreService::GENERATE_KEY, data, &reply);
@@ -1132,7 +1134,8 @@ public:
 
     virtual void begin(const sp<IBinder>& appToken, const String16& name,
                        keymaster_purpose_t purpose, bool pruneable,
-                       const KeymasterArguments& params, KeymasterArguments* outParams,
+                       const KeymasterArguments& params, const uint8_t* entropy,
+                       size_t entropyLength, KeymasterArguments* outParams,
                        OperationResult* result)
     {
         if (!result || !outParams) {
@@ -1146,6 +1149,7 @@ public:
         data.writeInt32(pruneable ? 1 : 0);
         data.writeInt32(1);
         params.writeToParcel(&data);
+        data.writeByteArray(entropyLength, entropy);
         status_t status = remote()->transact(BnKeystoreService::BEGIN, data, &reply);
         if (status != NO_ERROR) {
             ALOGD("begin() could not contact remote: %d\n", status);
@@ -1588,10 +1592,14 @@ status_t BnKeystoreService::onTransact(
             if (data.readInt32() != 0) {
                 args.readFromParcel(data);
             }
+            const uint8_t* entropy = NULL;
+            size_t entropyLength = 0;
+            readByteArray(data, &entropy, &entropyLength);
             int32_t uid = data.readInt32();
             int32_t flags = data.readInt32();
             KeyCharacteristics outCharacteristics;
-            int32_t ret = generateKey(name, args, uid, flags, &outCharacteristics);
+            int32_t ret = generateKey(name, args, entropy, entropyLength, uid, flags,
+                                      &outCharacteristics);
             reply->writeNoException();
             reply->writeInt32(ret);
             reply->writeInt32(1);
@@ -1659,9 +1667,13 @@ status_t BnKeystoreService::onTransact(
             if (data.readInt32() != 0) {
                 args.readFromParcel(data);
             }
+            const uint8_t* entropy = NULL;
+            size_t entropyLength = 0;
+            readByteArray(data, &entropy, &entropyLength);
             KeymasterArguments outArgs;
             OperationResult result;
-            begin(token, name, purpose, pruneable, args, &outArgs, &result);
+            begin(token, name, purpose, pruneable, args, entropy, entropyLength, &outArgs,
+                  &result);
             reply->writeNoException();
             reply->writeInt32(1);
             result.writeToParcel(reply);
