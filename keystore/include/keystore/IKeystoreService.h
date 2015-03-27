@@ -197,11 +197,14 @@ public:
     virtual int32_t addRngEntropy(const uint8_t* data, size_t dataLength) = 0;
 
     virtual int32_t generateKey(const String16& name, const KeymasterArguments& params,
-                                int uid, int flags, KeyCharacteristics* outCharacteristics) = 0;
+                                const uint8_t* entropy, size_t entropyLength, int uid, int flags,
+                                KeyCharacteristics* outCharacteristics) = 0;
+
     virtual int32_t getKeyCharacteristics(const String16& name,
                                           const keymaster_blob_t* clientId,
                                           const keymaster_blob_t* appData,
                                           KeyCharacteristics* outCharacteristics) = 0;
+
     virtual int32_t importKey(const String16& name, const KeymasterArguments&  params,
                               keymaster_key_format_t format, const uint8_t *keyData,
                               size_t keyLength, int uid, int flags,
@@ -213,7 +216,8 @@ public:
 
     virtual void begin(const sp<IBinder>& apptoken, const String16& name,
                        keymaster_purpose_t purpose, bool pruneable,
-                       const KeymasterArguments& params, KeymasterArguments* outParams,
+                       const KeymasterArguments& params, const uint8_t* entropy,
+                       size_t entropyLength, KeymasterArguments* outParams,
                        OperationResult* result) = 0;
 
     virtual void update(const sp<IBinder>& token, const KeymasterArguments& params,
