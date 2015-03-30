@@ -2824,6 +2824,20 @@ public:
         return ::NO_ERROR;
     }
 
+    bool isOperationAuthorized(const sp<IBinder>& token) {
+        const keymaster1_device_t* dev;
+        keymaster_operation_handle_t handle;
+        if(!mOperationMap.getOperation(token, &handle, &dev)) {
+            return false;
+        }
+        // TODO: Check authorization.
+        return true;
+    }
+
+    int32_t addAuthToken(const uint8_t* /*token*/, size_t /*length*/) {
+        return KM_ERROR_UNIMPLEMENTED;
+    }
+
 private:
     inline bool isKeystoreUnlocked(State state) {
         switch (state) {
