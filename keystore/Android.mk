@@ -21,7 +21,7 @@ ifeq ($(USE_32_BIT_KEYSTORE), true)
 LOCAL_MULTILIB := 32
 endif
 LOCAL_CFLAGS := -Wall -Wextra -Werror -Wunused
-LOCAL_SRC_FILES := keystore.cpp keyblob_utils.cpp operation.cpp
+LOCAL_SRC_FILES := keystore.cpp keyblob_utils.cpp operation.cpp auth_token_table.cpp
 LOCAL_SHARED_LIBRARIES := \
 	libbinder \
 	libcutils \
@@ -32,7 +32,8 @@ LOCAL_SHARED_LIBRARIES := \
 	libsoftkeymaster \
 	libutils \
 	libselinux \
-	libsoftkeymasterdevice
+	libsoftkeymasterdevice \
+	libkeymaster_messages
 LOCAL_MODULE := keystore
 LOCAL_MODULE_TAGS := optional
 LOCAL_C_INCLUES := system/keymaster/
