@@ -26,9 +26,10 @@ OperationMap::OperationMap(IBinder::DeathRecipient* deathRecipient)
 
 sp<IBinder> OperationMap::addOperation(keymaster_operation_handle_t handle,
                                        const keymaster1_device_t* dev,
-                                       sp<IBinder> appToken, bool pruneable) {
+                                       sp<IBinder> appToken,
+                                       const keymaster_key_blob_t& key, bool pruneable) {
     sp<IBinder> token = new BBinder();
-    mMap[token] = Operation(handle, dev, appToken);
+    mMap[token] = Operation(handle, dev, key, appToken);
     if (pruneable) {
         mLru.push_back(token);
     }
@@ -40,7 +41,8 @@ sp<IBinder> OperationMap::addOperation(keymaster_operation_handle_t handle,
 }
 
 bool OperationMap::getOperation(sp<IBinder> token, keymaster_operation_handle_t* outHandle,
-                                const keymaster1_device_t** outDevice) {
+                                const keymaster1_device_t** outDevice,
+                                keymaster_key_blob_t* key) {
     if (!outHandle || !outDevice) {
         return false;
     }
@@ -52,6 +54,13 @@ bool OperationMap::getOperation(sp<IBinder> token, keymaster_operation_handle_t*
 
     *outHandle = entry->second.handle;
     *outDevice = entry->second.device;
+    if (key) {
+        key->key_material_size = entry->second.key.key_material_size;
+        uint8_t* material = new uint8_t[key->key_material_size];
+        memcpy(reinterpret_cast<void*>(material), entry->second.key.key_material,
+               key->key_material_size);
+        key->key_material = material;
+    }
     return true;
 }
 
@@ -69,6 +78,7 @@ bool OperationMap::removeOperation(sp<IBinder> token) {
         return false;
     }
     sp<IBinder> appToken = entry->second.appToken;
+    delete[] entry->second.key.key_material;
     mMap.erase(entry);
     auto lruEntry = std::find(mLru.begin(), mLru.end(), token);
     if (lruEntry != mLru.end()) {
@@ -115,12 +125,19 @@ std::vector<sp<IBinder>> OperationMap::getOperationsForToken(sp<IBinder> appToke
 
 OperationMap::Operation::Operation(keymaster_operation_handle_t handle_,
                                    const keymaster1_device_t* device_,
+                                   const keymaster_key_blob_t& key_,
                                    sp<IBinder> appToken_)
     : handle(handle_),
       device(device_),
       appToken(appToken_) {
+          uint8_t* material = new uint8_t[key_.key_material_size];
+          memcpy(material, key_.key_material, key_.key_material_size);
+          key.key_material = material;
+          key.key_material_size = key_.key_material_size;
 }
 
 OperationMap::Operation::Operation() : handle(0), device(NULL), appToken(NULL) {
+    key.key_material = NULL;
+    key.key_material_size = 0;
 }
 } // namespace android
