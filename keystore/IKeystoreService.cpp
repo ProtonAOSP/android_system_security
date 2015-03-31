@@ -47,7 +47,7 @@ size_t KeystoreArg::size() const {
     return mSize;
 }
 
-OperationResult::OperationResult() : resultCode(0), token(), inputConsumed(0),
+OperationResult::OperationResult() : resultCode(0), token(), handle(0), inputConsumed(0),
     data(NULL), dataLength(0) {
 }
 
@@ -57,6 +57,7 @@ OperationResult::~OperationResult() {
 void OperationResult::readFromParcel(const Parcel& in) {
     resultCode = in.readInt32();
     token = in.readStrongBinder();
+    handle = static_cast<keymaster_operation_handle_t>(in.readInt64());
     inputConsumed = in.readInt32();
     ssize_t length = in.readInt32();
     dataLength = 0;
@@ -79,6 +80,7 @@ void OperationResult::readFromParcel(const Parcel& in) {
 void OperationResult::writeToParcel(Parcel* out) const {
     out->writeInt32(resultCode);
     out->writeStrongBinder(token);
+    out->writeInt64(handle);
     out->writeInt32(inputConsumed);
     out->writeInt32(dataLength);
     if (dataLength && data) {
