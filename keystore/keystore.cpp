@@ -62,6 +62,7 @@
 
 #include <selinux/android.h>
 
+#include "auth_token_table.h"
 #include "defaults.h"
 #include "operation.h"
 
@@ -166,6 +167,7 @@ typedef enum {
     P_RESET_UID     = 1 << 16,
     P_SYNC_UID      = 1 << 17,
     P_PASSWORD_UID  = 1 << 18,
+    P_ADD_AUTH      = 1 << 19,
 } perm_t;
 
 static struct user_euid {
@@ -198,6 +200,7 @@ const char *perm_labels[] = {
     "reset_uid",
     "sync_uid",
     "password_uid",
+    "add_auth",
 };
 
 static struct user_perm {
@@ -2838,8 +2841,21 @@ public:
         return true;
     }
 
-    int32_t addAuthToken(const uint8_t* /*token*/, size_t /*length*/) {
-        return KM_ERROR_UNIMPLEMENTED;
+    int32_t addAuthToken(const uint8_t* token, size_t length) {
+        uid_t callingUid = IPCThreadState::self()->getCallingUid();
+        pid_t spid = IPCThreadState::self()->getCallingPid();
+        if (!has_permission(callingUid, P_ADD_AUTH, spid)) {
+            ALOGW("permission denied for %d: addAuthToken", callingUid);
+            return ::PERMISSION_DENIED;
+        }
+        if (length != sizeof(hw_auth_token_t)) {
+            return KM_ERROR_INVALID_ARGUMENT;
+        }
+        hw_auth_token_t* authToken = new hw_auth_token_t;
+        memcpy(reinterpret_cast<void*>(authToken), token, sizeof(hw_auth_token_t));
+        // The table takes ownership of authToken.
+        mAuthTokenTable.AddAuthenticationToken(authToken);
+        return ::NO_ERROR;
     }
 
 private:
@@ -2883,6 +2899,7 @@ private:
 
     ::KeyStore* mKeyStore;
     OperationMap mOperationMap;
+    keymaster::AuthTokenTable mAuthTokenTable;
 };
 
 }; // namespace android
