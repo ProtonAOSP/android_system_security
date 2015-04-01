@@ -39,9 +39,9 @@ public:
     OperationMap(IBinder::DeathRecipient* deathRecipient);
     sp<IBinder> addOperation(keymaster_operation_handle_t handle,
                              const keymaster1_device_t* dev, sp<IBinder> appToken,
-                             bool pruneable);
+                             const keymaster_key_blob_t& key, bool pruneable);
     bool getOperation(sp<IBinder> token, keymaster_operation_handle_t* outHandle,
-                      const keymaster1_device_t** outDev);
+                      const keymaster1_device_t** outDev, keymaster_key_blob_t* outKey);
     bool removeOperation(sp<IBinder> token);
     bool hasPruneableOperation();
     sp<IBinder> getOldestPruneableOperation();
@@ -53,9 +53,10 @@ private:
     struct Operation {
         Operation();
         Operation(keymaster_operation_handle_t handle, const keymaster1_device_t* device,
-                  sp<IBinder> appToken);
+                  const keymaster_key_blob_t& key, sp<IBinder> appToken);
         keymaster_operation_handle_t handle;
         const keymaster1_device_t* device;
+        keymaster_key_blob_t key;
         sp<IBinder> appToken;
     };
     std::map<sp<IBinder>, struct Operation> mMap;
