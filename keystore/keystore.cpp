@@ -105,6 +105,15 @@ struct PKCS8_PRIV_KEY_INFO_Delete {
 };
 typedef UniquePtr<PKCS8_PRIV_KEY_INFO, PKCS8_PRIV_KEY_INFO_Delete> Unique_PKCS8_PRIV_KEY_INFO;
 
+struct keymaster_key_blob_t_Delete {
+    void operator()(keymaster_key_blob_t* blob) const {
+        if (blob) {
+            delete[] blob->key_material;
+        }
+        delete blob;
+    }
+};
+typedef  UniquePtr<keymaster_key_blob_t, keymaster_key_blob_t_Delete> Unique_keymaster_key_blob;
 
 static int keymaster_device_initialize(keymaster0_device_t** dev) {
     int rc;
@@ -2697,6 +2706,56 @@ public:
         result->resultCode = rc ? rc : ::NO_ERROR;
     }
 
+    /**
+     * Check that all keymaster_key_param_t's provided by the application are
+     * allowed. Any parameter that keystore adds itself should be disallowed here.
+     */
+    bool checkAllowedOperationParams(const std::vector<keymaster_key_param_t>& params) {
+        for (auto param: params) {
+            switch (param.tag) {
+                case KM_TAG_AUTH_TOKEN:
+                    return false;
+                default:
+                    break;
+            }
+        }
+        return true;
+    }
+
+    int authorizeOperation(const keymaster_key_blob_t& key,
+                            keymaster_operation_handle_t handle,
+                            std::vector<keymaster_key_param_t>* params,
+                            bool failOnTokenMissing=true) {
+        if (!checkAllowedOperationParams(*params)) {
+            return KM_ERROR_INVALID_ARGUMENT;
+        }
+        // Check for auth token and add it to the param list if present.
+        const hw_auth_token_t* authToken;
+        switch (mAuthTokenTable.FindAuthorization(key, handle, &authToken)) {
+        case keymaster::AuthTokenTable::OK:
+            // Auth token found.
+            params->push_back(keymaster_param_blob(KM_TAG_AUTH_TOKEN,
+                                                   reinterpret_cast<const uint8_t*>(authToken),
+                                                   sizeof(hw_auth_token_t)));
+            break;
+        case keymaster::AuthTokenTable::AUTH_NOT_REQUIRED:
+            return KM_ERROR_OK;
+        case keymaster::AuthTokenTable::AUTH_TOKEN_NOT_FOUND:
+        case keymaster::AuthTokenTable::OP_HANDLE_REQUIRED:
+        case keymaster::AuthTokenTable::AUTH_TOKEN_EXPIRED:
+            if (failOnTokenMissing) {
+                return KM_ERROR_KEY_USER_NOT_AUTHENTICATED;
+            }
+            break;
+        case keymaster::AuthTokenTable::AUTH_TOKEN_WRONG_SID:
+            return KM_ERROR_KEY_USER_NOT_AUTHENTICATED;
+        default:
+            return KM_ERROR_INVALID_ARGUMENT;
+        }
+        // TODO: Enforce the rest of authorization
+        return KM_ERROR_OK;
+    }
+
     void begin(const sp<IBinder>& appToken, const String16& name, keymaster_purpose_t purpose,
                bool pruneable, const KeymasterArguments& params, const uint8_t* entropy,
                size_t entropyLength, KeymasterArguments* outParams, OperationResult* result) {
@@ -2726,6 +2785,16 @@ public:
         keymaster_operation_handle_t handle;
         keymaster1_device_t* dev = mKeyStore->getDeviceForBlob(keyBlob);
         keymaster_error_t err = KM_ERROR_UNIMPLEMENTED;
+        std::vector<keymaster_key_param_t> opParams(params.params);
+        // Don't require an auth token for the call to begin, authentication can
+        // require an operation handle. Update and finish will require the token
+        // be present and valid.
+        int32_t authResult = authorizeOperation(key, 0, &opParams,
+                                                /*failOnTokenMissing*/ false);
+        if (authResult) {
+            result->resultCode = err;
+            return;
+        }
         // Add entropy to the device first.
         if (entropy) {
             if (dev->add_rng_entropy) {
@@ -2738,9 +2807,10 @@ public:
                 return;
             }
         }
-        // TODO: Check authorization.
-        err = dev->begin(dev, purpose, &key, params.params.data(), params.params.size(), &out,
-                         &outSize, &handle);
+        // Don't do an auth check here, we need begin to succeed for
+        // per-operation auth. update/finish will be doing the auth checks.
+        err = dev->begin(dev, purpose, &key, opParams.data(), opParams.size(), &out, &outSize,
+                         &handle);
 
         // If there are too many operations abort the oldest operation that was
         // started as pruneable and try again.
@@ -2763,7 +2833,8 @@ public:
             free(out);
         }
 
-        sp<IBinder> operationToken = mOperationMap.addOperation(handle, dev, appToken, pruneable);
+        sp<IBinder> operationToken = mOperationMap.addOperation(handle, dev, appToken, key,
+                                                                pruneable);
         result->resultCode = ::NO_ERROR;
         result->token = operationToken;
         result->handle = handle;
@@ -2773,17 +2844,23 @@ public:
                 size_t dataLength, OperationResult* result) {
         const keymaster1_device_t* dev;
         keymaster_operation_handle_t handle;
-        if (!mOperationMap.getOperation(token, &handle, &dev)) {
+        Unique_keymaster_key_blob key(new keymaster_key_blob_t);
+        *key = {NULL, 0};
+        if (!mOperationMap.getOperation(token, &handle, &dev, key.get())) {
             result->resultCode = KM_ERROR_INVALID_OPERATION_HANDLE;
             return;
         }
         uint8_t* output_buf = NULL;
         size_t output_length = 0;
         size_t consumed = 0;
-        // TODO: Check authorization.
-        keymaster_error_t err = dev->update(dev, handle, params.params.data(),
-                                            params.params.size(), data, dataLength,
-                                            &consumed, &output_buf, &output_length);
+        std::vector<keymaster_key_param_t> opParams(params.params);
+        int32_t authResult = authorizeOperation(*key, handle, &opParams);
+        if (authResult) {
+            result->resultCode = authResult;
+            return;
+        }
+        keymaster_error_t err = dev->update(dev, handle, opParams.data(), opParams.size(), data,
+                                            dataLength, &consumed, &output_buf, &output_length);
         result->data.reset(output_buf);
         result->dataLength = output_length;
         result->inputConsumed = consumed;
@@ -2794,18 +2871,26 @@ public:
                 const uint8_t* signature, size_t signatureLength, OperationResult* result) {
         const keymaster1_device_t* dev;
         keymaster_operation_handle_t handle;
-        if (!mOperationMap.getOperation(token, &handle, &dev)) {
+        Unique_keymaster_key_blob key(new keymaster_key_blob_t);
+        *key = {NULL, 0};
+        if (!mOperationMap.getOperation(token, &handle, &dev, key.get())) {
             result->resultCode = KM_ERROR_INVALID_OPERATION_HANDLE;
             return;
         }
         uint8_t* output_buf = NULL;
         size_t output_length = 0;
-        // TODO: Check authorization.
-        keymaster_error_t err = dev->finish(dev, handle, params.params.data(),
-                                            params.params.size(), signature, signatureLength,
-                                            &output_buf, &output_length);
+        std::vector<keymaster_key_param_t> opParams(params.params);
+        int32_t authResult = authorizeOperation(*key, handle, &opParams);
+        if (authResult) {
+            result->resultCode = authResult;
+            return;
+        }
+        keymaster_error_t err = dev->finish(dev, handle, opParams.data(), opParams.size(),
+                                            signature, signatureLength, &output_buf,
+                                            &output_length);
         // Remove the operation regardless of the result
         mOperationMap.removeOperation(token);
+        mAuthTokenTable.MarkCompleted(handle);
         result->data.reset(output_buf);
         result->dataLength = output_length;
         result->resultCode = err ? (int32_t) err : ::NO_ERROR;
@@ -2814,14 +2899,17 @@ public:
     int32_t abort(const sp<IBinder>& token) {
         const keymaster1_device_t* dev;
         keymaster_operation_handle_t handle;
-        if (!mOperationMap.getOperation(token, &handle, &dev)) {
+        if (!mOperationMap.getOperation(token, &handle, &dev, NULL)) {
             return KM_ERROR_INVALID_OPERATION_HANDLE;
         }
         mOperationMap.removeOperation(token);
+        int32_t rc;
         if (!dev->abort) {
-            return KM_ERROR_UNIMPLEMENTED;
+            rc = KM_ERROR_UNIMPLEMENTED;
+        } else {
+            rc = dev->abort(dev, handle);
         }
-        int32_t rc = dev->abort(dev, handle);
+        mAuthTokenTable.MarkCompleted(handle);
         if (rc) {
             return rc;
         }
@@ -2831,11 +2919,14 @@ public:
     bool isOperationAuthorized(const sp<IBinder>& token) {
         const keymaster1_device_t* dev;
         keymaster_operation_handle_t handle;
-        if(!mOperationMap.getOperation(token, &handle, &dev)) {
+        Unique_keymaster_key_blob key(new keymaster_key_blob_t);
+        *key = {NULL, 0};
+        if(!mOperationMap.getOperation(token, &handle, &dev, key.get())) {
             return false;
         }
-        // TODO: Check authorization.
-        return true;
+        std::vector<keymaster_key_param_t> ignored;
+        int32_t authResult = authorizeOperation(*key, handle, &ignored);
+        return authResult == KM_ERROR_OK;
     }
 
     int32_t addAuthToken(const uint8_t* token, size_t length) {
