@@ -54,7 +54,6 @@ class AuthTokenTable {
                                     // (e.g. new fingerprint enrolled).
         OP_HANDLE_REQUIRED = -4,    // The key requires auth per use but op_handle was zero.
         AUTH_TOKEN_NOT_FOUND = -5,
-        AUTH_BAD_PARAMS = -6,
     };
 
     /**
@@ -89,27 +88,6 @@ class AuthTokenTable {
                             keymaster_operation_handle_t op_handle, const hw_auth_token_t** found) {
         return FindAuthorization(AuthorizationSet(params, params_count), op_handle, found);
     }
-
-    /**
-     * Find an authorization token that authorizes the operation specified by \p handle on
-     * a key with the characteristics specified in \p blob.
-     *
-     * The table retains ownership of the returned object.
-     */
-    Error FindAuthorization(const keymaster_key_blob_t& blob, keymaster_operation_handle_t handle,
-                            const hw_auth_token_t** found) {
-        KeyBlob key(blob);
-        if (key.error()) {
-            return AUTH_BAD_PARAMS;
-        }
-        AuthorizationSet auths(key.unenforced());
-        for (auto param : key.enforced()) {
-            auths.push_back(param);
-        }
-        return FindAuthorization(auths, handle, found);
-
-    }
-
 
     /**
      * Mark operation completed.  This allows tokens associated with the specified operation to be

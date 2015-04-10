@@ -105,16 +105,6 @@ struct PKCS8_PRIV_KEY_INFO_Delete {
 };
 typedef UniquePtr<PKCS8_PRIV_KEY_INFO, PKCS8_PRIV_KEY_INFO_Delete> Unique_PKCS8_PRIV_KEY_INFO;
 
-struct keymaster_key_blob_t_Delete {
-    void operator()(keymaster_key_blob_t* blob) const {
-        if (blob) {
-            delete[] blob->key_material;
-        }
-        delete blob;
-    }
-};
-typedef  UniquePtr<keymaster_key_blob_t, keymaster_key_blob_t_Delete> Unique_keymaster_key_blob;
-
 static int keymaster_device_initialize(keymaster0_device_t** dev) {
     int rc;
 
@@ -2725,16 +2715,24 @@ public:
         return true;
     }
 
-    int authorizeOperation(const keymaster_key_blob_t& key,
+    int authorizeOperation(const keymaster_key_characteristics_t& characteristics,
                             keymaster_operation_handle_t handle,
                             std::vector<keymaster_key_param_t>* params,
                             bool failOnTokenMissing=true) {
         if (!checkAllowedOperationParams(*params)) {
             return KM_ERROR_INVALID_ARGUMENT;
         }
+        std::vector<keymaster_key_param_t> allCharacteristics;
+        for (size_t i = 0; i < characteristics.sw_enforced.length; i++) {
+            allCharacteristics.push_back(characteristics.sw_enforced.params[i]);
+        }
+        for (size_t i = 0; i < characteristics.hw_enforced.length; i++) {
+            allCharacteristics.push_back(characteristics.hw_enforced.params[i]);
+        }
         // Check for auth token and add it to the param list if present.
         const hw_auth_token_t* authToken;
-        switch (mAuthTokenTable.FindAuthorization(key, handle, &authToken)) {
+        switch (mAuthTokenTable.FindAuthorization(allCharacteristics.data(),
+                                                  allCharacteristics.size(), handle, &authToken)) {
         case keymaster::AuthTokenTable::OK:
             // Auth token found.
             params->push_back(keymaster_param_blob(KM_TAG_AUTH_TOKEN,
@@ -2757,6 +2755,36 @@ public:
         }
         // TODO: Enforce the rest of authorization
         return KM_ERROR_OK;
+    }
+
+    keymaster_error_t getOperationCharacteristics(const keymaster_key_blob_t& key,
+                                    const keymaster1_device_t* dev,
+                                    const std::vector<keymaster_key_param_t>& params,
+                                    keymaster_key_characteristics_t* out) {
+        UniquePtr<keymaster_blob_t> appId;
+        UniquePtr<keymaster_blob_t> appData;
+        for (auto param : params) {
+            if (param.tag == KM_TAG_APPLICATION_ID) {
+                appId.reset(new keymaster_blob_t);
+                appId->data = param.blob.data;
+                appId->data_length = param.blob.data_length;
+            } else if (param.tag == KM_TAG_APPLICATION_DATA) {
+                appData.reset(new keymaster_blob_t);
+                appData->data = param.blob.data;
+                appData->data_length = param.blob.data_length;
+            }
+        }
+        keymaster_key_characteristics_t* result = NULL;
+        if (!dev->get_key_characteristics) {
+            return KM_ERROR_UNIMPLEMENTED;
+        }
+        keymaster_error_t error = dev->get_key_characteristics(dev, &key, appId.get(),
+                                                               appData.get(), &result);
+        if (result) {
+            *out = *result;
+            free(result);
+        }
+        return error;
     }
 
     void begin(const sp<IBinder>& appToken, const String16& name, keymaster_purpose_t purpose,
@@ -2789,10 +2817,17 @@ public:
         keymaster1_device_t* dev = mKeyStore->getDeviceForBlob(keyBlob);
         keymaster_error_t err = KM_ERROR_UNIMPLEMENTED;
         std::vector<keymaster_key_param_t> opParams(params.params);
+        Unique_keymaster_key_characteristics characteristics;
+        characteristics.reset(new keymaster_key_characteristics_t);
+        err = getOperationCharacteristics(key, dev, opParams, characteristics.get());
+        if (err) {
+            result->resultCode = err;
+            return;
+        }
         // Don't require an auth token for the call to begin, authentication can
         // require an operation handle. Update and finish will require the token
         // be present and valid.
-        int32_t authResult = authorizeOperation(key, 0, &opParams,
+        int32_t authResult = authorizeOperation(*characteristics, 0, &opParams,
                                                 /*failOnTokenMissing*/ false);
         if (authResult) {
             result->resultCode = err;
@@ -2836,7 +2871,8 @@ public:
             free(out);
         }
 
-        sp<IBinder> operationToken = mOperationMap.addOperation(handle, dev, appToken, key,
+        sp<IBinder> operationToken = mOperationMap.addOperation(handle, dev, appToken,
+                                                                characteristics.release(),
                                                                 pruneable);
         result->resultCode = ::NO_ERROR;
         result->token = operationToken;
@@ -2847,9 +2883,8 @@ public:
                 size_t dataLength, OperationResult* result) {
         const keymaster1_device_t* dev;
         keymaster_operation_handle_t handle;
-        Unique_keymaster_key_blob key(new keymaster_key_blob_t);
-        *key = {NULL, 0};
-        if (!mOperationMap.getOperation(token, &handle, &dev, key.get())) {
+        const keymaster_key_characteristics_t* characteristics;
+        if (!mOperationMap.getOperation(token, &handle, &dev, &characteristics)) {
             result->resultCode = KM_ERROR_INVALID_OPERATION_HANDLE;
             return;
         }
@@ -2857,7 +2892,7 @@ public:
         size_t output_length = 0;
         size_t consumed = 0;
         std::vector<keymaster_key_param_t> opParams(params.params);
-        int32_t authResult = authorizeOperation(*key, handle, &opParams);
+        int32_t authResult = authorizeOperation(*characteristics, handle, &opParams);
         if (authResult) {
             result->resultCode = authResult;
             return;
@@ -2874,16 +2909,15 @@ public:
                 const uint8_t* signature, size_t signatureLength, OperationResult* result) {
         const keymaster1_device_t* dev;
         keymaster_operation_handle_t handle;
-        Unique_keymaster_key_blob key(new keymaster_key_blob_t);
-        *key = {NULL, 0};
-        if (!mOperationMap.getOperation(token, &handle, &dev, key.get())) {
+        const keymaster_key_characteristics_t* characteristics;
+        if (!mOperationMap.getOperation(token, &handle, &dev, &characteristics)) {
             result->resultCode = KM_ERROR_INVALID_OPERATION_HANDLE;
             return;
         }
         uint8_t* output_buf = NULL;
         size_t output_length = 0;
         std::vector<keymaster_key_param_t> opParams(params.params);
-        int32_t authResult = authorizeOperation(*key, handle, &opParams);
+        int32_t authResult = authorizeOperation(*characteristics, handle, &opParams);
         if (authResult) {
             result->resultCode = authResult;
             return;
@@ -2922,13 +2956,12 @@ public:
     bool isOperationAuthorized(const sp<IBinder>& token) {
         const keymaster1_device_t* dev;
         keymaster_operation_handle_t handle;
-        Unique_keymaster_key_blob key(new keymaster_key_blob_t);
-        *key = {NULL, 0};
-        if(!mOperationMap.getOperation(token, &handle, &dev, key.get())) {
+        const keymaster_key_characteristics_t* characteristics;
+        if (!mOperationMap.getOperation(token, &handle, &dev, &characteristics)) {
             return false;
         }
         std::vector<keymaster_key_param_t> ignored;
-        int32_t authResult = authorizeOperation(*key, handle, &ignored);
+        int32_t authResult = authorizeOperation(*characteristics, handle, &ignored);
         return authResult == KM_ERROR_OK;
     }
 
