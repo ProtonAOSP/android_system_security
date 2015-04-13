@@ -1778,7 +1778,6 @@ status_t BnKeystoreService::onTransact(
         }
         case ADD_AUTH_TOKEN: {
             CHECK_INTERFACE(IKeystoreService, data, reply);
-            sp<IBinder> token = data.readStrongBinder();
             const uint8_t* token_bytes = NULL;
             size_t size = 0;
             readByteArray(data, &token_bytes, &size);
