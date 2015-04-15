@@ -307,6 +307,9 @@ static uid_t get_keystore_euid(uid_t uid) {
  * namespace.
  */
 static bool is_granted_to(uid_t callingUid, uid_t targetUid) {
+    if (callingUid == targetUid) {
+        return true;
+    }
     for (size_t i = 0; i < sizeof(user_euids)/sizeof(user_euids[0]); i++) {
         struct user_euid user = user_euids[i];
         if (user.euid == callingUid && user.uid == targetUid) {
@@ -315,15 +318,6 @@ static bool is_granted_to(uid_t callingUid, uid_t targetUid) {
     }
 
     return false;
-}
-
-/**
- * Allow the system to perform some privileged tasks that have to do with
- * system maintenance. This should not be used for any function that uses
- * the keys in any way (e.g., signing).
- */
-static bool is_self_or_system(uid_t callingUid, uid_t targetUid) {
-    return callingUid == targetUid || callingUid == AID_SYSTEM;
 }
 
 /* Here is the encoding of keys. This is necessary in order to allow arbitrary
@@ -1638,24 +1632,19 @@ public:
     }
 
     int32_t test() {
-        uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        pid_t spid = IPCThreadState::self()->getCallingPid();
-        if (!has_permission(callingUid, P_TEST, spid)) {
-            ALOGW("permission denied for %d: test", callingUid);
+        if (!checkBinderPermission(P_TEST)) {
             return ::PERMISSION_DENIED;
         }
 
-        return mKeyStore->getState(callingUid);
+        return mKeyStore->getState(IPCThreadState::self()->getCallingUid());
     }
 
     int32_t get(const String16& name, uint8_t** item, size_t* itemLength) {
-        uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        pid_t spid = IPCThreadState::self()->getCallingPid();
-        if (!has_permission(callingUid, P_GET, spid)) {
-            ALOGW("permission denied for %d: get", callingUid);
+        if (!checkBinderPermission(P_GET)) {
             return ::PERMISSION_DENIED;
         }
 
+        uid_t callingUid = IPCThreadState::self()->getCallingUid();
         String8 name8(name);
         Blob keyBlob;
 
@@ -1677,23 +1666,11 @@ public:
 
     int32_t insert(const String16& name, const uint8_t* item, size_t itemLength, int targetUid,
             int32_t flags) {
-        pid_t spid = IPCThreadState::self()->getCallingPid();
-        uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        if (!has_permission(callingUid, P_INSERT, spid)) {
-            ALOGW("permission denied for %d: insert", callingUid);
-            return ::PERMISSION_DENIED;
-        }
-
-        State state = mKeyStore->getState(callingUid);
-        if ((flags & KEYSTORE_FLAG_ENCRYPTED) && !isKeystoreUnlocked(state)) {
-            ALOGD("calling get in state: %d", state);
-            return state;
-        }
-
-        if (targetUid == -1) {
-            targetUid = callingUid;
-        } else if (!is_granted_to(callingUid, targetUid)) {
-            return ::PERMISSION_DENIED;
+        targetUid = getEffectiveUid(targetUid);
+        int32_t result = checkBinderPermissionAndKeystoreState(P_INSERT, targetUid,
+                                                    flags & KEYSTORE_FLAG_ENCRYPTED);
+        if (result != ::NO_ERROR) {
+            return result;
         }
 
         String8 name8(name);
@@ -1706,35 +1683,18 @@ public:
     }
 
     int32_t del(const String16& name, int targetUid) {
-        uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        pid_t spid = IPCThreadState::self()->getCallingPid();
-        if (!has_permission(callingUid, P_DELETE, spid)) {
-            ALOGW("permission denied for %d: del", callingUid);
+        targetUid = getEffectiveUid(targetUid);
+        if (!checkBinderPermission(P_DELETE, targetUid)) {
             return ::PERMISSION_DENIED;
         }
-
-        if (targetUid == -1) {
-            targetUid = callingUid;
-        } else if (!is_granted_to(callingUid, targetUid)) {
-            return ::PERMISSION_DENIED;
-        }
-
         String8 name8(name);
         String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, targetUid));
         return mKeyStore->del(filename.string(), ::TYPE_ANY, targetUid);
     }
 
     int32_t exist(const String16& name, int targetUid) {
-        uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        pid_t spid = IPCThreadState::self()->getCallingPid();
-        if (!has_permission(callingUid, P_EXIST, spid)) {
-            ALOGW("permission denied for %d: exist", callingUid);
-            return ::PERMISSION_DENIED;
-        }
-
-        if (targetUid == -1) {
-            targetUid = callingUid;
-        } else if (!is_granted_to(callingUid, targetUid)) {
+        targetUid = getEffectiveUid(targetUid);
+        if (!checkBinderPermission(P_EXIST, targetUid)) {
             return ::PERMISSION_DENIED;
         }
 
@@ -1748,19 +1708,10 @@ public:
     }
 
     int32_t saw(const String16& prefix, int targetUid, Vector<String16>* matches) {
-        uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        pid_t spid = IPCThreadState::self()->getCallingPid();
-        if (!has_permission(callingUid, P_SAW, spid)) {
-            ALOGW("permission denied for %d: saw", callingUid);
+        targetUid = getEffectiveUid(targetUid);
+        if (!checkBinderPermission(P_SAW, targetUid)) {
             return ::PERMISSION_DENIED;
         }
-
-        if (targetUid == -1) {
-            targetUid = callingUid;
-        } else if (!is_granted_to(callingUid, targetUid)) {
-            return ::PERMISSION_DENIED;
-        }
-
         const String8 prefix8(prefix);
         String8 filename(mKeyStore->getKeyNameForUid(prefix8, targetUid));
 
@@ -1771,13 +1722,11 @@ public:
     }
 
     int32_t reset() {
-        uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        pid_t spid = IPCThreadState::self()->getCallingPid();
-        if (!has_permission(callingUid, P_RESET, spid)) {
-            ALOGW("permission denied for %d: reset", callingUid);
+        if (!checkBinderPermission(P_RESET)) {
             return ::PERMISSION_DENIED;
         }
 
+        uid_t callingUid = IPCThreadState::self()->getCallingUid();
         return mKeyStore->reset(callingUid) ? ::NO_ERROR : ::SYSTEM_ERROR;
     }
 
@@ -1789,14 +1738,12 @@ public:
      * the old one. This avoids permanent damages of the existing data.
      */
     int32_t password(const String16& password) {
-        uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        pid_t spid = IPCThreadState::self()->getCallingPid();
-        if (!has_permission(callingUid, P_PASSWORD, spid)) {
-            ALOGW("permission denied for %d: password", callingUid);
+        if (!checkBinderPermission(P_PASSWORD)) {
             return ::PERMISSION_DENIED;
         }
 
         const String8 password8(password);
+        uid_t callingUid = IPCThreadState::self()->getCallingUid();
 
         switch (mKeyStore->getState(callingUid)) {
             case ::STATE_UNINITIALIZED: {
@@ -1816,13 +1763,11 @@ public:
     }
 
     int32_t lock() {
-        uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        pid_t spid = IPCThreadState::self()->getCallingPid();
-        if (!has_permission(callingUid, P_LOCK, spid)) {
-            ALOGW("permission denied for %d: lock", callingUid);
+        if (!checkBinderPermission(P_LOCK)) {
             return ::PERMISSION_DENIED;
         }
 
+        uid_t callingUid = IPCThreadState::self()->getCallingUid();
         State state = mKeyStore->getState(callingUid);
         if (state != ::STATE_NO_ERROR) {
             ALOGD("calling lock in state: %d", state);
@@ -1834,13 +1779,11 @@ public:
     }
 
     int32_t unlock(const String16& pw) {
-        uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        pid_t spid = IPCThreadState::self()->getCallingPid();
-        if (!has_permission(callingUid, P_UNLOCK, spid)) {
-            ALOGW("permission denied for %d: unlock", callingUid);
+        if (!checkBinderPermission(P_UNLOCK)) {
             return ::PERMISSION_DENIED;
         }
 
+        uid_t callingUid = IPCThreadState::self()->getCallingUid();
         State state = mKeyStore->getState(callingUid);
         if (state != ::STATE_LOCKED) {
             ALOGD("calling unlock when not locked");
@@ -1852,37 +1795,22 @@ public:
     }
 
     int32_t zero() {
-        uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        pid_t spid = IPCThreadState::self()->getCallingPid();
-        if (!has_permission(callingUid, P_ZERO, spid)) {
-            ALOGW("permission denied for %d: zero", callingUid);
+        if (!checkBinderPermission(P_ZERO)) {
             return -1;
         }
 
+        uid_t callingUid = IPCThreadState::self()->getCallingUid();
         return mKeyStore->isEmpty(callingUid) ? ::KEY_NOT_FOUND : ::NO_ERROR;
     }
 
     int32_t generate(const String16& name, int32_t targetUid, int32_t keyType, int32_t keySize,
             int32_t flags, Vector<sp<KeystoreArg> >* args) {
-        uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        pid_t spid = IPCThreadState::self()->getCallingPid();
-        if (!has_permission(callingUid, P_INSERT, spid)) {
-            ALOGW("permission denied for %d: generate", callingUid);
-            return ::PERMISSION_DENIED;
+        targetUid = getEffectiveUid(targetUid);
+        int32_t result = checkBinderPermissionAndKeystoreState(P_INSERT, targetUid,
+                                                       flags & KEYSTORE_FLAG_ENCRYPTED);
+        if (result != ::NO_ERROR) {
+            return result;
         }
-
-        if (targetUid == -1) {
-            targetUid = callingUid;
-        } else if (!is_granted_to(callingUid, targetUid)) {
-            return ::PERMISSION_DENIED;
-        }
-
-        State state = mKeyStore->getState(callingUid);
-        if ((flags & KEYSTORE_FLAG_ENCRYPTED) && !isKeystoreUnlocked(state)) {
-            ALOGW("calling generate in state: %d", state);
-            return state;
-        }
-
         uint8_t* data;
         size_t dataLength;
         int rc;
@@ -2005,7 +1933,7 @@ public:
         }
 
         String8 name8(name);
-        String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, callingUid));
+        String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, targetUid));
 
         Blob keyBlob(data, dataLength, NULL, 0, TYPE_KEY_PAIR);
         free(data);
@@ -2013,30 +1941,17 @@ public:
         keyBlob.setEncrypted(flags & KEYSTORE_FLAG_ENCRYPTED);
         keyBlob.setFallback(isFallback);
 
-        return mKeyStore->put(filename.string(), &keyBlob, callingUid);
+        return mKeyStore->put(filename.string(), &keyBlob, targetUid);
     }
 
     int32_t import(const String16& name, const uint8_t* data, size_t length, int targetUid,
             int32_t flags) {
-        uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        pid_t spid = IPCThreadState::self()->getCallingPid();
-        if (!has_permission(callingUid, P_INSERT, spid)) {
-            ALOGW("permission denied for %d: import", callingUid);
-            return ::PERMISSION_DENIED;
+        targetUid = getEffectiveUid(targetUid);
+        int32_t result = checkBinderPermissionAndKeystoreState(P_INSERT, targetUid,
+                                                       flags & KEYSTORE_FLAG_ENCRYPTED);
+        if (result != ::NO_ERROR) {
+            return result;
         }
-
-        if (targetUid == -1) {
-            targetUid = callingUid;
-        } else if (!is_granted_to(callingUid, targetUid)) {
-            return ::PERMISSION_DENIED;
-        }
-
-        State state = mKeyStore->getState(targetUid);
-        if ((flags & KEYSTORE_FLAG_ENCRYPTED) && !isKeystoreUnlocked(state)) {
-            ALOGD("calling import in state: %d", state);
-            return state;
-        }
-
         String8 name8(name);
         String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, targetUid));
 
@@ -2045,18 +1960,15 @@ public:
 
     int32_t sign(const String16& name, const uint8_t* data, size_t length, uint8_t** out,
             size_t* outLength) {
-        uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        pid_t spid = IPCThreadState::self()->getCallingPid();
-        if (!has_permission(callingUid, P_SIGN, spid)) {
-            ALOGW("permission denied for %d: saw", callingUid);
+        if (!checkBinderPermission(P_SIGN)) {
             return ::PERMISSION_DENIED;
         }
 
+        uid_t callingUid = IPCThreadState::self()->getCallingUid();
         Blob keyBlob;
         String8 name8(name);
 
         ALOGV("sign %s from uid %d", name8.string(), callingUid);
-        int rc;
 
         ResponseCode responseCode = mKeyStore->getKeyForName(&keyBlob, name8, callingUid,
                 ::TYPE_KEY_PAIR);
@@ -2078,7 +1990,7 @@ public:
         keymaster_rsa_sign_params_t params;
         params.digest_type = DIGEST_NONE;
         params.padding_type = PADDING_NONE;
-        rc = device->sign_data(device, &params, keyBlob.getValue(), keyBlob.getLength(), data,
+        int rc = device->sign_data(device, &params, keyBlob.getValue(), keyBlob.getLength(), data,
                 length, out, outLength);
         if (rc) {
             ALOGW("device couldn't sign data");
@@ -2090,19 +2002,11 @@ public:
 
     int32_t verify(const String16& name, const uint8_t* data, size_t dataLength,
             const uint8_t* signature, size_t signatureLength) {
-        uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        pid_t spid = IPCThreadState::self()->getCallingPid();
-        if (!has_permission(callingUid, P_VERIFY, spid)) {
-            ALOGW("permission denied for %d: verify", callingUid);
+        if (!checkBinderPermission(P_VERIFY)) {
             return ::PERMISSION_DENIED;
         }
 
-        State state = mKeyStore->getState(callingUid);
-        if (!isKeystoreUnlocked(state)) {
-            ALOGD("calling verify in state: %d", state);
-            return state;
-        }
-
+        uid_t callingUid = IPCThreadState::self()->getCallingUid();
         Blob keyBlob;
         String8 name8(name);
         int rc;
@@ -2148,8 +2052,7 @@ public:
      */
     int32_t get_pubkey(const String16& name, uint8_t** pubkey, size_t* pubkeyLength) {
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        pid_t spid = IPCThreadState::self()->getCallingPid();
-        if (!has_permission(callingUid, P_GET, spid)) {
+        if (!checkBinderPermission(P_GET)) {
             ALOGW("permission denied for %d: get_pubkey", callingUid);
             return ::PERMISSION_DENIED;
         }
@@ -2186,36 +2089,14 @@ public:
     }
 
     int32_t del_key(const String16& name, int targetUid) {
-        uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        pid_t spid = IPCThreadState::self()->getCallingPid();
-        if (!has_permission(callingUid, P_DELETE, spid)) {
-            ALOGW("permission denied for %d: del_key", callingUid);
-            return ::PERMISSION_DENIED;
-        }
-
-        if (targetUid == -1) {
-            targetUid = callingUid;
-        } else if (!is_granted_to(callingUid, targetUid)) {
-            return ::PERMISSION_DENIED;
-        }
-
-        String8 name8(name);
-        String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, targetUid));
-        return mKeyStore->del(filename.string(), ::TYPE_KEY_PAIR, targetUid);
+        return del(name, targetUid);
     }
 
     int32_t grant(const String16& name, int32_t granteeUid) {
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        pid_t spid = IPCThreadState::self()->getCallingPid();
-        if (!has_permission(callingUid, P_GRANT, spid)) {
-            ALOGW("permission denied for %d: grant", callingUid);
-            return ::PERMISSION_DENIED;
-        }
-
-        State state = mKeyStore->getState(callingUid);
-        if (!isKeystoreUnlocked(state)) {
-            ALOGD("calling grant in state: %d", state);
-            return state;
+        int32_t result = checkBinderPermissionAndKeystoreState(P_GRANT);
+        if (result != ::NO_ERROR) {
+            return result;
         }
 
         String8 name8(name);
@@ -2231,16 +2112,9 @@ public:
 
     int32_t ungrant(const String16& name, int32_t granteeUid) {
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        pid_t spid = IPCThreadState::self()->getCallingPid();
-        if (!has_permission(callingUid, P_GRANT, spid)) {
-            ALOGW("permission denied for %d: ungrant", callingUid);
-            return ::PERMISSION_DENIED;
-        }
-
-        State state = mKeyStore->getState(callingUid);
-        if (!isKeystoreUnlocked(state)) {
-            ALOGD("calling ungrant in state: %d", state);
-            return state;
+        int32_t result = checkBinderPermissionAndKeystoreState(P_GRANT);
+        if (result != ::NO_ERROR) {
+            return result;
         }
 
         String8 name8(name);
@@ -2255,8 +2129,7 @@ public:
 
     int64_t getmtime(const String16& name) {
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        pid_t spid = IPCThreadState::self()->getCallingPid();
-        if (!has_permission(callingUid, P_GET, spid)) {
+        if (!checkBinderPermission(P_GET)) {
             ALOGW("permission denied for %d: getmtime", callingUid);
             return -1L;
         }
@@ -2351,25 +2224,9 @@ public:
     }
 
     int32_t clear_uid(int64_t targetUid64) {
-        uid_t targetUid = static_cast<uid_t>(targetUid64);
-        uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        pid_t spid = IPCThreadState::self()->getCallingPid();
-        if (!has_permission(callingUid, P_CLEAR_UID, spid)) {
-            ALOGW("permission denied for %d: clear_uid", callingUid);
+        uid_t targetUid = getEffectiveUid(targetUid64);
+        if (!checkBinderPermission(P_CLEAR_UID, targetUid)) {
             return ::PERMISSION_DENIED;
-        }
-
-        if (targetUid64 == -1) {
-            targetUid = callingUid;
-        } else if (!is_self_or_system(callingUid, targetUid)) {
-            ALOGW("permission denied for %d: clear_uid %d", callingUid, targetUid);
-            return ::PERMISSION_DENIED;
-        }
-
-        const keymaster1_device_t* device = mKeyStore->getDevice();
-        if (device == NULL) {
-            ALOGW("can't get keymaster device");
-            return ::SYSTEM_ERROR;
         }
 
         String8 prefix = String8::format("%u_", targetUid);
@@ -2387,15 +2244,8 @@ public:
     }
 
     int32_t reset_uid(int32_t targetUid) {
-        uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        pid_t spid = IPCThreadState::self()->getCallingPid();
-
-        if (!has_permission(callingUid, P_RESET_UID, spid)) {
-            ALOGW("permission denied for %d: reset_uid %d", callingUid, targetUid);
-            return ::PERMISSION_DENIED;
-        }
-        if (!is_self_or_system(callingUid, targetUid)) {
-            ALOGW("permission denied for %d: reset_uid %d", callingUid, targetUid);
+        targetUid = getEffectiveUid(targetUid);
+        if (!checkBinderPermission(P_RESET_UID, targetUid)) {
             return ::PERMISSION_DENIED;
         }
 
@@ -2403,16 +2253,10 @@ public:
     }
 
     int32_t sync_uid(int32_t sourceUid, int32_t targetUid) {
-        uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        pid_t spid = IPCThreadState::self()->getCallingPid();
-        if (!has_permission(callingUid, P_SYNC_UID, spid)) {
-            ALOGW("permission denied for %d: sync_uid %d -> %d", callingUid, sourceUid, targetUid);
+        if (!checkBinderPermission(P_SYNC_UID, targetUid)) {
             return ::PERMISSION_DENIED;
         }
-        if (callingUid != AID_SYSTEM) {
-            ALOGW("permission denied for %d: sync_uid %d -> %d", callingUid, sourceUid, targetUid);
-            return ::PERMISSION_DENIED;
-        }
+
         if (sourceUid == targetUid) {
             return ::SYSTEM_ERROR;
         }
@@ -2422,17 +2266,10 @@ public:
     }
 
     int32_t password_uid(const String16& pw, int32_t targetUid) {
-        uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        pid_t spid = IPCThreadState::self()->getCallingPid();
-        if (!has_permission(callingUid, P_PASSWORD_UID, spid)) {
-            ALOGW("permission denied for %d: password_uid %d", callingUid, targetUid);
+        targetUid = getEffectiveUid(targetUid);
+        if (!checkBinderPermission(P_PASSWORD, targetUid)) {
             return ::PERMISSION_DENIED;
         }
-        if (callingUid != AID_SYSTEM) {
-            ALOGW("permission denied for %d: password_uid %d", callingUid, targetUid);
-            return ::PERMISSION_DENIED;
-        }
-
         const String8 password8(pw);
 
         switch (mKeyStore->getState(targetUid)) {
@@ -2476,26 +2313,14 @@ public:
     int32_t generateKey(const String16& name, const KeymasterArguments& params,
                         const uint8_t* entropy, size_t entropyLength, int uid, int flags,
                         KeyCharacteristics* outCharacteristics) {
-        uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        pid_t callingPid = IPCThreadState::self()->getCallingPid();
-        if (!has_permission(callingUid, P_INSERT, callingPid)) {
-            ALOGW("permission denied for %d: generateKey", callingUid);
-            return ::PERMISSION_DENIED;
+        uid = getEffectiveUid(uid);
+        int rc = checkBinderPermissionAndKeystoreState(P_INSERT, uid,
+                                                       flags & KEYSTORE_FLAG_ENCRYPTED);
+        if (rc != ::NO_ERROR) {
+            return rc;
         }
 
-        State state = mKeyStore->getState(callingUid);
-        if ((flags & KEYSTORE_FLAG_ENCRYPTED) && !isKeystoreUnlocked(state)) {
-            ALOGW("calling generate in state: %d", state);
-            return state;
-        }
-
-        if (uid == -1) {
-            uid = callingUid;
-        } else if (!is_granted_to(callingUid, uid)) {
-            return ::PERMISSION_DENIED;
-        }
-
-        int rc = KM_ERROR_UNIMPLEMENTED;
+        rc = KM_ERROR_UNIMPLEMENTED;
         bool isFallback = false;
         keymaster_key_blob_t blob;
         keymaster_key_characteristics_t *out = NULL;
@@ -2567,7 +2392,6 @@ public:
                                   const keymaster_blob_t* clientId,
                                   const keymaster_blob_t* appData,
                                   KeyCharacteristics* outCharacteristics) {
-
         if (!outCharacteristics) {
             return KM_ERROR_UNEXPECTED_NULL_POINTER;
         }
@@ -2604,27 +2428,14 @@ public:
                                 keymaster_key_format_t format, const uint8_t *keyData,
                                 size_t keyLength, int uid, int flags,
                                 KeyCharacteristics* outCharacteristics) {
-        uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        pid_t spid = IPCThreadState::self()->getCallingPid();
-        if (!has_permission(callingUid, P_INSERT, spid)) {
-            ALOGW("permission denied for %d: importKey", callingUid);
-            return ::PERMISSION_DENIED;
+        uid = getEffectiveUid(uid);
+        int rc = checkBinderPermissionAndKeystoreState(P_INSERT, uid,
+                                                       flags & KEYSTORE_FLAG_ENCRYPTED);
+        if (rc != ::NO_ERROR) {
+            return rc;
         }
 
-        State state = mKeyStore->getState(callingUid);
-        if ((flags & KEYSTORE_FLAG_ENCRYPTED) && !isKeystoreUnlocked(state)) {
-            ALOGW("calling importKey in state: %d", state);
-            return state;
-        }
-
-        if (uid == -1) {
-            uid = callingUid;
-        } else if (!is_granted_to(callingUid, uid)) {
-            ALOGW("not granted to %d %d", callingUid, uid);
-            return ::PERMISSION_DENIED;
-        }
-
-        int rc = KM_ERROR_UNIMPLEMENTED;
+        rc = KM_ERROR_UNIMPLEMENTED;
         bool isFallback = false;
         keymaster_key_blob_t blob;
         keymaster_key_characteristics_t *out = NULL;
@@ -2966,10 +2777,9 @@ public:
     }
 
     int32_t addAuthToken(const uint8_t* token, size_t length) {
-        uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        pid_t spid = IPCThreadState::self()->getCallingPid();
-        if (!has_permission(callingUid, P_ADD_AUTH, spid)) {
-            ALOGW("permission denied for %d: addAuthToken", callingUid);
+        if (!checkBinderPermission(P_ADD_AUTH)) {
+            ALOGW("addAuthToken: permission denied for %d",
+                  IPCThreadState::self()->getCallingUid());
             return ::PERMISSION_DENIED;
         }
         if (length != sizeof(hw_auth_token_t)) {
@@ -2983,6 +2793,75 @@ public:
     }
 
 private:
+    static const int32_t UID_SELF = -1;
+
+    /**
+     * Get the effective target uid for a binder operation that takes an
+     * optional uid as the target.
+     */
+    inline uid_t getEffectiveUid(int32_t targetUid) {
+        if (targetUid == UID_SELF) {
+            return IPCThreadState::self()->getCallingUid();
+        }
+        return static_cast<uid_t>(targetUid);
+    }
+
+    /**
+     * Check if the caller of the current binder method has the required
+     * permission and if acting on other uids the grants to do so.
+     */
+    inline bool checkBinderPermission(perm_t permission, int32_t targetUid = UID_SELF) {
+        uid_t callingUid = IPCThreadState::self()->getCallingUid();
+        pid_t spid = IPCThreadState::self()->getCallingPid();
+        if (!has_permission(callingUid, permission, spid)) {
+            ALOGW("permission %s denied for %d", get_perm_label(permission), callingUid);
+            return false;
+        }
+        if (!is_granted_to(callingUid, getEffectiveUid(targetUid))) {
+            ALOGW("uid %d not granted to act for %d", callingUid, targetUid);
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Check if the caller of the current binder method has the required
+     * permission or the target of the operation is the caller's uid. This is
+     * for operation where the permission is only for cross-uid activity and all
+     * uids are allowed to act on their own (ie: clearing all entries for a
+     * given uid).
+     */
+    inline bool checkBinderPermissionOrSelfTarget(perm_t permission, int32_t targetUid) {
+        uid_t callingUid = IPCThreadState::self()->getCallingUid();
+        if (getEffectiveUid(targetUid) == callingUid) {
+            return true;
+        } else {
+            return checkBinderPermission(permission, targetUid);
+        }
+    }
+
+    /**
+     * Helper method to check that the caller has the required permission as
+     * well as the keystore is in the unlocked state if checkUnlocked is true.
+     *
+     * Returns NO_ERROR on success, PERMISSION_DENIED on a permission error and
+     * otherwise the state of keystore when not unlocked and checkUnlocked is
+     * true.
+     */
+    inline int32_t checkBinderPermissionAndKeystoreState(perm_t permission, int32_t targetUid = -1,
+                                                 bool checkUnlocked = true) {
+        if (!checkBinderPermission(permission, targetUid)) {
+            return ::PERMISSION_DENIED;
+        }
+        State state = mKeyStore->getState(getEffectiveUid(targetUid));
+        if (checkUnlocked && !isKeystoreUnlocked(state)) {
+            return state;
+        }
+
+        return ::NO_ERROR;
+
+    }
+
     inline bool isKeystoreUnlocked(State state) {
         switch (state) {
         case ::STATE_NO_ERROR:
