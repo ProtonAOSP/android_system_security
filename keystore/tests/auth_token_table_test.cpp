@@ -72,7 +72,7 @@ TEST(AuthTokenTableTest, Create) {
 }
 
 static hw_auth_token_t* make_token(uint64_t rsid, uint64_t ssid = 0, uint64_t challenge = 0,
-                                   uint32_t timestamp = 0) {
+                                   uint64_t timestamp = 0) {
     hw_auth_token_t* token = new hw_auth_token_t;
     token->user_id = rsid;
     token->authenticator_id = ssid;
@@ -127,6 +127,25 @@ TEST(AuthTokenTableTest, SimpleAddAndFindTokens) {
 
     ASSERT_EQ(AuthTokenTable::AUTH_TOKEN_NOT_FOUND,
               table.FindAuthorization(make_set(5), 0, &found));
+}
+
+TEST(AuthTokenTableTest, FlushTable) {
+    AuthTokenTable table(3, monotonic_clock);
+
+    table.AddAuthenticationToken(make_token(1));
+    table.AddAuthenticationToken(make_token(2));
+    table.AddAuthenticationToken(make_token(3));
+
+    const hw_auth_token_t* found;
+
+    // All three should be in the table.
+    EXPECT_EQ(3U, table.size());
+    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(1), 0, &found));
+    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(2), 0, &found));
+    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(3), 0, &found));
+
+    table.Clear();
+    EXPECT_EQ(0U, table.size());
 }
 
 TEST(AuthTokenTableTest, TableOverflow) {
