@@ -95,6 +95,8 @@ class AuthTokenTable {
      */
     void MarkCompleted(const keymaster_operation_handle_t op_handle);
 
+    void Clear();
+
     size_t size() { return entries_.size(); }
 
   private:
