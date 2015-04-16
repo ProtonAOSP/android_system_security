@@ -140,6 +140,10 @@ void AuthTokenTable::RemoveEntriesSupersededBy(const Entry& entry) {
                    entries_.end());
 }
 
+void AuthTokenTable::Clear() {
+    entries_.clear();
+}
+
 bool AuthTokenTable::IsSupersededBySomeEntry(const Entry& entry) {
     return std::any_of(entries_.begin(), entries_.end(),
                        [&](Entry& e) { return e.Supersedes(entry); });
