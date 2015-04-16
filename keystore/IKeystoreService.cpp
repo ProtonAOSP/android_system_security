@@ -220,7 +220,8 @@ void writeKeymasterArgumentToParcel(const keymaster_key_param_t& param, Parcel* 
             out->writeInt32(param.integer);
             break;
         }
-        case KM_LONG: {
+        case KM_LONG:
+        case KM_LONG_REP: {
             out->writeInt32(param.tag);
             out->writeInt64(param.long_integer);
             break;
@@ -271,7 +272,8 @@ bool readKeymasterArgumentFromParcel(const Parcel& in, keymaster_key_param_t* ou
             *out = keymaster_param_int(tag, value);
             break;
         }
-        case KM_LONG: {
+        case KM_LONG:
+        case KM_LONG_REP: {
             uint64_t value = in.readInt64();
             *out = keymaster_param_long(tag, value);
             break;
