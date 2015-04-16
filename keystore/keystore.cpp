@@ -2248,6 +2248,9 @@ public:
         if (!checkBinderPermission(P_RESET_UID, targetUid)) {
             return ::PERMISSION_DENIED;
         }
+        // Flush the auth token table to prevent stale tokens from sticking
+        // around.
+        mAuthTokenTable.Clear();
 
         return mKeyStore->reset(targetUid) ? ::NO_ERROR : ::SYSTEM_ERROR;
     }
