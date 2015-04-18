@@ -48,12 +48,12 @@ extern const RSA_METHOD keystore_rsa_method;
 extern const ECDSA_METHOD keystore_ecdsa_method;
 
 /* key_id_dup is called when one of the RSA or EC_KEY objects is duplicated. */
-int key_id_dup(CRYPTO_EX_DATA* to,
-               const CRYPTO_EX_DATA* from,
+int key_id_dup(CRYPTO_EX_DATA* /* to */,
+               const CRYPTO_EX_DATA* /* from */,
                void** from_d,
-               int index,
-               long argl,
-               void* argp) {
+               int /* index */,
+               long /* argl */,
+               void* /* argp */) {
     char *key_id = reinterpret_cast<char *>(*from_d);
     if (key_id != NULL) {
         *from_d = strdup(key_id);
@@ -62,12 +62,12 @@ int key_id_dup(CRYPTO_EX_DATA* to,
 }
 
 /* key_id_free is called when one of the RSA, DSA or EC_KEY object is freed. */
-void key_id_free(void* parent,
+void key_id_free(void* /* parent */,
                  void* ptr,
-                 CRYPTO_EX_DATA* ad,
-                 int index,
-                 long argl,
-                 void* argp) {
+                 CRYPTO_EX_DATA* /* ad */,
+                 int /* index */,
+                 long /* argl */,
+                 void* /* argp */) {
     char *key_id = reinterpret_cast<char *>(ptr);
     free(key_id);
 }
