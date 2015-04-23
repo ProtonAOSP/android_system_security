@@ -17,6 +17,7 @@
 #ifndef KEYSTORE_OPERATION_H_
 #define KEYSTORE_OPERATION_H_
 
+#include <hardware/hw_auth_token.h>
 #include <hardware/keymaster1.h>
 #include <binder/Binder.h>
 #include <binder/IBinder.h>
@@ -54,6 +55,8 @@ public:
                       const keymaster_key_characteristics_t** outCharacteristics);
     bool removeOperation(sp<IBinder> token);
     bool hasPruneableOperation();
+    bool getOperationAuthToken(sp<IBinder> token, const hw_auth_token_t** outToken);
+    bool setOperationAuthToken(sp<IBinder> token, const hw_auth_token_t* authToken);
     sp<IBinder> getOldestPruneableOperation();
     std::vector<sp<IBinder>> getOperationsForToken(sp<IBinder> appToken);
 
@@ -68,6 +71,7 @@ private:
         const keymaster1_device_t* device;
         Unique_keymaster_key_characteristics characteristics;
         sp<IBinder> appToken;
+        std::unique_ptr<const hw_auth_token_t*> authToken;
     };
     std::map<sp<IBinder>, struct Operation> mMap;
     std::vector<sp<IBinder>> mLru;

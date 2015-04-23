@@ -41,6 +41,7 @@ enum ResponseCode {
     WRONG_PASSWORD_2  = 12,
     WRONG_PASSWORD_3  = 13, // MAX_RETRY = 4
     SIGNATURE_INVALID = 14,
+    OP_AUTH_NEEDED    = 15, // Auth is needed for this operation before it can be used.
 };
 
 /*

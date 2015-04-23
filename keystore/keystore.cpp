@@ -2513,93 +2513,6 @@ public:
         result->resultCode = rc ? rc : ::NO_ERROR;
     }
 
-    /**
-     * Check that all keymaster_key_param_t's provided by the application are
-     * allowed. Any parameter that keystore adds itself should be disallowed here.
-     */
-    bool checkAllowedOperationParams(const std::vector<keymaster_key_param_t>& params) {
-        for (auto param: params) {
-            switch (param.tag) {
-                case KM_TAG_AUTH_TOKEN:
-                    return false;
-                default:
-                    break;
-            }
-        }
-        return true;
-    }
-
-    int authorizeOperation(const keymaster_key_characteristics_t& characteristics,
-                            keymaster_operation_handle_t handle,
-                            std::vector<keymaster_key_param_t>* params,
-                            bool failOnTokenMissing=true) {
-        if (!checkAllowedOperationParams(*params)) {
-            return KM_ERROR_INVALID_ARGUMENT;
-        }
-        std::vector<keymaster_key_param_t> allCharacteristics;
-        for (size_t i = 0; i < characteristics.sw_enforced.length; i++) {
-            allCharacteristics.push_back(characteristics.sw_enforced.params[i]);
-        }
-        for (size_t i = 0; i < characteristics.hw_enforced.length; i++) {
-            allCharacteristics.push_back(characteristics.hw_enforced.params[i]);
-        }
-        // Check for auth token and add it to the param list if present.
-        const hw_auth_token_t* authToken;
-        switch (mAuthTokenTable.FindAuthorization(allCharacteristics.data(),
-                                                  allCharacteristics.size(), handle, &authToken)) {
-        case keymaster::AuthTokenTable::OK:
-            // Auth token found.
-            params->push_back(keymaster_param_blob(KM_TAG_AUTH_TOKEN,
-                                                   reinterpret_cast<const uint8_t*>(authToken),
-                                                   sizeof(hw_auth_token_t)));
-            break;
-        case keymaster::AuthTokenTable::AUTH_NOT_REQUIRED:
-            return KM_ERROR_OK;
-        case keymaster::AuthTokenTable::AUTH_TOKEN_NOT_FOUND:
-        case keymaster::AuthTokenTable::OP_HANDLE_REQUIRED:
-        case keymaster::AuthTokenTable::AUTH_TOKEN_EXPIRED:
-            if (failOnTokenMissing) {
-                return KM_ERROR_KEY_USER_NOT_AUTHENTICATED;
-            }
-            break;
-        case keymaster::AuthTokenTable::AUTH_TOKEN_WRONG_SID:
-            return KM_ERROR_KEY_USER_NOT_AUTHENTICATED;
-        default:
-            return KM_ERROR_INVALID_ARGUMENT;
-        }
-        // TODO: Enforce the rest of authorization
-        return KM_ERROR_OK;
-    }
-
-    keymaster_error_t getOperationCharacteristics(const keymaster_key_blob_t& key,
-                                    const keymaster1_device_t* dev,
-                                    const std::vector<keymaster_key_param_t>& params,
-                                    keymaster_key_characteristics_t* out) {
-        UniquePtr<keymaster_blob_t> appId;
-        UniquePtr<keymaster_blob_t> appData;
-        for (auto param : params) {
-            if (param.tag == KM_TAG_APPLICATION_ID) {
-                appId.reset(new keymaster_blob_t);
-                appId->data = param.blob.data;
-                appId->data_length = param.blob.data_length;
-            } else if (param.tag == KM_TAG_APPLICATION_DATA) {
-                appData.reset(new keymaster_blob_t);
-                appData->data = param.blob.data;
-                appData->data_length = param.blob.data_length;
-            }
-        }
-        keymaster_key_characteristics_t* result = NULL;
-        if (!dev->get_key_characteristics) {
-            return KM_ERROR_UNIMPLEMENTED;
-        }
-        keymaster_error_t error = dev->get_key_characteristics(dev, &key, appId.get(),
-                                                               appData.get(), &result);
-        if (result) {
-            *out = *result;
-            free(result);
-        }
-        return error;
-    }
 
     void begin(const sp<IBinder>& appToken, const String16& name, keymaster_purpose_t purpose,
                bool pruneable, const KeymasterArguments& params, const uint8_t* entropy,
@@ -2612,6 +2525,10 @@ public:
         if (!pruneable && get_app_id(callingUid) != AID_SYSTEM) {
             ALOGE("Non-system uid %d trying to start non-pruneable operation", callingUid);
             result->resultCode = ::PERMISSION_DENIED;
+            return;
+        }
+        if (!checkAllowedOperationParams(params.params)) {
+            result->resultCode = KM_ERROR_INVALID_ARGUMENT;
             return;
         }
         Blob keyBlob;
@@ -2638,15 +2555,17 @@ public:
             result->resultCode = err;
             return;
         }
-        // Don't require an auth token for the call to begin, authentication can
-        // require an operation handle. Update and finish will require the token
-        // be present and valid.
-        int32_t authResult = authorizeOperation(*characteristics, 0, &opParams,
+        const hw_auth_token_t* authToken = NULL;
+        int32_t authResult = getAuthToken(characteristics.get(), 0, &authToken,
                                                 /*failOnTokenMissing*/ false);
-        if (authResult) {
-            result->resultCode = err;
+        // If per-operation auth is needed we need to begin the operation and
+        // the client will need to authorize that operation before calling
+        // update. Any other auth issues stop here.
+        if (authResult != ::NO_ERROR && authResult != ::OP_AUTH_NEEDED) {
+            result->resultCode = authResult;
             return;
         }
+        addAuthToParams(&opParams, authToken);
         // Add entropy to the device first.
         if (entropy) {
             if (dev->add_rng_entropy) {
@@ -2659,8 +2578,6 @@ public:
                 return;
             }
         }
-        // Don't do an auth check here, we need begin to succeed for
-        // per-operation auth. update/finish will be doing the auth checks.
         err = dev->begin(dev, purpose, &key, opParams.data(), opParams.size(), &out, &outSize,
                          &handle);
 
@@ -2672,8 +2589,7 @@ public:
             if (abort(oldest) != ::NO_ERROR) {
                 break;
             }
-            err = dev->begin(dev, purpose, &key, params.params.data(),
-                             params.params.size(), &out, &outSize,
+            err = dev->begin(dev, purpose, &key, opParams.data(), opParams.size(), &out, &outSize,
                              &handle);
         }
         if (err) {
@@ -2688,17 +2604,28 @@ public:
         sp<IBinder> operationToken = mOperationMap.addOperation(handle, dev, appToken,
                                                                 characteristics.release(),
                                                                 pruneable);
-        result->resultCode = ::NO_ERROR;
+        if (authToken) {
+            mOperationMap.setOperationAuthToken(operationToken, authToken);
+        }
+        // Return the authentication lookup result. If this is a per operation
+        // auth'd key then the resultCode will be ::OP_AUTH_NEEDED and the
+        // application should get an auth token using the handle before the
+        // first call to update, which will fail if keystore hasn't received the
+        // auth token.
+        result->resultCode = authResult;
         result->token = operationToken;
         result->handle = handle;
     }
 
     void update(const sp<IBinder>& token, const KeymasterArguments& params, const uint8_t* data,
                 size_t dataLength, OperationResult* result) {
+        if (!checkAllowedOperationParams(params.params)) {
+            result->resultCode = KM_ERROR_INVALID_ARGUMENT;
+            return;
+        }
         const keymaster1_device_t* dev;
         keymaster_operation_handle_t handle;
-        const keymaster_key_characteristics_t* characteristics;
-        if (!mOperationMap.getOperation(token, &handle, &dev, &characteristics)) {
+        if (!mOperationMap.getOperation(token, &handle, &dev, NULL)) {
             result->resultCode = KM_ERROR_INVALID_OPERATION_HANDLE;
             return;
         }
@@ -2706,8 +2633,8 @@ public:
         size_t output_length = 0;
         size_t consumed = 0;
         std::vector<keymaster_key_param_t> opParams(params.params);
-        int32_t authResult = authorizeOperation(*characteristics, handle, &opParams);
-        if (authResult) {
+        int32_t authResult = addOperationAuthTokenIfNeeded(token, &opParams);
+        if (authResult != ::NO_ERROR) {
             result->resultCode = authResult;
             return;
         }
@@ -2721,21 +2648,25 @@ public:
 
     void finish(const sp<IBinder>& token, const KeymasterArguments& params,
                 const uint8_t* signature, size_t signatureLength, OperationResult* result) {
+        if (!checkAllowedOperationParams(params.params)) {
+            result->resultCode = KM_ERROR_INVALID_ARGUMENT;
+            return;
+        }
         const keymaster1_device_t* dev;
         keymaster_operation_handle_t handle;
-        const keymaster_key_characteristics_t* characteristics;
-        if (!mOperationMap.getOperation(token, &handle, &dev, &characteristics)) {
+        if (!mOperationMap.getOperation(token, &handle, &dev, NULL)) {
             result->resultCode = KM_ERROR_INVALID_OPERATION_HANDLE;
             return;
         }
         uint8_t* output_buf = NULL;
         size_t output_length = 0;
         std::vector<keymaster_key_param_t> opParams(params.params);
-        int32_t authResult = authorizeOperation(*characteristics, handle, &opParams);
-        if (authResult) {
+        int32_t authResult = addOperationAuthTokenIfNeeded(token, &opParams);
+        if (authResult != ::NO_ERROR) {
             result->resultCode = authResult;
             return;
         }
+
         keymaster_error_t err = dev->finish(dev, handle, opParams.data(), opParams.size(),
                                             signature, signatureLength, &output_buf,
                                             &output_length);
@@ -2774,9 +2705,11 @@ public:
         if (!mOperationMap.getOperation(token, &handle, &dev, &characteristics)) {
             return false;
         }
+        const hw_auth_token_t* authToken = NULL;
+        mOperationMap.getOperationAuthToken(token, &authToken);
         std::vector<keymaster_key_param_t> ignored;
-        int32_t authResult = authorizeOperation(*characteristics, handle, &ignored);
-        return authResult == KM_ERROR_OK;
+        int32_t authResult = addOperationAuthTokenIfNeeded(token, &ignored);
+        return authResult == ::NO_ERROR;
     }
 
     int32_t addAuthToken(const uint8_t* token, size_t length) {
@@ -2901,6 +2834,137 @@ private:
         } else {
             return keyType == TYPE_RSA;
         }
+    }
+
+    /**
+     * Check that all keymaster_key_param_t's provided by the application are
+     * allowed. Any parameter that keystore adds itself should be disallowed here.
+     */
+    bool checkAllowedOperationParams(const std::vector<keymaster_key_param_t>& params) {
+        for (auto param: params) {
+            switch (param.tag) {
+                case KM_TAG_AUTH_TOKEN:
+                    return false;
+                default:
+                    break;
+            }
+        }
+        return true;
+    }
+
+    keymaster_error_t getOperationCharacteristics(const keymaster_key_blob_t& key,
+                                    const keymaster1_device_t* dev,
+                                    const std::vector<keymaster_key_param_t>& params,
+                                    keymaster_key_characteristics_t* out) {
+        UniquePtr<keymaster_blob_t> appId;
+        UniquePtr<keymaster_blob_t> appData;
+        for (auto param : params) {
+            if (param.tag == KM_TAG_APPLICATION_ID) {
+                appId.reset(new keymaster_blob_t);
+                appId->data = param.blob.data;
+                appId->data_length = param.blob.data_length;
+            } else if (param.tag == KM_TAG_APPLICATION_DATA) {
+                appData.reset(new keymaster_blob_t);
+                appData->data = param.blob.data;
+                appData->data_length = param.blob.data_length;
+            }
+        }
+        keymaster_key_characteristics_t* result = NULL;
+        if (!dev->get_key_characteristics) {
+            return KM_ERROR_UNIMPLEMENTED;
+        }
+        keymaster_error_t error = dev->get_key_characteristics(dev, &key, appId.get(),
+                                                               appData.get(), &result);
+        if (result) {
+            *out = *result;
+            free(result);
+        }
+        return error;
+    }
+
+    /**
+     * Get the auth token for this operation from the auth token table.
+     *
+     * Returns ::NO_ERROR if the auth token was set or none was required.
+     *         ::OP_AUTH_NEEDED if it is a per op authorization, no
+     *         authorization token exists for that operation and
+     *         failOnTokenMissing is false.
+     *         KM_ERROR_KEY_USER_NOT_AUTHENTICATED if there is no valid auth
+     *         token for the operation
+     */
+    int32_t getAuthToken(const keymaster_key_characteristics_t* characteristics,
+                         keymaster_operation_handle_t handle,
+                         const hw_auth_token_t** authToken,
+                         bool failOnTokenMissing = true) {
+
+        std::vector<keymaster_key_param_t> allCharacteristics;
+        for (size_t i = 0; i < characteristics->sw_enforced.length; i++) {
+            allCharacteristics.push_back(characteristics->sw_enforced.params[i]);
+        }
+        for (size_t i = 0; i < characteristics->hw_enforced.length; i++) {
+            allCharacteristics.push_back(characteristics->hw_enforced.params[i]);
+        }
+        keymaster::AuthTokenTable::Error err =
+                mAuthTokenTable.FindAuthorization(allCharacteristics.data(),
+                                                  allCharacteristics.size(), handle, authToken);
+        switch (err) {
+            case keymaster::AuthTokenTable::OK:
+            case keymaster::AuthTokenTable::AUTH_NOT_REQUIRED:
+                return ::NO_ERROR;
+            case keymaster::AuthTokenTable::AUTH_TOKEN_NOT_FOUND:
+            case keymaster::AuthTokenTable::AUTH_TOKEN_EXPIRED:
+            case keymaster::AuthTokenTable::AUTH_TOKEN_WRONG_SID:
+                return KM_ERROR_KEY_USER_NOT_AUTHENTICATED;
+            case keymaster::AuthTokenTable::OP_HANDLE_REQUIRED:
+                return failOnTokenMissing ? (int32_t) KM_ERROR_KEY_USER_NOT_AUTHENTICATED :
+                        (int32_t) ::OP_AUTH_NEEDED;
+            default:
+                ALOGE("Unexpected FindAuthorization return value %d", err);
+                return KM_ERROR_INVALID_ARGUMENT;
+        }
+    }
+
+    inline void addAuthToParams(std::vector<keymaster_key_param_t>* params,
+                                const hw_auth_token_t* token) {
+        if (token) {
+            params->push_back(keymaster_param_blob(KM_TAG_AUTH_TOKEN,
+                                                   reinterpret_cast<const uint8_t*>(token),
+                                                   sizeof(hw_auth_token_t)));
+        }
+    }
+
+    /**
+     * Add the auth token for the operation to the param list if the operation
+     * requires authorization. Uses the cached result in the OperationMap if available
+     * otherwise gets the token from the AuthTokenTable and caches the result.
+     *
+     * Returns ::NO_ERROR if the auth token was added or not needed.
+     *         KM_ERROR_KEY_USER_NOT_AUTHENTICATED if the operation is not
+     *         authenticated.
+     *         KM_ERROR_INVALID_OPERATION_HANDLE if token is not a valid
+     *         operation token.
+     */
+    int32_t addOperationAuthTokenIfNeeded(sp<IBinder> token,
+                                          std::vector<keymaster_key_param_t>* params) {
+        const hw_auth_token_t* authToken = NULL;
+        bool authTokenNeeded = !mOperationMap.getOperationAuthToken(token, &authToken);
+        if (authTokenNeeded) {
+            const keymaster1_device_t* dev;
+            keymaster_operation_handle_t handle;
+            const keymaster_key_characteristics_t* characteristics = NULL;
+            if (!mOperationMap.getOperation(token, &handle, &dev, &characteristics)) {
+                return KM_ERROR_INVALID_OPERATION_HANDLE;
+            }
+            int32_t result = getAuthToken(characteristics, handle, &authToken);
+            if (result != ::NO_ERROR) {
+                return result;
+            }
+            if (authToken) {
+                mOperationMap.setOperationAuthToken(token, authToken);
+            }
+        }
+        addAuthToParams(params, authToken);
+        return ::NO_ERROR;
     }
 
     ::KeyStore* mKeyStore;
