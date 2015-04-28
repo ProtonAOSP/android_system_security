@@ -110,6 +110,29 @@ sp<IBinder> OperationMap::getOldestPruneableOperation() {
     return mLru[0];
 }
 
+bool OperationMap::getOperationAuthToken(sp<IBinder> token, const hw_auth_token_t** outToken) {
+    auto entry = mMap.find(token);
+    if (entry == mMap.end()) {
+        return false;
+    }
+    if (entry->second.authToken.get() != NULL) {
+        *outToken = *entry->second.authToken;
+    } else {
+        *outToken = NULL;
+    }
+    return true;
+}
+
+bool OperationMap::setOperationAuthToken(sp<IBinder> token, const hw_auth_token_t* authToken) {
+    auto entry = mMap.find(token);
+    if (entry == mMap.end()) {
+        return false;
+    }
+    entry->second.authToken.reset(new const hw_auth_token_t*);
+    *entry->second.authToken = authToken;
+    return true;
+}
+
 std::vector<sp<IBinder>> OperationMap::getOperationsForToken(sp<IBinder> appToken) {
     auto appEntry = mAppTokenMap.find(appToken);
     if (appEntry != mAppTokenMap.end()) {
