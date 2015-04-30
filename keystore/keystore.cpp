@@ -2947,8 +2947,8 @@ private:
     int32_t addOperationAuthTokenIfNeeded(sp<IBinder> token,
                                           std::vector<keymaster_key_param_t>* params) {
         const hw_auth_token_t* authToken = NULL;
-        bool authTokenNeeded = !mOperationMap.getOperationAuthToken(token, &authToken);
-        if (authTokenNeeded) {
+        mOperationMap.getOperationAuthToken(token, &authToken);
+        if (!authToken) {
             const keymaster1_device_t* dev;
             keymaster_operation_handle_t handle;
             const keymaster_key_characteristics_t* characteristics = NULL;
