@@ -132,8 +132,8 @@ out:
 static int fallback_keymaster_device_initialize(keymaster1_device_t** dev) {
     keymaster::SoftKeymasterDevice* softkeymaster =
             new keymaster::SoftKeymasterDevice();
-    // SoftKeymasterDevice is designed to make this cast safe.
-    *dev = reinterpret_cast<keymaster1_device_t*>(softkeymaster);
+    *dev = softkeymaster->keymaster_device();
+    // softkeymaster will be freed by *dev->close_device; don't delete here.
     return 0;
 }
 
