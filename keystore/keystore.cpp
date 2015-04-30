@@ -43,8 +43,9 @@
 
 #include <hardware/keymaster0.h>
 
-#include <keymaster/softkeymaster.h>
 #include <keymaster/soft_keymaster_device.h>
+#include <keymaster/soft_keymaster_logger.h>
+#include <keymaster/softkeymaster.h>
 
 #include <UniquePtr.h>
 #include <utils/String8.h>
@@ -128,6 +129,10 @@ out:
     *dev = NULL;
     return rc;
 }
+
+// softkeymaster_logger appears not to be used in keystore, but it installs itself as the
+// logger used by SoftKeymasterDevice.
+static keymaster::SoftKeymasterLogger softkeymaster_logger;
 
 static int fallback_keymaster_device_initialize(keymaster1_device_t** dev) {
     keymaster::SoftKeymasterDevice* softkeymaster =
