@@ -2230,7 +2230,7 @@ public:
 
     int32_t clear_uid(int64_t targetUid64) {
         uid_t targetUid = getEffectiveUid(targetUid64);
-        if (!checkBinderPermission(P_CLEAR_UID, targetUid)) {
+        if (!checkBinderPermissionSelfOrSystem(P_CLEAR_UID, targetUid)) {
             return ::PERMISSION_DENIED;
         }
 
@@ -2250,7 +2250,7 @@ public:
 
     int32_t reset_uid(int32_t targetUid) {
         targetUid = getEffectiveUid(targetUid);
-        if (!checkBinderPermission(P_RESET_UID, targetUid)) {
+        if (!checkBinderPermissionSelfOrSystem(P_RESET_UID, targetUid)) {
             return ::PERMISSION_DENIED;
         }
         // Flush the auth token table to prevent stale tokens from sticking
@@ -2763,6 +2763,20 @@ private:
             return false;
         }
         return true;
+    }
+
+    /**
+     * Check if the caller of the current binder method has the required
+     * permission and the target uid is the caller or the caller is system.
+     */
+    inline bool checkBinderPermissionSelfOrSystem(perm_t permission, int32_t targetUid) {
+        uid_t callingUid = IPCThreadState::self()->getCallingUid();
+        pid_t spid = IPCThreadState::self()->getCallingPid();
+        if (!has_permission(callingUid, permission, spid)) {
+            ALOGW("permission %s denied for %d", get_perm_label(permission), callingUid);
+            return false;
+        }
+        return getEffectiveUid(targetUid) == callingUid || callingUid == AID_SYSTEM;
     }
 
     /**
