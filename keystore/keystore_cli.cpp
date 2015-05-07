@@ -200,11 +200,11 @@ int main(int argc, char* argv[])
 
     NO_ARG_INT_RETURN(reset);
 
-    SINGLE_ARG_INT_RETURN(password);
+    // TODO: notifyUserPasswordChanged
 
     NO_ARG_INT_RETURN(lock);
 
-    SINGLE_ARG_INT_RETURN(unlock);
+    // TODO: unlock
 
     NO_ARG_INT_RETURN(zero);
 

@@ -105,7 +105,7 @@ public:
         EXIST = IBinder::FIRST_CALL_TRANSACTION + 4,
         SAW = IBinder::FIRST_CALL_TRANSACTION + 5,
         RESET = IBinder::FIRST_CALL_TRANSACTION + 6,
-        PASSWORD = IBinder::FIRST_CALL_TRANSACTION + 7,
+        ON_USER_PASSWORD_CHANGED = IBinder::FIRST_CALL_TRANSACTION + 7,
         LOCK = IBinder::FIRST_CALL_TRANSACTION + 8,
         UNLOCK = IBinder::FIRST_CALL_TRANSACTION + 9,
         ZERO = IBinder::FIRST_CALL_TRANSACTION + 10,
@@ -154,11 +154,11 @@ public:
 
     virtual int32_t reset() = 0;
 
-    virtual int32_t password(const String16& password) = 0;
+    virtual int32_t onUserPasswordChanged(int32_t userId, const String16& newPassword) = 0;
 
     virtual int32_t lock() = 0;
 
-    virtual int32_t unlock(const String16& password) = 0;
+    virtual int32_t unlock(int32_t userId, const String16& password) = 0;
 
     virtual int32_t zero() = 0;
 
