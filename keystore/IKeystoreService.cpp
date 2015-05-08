@@ -555,20 +555,22 @@ public:
         return ret;
     }
 
-    virtual int32_t password(const String16& password)
+    virtual int32_t onUserPasswordChanged(int32_t userId, const String16& password)
     {
         Parcel data, reply;
         data.writeInterfaceToken(IKeystoreService::getInterfaceDescriptor());
+        data.writeInt32(userId);
         data.writeString16(password);
-        status_t status = remote()->transact(BnKeystoreService::PASSWORD, data, &reply);
+        status_t status = remote()->transact(BnKeystoreService::ON_USER_PASSWORD_CHANGED, data,
+                                             &reply);
         if (status != NO_ERROR) {
-            ALOGD("password() could not contact remote: %d\n", status);
+            ALOGD("onUserPasswordChanged() could not contact remote: %d\n", status);
             return -1;
         }
         int32_t err = reply.readExceptionCode();
         int32_t ret = reply.readInt32();
         if (err < 0) {
-            ALOGD("password() caught exception %d\n", err);
+            ALOGD("onUserPasswordChanged() caught exception %d\n", err);
             return -1;
         }
         return ret;
@@ -592,10 +594,11 @@ public:
         return ret;
     }
 
-    virtual int32_t unlock(const String16& password)
+    virtual int32_t unlock(int32_t userId, const String16& password)
     {
         Parcel data, reply;
         data.writeInterfaceToken(IKeystoreService::getInterfaceDescriptor());
+        data.writeInt32(userId);
         data.writeString16(password);
         status_t status = remote()->transact(BnKeystoreService::UNLOCK, data, &reply);
         if (status != NO_ERROR) {
@@ -1380,10 +1383,11 @@ status_t BnKeystoreService::onTransact(
             reply->writeInt32(ret);
             return NO_ERROR;
         } break;
-        case PASSWORD: {
+        case ON_USER_PASSWORD_CHANGED: {
             CHECK_INTERFACE(IKeystoreService, data, reply);
+            int32_t userId = data.readInt32();
             String16 pass = data.readString16();
-            int32_t ret = password(pass);
+            int32_t ret = onUserPasswordChanged(userId, pass);
             reply->writeNoException();
             reply->writeInt32(ret);
             return NO_ERROR;
@@ -1397,8 +1401,9 @@ status_t BnKeystoreService::onTransact(
         } break;
         case UNLOCK: {
             CHECK_INTERFACE(IKeystoreService, data, reply);
+            int32_t userId = data.readInt32();
             String16 pass = data.readString16();
-            int32_t ret = unlock(pass);
+            int32_t ret = unlock(userId, pass);
             reply->writeNoException();
             reply->writeInt32(ret);
             return NO_ERROR;
