@@ -249,6 +249,10 @@ static uid_t get_user_id(uid_t uid) {
     return uid / AID_USER;
 }
 
+static uid_t get_uid(uid_t userId, uid_t appId) {
+    return userId * AID_USER + get_app_id(appId);
+}
+
 static bool keystore_selinux_check_access(uid_t /*uid*/, perm_t perm, pid_t spid) {
     if (!ks_is_selinux_enabled) {
         return true;
@@ -768,6 +772,12 @@ public:
         memset(&mMasterKeyDecryption, 0, sizeof(mMasterKeyDecryption));
     }
 
+    bool deleteMasterKey() {
+        setState(STATE_UNINITIALIZED);
+        zeroizeMasterKeysInMemory();
+        return unlink(mMasterKeyFile) == 0 || errno == ENOENT;
+    }
+
     ResponseCode initialize(const android::String8& pw, Entropy* entropy) {
         if (!generateMasterKey(entropy)) {
             return SYSTEM_ERROR;
@@ -870,19 +880,18 @@ public:
     bool reset() {
         DIR* dir = opendir(getUserDirName());
         if (!dir) {
+            // If the directory doesn't exist then nothing to do.
+            if (errno == ENOENT) {
+                return true;
+            }
             ALOGW("couldn't open user directory: %s", strerror(errno));
             return false;
         }
 
         struct dirent* file;
         while ((file = readdir(dir)) != NULL) {
-            // We only care about files.
-            if (file->d_type != DT_REG) {
-                continue;
-            }
-
-            // Skip anything that starts with a "."
-            if (file->d_name[0] == '.' && strcmp(".masterkey", file->d_name)) {
+            // skip . and ..
+            if (!strcmp(".", file->d_name) || !strcmp("..", file->d_name)) {
                 continue;
             }
 
@@ -1050,29 +1059,53 @@ public:
                 encoded);
     }
 
-    bool reset(uid_t uid) {
+    /*
+     * Delete entries owned by userId. If keepUnencryptedEntries is true
+     * then only encrypted entries will be removed, otherwise all entries will
+     * be removed.
+     */
+    void resetUser(uid_t userId, bool keepUnenryptedEntries) {
         android::String8 prefix("");
         android::Vector<android::String16> aliases;
-        if (saw(prefix, &aliases, uid) != ::NO_ERROR) {
-            return ::SYSTEM_ERROR;
-        }
-
+        uid_t uid = get_uid(userId, AID_SYSTEM);
         UserState* userState = getUserState(uid);
+        if (saw(prefix, &aliases, uid) != ::NO_ERROR) {
+            return;
+        }
         for (uint32_t i = 0; i < aliases.size(); i++) {
             android::String8 filename(aliases[i]);
             filename = android::String8::format("%s/%s", userState->getUserDirName(),
-                    getKeyName(filename).string());
-            del(filename, ::TYPE_ANY, uid);
-        }
+                                                getKeyName(filename).string());
+            bool shouldDelete = true;
+            if (keepUnenryptedEntries) {
+                Blob blob;
+                ResponseCode rc = get(filename, &blob, ::TYPE_ANY, uid);
 
-        userState->zeroizeMasterKeysInMemory();
-        userState->setState(STATE_UNINITIALIZED);
-        return userState->reset();
+                /* get can fail if the blob is encrypted and the state is
+                 * not unlocked, only skip deleting blobs that were loaded and
+                 * who are not encrypted. If there are blobs we fail to read for
+                 * other reasons err on the safe side and delete them since we
+                 * can't tell if they're encrypted.
+                 */
+                shouldDelete = !(rc == ::NO_ERROR && !blob.isEncrypted());
+            }
+            if (shouldDelete) {
+                del(filename, ::TYPE_ANY, uid);
+            }
+        }
+        if (!userState->deleteMasterKey()) {
+            ALOGE("Failed to delete user %d's master key", userId);
+        }
+        if (!keepUnenryptedEntries) {
+            if(!userState->reset()) {
+                ALOGE("Failed to remove user %d's directory", userId);
+            }
+        }
     }
 
     bool isEmpty(uid_t uid) const {
         const UserState* userState = getUserState(uid);
-        if (userState == NULL || userState->getState() == STATE_UNINITIALIZED) {
+        if (userState == NULL) {
             return true;
         }
 
@@ -1729,39 +1762,46 @@ public:
         }
 
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        return mKeyStore->reset(callingUid) ? ::NO_ERROR : ::SYSTEM_ERROR;
+        mKeyStore->resetUser(get_user_id(callingUid), false);
+        return ::NO_ERROR;
     }
 
-    /*
-     * Here is the history. To improve the security, the parameters to generate the
-     * master key has been changed. To make a seamless transition, we update the
-     * file using the same password when the user unlock it for the first time. If
-     * any thing goes wrong during the transition, the new file will not overwrite
-     * the old one. This avoids permanent damages of the existing data.
-     */
-    int32_t password(const String16& password) {
+    int32_t onUserPasswordChanged(int32_t userId, const String16& password) {
         if (!checkBinderPermission(P_PASSWORD)) {
             return ::PERMISSION_DENIED;
         }
 
         const String8 password8(password);
-        uid_t callingUid = IPCThreadState::self()->getCallingUid();
+        uid_t uid = get_uid(userId, AID_SYSTEM);
 
-        switch (mKeyStore->getState(callingUid)) {
-            case ::STATE_UNINITIALIZED: {
-                // generate master key, encrypt with password, write to file, initialize mMasterKey*.
-                return mKeyStore->initializeUser(password8, callingUid);
+        // Flush the auth token table to prevent stale tokens from sticking
+        // around.
+        mAuthTokenTable.Clear();
+
+        if (password.size() == 0) {
+            ALOGI("Secure lockscreen for user %d removed, deleting encrypted entries", userId);
+            mKeyStore->resetUser(static_cast<uid_t>(userId), true);
+            return ::NO_ERROR;
+        } else {
+            switch (mKeyStore->getState(uid)) {
+                case ::STATE_UNINITIALIZED: {
+                    // generate master key, encrypt with password, write to file,
+                    // initialize mMasterKey*.
+                    return mKeyStore->initializeUser(password8, uid);
+                }
+                case ::STATE_NO_ERROR: {
+                    // rewrite master key with new password.
+                    return mKeyStore->writeMasterKey(password8, uid);
+                }
+                case ::STATE_LOCKED: {
+                    ALOGE("Changing user %d's password while locked, clearing old encryption",
+                          userId);
+                    mKeyStore->resetUser(static_cast<uid_t>(userId), true);
+                    return mKeyStore->initializeUser(password8, uid);
+                }
             }
-            case ::STATE_NO_ERROR: {
-                // rewrite master key with new password.
-                return mKeyStore->writeMasterKey(password8, callingUid);
-            }
-            case ::STATE_LOCKED: {
-                // read master key, decrypt with password, initialize mMasterKey*.
-                return mKeyStore->readMasterKey(password8, callingUid);
-            }
+            return ::SYSTEM_ERROR;
         }
-        return ::SYSTEM_ERROR;
     }
 
     int32_t lock() {
@@ -1780,20 +1820,21 @@ public:
         return ::NO_ERROR;
     }
 
-    int32_t unlock(const String16& pw) {
+    int32_t unlock(int32_t userId, const String16& pw) {
         if (!checkBinderPermission(P_UNLOCK)) {
             return ::PERMISSION_DENIED;
         }
 
-        uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        State state = mKeyStore->getState(callingUid);
+        uid_t uid = get_uid(userId, AID_SYSTEM);
+        State state = mKeyStore->getState(uid);
         if (state != ::STATE_LOCKED) {
-            ALOGD("calling unlock when not locked");
+            ALOGI("calling unlock when not locked, ignoring.");
             return state;
         }
 
         const String8 password8(pw);
-        return password(pw);
+        // read master key, decrypt with password, initialize mMasterKey*.
+        return mKeyStore->readMasterKey(password8, uid);
     }
 
     int32_t zero() {
@@ -2246,15 +2287,9 @@ public:
     }
 
     int32_t reset_uid(int32_t targetUid) {
+        // TODO: Remove this method from the binder interface
         targetUid = getEffectiveUid(targetUid);
-        if (!checkBinderPermissionSelfOrSystem(P_RESET_UID, targetUid)) {
-            return ::PERMISSION_DENIED;
-        }
-        // Flush the auth token table to prevent stale tokens from sticking
-        // around.
-        mAuthTokenTable.Clear();
-
-        return mKeyStore->reset(targetUid) ? ::NO_ERROR : ::SYSTEM_ERROR;
+        return onUserPasswordChanged(get_user_id(targetUid), String16(""));
     }
 
     int32_t sync_uid(int32_t sourceUid, int32_t targetUid) {
