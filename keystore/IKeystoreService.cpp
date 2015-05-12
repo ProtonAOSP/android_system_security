@@ -397,19 +397,20 @@ public:
     }
 
     // test ping
-    virtual int32_t test()
+    virtual int32_t getState(int32_t userId)
     {
         Parcel data, reply;
         data.writeInterfaceToken(IKeystoreService::getInterfaceDescriptor());
-        status_t status = remote()->transact(BnKeystoreService::TEST, data, &reply);
+        data.writeInt32(userId);
+        status_t status = remote()->transact(BnKeystoreService::GET_STATE, data, &reply);
         if (status != NO_ERROR) {
-            ALOGD("test() could not contact remote: %d\n", status);
+            ALOGD("getState() could not contact remote: %d\n", status);
             return -1;
         }
         int32_t err = reply.readExceptionCode();
         int32_t ret = reply.readInt32();
         if (err < 0) {
-            ALOGD("test() caught exception %d\n", err);
+            ALOGD("getState() caught exception %d\n", err);
             return -1;
         }
         return ret;
@@ -513,15 +514,15 @@ public:
         return ret;
     }
 
-    virtual int32_t saw(const String16& name, int uid, Vector<String16>* matches)
+    virtual int32_t list(const String16& prefix, int uid, Vector<String16>* matches)
     {
         Parcel data, reply;
         data.writeInterfaceToken(IKeystoreService::getInterfaceDescriptor());
-        data.writeString16(name);
+        data.writeString16(prefix);
         data.writeInt32(uid);
-        status_t status = remote()->transact(BnKeystoreService::SAW, data, &reply);
+        status_t status = remote()->transact(BnKeystoreService::LIST, data, &reply);
         if (status != NO_ERROR) {
-            ALOGD("saw() could not contact remote: %d\n", status);
+            ALOGD("list() could not contact remote: %d\n", status);
             return -1;
         }
         int32_t err = reply.readExceptionCode();
@@ -531,7 +532,7 @@ public:
         }
         int32_t ret = reply.readInt32();
         if (err < 0) {
-            ALOGD("saw() caught exception %d\n", err);
+            ALOGD("list() caught exception %d\n", err);
             return -1;
         }
         return ret;
@@ -576,10 +577,11 @@ public:
         return ret;
     }
 
-    virtual int32_t lock()
+    virtual int32_t lock(int32_t userId)
     {
         Parcel data, reply;
         data.writeInterfaceToken(IKeystoreService::getInterfaceDescriptor());
+        data.writeInt32(userId);
         status_t status = remote()->transact(BnKeystoreService::LOCK, data, &reply);
         if (status != NO_ERROR) {
             ALOGD("lock() could not contact remote: %d\n", status);
@@ -614,22 +616,23 @@ public:
         return ret;
     }
 
-    virtual int32_t zero()
+    virtual bool isEmpty(int32_t userId)
     {
         Parcel data, reply;
         data.writeInterfaceToken(IKeystoreService::getInterfaceDescriptor());
-        status_t status = remote()->transact(BnKeystoreService::ZERO, data, &reply);
+        data.writeInt32(userId);
+        status_t status = remote()->transact(BnKeystoreService::IS_EMPTY, data, &reply);
         if (status != NO_ERROR) {
-            ALOGD("zero() could not contact remote: %d\n", status);
-            return -1;
+            ALOGD("isEmpty() could not contact remote: %d\n", status);
+            return false;
         }
         int32_t err = reply.readExceptionCode();
         int32_t ret = reply.readInt32();
         if (err < 0) {
-            ALOGD("zero() caught exception %d\n", err);
-            return -1;
+            ALOGD("isEmpty() caught exception %d\n", err);
+            return false;
         }
-        return ret;
+        return ret != 0;
     }
 
     virtual int32_t generate(const String16& name, int32_t uid, int32_t keyType, int32_t keySize,
@@ -788,26 +791,6 @@ public:
         return 0;
      }
 
-    virtual int32_t del_key(const String16& name, int uid)
-    {
-        Parcel data, reply;
-        data.writeInterfaceToken(IKeystoreService::getInterfaceDescriptor());
-        data.writeString16(name);
-        data.writeInt32(uid);
-        status_t status = remote()->transact(BnKeystoreService::DEL_KEY, data, &reply);
-        if (status != NO_ERROR) {
-            ALOGD("del_key() could not contact remote: %d\n", status);
-            return -1;
-        }
-        int32_t err = reply.readExceptionCode();
-        int32_t ret = reply.readInt32();
-        if (err < 0) {
-            ALOGD("del_key() caught exception %d\n", err);
-            return -1;
-        }
-        return ret;
-    }
-
     virtual int32_t grant(const String16& name, int32_t granteeUid)
     {
         Parcel data, reply;
@@ -928,64 +911,6 @@ public:
         return ret;
     }
 
-    virtual int32_t reset_uid(int32_t uid) {
-        Parcel data, reply;
-        data.writeInterfaceToken(IKeystoreService::getInterfaceDescriptor());
-        data.writeInt32(uid);
-        status_t status = remote()->transact(BnKeystoreService::RESET_UID, data, &reply);
-        if (status != NO_ERROR) {
-            ALOGD("reset_uid() could not contact remote: %d\n", status);
-            return -1;
-        }
-        int32_t err = reply.readExceptionCode();
-        int32_t ret = reply.readInt32();
-        if (err < 0) {
-            ALOGD("reset_uid() caught exception %d\n", err);
-            return -1;
-        }
-        return ret;
-
-    }
-
-    virtual int32_t sync_uid(int32_t sourceUid, int32_t targetUid)
-    {
-        Parcel data, reply;
-        data.writeInterfaceToken(IKeystoreService::getInterfaceDescriptor());
-        data.writeInt32(sourceUid);
-        data.writeInt32(targetUid);
-        status_t status = remote()->transact(BnKeystoreService::SYNC_UID, data, &reply);
-        if (status != NO_ERROR) {
-            ALOGD("sync_uid() could not contact remote: %d\n", status);
-            return -1;
-        }
-        int32_t err = reply.readExceptionCode();
-        int32_t ret = reply.readInt32();
-        if (err < 0) {
-            ALOGD("sync_uid() caught exception %d\n", err);
-            return -1;
-        }
-        return ret;
-    }
-
-    virtual int32_t password_uid(const String16& password, int32_t uid)
-    {
-        Parcel data, reply;
-        data.writeInterfaceToken(IKeystoreService::getInterfaceDescriptor());
-        data.writeString16(password);
-        data.writeInt32(uid);
-        status_t status = remote()->transact(BnKeystoreService::PASSWORD_UID, data, &reply);
-        if (status != NO_ERROR) {
-            ALOGD("password_uid() could not contact remote: %d\n", status);
-            return -1;
-        }
-        int32_t err = reply.readExceptionCode();
-        int32_t ret = reply.readInt32();
-        if (err < 0) {
-            ALOGD("password_uid() caught exception %d\n", err);
-            return -1;
-        }
-        return ret;
-    }
     virtual int32_t addRngEntropy(const uint8_t* buf, size_t bufLength)
     {
         Parcel data, reply;
@@ -1341,9 +1266,10 @@ status_t BnKeystoreService::onTransact(
     uint32_t code, const Parcel& data, Parcel* reply, uint32_t flags)
 {
     switch(code) {
-        case TEST: {
+        case GET_STATE: {
             CHECK_INTERFACE(IKeystoreService, data, reply);
-            int32_t ret = test();
+            int32_t userId = data.readInt32();
+            int32_t ret = getState(userId);
             reply->writeNoException();
             reply->writeInt32(ret);
             return NO_ERROR;
@@ -1401,12 +1327,12 @@ status_t BnKeystoreService::onTransact(
             reply->writeInt32(ret);
             return NO_ERROR;
         } break;
-        case SAW: {
+        case LIST: {
             CHECK_INTERFACE(IKeystoreService, data, reply);
-            String16 name = data.readString16();
+            String16 prefix = data.readString16();
             int uid = data.readInt32();
             Vector<String16> matches;
-            int32_t ret = saw(name, uid, &matches);
+            int32_t ret = list(prefix, uid, &matches);
             reply->writeNoException();
             reply->writeInt32(matches.size());
             Vector<String16>::const_iterator it = matches.begin();
@@ -1434,7 +1360,8 @@ status_t BnKeystoreService::onTransact(
         } break;
         case LOCK: {
             CHECK_INTERFACE(IKeystoreService, data, reply);
-            int32_t ret = lock();
+            int32_t userId = data.readInt32();
+            int32_t ret = lock(userId);
             reply->writeNoException();
             reply->writeInt32(ret);
             return NO_ERROR;
@@ -1448,11 +1375,12 @@ status_t BnKeystoreService::onTransact(
             reply->writeInt32(ret);
             return NO_ERROR;
         } break;
-        case ZERO: {
+        case IS_EMPTY: {
             CHECK_INTERFACE(IKeystoreService, data, reply);
-            int32_t ret = zero();
+            int32_t userId = data.readInt32();
+            bool ret = isEmpty(userId);
             reply->writeNoException();
-            reply->writeInt32(ret);
+            reply->writeInt32(ret ? 1 : 0);
             return NO_ERROR;
         } break;
         case GENERATE: {
@@ -1574,15 +1502,6 @@ status_t BnKeystoreService::onTransact(
             reply->writeInt32(ret);
             return NO_ERROR;
         } break;
-        case DEL_KEY: {
-            CHECK_INTERFACE(IKeystoreService, data, reply);
-            String16 name = data.readString16();
-            int uid = data.readInt32();
-            int32_t ret = del_key(name, uid);
-            reply->writeNoException();
-            reply->writeInt32(ret);
-            return NO_ERROR;
-        } break;
         case GRANT: {
             CHECK_INTERFACE(IKeystoreService, data, reply);
             String16 name = data.readString16();
@@ -1632,32 +1551,6 @@ status_t BnKeystoreService::onTransact(
             CHECK_INTERFACE(IKeystoreService, data, reply);
             int64_t uid = data.readInt64();
             int32_t ret = clear_uid(uid);
-            reply->writeNoException();
-            reply->writeInt32(ret);
-            return NO_ERROR;
-        }
-        case RESET_UID: {
-            CHECK_INTERFACE(IKeystoreService, data, reply);
-            int32_t uid = data.readInt32();
-            int32_t ret = reset_uid(uid);
-            reply->writeNoException();
-            reply->writeInt32(ret);
-            return NO_ERROR;
-        }
-        case SYNC_UID: {
-            CHECK_INTERFACE(IKeystoreService, data, reply);
-            int32_t sourceUid = data.readInt32();
-            int32_t targetUid = data.readInt32();
-            int32_t ret = sync_uid(sourceUid, targetUid);
-            reply->writeNoException();
-            reply->writeInt32(ret);
-            return NO_ERROR;
-        }
-        case PASSWORD_UID: {
-            CHECK_INTERFACE(IKeystoreService, data, reply);
-            String16 password = data.readString16();
-            int32_t uid = data.readInt32();
-            int32_t ret = password_uid(password, uid);
             reply->writeNoException();
             reply->writeInt32(ret);
             return NO_ERROR;
