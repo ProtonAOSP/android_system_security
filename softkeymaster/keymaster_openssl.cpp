@@ -752,7 +752,8 @@ __attribute__((visibility("default"))) int openssl_open(const hw_module_t* modul
     dev->common.module = (struct hw_module_t*)module;
     dev->common.close = openssl_close;
 
-    dev->flags = KEYMASTER_SOFTWARE_ONLY;
+    dev->flags = KEYMASTER_SOFTWARE_ONLY | KEYMASTER_BLOBS_ARE_STANDALONE | KEYMASTER_SUPPORTS_DSA |
+                 KEYMASTER_SUPPORTS_EC;
 
     dev->generate_keypair = openssl_generate_keypair;
     dev->import_keypair = openssl_import_keypair;
