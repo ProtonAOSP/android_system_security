@@ -172,6 +172,7 @@ typedef enum {
     P_SYNC_UID      = 1 << 17,
     P_PASSWORD_UID  = 1 << 18,
     P_ADD_AUTH      = 1 << 19,
+    P_USER_CHANGED  = 1 << 20,
 } perm_t;
 
 static struct user_euid {
@@ -205,6 +206,7 @@ const char *perm_labels[] = {
     "sync_uid",
     "password_uid",
     "add_auth",
+    "user_changed",
 };
 
 static struct user_perm {
@@ -1808,6 +1810,36 @@ public:
             }
             return ::SYSTEM_ERROR;
         }
+    }
+
+    int32_t onUserAdded(int32_t userId, int32_t parentId) {
+        if (!checkBinderPermission(P_USER_CHANGED)) {
+            return ::PERMISSION_DENIED;
+        }
+
+        // Sanity check that the new user has an empty keystore.
+        if (!mKeyStore->isEmpty(userId)) {
+            ALOGW("New user %d's keystore not empty. Clearing old entries.");
+        }
+        // Unconditionally clear the keystore, just to be safe.
+        mKeyStore->resetUser(userId, false);
+
+        // If the user has a parent user then use the parent's
+        // masterkey/password, otherwise there's nothing to do.
+        if (parentId != -1) {
+            return mKeyStore->copyMasterKey(parentId, userId);
+        } else {
+            return ::NO_ERROR;
+        }
+    }
+
+    int32_t onUserRemoved(int32_t userId) {
+        if (!checkBinderPermission(P_USER_CHANGED)) {
+            return ::PERMISSION_DENIED;
+        }
+
+        mKeyStore->resetUser(userId, false);
+        return ::NO_ERROR;
     }
 
     int32_t lock() {

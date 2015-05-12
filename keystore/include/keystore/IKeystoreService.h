@@ -135,6 +135,8 @@ public:
         ABORT = IBinder::FIRST_CALL_TRANSACTION + 34,
         IS_OPERATION_AUTHORIZED = IBinder::FIRST_CALL_TRANSACTION + 35,
         ADD_AUTH_TOKEN = IBinder::FIRST_CALL_TRANSACTION + 36,
+        ON_USER_ADDED = IBinder::FIRST_CALL_TRANSACTION + 37,
+        ON_USER_REMOVED = IBinder::FIRST_CALL_TRANSACTION + 38,
     };
 
     DECLARE_META_INTERFACE(KeystoreService);
@@ -235,6 +237,10 @@ public:
     virtual bool isOperationAuthorized(const sp<IBinder>& handle) = 0;
 
     virtual int32_t addAuthToken(const uint8_t* token, size_t length) = 0;
+
+    virtual int32_t onUserAdded(int32_t userId, int32_t parentId) = 0;
+
+    virtual int32_t onUserRemoved(int32_t userId) = 0;
 
 };
 
