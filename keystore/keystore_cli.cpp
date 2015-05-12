@@ -76,6 +76,24 @@ static const char* responses[] = {
         } \
     } while (0)
 
+#define SINGLE_INT_ARG_INT_RETURN(cmd) \
+    do { \
+        if (strcmp(argv[1], #cmd) == 0) { \
+            if (argc < 3) { \
+                fprintf(stderr, "Usage: %s " #cmd " <name>\n", argv[0]); \
+                return 1; \
+            } \
+            int32_t ret = service->cmd(atoi(argv[2])); \
+            if (ret < 0) { \
+                fprintf(stderr, "%s: could not connect: %d\n", argv[0], ret); \
+                return 1; \
+            } else { \
+                printf(#cmd ": %s (%d)\n", responses[ret], ret); \
+                return 0; \
+            } \
+        } \
+    } while (0)
+
 #define SINGLE_ARG_PLUS_UID_INT_RETURN(cmd) \
     do { \
         if (strcmp(argv[1], #cmd) == 0) { \
@@ -145,14 +163,14 @@ static const char* responses[] = {
         } \
     } while (0)
 
-static int saw(sp<IKeystoreService> service, const String16& name, int uid) {
+static int list(sp<IKeystoreService> service, const String16& name, int uid) {
     Vector<String16> matches;
-    int32_t ret = service->saw(name, uid, &matches);
+    int32_t ret = service->list(name, uid, &matches);
     if (ret < 0) {
-        fprintf(stderr, "saw: could not connect: %d\n", ret);
+        fprintf(stderr, "list: could not connect: %d\n", ret);
         return 1;
     } else if (ret != ::NO_ERROR) {
-        fprintf(stderr, "saw: %s (%d)\n", responses[ret], ret);
+        fprintf(stderr, "list: %s (%d)\n", responses[ret], ret);
         return 1;
     } else {
         Vector<String16>::const_iterator it = matches.begin();
@@ -183,7 +201,7 @@ int main(int argc, char* argv[])
      * All the commands should return a value
      */
 
-    NO_ARG_INT_RETURN(test);
+    SINGLE_INT_ARG_INT_RETURN(getState);
 
     SINGLE_ARG_DATA_RETURN(get);
 
@@ -193,8 +211,8 @@ int main(int argc, char* argv[])
 
     SINGLE_ARG_PLUS_UID_INT_RETURN(exist);
 
-    if (strcmp(argv[1], "saw") == 0) {
-        return saw(service, argc < 3 ? String16("") : String16(argv[2]),
+    if (strcmp(argv[1], "list") == 0) {
+        return list(service, argc < 3 ? String16("") : String16(argv[2]),
                 argc < 4 ? -1 : atoi(argv[3]));
     }
 
@@ -202,17 +220,15 @@ int main(int argc, char* argv[])
 
     // TODO: notifyUserPasswordChanged
 
-    NO_ARG_INT_RETURN(lock);
+    SINGLE_INT_ARG_INT_RETURN(lock);
 
     // TODO: unlock
 
-    NO_ARG_INT_RETURN(zero);
+    SINGLE_INT_ARG_INT_RETURN(isEmpty);
 
     // TODO: generate
 
     SINGLE_ARG_DATA_RETURN(get_pubkey);
-
-    SINGLE_ARG_PLUS_UID_INT_RETURN(del_key);
 
     // TODO: grant
 

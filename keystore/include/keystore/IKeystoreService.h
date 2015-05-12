@@ -98,50 +98,46 @@ void writeKeymasterArgumentToParcel(const keymaster_key_param_t& param, Parcel* 
 class IKeystoreService: public IInterface {
 public:
     enum {
-        TEST = IBinder::FIRST_CALL_TRANSACTION + 0,
+        GET_STATE = IBinder::FIRST_CALL_TRANSACTION + 0,
         GET = IBinder::FIRST_CALL_TRANSACTION + 1,
         INSERT = IBinder::FIRST_CALL_TRANSACTION + 2,
         DEL = IBinder::FIRST_CALL_TRANSACTION + 3,
         EXIST = IBinder::FIRST_CALL_TRANSACTION + 4,
-        SAW = IBinder::FIRST_CALL_TRANSACTION + 5,
+        LIST = IBinder::FIRST_CALL_TRANSACTION + 5,
         RESET = IBinder::FIRST_CALL_TRANSACTION + 6,
         ON_USER_PASSWORD_CHANGED = IBinder::FIRST_CALL_TRANSACTION + 7,
         LOCK = IBinder::FIRST_CALL_TRANSACTION + 8,
         UNLOCK = IBinder::FIRST_CALL_TRANSACTION + 9,
-        ZERO = IBinder::FIRST_CALL_TRANSACTION + 10,
+        IS_EMPTY = IBinder::FIRST_CALL_TRANSACTION + 10,
         GENERATE = IBinder::FIRST_CALL_TRANSACTION + 11,
         IMPORT = IBinder::FIRST_CALL_TRANSACTION + 12,
         SIGN = IBinder::FIRST_CALL_TRANSACTION + 13,
         VERIFY = IBinder::FIRST_CALL_TRANSACTION + 14,
         GET_PUBKEY = IBinder::FIRST_CALL_TRANSACTION + 15,
-        DEL_KEY = IBinder::FIRST_CALL_TRANSACTION + 16,
-        GRANT = IBinder::FIRST_CALL_TRANSACTION + 17,
-        UNGRANT = IBinder::FIRST_CALL_TRANSACTION + 18,
-        GETMTIME = IBinder::FIRST_CALL_TRANSACTION + 19,
-        DUPLICATE = IBinder::FIRST_CALL_TRANSACTION + 20,
-        IS_HARDWARE_BACKED = IBinder::FIRST_CALL_TRANSACTION + 21,
-        CLEAR_UID = IBinder::FIRST_CALL_TRANSACTION + 22,
-        RESET_UID = IBinder::FIRST_CALL_TRANSACTION + 23,
-        SYNC_UID = IBinder::FIRST_CALL_TRANSACTION + 24,
-        PASSWORD_UID = IBinder::FIRST_CALL_TRANSACTION + 25,
-        ADD_RNG_ENTROPY = IBinder::FIRST_CALL_TRANSACTION + 26,
-        GENERATE_KEY = IBinder::FIRST_CALL_TRANSACTION + 27,
-        GET_KEY_CHARACTERISTICS = IBinder::FIRST_CALL_TRANSACTION + 28,
-        IMPORT_KEY = IBinder::FIRST_CALL_TRANSACTION + 29,
-        EXPORT_KEY = IBinder::FIRST_CALL_TRANSACTION + 30,
-        BEGIN = IBinder::FIRST_CALL_TRANSACTION + 31,
-        UPDATE = IBinder::FIRST_CALL_TRANSACTION + 32,
-        FINISH = IBinder::FIRST_CALL_TRANSACTION + 33,
-        ABORT = IBinder::FIRST_CALL_TRANSACTION + 34,
-        IS_OPERATION_AUTHORIZED = IBinder::FIRST_CALL_TRANSACTION + 35,
-        ADD_AUTH_TOKEN = IBinder::FIRST_CALL_TRANSACTION + 36,
-        ON_USER_ADDED = IBinder::FIRST_CALL_TRANSACTION + 37,
-        ON_USER_REMOVED = IBinder::FIRST_CALL_TRANSACTION + 38,
+        GRANT = IBinder::FIRST_CALL_TRANSACTION + 16,
+        UNGRANT = IBinder::FIRST_CALL_TRANSACTION + 17,
+        GETMTIME = IBinder::FIRST_CALL_TRANSACTION + 18,
+        DUPLICATE = IBinder::FIRST_CALL_TRANSACTION + 19,
+        IS_HARDWARE_BACKED = IBinder::FIRST_CALL_TRANSACTION + 20,
+        CLEAR_UID = IBinder::FIRST_CALL_TRANSACTION + 21,
+        ADD_RNG_ENTROPY = IBinder::FIRST_CALL_TRANSACTION + 22,
+        GENERATE_KEY = IBinder::FIRST_CALL_TRANSACTION + 23,
+        GET_KEY_CHARACTERISTICS = IBinder::FIRST_CALL_TRANSACTION + 24,
+        IMPORT_KEY = IBinder::FIRST_CALL_TRANSACTION + 25,
+        EXPORT_KEY = IBinder::FIRST_CALL_TRANSACTION + 26,
+        BEGIN = IBinder::FIRST_CALL_TRANSACTION + 27,
+        UPDATE = IBinder::FIRST_CALL_TRANSACTION + 28,
+        FINISH = IBinder::FIRST_CALL_TRANSACTION + 29,
+        ABORT = IBinder::FIRST_CALL_TRANSACTION + 30,
+        IS_OPERATION_AUTHORIZED = IBinder::FIRST_CALL_TRANSACTION + 31,
+        ADD_AUTH_TOKEN = IBinder::FIRST_CALL_TRANSACTION + 32,
+        ON_USER_ADDED = IBinder::FIRST_CALL_TRANSACTION + 33,
+        ON_USER_REMOVED = IBinder::FIRST_CALL_TRANSACTION + 34,
     };
 
     DECLARE_META_INTERFACE(KeystoreService);
 
-    virtual int32_t test() = 0;
+    virtual int32_t getState(int32_t userId) = 0;
 
     virtual int32_t get(const String16& name, uint8_t** item, size_t* itemLength) = 0;
 
@@ -152,17 +148,17 @@ public:
 
     virtual int32_t exist(const String16& name, int uid) = 0;
 
-    virtual int32_t saw(const String16& name, int uid, Vector<String16>* matches) = 0;
+    virtual int32_t list(const String16& prefix, int uid, Vector<String16>* matches) = 0;
 
     virtual int32_t reset() = 0;
 
     virtual int32_t onUserPasswordChanged(int32_t userId, const String16& newPassword) = 0;
 
-    virtual int32_t lock() = 0;
+    virtual int32_t lock(int32_t userId) = 0;
 
     virtual int32_t unlock(int32_t userId, const String16& password) = 0;
 
-    virtual int32_t zero() = 0;
+    virtual bool isEmpty(int32_t userId) = 0;
 
     virtual int32_t generate(const String16& name, int32_t uid, int32_t keyType, int32_t keySize,
             int32_t flags, Vector<sp<KeystoreArg> >* args) = 0;
@@ -178,8 +174,6 @@ public:
 
     virtual int32_t get_pubkey(const String16& name, uint8_t** pubkey, size_t* pubkeyLength) = 0;
 
-    virtual int32_t del_key(const String16& name, int uid) = 0;
-
     virtual int32_t grant(const String16& name, int32_t granteeUid) = 0;
 
     virtual int32_t ungrant(const String16& name, int32_t granteeUid) = 0;
@@ -192,12 +186,6 @@ public:
     virtual int32_t is_hardware_backed(const String16& keyType) = 0;
 
     virtual int32_t clear_uid(int64_t uid) = 0;
-
-    virtual int32_t reset_uid(int32_t uid) = 0;
-
-    virtual int32_t sync_uid(int32_t sourceUid, int32_t targetUid) = 0;
-
-    virtual int32_t password_uid(const String16& password, int32_t uid) = 0;
 
     virtual int32_t addRngEntropy(const uint8_t* data, size_t dataLength) = 0;
 
