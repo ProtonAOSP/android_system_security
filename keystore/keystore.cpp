@@ -249,10 +249,6 @@ static uid_t get_user_id(uid_t uid) {
     return uid / AID_USER;
 }
 
-static uid_t get_uid(uid_t userId, uid_t appId) {
-    return userId * AID_USER + get_app_id(appId);
-}
-
 static bool keystore_selinux_check_access(uid_t /*uid*/, perm_t perm, pid_t spid) {
     if (!ks_is_selinux_enabled) {
         return true;
@@ -1018,28 +1014,28 @@ public:
         return ::NO_ERROR;
     }
 
-    State getState(uid_t uid) {
-        return getUserState(uid)->getState();
+    State getState(uid_t userId) {
+        return getUserState(userId)->getState();
     }
 
-    ResponseCode initializeUser(const android::String8& pw, uid_t uid) {
-        UserState* userState = getUserState(uid);
+    ResponseCode initializeUser(const android::String8& pw, uid_t userId) {
+        UserState* userState = getUserState(userId);
         return userState->initialize(pw, mEntropy);
     }
 
-    ResponseCode copyMasterKey(uid_t src, uid_t uid) {
-        UserState *userState = getUserState(uid);
-        UserState *initState = getUserState(src);
+    ResponseCode copyMasterKey(uid_t srcUser, uid_t dstUser) {
+        UserState *userState = getUserState(dstUser);
+        UserState *initState = getUserState(srcUser);
         return userState->copyMasterKey(initState);
     }
 
-    ResponseCode writeMasterKey(const android::String8& pw, uid_t uid) {
-        UserState* userState = getUserState(uid);
+    ResponseCode writeMasterKey(const android::String8& pw, uid_t userId) {
+        UserState* userState = getUserState(userId);
         return userState->writeMasterKey(pw, mEntropy);
     }
 
-    ResponseCode readMasterKey(const android::String8& pw, uid_t uid) {
-        UserState* userState = getUserState(uid);
+    ResponseCode readMasterKey(const android::String8& pw, uid_t userId) {
+        UserState* userState = getUserState(userId);
         return userState->readMasterKey(pw, mEntropy);
     }
 
@@ -1058,7 +1054,7 @@ public:
     android::String8 getKeyNameForUidWithDir(const android::String8& keyName, uid_t uid) {
         char encoded[encode_key_length(keyName) + 1];	// add 1 for null char
         encode_key(encoded, keyName);
-        return android::String8::format("%s/%u_%s", getUserState(uid)->getUserDirName(), uid,
+        return android::String8::format("%s/%u_%s", getUserStateByUid(uid)->getUserDirName(), uid,
                 encoded);
     }
 
@@ -1070,9 +1066,8 @@ public:
     void resetUser(uid_t userId, bool keepUnenryptedEntries) {
         android::String8 prefix("");
         android::Vector<android::String16> aliases;
-        uid_t uid = get_uid(userId, AID_SYSTEM);
-        UserState* userState = getUserState(uid);
-        if (saw(prefix, &aliases, uid) != ::NO_ERROR) {
+        UserState* userState = getUserState(userId);
+        if (saw(prefix, &aliases, userId) != ::NO_ERROR) {
             return;
         }
         for (uint32_t i = 0; i < aliases.size(); i++) {
@@ -1082,7 +1077,7 @@ public:
             bool shouldDelete = true;
             if (keepUnenryptedEntries) {
                 Blob blob;
-                ResponseCode rc = get(filename, &blob, ::TYPE_ANY, uid);
+                ResponseCode rc = get(filename, &blob, ::TYPE_ANY, userId);
 
                 /* get can fail if the blob is encrypted and the state is
                  * not unlocked, only skip deleting blobs that were loaded and
@@ -1093,7 +1088,7 @@ public:
                 shouldDelete = !(rc == ::NO_ERROR && !blob.isEncrypted());
             }
             if (shouldDelete) {
-                del(filename, ::TYPE_ANY, uid);
+                del(filename, ::TYPE_ANY, userId);
             }
         }
         if (!userState->deleteMasterKey()) {
@@ -1106,8 +1101,8 @@ public:
         }
     }
 
-    bool isEmpty(uid_t uid) const {
-        const UserState* userState = getUserState(uid);
+    bool isEmpty(uid_t userId) const {
+        const UserState* userState = getUserState(userId);
         if (userState == NULL) {
             return true;
         }
@@ -1137,14 +1132,14 @@ public:
         return result;
     }
 
-    void lock(uid_t uid) {
-        UserState* userState = getUserState(uid);
+    void lock(uid_t userId) {
+        UserState* userState = getUserState(userId);
         userState->zeroizeMasterKeysInMemory();
         userState->setState(STATE_LOCKED);
     }
 
-    ResponseCode get(const char* filename, Blob* keyBlob, const BlobType type, uid_t uid) {
-        UserState* userState = getUserState(uid);
+    ResponseCode get(const char* filename, Blob* keyBlob, const BlobType type, uid_t userId) {
+        UserState* userState = getUserState(userId);
         ResponseCode rc = keyBlob->readBlob(filename, userState->getDecryptionKey(),
                 userState->getState());
         if (rc != NO_ERROR) {
@@ -1157,8 +1152,8 @@ public:
              * it must be read it again since the blob is encrypted each time
              * it's written.
              */
-            if (upgradeBlob(filename, keyBlob, version, type, uid)) {
-                if ((rc = this->put(filename, keyBlob, uid)) != NO_ERROR
+            if (upgradeBlob(filename, keyBlob, version, type, userId)) {
+                if ((rc = this->put(filename, keyBlob, userId)) != NO_ERROR
                         || (rc = keyBlob->readBlob(filename, userState->getDecryptionKey(),
                                 userState->getState())) != NO_ERROR) {
                     return rc;
@@ -1174,12 +1169,12 @@ public:
                 && mDevice->common.module->module_api_version >= KEYMASTER_MODULE_API_VERSION_0_2
                 && keyBlob->isFallback()) {
             ResponseCode imported = importKey(keyBlob->getValue(), keyBlob->getLength(), filename,
-                    uid, keyBlob->isEncrypted() ? KEYSTORE_FLAG_ENCRYPTED : KEYSTORE_FLAG_NONE);
+                    userId, keyBlob->isEncrypted() ? KEYSTORE_FLAG_ENCRYPTED : KEYSTORE_FLAG_NONE);
 
             // The HAL allowed the import, reget the key to have the "fresh"
             // version.
             if (imported == NO_ERROR) {
-                rc = get(filename, keyBlob, TYPE_KEY_PAIR, uid);
+                rc = get(filename, keyBlob, TYPE_KEY_PAIR, userId);
             }
         }
 
@@ -1191,15 +1186,15 @@ public:
         return rc;
     }
 
-    ResponseCode put(const char* filename, Blob* keyBlob, uid_t uid) {
-        UserState* userState = getUserState(uid);
+    ResponseCode put(const char* filename, Blob* keyBlob, uid_t userId) {
+        UserState* userState = getUserState(userId);
         return keyBlob->writeBlob(filename, userState->getEncryptionKey(), userState->getState(),
                 mEntropy);
     }
 
-    ResponseCode del(const char *filename, const BlobType type, uid_t uid) {
+    ResponseCode del(const char *filename, const BlobType type, uid_t userId) {
         Blob keyBlob;
-        ResponseCode rc = get(filename, &keyBlob, type, uid);
+        ResponseCode rc = get(filename, &keyBlob, type, userId);
         if (rc != ::NO_ERROR) {
             return rc;
         }
@@ -1229,9 +1224,9 @@ public:
     }
 
     ResponseCode saw(const android::String8& prefix, android::Vector<android::String16> *matches,
-            uid_t uid) {
+            uid_t userId) {
 
-        UserState* userState = getUserState(uid);
+        UserState* userState = getUserState(userId);
         size_t n = prefix.length();
 
         DIR* dir = opendir(userState->getUserDirName());
@@ -1298,7 +1293,7 @@ public:
         return getGrant(filename, uid) != NULL;
     }
 
-    ResponseCode importKey(const uint8_t* key, size_t keyLen, const char* filename, uid_t uid,
+    ResponseCode importKey(const uint8_t* key, size_t keyLen, const char* filename, uid_t userId,
             int32_t flags) {
         uint8_t* data;
         size_t dataLength;
@@ -1333,7 +1328,7 @@ public:
         keyBlob.setEncrypted(flags & KEYSTORE_FLAG_ENCRYPTED);
         keyBlob.setFallback(isFallback);
 
-        return put(filename, &keyBlob, uid);
+        return put(filename, &keyBlob, userId);
     }
 
     bool isHardwareBacked(const android::String16& keyType) const {
@@ -1354,8 +1349,9 @@ public:
     ResponseCode getKeyForName(Blob* keyBlob, const android::String8& keyName, const uid_t uid,
             const BlobType type) {
         android::String8 filepath8(getKeyNameForUidWithDir(keyName, uid));
+        uid_t userId = get_user_id(uid);
 
-        ResponseCode responseCode = get(filepath8.string(), keyBlob, type, uid);
+        ResponseCode responseCode = get(filepath8.string(), keyBlob, type, userId);
         if (responseCode == NO_ERROR) {
             return responseCode;
         }
@@ -1364,7 +1360,7 @@ public:
         uid_t euid = get_keystore_euid(uid);
         if (euid != uid) {
             filepath8 = getKeyNameForUidWithDir(keyName, euid);
-            responseCode = get(filepath8.string(), keyBlob, type, uid);
+            responseCode = get(filepath8.string(), keyBlob, type, userId);
             if (responseCode == NO_ERROR) {
                 return responseCode;
             }
@@ -1377,22 +1373,20 @@ public:
         if (end[0] != '_' || end[1] == 0) {
             return KEY_NOT_FOUND;
         }
-        filepath8 = android::String8::format("%s/%s", getUserState(uid)->getUserDirName(),
+        filepath8 = android::String8::format("%s/%s", getUserState(userId)->getUserDirName(),
                 filename8.string());
         if (!hasGrant(filepath8.string(), uid)) {
             return responseCode;
         }
 
         // It is a granted key. Try to load it.
-        return get(filepath8.string(), keyBlob, type, uid);
+        return get(filepath8.string(), keyBlob, type, userId);
     }
 
     /**
      * Returns any existing UserState or creates it if it doesn't exist.
      */
-    UserState* getUserState(uid_t uid) {
-        uid_t userId = get_user_id(uid);
-
+    UserState* getUserState(uid_t userId) {
         for (android::Vector<UserState*>::iterator it(mMasterKeys.begin());
                 it != mMasterKeys.end(); it++) {
             UserState* state = *it;
@@ -1414,11 +1408,17 @@ public:
     }
 
     /**
+     * Returns any existing UserState or creates it if it doesn't exist.
+     */
+    UserState* getUserStateByUid(uid_t uid) {
+        uid_t userId = get_user_id(uid);
+        return getUserState(userId);
+    }
+
+    /**
      * Returns NULL if the UserState doesn't already exist.
      */
-    const UserState* getUserState(uid_t uid) const {
-        uid_t userId = get_user_id(uid);
-
+    const UserState* getUserState(uid_t userId) const {
         for (android::Vector<UserState*>::const_iterator it(mMasterKeys.begin());
                 it != mMasterKeys.end(); it++) {
             UserState* state = *it;
@@ -1428,6 +1428,14 @@ public:
         }
 
         return NULL;
+    }
+
+    /**
+     * Returns NULL if the UserState doesn't already exist.
+     */
+    const UserState* getUserStateByUid(uid_t uid) const {
+        uid_t userId = get_user_id(uid);
+        return getUserState(userId);
     }
 
 private:
@@ -1537,7 +1545,7 @@ private:
             return SYSTEM_ERROR;
         }
 
-        ResponseCode rc = importKey(pkcs8key.get(), len, filename, uid,
+        ResponseCode rc = importKey(pkcs8key.get(), len, filename, get_user_id(uid),
                 blob->isEncrypted() ? KEYSTORE_FLAG_ENCRYPTED : KEYSTORE_FLAG_NONE);
         if (rc != NO_ERROR) {
             return rc;
@@ -1580,7 +1588,7 @@ private:
         bool upgraded = false;
 
         if (mMetaData.version == 0) {
-            UserState* userState = getUserState(0);
+            UserState* userState = getUserStateByUid(0);
 
             // Initialize first so the directory is made.
             userState->initialize();
@@ -1622,7 +1630,7 @@ private:
                 if (end[0] != '_' || end[1] == 0) {
                     continue;
                 }
-                UserState* otherUser = getUserState(thisUid);
+                UserState* otherUser = getUserStateByUid(thisUid);
                 if (otherUser->getUserId() != 0) {
                     unlinkat(dirfd(dir), file->d_name, 0);
                 }
@@ -1674,7 +1682,7 @@ public:
             return ::PERMISSION_DENIED;
         }
 
-        return mKeyStore->getState(IPCThreadState::self()->getCallingUid());
+        return mKeyStore->getState(get_user_id(IPCThreadState::self()->getCallingUid()));
     }
 
     int32_t get(const String16& name, uint8_t** item, size_t* itemLength) {
@@ -1717,7 +1725,7 @@ public:
         Blob keyBlob(item, itemLength, NULL, 0, ::TYPE_GENERIC);
         keyBlob.setEncrypted(flags & KEYSTORE_FLAG_ENCRYPTED);
 
-        return mKeyStore->put(filename.string(), &keyBlob, targetUid);
+        return mKeyStore->put(filename.string(), &keyBlob, get_user_id(targetUid));
     }
 
     int32_t del(const String16& name, int targetUid) {
@@ -1727,7 +1735,7 @@ public:
         }
         String8 name8(name);
         String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, targetUid));
-        return mKeyStore->del(filename.string(), ::TYPE_ANY, targetUid);
+        return mKeyStore->del(filename.string(), ::TYPE_ANY, get_user_id(targetUid));
     }
 
     int32_t exist(const String16& name, int targetUid) {
@@ -1753,7 +1761,7 @@ public:
         const String8 prefix8(prefix);
         String8 filename(mKeyStore->getKeyNameForUid(prefix8, targetUid));
 
-        if (mKeyStore->saw(filename, matches, targetUid) != ::NO_ERROR) {
+        if (mKeyStore->saw(filename, matches, get_user_id(targetUid)) != ::NO_ERROR) {
             return ::SYSTEM_ERROR;
         }
         return ::NO_ERROR;
@@ -1775,32 +1783,30 @@ public:
         }
 
         const String8 password8(password);
-        uid_t uid = get_uid(userId, AID_SYSTEM);
-
         // Flush the auth token table to prevent stale tokens from sticking
         // around.
         mAuthTokenTable.Clear();
 
         if (password.size() == 0) {
             ALOGI("Secure lockscreen for user %d removed, deleting encrypted entries", userId);
-            mKeyStore->resetUser(static_cast<uid_t>(userId), true);
+            mKeyStore->resetUser(userId, true);
             return ::NO_ERROR;
         } else {
-            switch (mKeyStore->getState(uid)) {
+            switch (mKeyStore->getState(userId)) {
                 case ::STATE_UNINITIALIZED: {
                     // generate master key, encrypt with password, write to file,
                     // initialize mMasterKey*.
-                    return mKeyStore->initializeUser(password8, uid);
+                    return mKeyStore->initializeUser(password8, userId);
                 }
                 case ::STATE_NO_ERROR: {
                     // rewrite master key with new password.
-                    return mKeyStore->writeMasterKey(password8, uid);
+                    return mKeyStore->writeMasterKey(password8, userId);
                 }
                 case ::STATE_LOCKED: {
                     ALOGE("Changing user %d's password while locked, clearing old encryption",
                           userId);
-                    mKeyStore->resetUser(static_cast<uid_t>(userId), true);
-                    return mKeyStore->initializeUser(password8, uid);
+                    mKeyStore->resetUser(userId, true);
+                    return mKeyStore->initializeUser(password8, userId);
                 }
             }
             return ::SYSTEM_ERROR;
@@ -1812,14 +1818,14 @@ public:
             return ::PERMISSION_DENIED;
         }
 
-        uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        State state = mKeyStore->getState(callingUid);
+        uid_t userId = get_user_id(IPCThreadState::self()->getCallingUid());
+        State state = mKeyStore->getState(userId);
         if (state != ::STATE_NO_ERROR) {
             ALOGD("calling lock in state: %d", state);
             return state;
         }
 
-        mKeyStore->lock(callingUid);
+        mKeyStore->lock(userId);
         return ::NO_ERROR;
     }
 
@@ -1828,8 +1834,7 @@ public:
             return ::PERMISSION_DENIED;
         }
 
-        uid_t uid = get_uid(userId, AID_SYSTEM);
-        State state = mKeyStore->getState(uid);
+        State state = mKeyStore->getState(userId);
         if (state != ::STATE_LOCKED) {
             ALOGI("calling unlock when not locked, ignoring.");
             return state;
@@ -1837,7 +1842,7 @@ public:
 
         const String8 password8(pw);
         // read master key, decrypt with password, initialize mMasterKey*.
-        return mKeyStore->readMasterKey(password8, uid);
+        return mKeyStore->readMasterKey(password8, userId);
     }
 
     int32_t zero() {
@@ -1846,7 +1851,7 @@ public:
         }
 
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        return mKeyStore->isEmpty(callingUid) ? ::KEY_NOT_FOUND : ::NO_ERROR;
+        return mKeyStore->isEmpty(get_user_id(callingUid)) ? ::KEY_NOT_FOUND : ::NO_ERROR;
     }
 
     int32_t generate(const String16& name, int32_t targetUid, int32_t keyType, int32_t keySize,
@@ -1987,7 +1992,7 @@ public:
         keyBlob.setEncrypted(flags & KEYSTORE_FLAG_ENCRYPTED);
         keyBlob.setFallback(isFallback);
 
-        return mKeyStore->put(filename.string(), &keyBlob, targetUid);
+        return mKeyStore->put(filename.string(), &keyBlob, get_user_id(targetUid));
     }
 
     int32_t import(const String16& name, const uint8_t* data, size_t length, int targetUid,
@@ -2001,7 +2006,8 @@ public:
         String8 name8(name);
         String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, targetUid));
 
-        return mKeyStore->importKey(data, length, filename.string(), targetUid, flags);
+        return mKeyStore->importKey(data, length, filename.string(), get_user_id(targetUid),
+                                    flags);
     }
 
     int32_t sign(const String16& name, const uint8_t* data, size_t length, uint8_t** out,
@@ -2214,7 +2220,7 @@ public:
             return -1L;
         }
 
-        State state = mKeyStore->getState(callingUid);
+        State state = mKeyStore->getState(get_user_id(callingUid));
         if (!isKeystoreUnlocked(state)) {
             ALOGD("calling duplicate in state: %d", state);
             return state;
@@ -2257,12 +2263,12 @@ public:
 
         Blob keyBlob;
         ResponseCode responseCode = mKeyStore->get(sourceFile.string(), &keyBlob, TYPE_ANY,
-                srcUid);
+                get_user_id(srcUid));
         if (responseCode != ::NO_ERROR) {
             return responseCode;
         }
 
-        return mKeyStore->put(targetFile.string(), &keyBlob, destUid);
+        return mKeyStore->put(targetFile.string(), &keyBlob, get_user_id(destUid));
     }
 
     int32_t is_hardware_backed(const String16& keyType) {
@@ -2277,14 +2283,14 @@ public:
 
         String8 prefix = String8::format("%u_", targetUid);
         Vector<String16> aliases;
-        if (mKeyStore->saw(prefix, &aliases, targetUid) != ::NO_ERROR) {
+        if (mKeyStore->saw(prefix, &aliases, get_user_id(targetUid)) != ::NO_ERROR) {
             return ::SYSTEM_ERROR;
         }
 
         for (uint32_t i = 0; i < aliases.size(); i++) {
             String8 name8(aliases[i]);
             String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, targetUid));
-            mKeyStore->del(filename.string(), ::TYPE_ANY, targetUid);
+            mKeyStore->del(filename.string(), ::TYPE_ANY, get_user_id(targetUid));
         }
         return ::NO_ERROR;
     }
@@ -2299,13 +2305,15 @@ public:
         if (!checkBinderPermission(P_SYNC_UID, targetUid)) {
             return ::PERMISSION_DENIED;
         }
+        uid_t sourceUser = get_user_id(sourceUid);
+        uid_t targetUser = get_user_id(targetUid);
 
-        if (sourceUid == targetUid) {
+        if (sourceUser == targetUser) {
             return ::SYSTEM_ERROR;
         }
 
         // Initialise user keystore with existing master key held in-memory
-        return mKeyStore->copyMasterKey(sourceUid, targetUid);
+        return mKeyStore->copyMasterKey(sourceUser, targetUser);
     }
 
     int32_t password_uid(const String16& pw, int32_t targetUid) {
@@ -2314,19 +2322,20 @@ public:
             return ::PERMISSION_DENIED;
         }
         const String8 password8(pw);
+        uid_t userId = get_user_id(targetUid);
 
-        switch (mKeyStore->getState(targetUid)) {
+        switch (mKeyStore->getState(userId)) {
             case ::STATE_UNINITIALIZED: {
                 // generate master key, encrypt with password, write to file, initialize mMasterKey*.
-                return mKeyStore->initializeUser(password8, targetUid);
+                return mKeyStore->initializeUser(password8, userId);
             }
             case ::STATE_NO_ERROR: {
                 // rewrite master key with new password.
-                return mKeyStore->writeMasterKey(password8, targetUid);
+                return mKeyStore->writeMasterKey(password8, userId);
             }
             case ::STATE_LOCKED: {
                 // read master key, decrypt with password, initialize mMasterKey*.
-                return mKeyStore->readMasterKey(password8, targetUid);
+                return mKeyStore->readMasterKey(password8, userId);
             }
         }
         return ::SYSTEM_ERROR;
@@ -2428,7 +2437,7 @@ public:
 
         free(const_cast<uint8_t*>(blob.key_material));
 
-        return mKeyStore->put(filename.string(), &keyBlob, uid);
+        return mKeyStore->put(filename.string(), &keyBlob, get_user_id(uid));
     }
 
     int32_t getKeyCharacteristics(const String16& name,
@@ -2519,7 +2528,7 @@ public:
 
         free((void*) blob.key_material);
 
-        return mKeyStore->put(filename.string(), &keyBlob, uid);
+        return mKeyStore->put(filename.string(), &keyBlob, get_user_id(uid));
     }
 
     void exportKey(const String16& name, keymaster_key_format_t format,
@@ -2843,7 +2852,7 @@ private:
         if (!checkBinderPermission(permission, targetUid)) {
             return ::PERMISSION_DENIED;
         }
-        State state = mKeyStore->getState(getEffectiveUid(targetUid));
+        State state = mKeyStore->getState(get_user_id(getEffectiveUid(targetUid)));
         if (checkUnlocked && !isKeystoreUnlocked(state)) {
             return state;
         }
