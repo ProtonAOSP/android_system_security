@@ -1291,6 +1291,46 @@ public:
         }
         return ret;
     };
+
+    virtual int32_t onUserAdded(int32_t userId, int32_t parentId)
+    {
+        Parcel data, reply;
+        data.writeInterfaceToken(IKeystoreService::getInterfaceDescriptor());
+        data.writeInt32(userId);
+        data.writeInt32(parentId);
+        status_t status = remote()->transact(BnKeystoreService::ON_USER_ADDED, data, &reply);
+        if (status != NO_ERROR) {
+            ALOGD("onUserAdded() could not contact remote: %d\n", status);
+            return -1;
+        }
+        int32_t err = reply.readExceptionCode();
+        int32_t ret = reply.readInt32();
+        if (err < 0) {
+            ALOGD("onUserAdded() caught exception %d\n", err);
+            return -1;
+        }
+        return ret;
+    }
+
+    virtual int32_t onUserRemoved(int32_t userId)
+    {
+        Parcel data, reply;
+        data.writeInterfaceToken(IKeystoreService::getInterfaceDescriptor());
+        data.writeInt32(userId);
+        status_t status = remote()->transact(BnKeystoreService::ON_USER_REMOVED, data, &reply);
+        if (status != NO_ERROR) {
+            ALOGD("onUserRemoved() could not contact remote: %d\n", status);
+            return -1;
+        }
+        int32_t err = reply.readExceptionCode();
+        int32_t ret = reply.readInt32();
+        if (err < 0) {
+            ALOGD("onUserRemoved() caught exception %d\n", err);
+            return -1;
+        }
+        return ret;
+    }
+
 };
 
 IMPLEMENT_META_INTERFACE(KeystoreService, "android.security.IKeystoreService");
@@ -1789,6 +1829,25 @@ status_t BnKeystoreService::onTransact(
             size_t size = 0;
             readByteArray(data, &token_bytes, &size);
             int32_t result = addAuthToken(token_bytes, size);
+            reply->writeNoException();
+            reply->writeInt32(result);
+
+            return NO_ERROR;
+        }
+        case ON_USER_ADDED: {
+            CHECK_INTERFACE(IKeystoreService, data, reply);
+            int32_t userId = data.readInt32();
+            int32_t parentId = data.readInt32();
+            int32_t result = onUserAdded(userId, parentId);
+            reply->writeNoException();
+            reply->writeInt32(result);
+
+            return NO_ERROR;
+        }
+        case ON_USER_REMOVED: {
+            CHECK_INTERFACE(IKeystoreService, data, reply);
+            int32_t userId = data.readInt32();
+            int32_t result = onUserRemoved(userId);
             reply->writeNoException();
             reply->writeInt32(result);
 
