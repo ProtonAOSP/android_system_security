@@ -1819,7 +1819,7 @@ public:
 
         // Sanity check that the new user has an empty keystore.
         if (!mKeyStore->isEmpty(userId)) {
-            ALOGW("New user %d's keystore not empty. Clearing old entries.");
+            ALOGW("New user %d's keystore not empty. Clearing old entries.", userId);
         }
         // Unconditionally clear the keystore, just to be safe.
         mKeyStore->resetUser(userId, false);
