@@ -152,27 +152,24 @@ static void keymaster_device_release(keymaster0_device_t* dev) {
 
 /* Here are the permissions, actions, users, and the main function. */
 typedef enum {
-    P_TEST          = 1 << 0,
+    P_GET_STATE     = 1 << 0,
     P_GET           = 1 << 1,
     P_INSERT        = 1 << 2,
     P_DELETE        = 1 << 3,
     P_EXIST         = 1 << 4,
-    P_SAW           = 1 << 5,
+    P_LIST          = 1 << 5,
     P_RESET         = 1 << 6,
     P_PASSWORD      = 1 << 7,
     P_LOCK          = 1 << 8,
     P_UNLOCK        = 1 << 9,
-    P_ZERO          = 1 << 10,
+    P_IS_EMPTY      = 1 << 10,
     P_SIGN          = 1 << 11,
     P_VERIFY        = 1 << 12,
     P_GRANT         = 1 << 13,
     P_DUPLICATE     = 1 << 14,
     P_CLEAR_UID     = 1 << 15,
-    P_RESET_UID     = 1 << 16,
-    P_SYNC_UID      = 1 << 17,
-    P_PASSWORD_UID  = 1 << 18,
-    P_ADD_AUTH      = 1 << 19,
-    P_USER_CHANGED  = 1 << 20,
+    P_ADD_AUTH      = 1 << 16,
+    P_USER_CHANGED  = 1 << 17,
 } perm_t;
 
 static struct user_euid {
@@ -186,25 +183,22 @@ static struct user_euid {
 
 /* perm_labels associcated with keystore_key SELinux class verbs. */
 const char *perm_labels[] = {
-    "test",
+    "get_state",
     "get",
     "insert",
     "delete",
     "exist",
-    "saw",
+    "list",
     "reset",
     "password",
     "lock",
     "unlock",
-    "zero",
+    "is_empty",
     "sign",
     "verify",
     "grant",
     "duplicate",
     "clear_uid",
-    "reset_uid",
-    "sync_uid",
-    "password_uid",
     "add_auth",
     "user_changed",
 };
@@ -219,8 +213,8 @@ static struct user_perm {
     {AID_ROOT,   static_cast<perm_t>(P_GET) },
 };
 
-static const perm_t DEFAULT_PERMS = static_cast<perm_t>(P_TEST | P_GET | P_INSERT | P_DELETE | P_EXIST | P_SAW | P_SIGN
-        | P_VERIFY);
+static const perm_t DEFAULT_PERMS = static_cast<perm_t>(P_GET_STATE | P_GET | P_INSERT | P_DELETE
+                                                        | P_EXIST | P_LIST | P_SIGN | P_VERIFY);
 
 static char *tctx;
 static int ks_is_selinux_enabled;
@@ -1069,7 +1063,7 @@ public:
         android::String8 prefix("");
         android::Vector<android::String16> aliases;
         UserState* userState = getUserState(userId);
-        if (saw(prefix, &aliases, userId) != ::NO_ERROR) {
+        if (list(prefix, &aliases, userId) != ::NO_ERROR) {
             return;
         }
         for (uint32_t i = 0; i < aliases.size(); i++) {
@@ -1225,7 +1219,7 @@ public:
         return (unlink(filename) && errno != ENOENT) ? ::SYSTEM_ERROR : ::NO_ERROR;
     }
 
-    ResponseCode saw(const android::String8& prefix, android::Vector<android::String16> *matches,
+    ResponseCode list(const android::String8& prefix, android::Vector<android::String16> *matches,
             uid_t userId) {
 
         UserState* userState = getUserState(userId);
@@ -1679,12 +1673,12 @@ public:
         }
     }
 
-    int32_t test() {
-        if (!checkBinderPermission(P_TEST)) {
+    int32_t getState(int32_t userId) {
+        if (!checkBinderPermission(P_GET_STATE)) {
             return ::PERMISSION_DENIED;
         }
 
-        return mKeyStore->getState(get_user_id(IPCThreadState::self()->getCallingUid()));
+        return mKeyStore->getState(userId);
     }
 
     int32_t get(const String16& name, uint8_t** item, size_t* itemLength) {
@@ -1755,15 +1749,15 @@ public:
         return ::NO_ERROR;
     }
 
-    int32_t saw(const String16& prefix, int targetUid, Vector<String16>* matches) {
+    int32_t list(const String16& prefix, int targetUid, Vector<String16>* matches) {
         targetUid = getEffectiveUid(targetUid);
-        if (!checkBinderPermission(P_SAW, targetUid)) {
+        if (!checkBinderPermission(P_LIST, targetUid)) {
             return ::PERMISSION_DENIED;
         }
         const String8 prefix8(prefix);
         String8 filename(mKeyStore->getKeyNameForUid(prefix8, targetUid));
 
-        if (mKeyStore->saw(filename, matches, get_user_id(targetUid)) != ::NO_ERROR) {
+        if (mKeyStore->list(filename, matches, get_user_id(targetUid)) != ::NO_ERROR) {
             return ::SYSTEM_ERROR;
         }
         return ::NO_ERROR;
@@ -1845,12 +1839,11 @@ public:
         return ::NO_ERROR;
     }
 
-    int32_t lock() {
+    int32_t lock(int32_t userId) {
         if (!checkBinderPermission(P_LOCK)) {
             return ::PERMISSION_DENIED;
         }
 
-        uid_t userId = get_user_id(IPCThreadState::self()->getCallingUid());
         State state = mKeyStore->getState(userId);
         if (state != ::STATE_NO_ERROR) {
             ALOGD("calling lock in state: %d", state);
@@ -1877,13 +1870,12 @@ public:
         return mKeyStore->readMasterKey(password8, userId);
     }
 
-    int32_t zero() {
-        if (!checkBinderPermission(P_ZERO)) {
-            return -1;
+    bool isEmpty(int32_t userId) {
+        if (!checkBinderPermission(P_IS_EMPTY)) {
+            return false;
         }
 
-        uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        return mKeyStore->isEmpty(get_user_id(callingUid)) ? ::KEY_NOT_FOUND : ::NO_ERROR;
+        return mKeyStore->isEmpty(userId);
     }
 
     int32_t generate(const String16& name, int32_t targetUid, int32_t keyType, int32_t keySize,
@@ -2172,10 +2164,6 @@ public:
         return ::NO_ERROR;
     }
 
-    int32_t del_key(const String16& name, int targetUid) {
-        return del(name, targetUid);
-    }
-
     int32_t grant(const String16& name, int32_t granteeUid) {
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
         int32_t result = checkBinderPermissionAndKeystoreState(P_GRANT);
@@ -2315,7 +2303,7 @@ public:
 
         String8 prefix = String8::format("%u_", targetUid);
         Vector<String16> aliases;
-        if (mKeyStore->saw(prefix, &aliases, get_user_id(targetUid)) != ::NO_ERROR) {
+        if (mKeyStore->list(prefix, &aliases, get_user_id(targetUid)) != ::NO_ERROR) {
             return ::SYSTEM_ERROR;
         }
 
@@ -2325,52 +2313,6 @@ public:
             mKeyStore->del(filename.string(), ::TYPE_ANY, get_user_id(targetUid));
         }
         return ::NO_ERROR;
-    }
-
-    int32_t reset_uid(int32_t targetUid) {
-        // TODO: Remove this method from the binder interface
-        targetUid = getEffectiveUid(targetUid);
-        return onUserPasswordChanged(get_user_id(targetUid), String16(""));
-    }
-
-    int32_t sync_uid(int32_t sourceUid, int32_t targetUid) {
-        if (!checkBinderPermission(P_SYNC_UID, targetUid)) {
-            return ::PERMISSION_DENIED;
-        }
-        uid_t sourceUser = get_user_id(sourceUid);
-        uid_t targetUser = get_user_id(targetUid);
-
-        if (sourceUser == targetUser) {
-            return ::SYSTEM_ERROR;
-        }
-
-        // Initialise user keystore with existing master key held in-memory
-        return mKeyStore->copyMasterKey(sourceUser, targetUser);
-    }
-
-    int32_t password_uid(const String16& pw, int32_t targetUid) {
-        targetUid = getEffectiveUid(targetUid);
-        if (!checkBinderPermission(P_PASSWORD, targetUid)) {
-            return ::PERMISSION_DENIED;
-        }
-        const String8 password8(pw);
-        uid_t userId = get_user_id(targetUid);
-
-        switch (mKeyStore->getState(userId)) {
-            case ::STATE_UNINITIALIZED: {
-                // generate master key, encrypt with password, write to file, initialize mMasterKey*.
-                return mKeyStore->initializeUser(password8, userId);
-            }
-            case ::STATE_NO_ERROR: {
-                // rewrite master key with new password.
-                return mKeyStore->writeMasterKey(password8, userId);
-            }
-            case ::STATE_LOCKED: {
-                // read master key, decrypt with password, initialize mMasterKey*.
-                return mKeyStore->readMasterKey(password8, userId);
-            }
-        }
-        return ::SYSTEM_ERROR;
     }
 
     int32_t addRngEntropy(const uint8_t* data, size_t dataLength) {
