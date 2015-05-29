@@ -218,6 +218,7 @@ public:
 
     virtual void finish(const sp<IBinder>& token, const KeymasterArguments& params,
                         const uint8_t* signature, size_t signatureLength,
+                        const uint8_t* entropy, size_t entropyLength,
                         OperationResult* result) = 0;
 
     virtual int32_t abort(const sp<IBinder>& handle) = 0;
