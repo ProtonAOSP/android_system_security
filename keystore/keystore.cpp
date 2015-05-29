@@ -2670,7 +2670,8 @@ public:
     }
 
     void finish(const sp<IBinder>& token, const KeymasterArguments& params,
-                const uint8_t* signature, size_t signatureLength, OperationResult* result) {
+                const uint8_t* signature, size_t signatureLength,
+                const uint8_t* entropy, size_t entropyLength, OperationResult* result) {
         if (!checkAllowedOperationParams(params.params)) {
             result->resultCode = KM_ERROR_INVALID_ARGUMENT;
             return;
@@ -2689,8 +2690,20 @@ public:
             result->resultCode = authResult;
             return;
         }
+        keymaster_error_t err;
+        if (entropy) {
+            if (dev->add_rng_entropy) {
+                err = dev->add_rng_entropy(dev, entropy, entropyLength);
+            } else {
+                err = KM_ERROR_UNIMPLEMENTED;
+            }
+            if (err) {
+                result->resultCode = err;
+                return;
+            }
+        }
 
-        keymaster_error_t err = dev->finish(dev, handle, opParams.data(), opParams.size(),
+        err = dev->finish(dev, handle, opParams.data(), opParams.size(),
                                             signature, signatureLength, &output_buf,
                                             &output_length);
         // Remove the operation regardless of the result

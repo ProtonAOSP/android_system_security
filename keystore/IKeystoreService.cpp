@@ -1131,7 +1131,9 @@ public:
     }
 
     virtual void finish(const sp<IBinder>& token, const KeymasterArguments& params,
-                        const uint8_t* signature, size_t signatureLength, OperationResult* result)
+                        const uint8_t* signature, size_t signatureLength,
+                        const uint8_t* entropy, size_t entropyLength,
+                        OperationResult* result)
     {
         if (!result) {
             return;
@@ -1142,6 +1144,7 @@ public:
         data.writeInt32(1);
         params.writeToParcel(&data);
         data.writeByteArray(signatureLength, signature);
+        data.writeByteArray(entropyLength, entropy);
         status_t status = remote()->transact(BnKeystoreService::FINISH, data, &reply);
         if (status != NO_ERROR) {
             ALOGD("finish() could not contact remote: %d\n", status);
@@ -1687,11 +1690,14 @@ status_t BnKeystoreService::onTransact(
             if (data.readInt32() != 0) {
                 args.readFromParcel(data);
             }
-            const uint8_t* buf = NULL;
-            size_t bufLength = 0;
-            readByteArray(data, &buf, &bufLength);
+            const uint8_t* signature = NULL;
+            size_t signatureLength = 0;
+            readByteArray(data, &signature, &signatureLength);
+            const uint8_t* entropy = NULL;
+            size_t entropyLength = 0;
+            readByteArray(data, &entropy, &entropyLength);
             OperationResult result;
-            finish(token, args, buf, bufLength, &result);
+            finish(token, args, signature, signatureLength, entropy, entropyLength,  &result);
             reply->writeNoException();
             reply->writeInt32(1);
             result.writeToParcel(reply);
