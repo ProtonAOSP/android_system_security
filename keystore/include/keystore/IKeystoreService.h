@@ -42,6 +42,16 @@ struct MallocDeleter {
     void operator()(uint8_t* p) { free(p); }
 };
 
+// struct for serializing/deserializing a list of keymaster_key_param_t's
+struct KeymasterArguments {
+    KeymasterArguments();
+    ~KeymasterArguments();
+    void readFromParcel(const Parcel& in);
+    void writeToParcel(Parcel* out) const;
+
+    std::vector<keymaster_key_param_t> params;
+};
+
 // struct for serializing the results of begin/update/finish
 struct OperationResult {
     OperationResult();
@@ -55,6 +65,7 @@ struct OperationResult {
     int inputConsumed;
     std::unique_ptr<uint8_t[], MallocDeleter> data;
     size_t dataLength;
+    KeymasterArguments outParams;
 };
 
 // struct for serializing the results of export
@@ -67,16 +78,6 @@ struct ExportResult {
     int resultCode;
     std::unique_ptr<uint8_t[], MallocDeleter> exportData;
     size_t dataLength;
-};
-
-// struct for serializing/deserializing a list of keymaster_key_param_t's
-struct KeymasterArguments {
-    KeymasterArguments();
-    ~KeymasterArguments();
-    void readFromParcel(const Parcel& in);
-    void writeToParcel(Parcel* out) const;
-
-    std::vector<keymaster_key_param_t> params;
 };
 
 // struct for serializing keymaster_key_characteristics_t's
@@ -210,8 +211,7 @@ public:
     virtual void begin(const sp<IBinder>& apptoken, const String16& name,
                        keymaster_purpose_t purpose, bool pruneable,
                        const KeymasterArguments& params, const uint8_t* entropy,
-                       size_t entropyLength, KeymasterArguments* outParams,
-                       OperationResult* result) = 0;
+                       size_t entropyLength, OperationResult* result) = 0;
 
     virtual void update(const sp<IBinder>& token, const KeymasterArguments& params,
                         const uint8_t* data, size_t dataLength, OperationResult* result) = 0;

@@ -76,6 +76,7 @@ void OperationResult::readFromParcel(const Parcel& in) {
             ALOGE("Failed to readInplace OperationResult data");
         }
     }
+    outParams.readFromParcel(in);
 }
 
 void OperationResult::writeToParcel(Parcel* out) const {
@@ -92,6 +93,7 @@ void OperationResult::writeToParcel(Parcel* out) const {
             ALOGE("Failed to writeInplace OperationResult data.");
         }
     }
+    outParams.writeToParcel(out);
 }
 
 ExportResult::ExportResult() : resultCode(0), exportData(NULL), dataLength(0) {
@@ -1066,10 +1068,9 @@ public:
     virtual void begin(const sp<IBinder>& appToken, const String16& name,
                        keymaster_purpose_t purpose, bool pruneable,
                        const KeymasterArguments& params, const uint8_t* entropy,
-                       size_t entropyLength, KeymasterArguments* outParams,
-                       OperationResult* result)
+                       size_t entropyLength, OperationResult* result)
     {
-        if (!result || !outParams) {
+        if (!result) {
             return;
         }
         Parcel data, reply;
@@ -1095,9 +1096,6 @@ public:
         }
         if (reply.readInt32() != 0) {
             result->readFromParcel(reply);
-        }
-        if (reply.readInt32() != 0) {
-            outParams->readFromParcel(reply);
         }
     }
 
@@ -1650,15 +1648,11 @@ status_t BnKeystoreService::onTransact(
             const uint8_t* entropy = NULL;
             size_t entropyLength = 0;
             readByteArray(data, &entropy, &entropyLength);
-            KeymasterArguments outArgs;
             OperationResult result;
-            begin(token, name, purpose, pruneable, args, entropy, entropyLength, &outArgs,
-                  &result);
+            begin(token, name, purpose, pruneable, args, entropy, entropyLength, &result);
             reply->writeNoException();
             reply->writeInt32(1);
             result.writeToParcel(reply);
-            reply->writeInt32(1);
-            outArgs.writeToParcel(reply);
 
             return NO_ERROR;
         }

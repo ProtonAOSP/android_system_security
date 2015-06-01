@@ -2353,6 +2353,8 @@ public:
 
         const keymaster1_device_t* device = mKeyStore->getDevice();
         const keymaster1_device_t* fallback = mKeyStore->getFallbackDevice();
+        std::vector<keymaster_key_param_t> opParams(params.params);
+        const keymaster_key_param_set_t inParams = {opParams.data(), opParams.size()};
         if (device == NULL) {
             return ::SYSTEM_ERROR;
         }
@@ -2367,8 +2369,7 @@ public:
                 rc = KM_ERROR_UNIMPLEMENTED;
             }
             if (rc == KM_ERROR_OK) {
-                rc = device->generate_key(device, params.params.data(), params.params.size(),
-                                          &blob, &out);
+                rc = device->generate_key(device, &inParams, &blob, &out);
             }
         }
         // If the HW device didn't support generate_key or generate_key failed
@@ -2383,9 +2384,7 @@ public:
                 rc = KM_ERROR_UNIMPLEMENTED;
             }
             if (rc == KM_ERROR_OK) {
-                rc = fallback->generate_key(fallback, params.params.data(), params.params.size(),
-                                            &blob,
-                                            &out);
+                rc = fallback->generate_key(fallback, &inParams, &blob, &out);
             }
         }
 
@@ -2468,18 +2467,19 @@ public:
 
         const keymaster1_device_t* device = mKeyStore->getDevice();
         const keymaster1_device_t* fallback = mKeyStore->getFallbackDevice();
+        std::vector<keymaster_key_param_t> opParams(params.params);
+        const keymaster_key_param_set_t inParams = {opParams.data(), opParams.size()};
+        const keymaster_blob_t input = {keyData, keyLength};
         if (device == NULL) {
             return ::SYSTEM_ERROR;
         }
         if (device->common.module->module_api_version >= KEYMASTER_MODULE_API_VERSION_1_0 &&
                 device->import_key != NULL) {
-            rc = device->import_key(device, params.params.data(), params.params.size(),
-                                    format, keyData, keyLength, &blob, &out);
+            rc = device->import_key(device, &inParams, format,&input, &blob, &out);
         }
         if (rc && fallback->import_key != NULL) {
             isFallback = true;
-            rc = fallback->import_key(fallback, params.params.data(), params.params.size(),
-                                      format, keyData, keyLength, &blob, &out);
+            rc = fallback->import_key(fallback, &inParams, format, &input, &blob, &out);
         }
         if (out) {
             if (outCharacteristics) {
@@ -2529,21 +2529,17 @@ public:
             result->resultCode = KM_ERROR_UNIMPLEMENTED;
             return;
         }
-        uint8_t* ptr = NULL;
-        rc = dev->export_key(dev, format, &key, clientId, appData,
-                                             &ptr, &result->dataLength);
-        result->exportData.reset(ptr);
+        keymaster_blob_t output = {NULL, 0};
+        rc = dev->export_key(dev, format, &key, clientId, appData, &output);
+        result->exportData.reset(const_cast<uint8_t*>(output.data));
+        result->dataLength = output.data_length;
         result->resultCode = rc ? rc : ::NO_ERROR;
     }
 
 
     void begin(const sp<IBinder>& appToken, const String16& name, keymaster_purpose_t purpose,
                bool pruneable, const KeymasterArguments& params, const uint8_t* entropy,
-               size_t entropyLength, KeymasterArguments* outParams, OperationResult* result) {
-        if (!result || !outParams) {
-            ALOGE("Unexpected null arguments to begin()");
-            return;
-        }
+               size_t entropyLength, OperationResult* result) {
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
         if (!pruneable && get_app_id(callingUid) != AID_SYSTEM) {
             ALOGE("Non-system uid %d trying to start non-pruneable operation", callingUid);
@@ -2565,8 +2561,6 @@ public:
         keymaster_key_blob_t key;
         key.key_material_size = keyBlob.getLength();
         key.key_material = keyBlob.getValue();
-        keymaster_key_param_t* out;
-        size_t outSize;
         keymaster_operation_handle_t handle;
         keymaster1_device_t* dev = mKeyStore->getDeviceForBlob(keyBlob);
         keymaster_error_t err = KM_ERROR_UNIMPLEMENTED;
@@ -2601,8 +2595,9 @@ public:
                 return;
             }
         }
-        err = dev->begin(dev, purpose, &key, opParams.data(), opParams.size(), &out, &outSize,
-                         &handle);
+        keymaster_key_param_set_t inParams = {opParams.data(), opParams.size()};
+        keymaster_key_param_set_t outParams = {NULL, 0};
+        err = dev->begin(dev, purpose, &key, &inParams, &outParams, &handle);
 
         // If there are too many operations abort the oldest operation that was
         // started as pruneable and try again.
@@ -2612,16 +2607,11 @@ public:
             if (abort(oldest) != ::NO_ERROR) {
                 break;
             }
-            err = dev->begin(dev, purpose, &key, opParams.data(), opParams.size(), &out, &outSize,
-                             &handle);
+            err = dev->begin(dev, purpose, &key, &inParams, &outParams, &handle);
         }
         if (err) {
             result->resultCode = err;
             return;
-        }
-        if (out) {
-            outParams->params.assign(out, out + outSize);
-            free(out);
         }
 
         sp<IBinder> operationToken = mOperationMap.addOperation(handle, dev, appToken,
@@ -2638,6 +2628,10 @@ public:
         result->resultCode = authResult;
         result->token = operationToken;
         result->handle = handle;
+        if (outParams.params) {
+            result->outParams.params.assign(outParams.params, outParams.params + outParams.length);
+            free(outParams.params);
+        }
     }
 
     void update(const sp<IBinder>& token, const KeymasterArguments& params, const uint8_t* data,
@@ -2652,21 +2646,28 @@ public:
             result->resultCode = KM_ERROR_INVALID_OPERATION_HANDLE;
             return;
         }
-        uint8_t* output_buf = NULL;
-        size_t output_length = 0;
-        size_t consumed = 0;
         std::vector<keymaster_key_param_t> opParams(params.params);
         int32_t authResult = addOperationAuthTokenIfNeeded(token, &opParams);
         if (authResult != ::NO_ERROR) {
             result->resultCode = authResult;
             return;
         }
-        keymaster_error_t err = dev->update(dev, handle, opParams.data(), opParams.size(), data,
-                                            dataLength, &consumed, &output_buf, &output_length);
-        result->data.reset(output_buf);
-        result->dataLength = output_length;
+        keymaster_key_param_set_t inParams = {opParams.data(), opParams.size()};
+        keymaster_blob_t input = {data, dataLength};
+        size_t consumed = 0;
+        keymaster_blob_t output = {NULL, 0};
+        keymaster_key_param_set_t outParams = {NULL, 0};
+
+        keymaster_error_t err = dev->update(dev, handle, &inParams, &input, &consumed, &outParams,
+                                            &output);
+        result->data.reset(const_cast<uint8_t*>(output.data));
+        result->dataLength = output.data_length;
         result->inputConsumed = consumed;
         result->resultCode = err ? (int32_t) err : ::NO_ERROR;
+        if (outParams.params) {
+            result->outParams.params.assign(outParams.params, outParams.params + outParams.length);
+            free(outParams.params);
+        }
     }
 
     void finish(const sp<IBinder>& token, const KeymasterArguments& params,
@@ -2681,8 +2682,6 @@ public:
             result->resultCode = KM_ERROR_INVALID_OPERATION_HANDLE;
             return;
         }
-        uint8_t* output_buf = NULL;
-        size_t output_length = 0;
         std::vector<keymaster_key_param_t> opParams(params.params);
         int32_t authResult = addOperationAuthTokenIfNeeded(token, &opParams);
         if (authResult != ::NO_ERROR) {
@@ -2690,15 +2689,22 @@ public:
             return;
         }
 
-        keymaster_error_t err = dev->finish(dev, handle, opParams.data(), opParams.size(),
-                                            signature, signatureLength, &output_buf,
-                                            &output_length);
+        keymaster_key_param_set_t inParams = {opParams.data(), opParams.size()};
+        keymaster_blob_t input = {signature, signatureLength};
+        keymaster_blob_t output = {NULL, 0};
+        keymaster_key_param_set_t outParams = {NULL, 0};
+        keymaster_error_t err = dev->finish(dev, handle, &inParams, &input, &outParams, &output);
         // Remove the operation regardless of the result
         mOperationMap.removeOperation(token);
         mAuthTokenTable.MarkCompleted(handle);
-        result->data.reset(output_buf);
-        result->dataLength = output_length;
+
+        result->data.reset(const_cast<uint8_t*>(output.data));
+        result->dataLength = output.data_length;
         result->resultCode = err ? (int32_t) err : ::NO_ERROR;
+        if (outParams.params) {
+            result->outParams.params.assign(outParams.params, outParams.params + outParams.length);
+            free(outParams.params);
+        }
     }
 
     int32_t abort(const sp<IBinder>& token) {
