@@ -71,7 +71,7 @@ private:
         const keymaster1_device_t* device;
         Unique_keymaster_key_characteristics characteristics;
         sp<IBinder> appToken;
-        std::unique_ptr<const hw_auth_token_t*> authToken;
+        std::unique_ptr<hw_auth_token_t> authToken;
     };
     std::map<sp<IBinder>, struct Operation> mMap;
     std::vector<sp<IBinder>> mLru;

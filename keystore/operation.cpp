@@ -115,11 +115,7 @@ bool OperationMap::getOperationAuthToken(sp<IBinder> token, const hw_auth_token_
     if (entry == mMap.end()) {
         return false;
     }
-    if (entry->second.authToken.get() != NULL) {
-        *outToken = *entry->second.authToken;
-    } else {
-        *outToken = NULL;
-    }
+    *outToken = entry->second.authToken.get();
     return true;
 }
 
@@ -128,8 +124,8 @@ bool OperationMap::setOperationAuthToken(sp<IBinder> token, const hw_auth_token_
     if (entry == mMap.end()) {
         return false;
     }
-    entry->second.authToken.reset(new const hw_auth_token_t*);
-    *entry->second.authToken = authToken;
+    entry->second.authToken.reset(new hw_auth_token_t);
+    *entry->second.authToken = *authToken;
     return true;
 }
 
