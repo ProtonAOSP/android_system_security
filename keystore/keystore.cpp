@@ -106,23 +106,31 @@ struct PKCS8_PRIV_KEY_INFO_Delete {
 };
 typedef UniquePtr<PKCS8_PRIV_KEY_INFO, PKCS8_PRIV_KEY_INFO_Delete> Unique_PKCS8_PRIV_KEY_INFO;
 
-static int keymaster_device_initialize(keymaster0_device_t** dev) {
+static int keymaster_device_initialize(keymaster1_device_t** dev) {
     int rc;
 
     const hw_module_t* mod;
+    keymaster::SoftKeymasterDevice* softkeymaster = NULL;
     rc = hw_get_module_by_class(KEYSTORE_HARDWARE_MODULE_ID, NULL, &mod);
     if (rc) {
         ALOGE("could not find any keystore module");
         goto out;
     }
 
-    rc = keymaster0_open(mod, dev);
+    rc = mod->methods->open(mod, KEYSTORE_KEYMASTER, reinterpret_cast<struct hw_device_t**>(dev));
     if (rc) {
         ALOGE("could not open keymaster device in %s (%s)",
             KEYSTORE_HARDWARE_MODULE_ID, strerror(-rc));
         goto out;
     }
 
+    // Wrap older hardware modules with a softkeymaster adapter.
+    if ((*dev)->common.module->module_api_version >= KEYMASTER_MODULE_API_VERSION_1_0) {
+        return 0;
+    }
+    softkeymaster =
+            new keymaster::SoftKeymasterDevice(reinterpret_cast<keymaster0_device_t*>(*dev));
+    *dev = softkeymaster->keymaster_device();
     return 0;
 
 out:
@@ -142,8 +150,8 @@ static int fallback_keymaster_device_initialize(keymaster1_device_t** dev) {
     return 0;
 }
 
-static void keymaster_device_release(keymaster0_device_t* dev) {
-    keymaster0_close(dev);
+static void keymaster_device_release(keymaster1_device_t* dev) {
+    dev->common.close(&dev->common);
 }
 
 /***************
@@ -3032,7 +3040,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    keymaster0_device_t* dev;
+    keymaster1_device_t* dev;
     if (keymaster_device_initialize(&dev)) {
         ALOGE("keystore keymaster could not be initialized; exiting");
         return 1;
@@ -3057,7 +3065,7 @@ int main(int argc, char* argv[]) {
         ALOGI("SELinux: Keystore SELinux is disabled.\n");
     }
 
-    KeyStore keyStore(&entropy, reinterpret_cast<keymaster1_device_t*>(dev), fallback);
+    KeyStore keyStore(&entropy, dev, fallback);
     keyStore.initialize();
     android::sp<android::IServiceManager> sm = android::defaultServiceManager();
     android::sp<android::KeyStoreProxy> proxy = new android::KeyStoreProxy(&keyStore);
