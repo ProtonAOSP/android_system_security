@@ -2714,7 +2714,7 @@ public:
         keymaster_blob_t input = {signature, signatureLength};
         keymaster_blob_t output = {NULL, 0};
         keymaster_key_param_set_t outParams = {NULL, 0};
-        keymaster_error_t err = dev->finish(dev, handle, &inParams, &input, &outParams, &output);
+        err = dev->finish(dev, handle, &inParams, &input, &outParams, &output);
         // Remove the operation regardless of the result
         mOperationMap.removeOperation(token);
         mAuthTokenTable.MarkCompleted(handle);
