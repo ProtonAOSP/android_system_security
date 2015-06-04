@@ -63,6 +63,8 @@
 
 #include <selinux/android.h>
 
+#include <sstream>
+
 #include "auth_token_table.h"
 #include "defaults.h"
 #include "operation.h"
@@ -1182,10 +1184,10 @@ public:
             }
         }
 
-        // Keymaster 0.3 keys are valid keymaster 1.0 keys, so silently upgrade
-        // them if needed.
-        if (type == TYPE_KEYMASTER_10 && keyBlob->getType() == TYPE_KEY_PAIR) {
+        // Keymaster 0.3 keys are valid keymaster 1.0 keys, so silently upgrade.
+        if (keyBlob->getType() == TYPE_KEY_PAIR) {
             keyBlob->setType(TYPE_KEYMASTER_10);
+            rc = this->put(filename, keyBlob, userId);
         }
 
         if (type != TYPE_ANY && keyBlob->getType() != type) {
@@ -1900,194 +1902,114 @@ public:
         if (result != ::NO_ERROR) {
             return result;
         }
-        uint8_t* data;
-        size_t dataLength;
-        int rc;
-        bool isFallback = false;
 
-        const keymaster1_device_t* device = mKeyStore->getDevice();
-        const keymaster1_device_t* fallback = mKeyStore->getFallbackDevice();
-        if (device == NULL) {
-            return ::SYSTEM_ERROR;
-        }
+        KeymasterArguments params;
+        addLegacyKeyAuthorizations(params.params);
 
-        if (device->generate_keypair == NULL) {
-            return ::SYSTEM_ERROR;
-        }
-
-        if (keyType == EVP_PKEY_DSA) {
-            keymaster_dsa_keygen_params_t dsa_params;
-            memset(&dsa_params, '\0', sizeof(dsa_params));
-
-            if (keySize == -1) {
-                keySize = DSA_DEFAULT_KEY_SIZE;
-            } else if ((keySize % 64) != 0 || keySize < DSA_MIN_KEY_SIZE
-                    || keySize > DSA_MAX_KEY_SIZE) {
-                ALOGI("invalid key size %d", keySize);
-                return ::SYSTEM_ERROR;
-            }
-            dsa_params.key_size = keySize;
-
-            if (args->size() == 3) {
-                sp<KeystoreArg> gArg = args->itemAt(0);
-                sp<KeystoreArg> pArg = args->itemAt(1);
-                sp<KeystoreArg> qArg = args->itemAt(2);
-
-                if (gArg != NULL && pArg != NULL && qArg != NULL) {
-                    dsa_params.generator = reinterpret_cast<const uint8_t*>(gArg->data());
-                    dsa_params.generator_len = gArg->size();
-
-                    dsa_params.prime_p = reinterpret_cast<const uint8_t*>(pArg->data());
-                    dsa_params.prime_p_len = pArg->size();
-
-                    dsa_params.prime_q = reinterpret_cast<const uint8_t*>(qArg->data());
-                    dsa_params.prime_q_len = qArg->size();
-                } else {
-                    ALOGI("not all DSA parameters were read");
+        switch (keyType) {
+            case EVP_PKEY_EC: {
+                params.params.push_back(keymaster_param_enum(KM_TAG_ALGORITHM, KM_ALGORITHM_EC));
+                if (keySize == -1) {
+                    keySize = EC_DEFAULT_KEY_SIZE;
+                } else if (keySize < EC_MIN_KEY_SIZE || keySize > EC_MAX_KEY_SIZE) {
+                    ALOGI("invalid key size %d", keySize);
                     return ::SYSTEM_ERROR;
                 }
-            } else if (args->size() != 0) {
-                ALOGI("DSA args must be 3");
-                return ::SYSTEM_ERROR;
+                params.params.push_back(keymaster_param_int(KM_TAG_KEY_SIZE, keySize));
+                break;
             }
-
-            if (isKeyTypeSupported(device, TYPE_DSA)) {
-                rc = device->generate_keypair(device, TYPE_DSA, &dsa_params, &data, &dataLength);
-            } else {
-                isFallback = true;
-                rc = fallback->generate_keypair(fallback, TYPE_DSA, &dsa_params, &data,
-                                                &dataLength);
-            }
-        } else if (keyType == EVP_PKEY_EC) {
-            keymaster_ec_keygen_params_t ec_params;
-            memset(&ec_params, '\0', sizeof(ec_params));
-
-            if (keySize == -1) {
-                keySize = EC_DEFAULT_KEY_SIZE;
-            } else if (keySize < EC_MIN_KEY_SIZE || keySize > EC_MAX_KEY_SIZE) {
-                ALOGI("invalid key size %d", keySize);
-                return ::SYSTEM_ERROR;
-            }
-            ec_params.field_size = keySize;
-
-            if (isKeyTypeSupported(device, TYPE_EC)) {
-                rc = device->generate_keypair(device, TYPE_EC, &ec_params, &data, &dataLength);
-            } else {
-                isFallback = true;
-                rc = fallback->generate_keypair(fallback, TYPE_EC, &ec_params, &data, &dataLength);
-            }
-        } else if (keyType == EVP_PKEY_RSA) {
-            keymaster_rsa_keygen_params_t rsa_params;
-            memset(&rsa_params, '\0', sizeof(rsa_params));
-            rsa_params.public_exponent = RSA_DEFAULT_EXPONENT;
-
-            if (keySize == -1) {
-                keySize = RSA_DEFAULT_KEY_SIZE;
-            } else if (keySize < RSA_MIN_KEY_SIZE || keySize > RSA_MAX_KEY_SIZE) {
-                ALOGI("invalid key size %d", keySize);
-                return ::SYSTEM_ERROR;
-            }
-            rsa_params.modulus_size = keySize;
-
-            if (args->size() > 1) {
-                ALOGI("invalid number of arguments: %zu", args->size());
-                return ::SYSTEM_ERROR;
-            } else if (args->size() == 1) {
-                sp<KeystoreArg> pubExpBlob = args->itemAt(0);
-                if (pubExpBlob != NULL) {
-                    Unique_BIGNUM pubExpBn(
-                            BN_bin2bn(reinterpret_cast<const unsigned char*>(pubExpBlob->data()),
-                                    pubExpBlob->size(), NULL));
-                    if (pubExpBn.get() == NULL) {
-                        ALOGI("Could not convert public exponent to BN");
-                        return ::SYSTEM_ERROR;
-                    }
-                    unsigned long pubExp = BN_get_word(pubExpBn.get());
-                    if (pubExp == 0xFFFFFFFFL) {
-                        ALOGI("cannot represent public exponent as a long value");
-                        return ::SYSTEM_ERROR;
-                    }
-                    rsa_params.public_exponent = pubExp;
+            case EVP_PKEY_RSA: {
+                params.params.push_back(keymaster_param_enum(KM_TAG_ALGORITHM, KM_ALGORITHM_RSA));
+                if (keySize == -1) {
+                    keySize = RSA_DEFAULT_KEY_SIZE;
+                } else if (keySize < RSA_MIN_KEY_SIZE || keySize > RSA_MAX_KEY_SIZE) {
+                    ALOGI("invalid key size %d", keySize);
+                    return ::SYSTEM_ERROR;
                 }
+                params.params.push_back(keymaster_param_int(KM_TAG_KEY_SIZE, keySize));
+                unsigned long exponent = RSA_DEFAULT_EXPONENT;
+                if (args->size() > 1) {
+                    ALOGI("invalid number of arguments: %zu", args->size());
+                    return ::SYSTEM_ERROR;
+                } else if (args->size() == 1) {
+                    sp<KeystoreArg> expArg = args->itemAt(0);
+                    if (expArg != NULL) {
+                        Unique_BIGNUM pubExpBn(
+                                BN_bin2bn(reinterpret_cast<const unsigned char*>(expArg->data()),
+                                          expArg->size(), NULL));
+                        if (pubExpBn.get() == NULL) {
+                            ALOGI("Could not convert public exponent to BN");
+                            return ::SYSTEM_ERROR;
+                        }
+                        exponent = BN_get_word(pubExpBn.get());
+                        if (exponent == 0xFFFFFFFFL) {
+                            ALOGW("cannot represent public exponent as a long value");
+                            return ::SYSTEM_ERROR;
+                        }
+                    } else {
+                        ALOGW("public exponent not read");
+                        return ::SYSTEM_ERROR;
+                    }
+                }
+                params.params.push_back(keymaster_param_long(KM_TAG_RSA_PUBLIC_EXPONENT,
+                                                             exponent));
+                break;
             }
-
-            rc = device->generate_keypair(device, TYPE_RSA, &rsa_params, &data, &dataLength);
-        } else {
-            ALOGW("Unsupported key type %d", keyType);
-            rc = -1;
+            default: {
+                ALOGW("Unsupported key type %d", keyType);
+                return ::SYSTEM_ERROR;
+            }
         }
 
-        if (rc) {
-            return ::SYSTEM_ERROR;
+        int32_t rc = generateKey(name, params, NULL, 0, targetUid, flags,
+                                 /*outCharacteristics*/ NULL);
+        if (rc != ::NO_ERROR) {
+            ALOGW("generate failed: %d", rc);
         }
-
-        String8 name8(name);
-        String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, targetUid));
-
-        Blob keyBlob(data, dataLength, NULL, 0, TYPE_KEY_PAIR);
-        free(data);
-
-        keyBlob.setEncrypted(flags & KEYSTORE_FLAG_ENCRYPTED);
-        keyBlob.setFallback(isFallback);
-
-        return mKeyStore->put(filename.string(), &keyBlob, get_user_id(targetUid));
+        return translateResultToLegacyResult(rc);
     }
 
     int32_t import(const String16& name, const uint8_t* data, size_t length, int targetUid,
             int32_t flags) {
-        targetUid = getEffectiveUid(targetUid);
-        int32_t result = checkBinderPermissionAndKeystoreState(P_INSERT, targetUid,
-                                                       flags & KEYSTORE_FLAG_ENCRYPTED);
-        if (result != ::NO_ERROR) {
-            return result;
-        }
-        String8 name8(name);
-        String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, targetUid));
+        KeymasterArguments params;
+        addLegacyKeyAuthorizations(params.params);
+        const uint8_t* ptr = data;
 
-        return mKeyStore->importKey(data, length, filename.string(), get_user_id(targetUid),
-                                    flags);
+        Unique_PKCS8_PRIV_KEY_INFO pkcs8(d2i_PKCS8_PRIV_KEY_INFO(NULL, &ptr, length));
+        if (!pkcs8.get()) {
+            return ::SYSTEM_ERROR;
+        }
+        Unique_EVP_PKEY pkey(EVP_PKCS82PKEY(pkcs8.get()));
+        if (!pkey.get()) {
+            return ::SYSTEM_ERROR;
+        }
+        int type = EVP_PKEY_type(pkey->type);
+        switch (type) {
+            case EVP_PKEY_RSA:
+                params.params.push_back(keymaster_param_enum(KM_TAG_ALGORITHM, KM_ALGORITHM_RSA));
+                break;
+            case EVP_PKEY_EC:
+                params.params.push_back(keymaster_param_enum(KM_TAG_ALGORITHM,
+                                                             KM_ALGORITHM_EC));
+                break;
+            default:
+                ALOGW("Unsupported key type %d", type);
+                return ::SYSTEM_ERROR;
+        }
+        int32_t rc = importKey(name, params, KM_KEY_FORMAT_PKCS8, data, length, targetUid, flags,
+                               /*outCharacteristics*/ NULL);
+        if (rc != ::NO_ERROR) {
+            ALOGW("importKey failed: %d", rc);
+        }
+        return translateResultToLegacyResult(rc);
     }
 
     int32_t sign(const String16& name, const uint8_t* data, size_t length, uint8_t** out,
-            size_t* outLength) {
+                 size_t* outLength) {
         if (!checkBinderPermission(P_SIGN)) {
             return ::PERMISSION_DENIED;
         }
-
-        uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        Blob keyBlob;
-        String8 name8(name);
-
-        ALOGV("sign %s from uid %d", name8.string(), callingUid);
-
-        ResponseCode responseCode = mKeyStore->getKeyForName(&keyBlob, name8, callingUid,
-                ::TYPE_KEY_PAIR);
-        if (responseCode != ::NO_ERROR) {
-            return responseCode;
-        }
-
-        const keymaster1_device_t* device = mKeyStore->getDeviceForBlob(keyBlob);
-        if (device == NULL) {
-            ALOGE("no keymaster device; cannot sign");
-            return ::SYSTEM_ERROR;
-        }
-
-        if (device->sign_data == NULL) {
-            ALOGE("device doesn't implement signing");
-            return ::SYSTEM_ERROR;
-        }
-
-        keymaster_rsa_sign_params_t params;
-        params.digest_type = DIGEST_NONE;
-        params.padding_type = PADDING_NONE;
-        int rc = device->sign_data(device, &params, keyBlob.getValue(), keyBlob.getLength(), data,
-                length, out, outLength);
-        if (rc) {
-            ALOGW("device couldn't sign data");
-            return ::SYSTEM_ERROR;
-        }
-
-        return ::NO_ERROR;
+        return doLegacySignVerify(name, data, length, out, outLength, NULL, 0, KM_PURPOSE_SIGN);
     }
 
     int32_t verify(const String16& name, const uint8_t* data, size_t dataLength,
@@ -2095,38 +2017,8 @@ public:
         if (!checkBinderPermission(P_VERIFY)) {
             return ::PERMISSION_DENIED;
         }
-
-        uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        Blob keyBlob;
-        String8 name8(name);
-        int rc;
-
-        ResponseCode responseCode = mKeyStore->getKeyForName(&keyBlob, name8, callingUid,
-                TYPE_KEY_PAIR);
-        if (responseCode != ::NO_ERROR) {
-            return responseCode;
-        }
-
-        const keymaster1_device_t* device = mKeyStore->getDeviceForBlob(keyBlob);
-        if (device == NULL) {
-            return ::SYSTEM_ERROR;
-        }
-
-        if (device->verify_data == NULL) {
-            return ::SYSTEM_ERROR;
-        }
-
-        keymaster_rsa_sign_params_t params;
-        params.digest_type = DIGEST_NONE;
-        params.padding_type = PADDING_NONE;
-
-        rc = device->verify_data(device, &params, keyBlob.getValue(), keyBlob.getLength(), data,
-                dataLength, signature, signatureLength);
-        if (rc) {
-            return ::SYSTEM_ERROR;
-        } else {
-            return ::NO_ERROR;
-        }
+        return doLegacySignVerify(name, data, dataLength, NULL, NULL, signature, signatureLength,
+                                 KM_PURPOSE_VERIFY);
     }
 
     /*
@@ -2141,40 +2033,15 @@ public:
      * intentions are.
      */
     int32_t get_pubkey(const String16& name, uint8_t** pubkey, size_t* pubkeyLength) {
-        uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        if (!checkBinderPermission(P_GET)) {
-            ALOGW("permission denied for %d: get_pubkey", callingUid);
-            return ::PERMISSION_DENIED;
+        ExportResult result;
+        exportKey(name, KM_KEY_FORMAT_X509, NULL, NULL, &result);
+        if (result.resultCode != ::NO_ERROR) {
+            ALOGW("export failed: %d", result.resultCode);
+            return translateResultToLegacyResult(result.resultCode);
         }
 
-        Blob keyBlob;
-        String8 name8(name);
-
-        ALOGV("get_pubkey '%s' from uid %d", name8.string(), callingUid);
-
-        ResponseCode responseCode = mKeyStore->getKeyForName(&keyBlob, name8, callingUid,
-                TYPE_KEY_PAIR);
-        if (responseCode != ::NO_ERROR) {
-            return responseCode;
-        }
-
-        const keymaster1_device_t* device = mKeyStore->getDeviceForBlob(keyBlob);
-        if (device == NULL) {
-            return ::SYSTEM_ERROR;
-        }
-
-        if (device->get_keypair_public == NULL) {
-            ALOGE("device has no get_keypair_public implementation!");
-            return ::SYSTEM_ERROR;
-        }
-
-        int rc;
-        rc = device->get_keypair_public(device, keyBlob.getValue(), keyBlob.getLength(), pubkey,
-                pubkeyLength);
-        if (rc) {
-            return ::SYSTEM_ERROR;
-        }
-
+        *pubkey = result.exportData.release();
+        *pubkeyLength = result.dataLength;
         return ::NO_ERROR;
     }
 
@@ -3034,6 +2901,128 @@ private:
             }
         }
         addAuthToParams(params, authToken);
+        return ::NO_ERROR;
+    }
+
+    /**
+     * Translate a result value to a legacy return value. All keystore errors are
+     * preserved and keymaster errors become SYSTEM_ERRORs
+     */
+    inline int32_t translateResultToLegacyResult(int32_t result) {
+        if (result > 0) {
+            return result;
+        }
+        return ::SYSTEM_ERROR;
+    }
+
+    void addLegacyKeyAuthorizations(std::vector<keymaster_key_param_t>& params) {
+        params.push_back(keymaster_param_enum(KM_TAG_PURPOSE, KM_PURPOSE_SIGN));
+        params.push_back(keymaster_param_enum(KM_TAG_PURPOSE, KM_PURPOSE_VERIFY));
+        params.push_back(keymaster_param_enum(KM_TAG_PURPOSE, KM_PURPOSE_ENCRYPT));
+        params.push_back(keymaster_param_enum(KM_TAG_PURPOSE, KM_PURPOSE_DECRYPT));
+        params.push_back(keymaster_param_enum(KM_TAG_PADDING, KM_PAD_NONE));
+        params.push_back(keymaster_param_enum(KM_TAG_DIGEST, KM_DIGEST_NONE));
+        params.push_back(keymaster_param_bool(KM_TAG_ALL_USERS));
+        params.push_back(keymaster_param_bool(KM_TAG_NO_AUTH_REQUIRED));
+        params.push_back(keymaster_param_date(KM_TAG_ORIGINATION_EXPIRE_DATETIME, LLONG_MAX));
+        params.push_back(keymaster_param_date(KM_TAG_USAGE_EXPIRE_DATETIME, LLONG_MAX));
+        params.push_back(keymaster_param_date(KM_TAG_ACTIVE_DATETIME, 0));
+        uint64_t now = keymaster::java_time(time(NULL));
+        params.push_back(keymaster_param_date(KM_TAG_CREATION_DATETIME, now));
+    }
+
+    keymaster_key_param_t* getKeyAlgorithm(keymaster_key_characteristics_t* characteristics) {
+        for (size_t i = 0; i < characteristics->hw_enforced.length; i++) {
+            if (characteristics->hw_enforced.params[i].tag == KM_TAG_ALGORITHM) {
+                return &characteristics->hw_enforced.params[i];
+            }
+        }
+        for (size_t i = 0; i < characteristics->sw_enforced.length; i++) {
+            if (characteristics->sw_enforced.params[i].tag == KM_TAG_ALGORITHM) {
+                return &characteristics->sw_enforced.params[i];
+            }
+        }
+        return NULL;
+    }
+
+    void addLegacyBeginParams(const String16& name, std::vector<keymaster_key_param_t>& params) {
+        // All legacy keys are DIGEST_NONE/PAD_NONE.
+        params.push_back(keymaster_param_enum(KM_TAG_DIGEST, KM_DIGEST_NONE));
+        params.push_back(keymaster_param_enum(KM_TAG_PADDING, KM_PAD_NONE));
+
+        // Look up the algorithm of the key.
+        KeyCharacteristics characteristics;
+        int32_t rc = getKeyCharacteristics(name, NULL, NULL, &characteristics);
+        if (rc != ::NO_ERROR) {
+            ALOGE("Failed to get key characteristics");
+            return;
+        }
+        keymaster_key_param_t* algorithm = getKeyAlgorithm(&characteristics.characteristics);
+        if (!algorithm) {
+            ALOGE("getKeyCharacteristics did not include KM_TAG_ALGORITHM");
+            return;
+        }
+        params.push_back(*algorithm);
+    }
+
+    int32_t doLegacySignVerify(const String16& name, const uint8_t* data, size_t length,
+                              uint8_t** out, size_t* outLength, const uint8_t* signature,
+                              size_t signatureLength, keymaster_purpose_t purpose) {
+
+        if (exist(name, IPCThreadState::self()->getCallingUid()) != ::NO_ERROR) {
+            ALOGW("Key not found");
+            return ::KEY_NOT_FOUND;
+        }
+        std::basic_stringstream<uint8_t> outBuffer;
+        OperationResult result;
+        KeymasterArguments inArgs;
+        addLegacyBeginParams(name, inArgs.params);
+        sp<IBinder> appToken(new BBinder);
+        sp<IBinder> token;
+
+        begin(appToken, name, purpose, true, inArgs, NULL, 0, &result);
+        if (result.resultCode != ResponseCode::NO_ERROR) {
+            ALOGW("Error in begin: %d", result.resultCode);
+            return translateResultToLegacyResult(result.resultCode);
+        }
+        inArgs.params.clear();
+        token = result.token;
+        size_t consumed = 0;
+        size_t lastConsumed = 0;
+        do {
+            update(token, inArgs, data + consumed, length - consumed, &result);
+            if (result.resultCode != ResponseCode::NO_ERROR) {
+                ALOGW("Error in update: %d", result.resultCode);
+                return translateResultToLegacyResult(result.resultCode);
+            }
+            if (out) {
+                outBuffer.write(result.data.get(), result.dataLength);
+            }
+            lastConsumed = result.inputConsumed;
+            consumed += lastConsumed;
+        } while (consumed < length && lastConsumed > 0);
+
+        if (consumed != length) {
+            ALOGW("Not all data consumed. Consumed %zu of %zu", consumed, length);
+            return ::SYSTEM_ERROR;
+        }
+
+        finish(token, inArgs, signature, signatureLength, NULL, 0, &result);
+        if (result.resultCode != ResponseCode::NO_ERROR) {
+            ALOGW("Error in finish: %d", result.resultCode);
+            return translateResultToLegacyResult(result.resultCode);
+        }
+        if (out) {
+            outBuffer.write(result.data.get(), result.dataLength);
+        }
+
+        if (out) {
+            auto buf = outBuffer.str();
+            *out = new uint8_t[buf.size()];
+            memcpy(*out, buf.c_str(), buf.size());
+            *outLength = buf.size();
+        }
+
         return ::NO_ERROR;
     }
 
