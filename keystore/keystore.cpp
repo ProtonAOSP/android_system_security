@@ -1182,6 +1182,12 @@ public:
             }
         }
 
+        // Keymaster 0.3 keys are valid keymaster 1.0 keys, so silently upgrade
+        // them if needed.
+        if (type == TYPE_KEYMASTER_10 && keyBlob->getType() == TYPE_KEY_PAIR) {
+            keyBlob->setType(TYPE_KEYMASTER_10);
+        }
+
         if (type != TYPE_ANY && keyBlob->getType() != type) {
             ALOGW("key found but type doesn't match: %d vs %d", keyBlob->getType(), type);
             return KEY_NOT_FOUND;
