@@ -1453,7 +1453,7 @@ status_t BnKeystoreService::onTransact(
                 reply->writeInt32(outSize);
                 void* buf = reply->writeInplace(outSize);
                 memcpy(buf, out, outSize);
-                free(out);
+                delete[] reinterpret_cast<uint8_t*>(out);
             } else {
                 reply->writeInt32(-1);
             }
