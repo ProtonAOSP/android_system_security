@@ -19,7 +19,6 @@
 
 #include <hardware/hw_auth_token.h>
 #include <keymaster/authorization_set.h>
-#include <keymaster/key_blob.h>
 
 #ifndef SYSTEM_KEYMASTER_AUTH_TOKEN_TABLE_H
 #define SYSTEM_KEYMASTER_AUTH_TOKEN_TABLE_H
