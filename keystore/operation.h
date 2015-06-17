@@ -47,11 +47,12 @@ typedef std::unique_ptr<keymaster_key_characteristics_t, keymaster_key_character
 class OperationMap {
 public:
     OperationMap(IBinder::DeathRecipient* deathRecipient);
-    sp<IBinder> addOperation(keymaster_operation_handle_t handle,
+    sp<IBinder> addOperation(keymaster_operation_handle_t handle, keymaster_purpose_t purpose,
                              const keymaster1_device_t* dev, sp<IBinder> appToken,
                              keymaster_key_characteristics_t* characteristics, bool pruneable);
+    bool hasOperation(sp<IBinder> token);
     bool getOperation(sp<IBinder> token, keymaster_operation_handle_t* outHandle,
-                      const keymaster1_device_t** outDev,
+                      keymaster_purpose_t* outPurpose, const keymaster1_device_t** outDev,
                       const keymaster_key_characteristics_t** outCharacteristics);
     bool removeOperation(sp<IBinder> token);
     bool hasPruneableOperation();
@@ -65,9 +66,11 @@ private:
     void removeOperationTracking(sp<IBinder> token, sp<IBinder> appToken);
     struct Operation {
         Operation();
-        Operation(keymaster_operation_handle_t handle, const keymaster1_device_t* device,
+        Operation(keymaster_operation_handle_t handle, keymaster_purpose_t purpose,
+                  const keymaster1_device_t* device,
                   keymaster_key_characteristics_t* characteristics, sp<IBinder> appToken);
         keymaster_operation_handle_t handle;
+        keymaster_purpose_t purpose;
         const keymaster1_device_t* device;
         Unique_keymaster_key_characteristics characteristics;
         sp<IBinder> appToken;

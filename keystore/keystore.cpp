@@ -2454,7 +2454,7 @@ public:
             return;
         }
         const hw_auth_token_t* authToken = NULL;
-        int32_t authResult = getAuthToken(characteristics.get(), 0, &authToken,
+        int32_t authResult = getAuthToken(characteristics.get(), 0, purpose, &authToken,
                                                 /*failOnTokenMissing*/ false);
         // If per-operation auth is needed we need to begin the operation and
         // the client will need to authorize that operation before calling
@@ -2495,7 +2495,7 @@ public:
             return;
         }
 
-        sp<IBinder> operationToken = mOperationMap.addOperation(handle, dev, appToken,
+        sp<IBinder> operationToken = mOperationMap.addOperation(handle, purpose, dev, appToken,
                                                                 characteristics.release(),
                                                                 pruneable);
         if (authToken) {
@@ -2523,7 +2523,8 @@ public:
         }
         const keymaster1_device_t* dev;
         keymaster_operation_handle_t handle;
-        if (!mOperationMap.getOperation(token, &handle, &dev, NULL)) {
+        keymaster_purpose_t purpose;
+        if (!mOperationMap.getOperation(token, &handle, &purpose, &dev, NULL)) {
             result->resultCode = KM_ERROR_INVALID_OPERATION_HANDLE;
             return;
         }
@@ -2560,7 +2561,8 @@ public:
         }
         const keymaster1_device_t* dev;
         keymaster_operation_handle_t handle;
-        if (!mOperationMap.getOperation(token, &handle, &dev, NULL)) {
+        keymaster_purpose_t purpose;
+        if (!mOperationMap.getOperation(token, &handle, &purpose, &dev, NULL)) {
             result->resultCode = KM_ERROR_INVALID_OPERATION_HANDLE;
             return;
         }
@@ -2604,7 +2606,8 @@ public:
     int32_t abort(const sp<IBinder>& token) {
         const keymaster1_device_t* dev;
         keymaster_operation_handle_t handle;
-        if (!mOperationMap.getOperation(token, &handle, &dev, NULL)) {
+        keymaster_purpose_t purpose;
+        if (!mOperationMap.getOperation(token, &handle, &purpose, &dev, NULL)) {
             return KM_ERROR_INVALID_OPERATION_HANDLE;
         }
         mOperationMap.removeOperation(token);
@@ -2625,7 +2628,8 @@ public:
         const keymaster1_device_t* dev;
         keymaster_operation_handle_t handle;
         const keymaster_key_characteristics_t* characteristics;
-        if (!mOperationMap.getOperation(token, &handle, &dev, &characteristics)) {
+        keymaster_purpose_t purpose;
+        if (!mOperationMap.getOperation(token, &handle, &purpose, &dev, &characteristics)) {
             return false;
         }
         const hw_auth_token_t* authToken = NULL;
@@ -2831,6 +2835,7 @@ private:
      */
     int32_t getAuthToken(const keymaster_key_characteristics_t* characteristics,
                          keymaster_operation_handle_t handle,
+                         keymaster_purpose_t purpose,
                          const hw_auth_token_t** authToken,
                          bool failOnTokenMissing = true) {
 
@@ -2841,9 +2846,8 @@ private:
         for (size_t i = 0; i < characteristics->hw_enforced.length; i++) {
             allCharacteristics.push_back(characteristics->hw_enforced.params[i]);
         }
-        keymaster::AuthTokenTable::Error err =
-                mAuthTokenTable.FindAuthorization(allCharacteristics.data(),
-                                                  allCharacteristics.size(), handle, authToken);
+        keymaster::AuthTokenTable::Error err = mAuthTokenTable.FindAuthorization(
+                allCharacteristics.data(), allCharacteristics.size(), purpose, handle, authToken);
         switch (err) {
             case keymaster::AuthTokenTable::OK:
             case keymaster::AuthTokenTable::AUTH_NOT_REQUIRED:
@@ -2889,10 +2893,11 @@ private:
             const keymaster1_device_t* dev;
             keymaster_operation_handle_t handle;
             const keymaster_key_characteristics_t* characteristics = NULL;
-            if (!mOperationMap.getOperation(token, &handle, &dev, &characteristics)) {
+            keymaster_purpose_t purpose;
+            if (!mOperationMap.getOperation(token, &handle, &purpose, &dev, &characteristics)) {
                 return KM_ERROR_INVALID_OPERATION_HANDLE;
             }
-            int32_t result = getAuthToken(characteristics, handle, &authToken);
+            int32_t result = getAuthToken(characteristics, handle, purpose, &authToken);
             if (result != ::NO_ERROR) {
                 return result;
             }

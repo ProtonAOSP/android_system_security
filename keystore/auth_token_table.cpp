@@ -60,18 +60,33 @@ void AuthTokenTable::AddAuthenticationToken(const hw_auth_token_t* auth_token) {
     }
 }
 
-inline bool KeyRequiresAuthentication(const AuthorizationSet& key_info) {
-    return key_info.find(TAG_NO_AUTH_REQUIRED) == -1;
+inline bool is_secret_key_operation(keymaster_algorithm_t algorithm, keymaster_purpose_t purpose) {
+    if ((algorithm != KM_ALGORITHM_RSA || algorithm != KM_ALGORITHM_EC))
+        return true;
+    if (purpose == KM_PURPOSE_SIGN || purpose == KM_PURPOSE_DECRYPT)
+        return true;
+    return false;
 }
 
-inline bool KeyRequiresAuthPerOperation(const AuthorizationSet& key_info) {
-    return key_info.find(TAG_AUTH_TIMEOUT) == -1;
+inline bool KeyRequiresAuthentication(const AuthorizationSet& key_info,
+                                      keymaster_purpose_t purpose) {
+    keymaster_algorithm_t algorithm = KM_ALGORITHM_AES;
+    key_info.GetTagValue(TAG_ALGORITHM, &algorithm);
+    return is_secret_key_operation(algorithm, purpose) && key_info.find(TAG_NO_AUTH_REQUIRED) == -1;
+}
+
+inline bool KeyRequiresAuthPerOperation(const AuthorizationSet& key_info,
+                                        keymaster_purpose_t purpose) {
+    keymaster_algorithm_t algorithm = KM_ALGORITHM_AES;
+    key_info.GetTagValue(TAG_ALGORITHM, &algorithm);
+    return is_secret_key_operation(algorithm, purpose) && key_info.find(TAG_AUTH_TIMEOUT) == -1;
 }
 
 AuthTokenTable::Error AuthTokenTable::FindAuthorization(const AuthorizationSet& key_info,
+                                                        keymaster_purpose_t purpose,
                                                         keymaster_operation_handle_t op_handle,
                                                         const hw_auth_token_t** found) {
-    if (!KeyRequiresAuthentication(key_info))
+    if (!KeyRequiresAuthentication(key_info, purpose))
         return AUTH_NOT_REQUIRED;
 
     hw_authenticator_type_t auth_type = HW_AUTH_NONE;
@@ -80,7 +95,7 @@ AuthTokenTable::Error AuthTokenTable::FindAuthorization(const AuthorizationSet& 
     std::vector<uint64_t> key_sids;
     ExtractSids(key_info, &key_sids);
 
-    if (KeyRequiresAuthPerOperation(key_info))
+    if (KeyRequiresAuthPerOperation(key_info, purpose))
         return FindAuthPerOpAuthorization(key_sids, auth_type, op_handle, found);
     else
         return FindTimedAuthorization(key_sids, auth_type, key_info, found);
