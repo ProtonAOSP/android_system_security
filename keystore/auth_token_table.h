@@ -70,7 +70,7 @@ class AuthTokenTable {
      *
      * The table retains ownership of the returned object.
      */
-    Error FindAuthorization(const AuthorizationSet& key_info,
+    Error FindAuthorization(const AuthorizationSet& key_info, keymaster_purpose_t purpose,
                             keymaster_operation_handle_t op_handle, const hw_auth_token_t** found);
 
     /**
@@ -84,8 +84,9 @@ class AuthTokenTable {
      * The table retains ownership of the returned object.
      */
     Error FindAuthorization(const keymaster_key_param_t* params, size_t params_count,
-                            keymaster_operation_handle_t op_handle, const hw_auth_token_t** found) {
-        return FindAuthorization(AuthorizationSet(params, params_count), op_handle, found);
+                            keymaster_purpose_t purpose, keymaster_operation_handle_t op_handle,
+                            const hw_auth_token_t** found) {
+        return FindAuthorization(AuthorizationSet(params, params_count), purpose, op_handle, found);
     }
 
     /**
