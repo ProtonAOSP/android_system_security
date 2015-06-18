@@ -2974,10 +2974,6 @@ private:
                               uint8_t** out, size_t* outLength, const uint8_t* signature,
                               size_t signatureLength, keymaster_purpose_t purpose) {
 
-        if (exist(name, IPCThreadState::self()->getCallingUid()) != ::NO_ERROR) {
-            ALOGW("Key not found");
-            return ::KEY_NOT_FOUND;
-        }
         std::basic_stringstream<uint8_t> outBuffer;
         OperationResult result;
         KeymasterArguments inArgs;
@@ -2987,7 +2983,11 @@ private:
 
         begin(appToken, name, purpose, true, inArgs, NULL, 0, &result);
         if (result.resultCode != ResponseCode::NO_ERROR) {
-            ALOGW("Error in begin: %d", result.resultCode);
+            if (result.resultCode == ::KEY_NOT_FOUND) {
+                ALOGW("Key not found");
+            } else {
+                ALOGW("Error in begin: %d", result.resultCode);
+            }
             return translateResultToLegacyResult(result.resultCode);
         }
         inArgs.params.clear();
