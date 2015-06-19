@@ -25,13 +25,13 @@ OperationMap::OperationMap(IBinder::DeathRecipient* deathRecipient)
 }
 
 sp<IBinder> OperationMap::addOperation(keymaster_operation_handle_t handle,
-                                       keymaster_purpose_t purpose,
+                                       uint64_t keyid, keymaster_purpose_t purpose,
                                        const keymaster1_device_t* dev,
                                        sp<IBinder> appToken,
                                        keymaster_key_characteristics_t* characteristics,
                                        bool pruneable) {
     sp<IBinder> token = new BBinder();
-    mMap[token] = std::move(Operation(handle, purpose, dev, characteristics, appToken));
+    mMap[token] = std::move(Operation(handle, keyid, purpose, dev, characteristics, appToken));
     if (pruneable) {
         mLru.push_back(token);
     }
@@ -43,7 +43,7 @@ sp<IBinder> OperationMap::addOperation(keymaster_operation_handle_t handle,
 }
 
 bool OperationMap::getOperation(sp<IBinder> token, keymaster_operation_handle_t* outHandle,
-                                keymaster_purpose_t* outPurpose,
+                                uint64_t* outKeyid, keymaster_purpose_t* outPurpose,
                                 const keymaster1_device_t** outDevice,
                                 const keymaster_key_characteristics_t** outCharacteristics) {
     if (!outHandle || !outDevice) {
@@ -56,6 +56,7 @@ bool OperationMap::getOperation(sp<IBinder> token, keymaster_operation_handle_t*
     updateLru(token);
 
     *outHandle = entry->second.handle;
+    *outKeyid = entry->second.keyid;
     *outPurpose = entry->second.purpose;
     *outDevice = entry->second.device;
     if (outCharacteristics) {
@@ -142,11 +143,13 @@ std::vector<sp<IBinder>> OperationMap::getOperationsForToken(sp<IBinder> appToke
 }
 
 OperationMap::Operation::Operation(keymaster_operation_handle_t handle_,
+                                   uint64_t keyid_,
                                    keymaster_purpose_t purpose_,
                                    const keymaster1_device_t* device_,
                                    keymaster_key_characteristics_t* characteristics_,
                                    sp<IBinder> appToken_)
     : handle(handle_),
+      keyid(keyid_),
       purpose(purpose_),
       device(device_),
       characteristics(characteristics_),

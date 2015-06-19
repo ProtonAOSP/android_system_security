@@ -33,7 +33,8 @@ LOCAL_SHARED_LIBRARIES := \
 	libutils \
 	libselinux \
 	libsoftkeymasterdevice \
-	libkeymaster_messages
+	libkeymaster_messages \
+	libkeymaster1
 LOCAL_MODULE := keystore
 LOCAL_MODULE_TAGS := optional
 LOCAL_C_INCLUES := system/keymaster/
