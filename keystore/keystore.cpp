@@ -67,6 +67,7 @@
 
 #include "auth_token_table.h"
 #include "defaults.h"
+#include "keystore_keymaster_enforcement.h"
 #include "operation.h"
 
 /* KeyStore is a secured storage for key-value pairs. In this implementation,
@@ -2480,6 +2481,26 @@ public:
         keymaster_key_param_set_t outParams = {NULL, 0};
         err = dev->begin(dev, purpose, &key, &inParams, &outParams, &handle);
 
+        // Create a keyid for this key.
+        keymaster::km_id_t keyid;
+        if (!enforcement_policy.CreateKeyId(key, &keyid)) {
+            ALOGE("Failed to create a key ID for authorization checking.");
+            result->resultCode = KM_ERROR_UNKNOWN_ERROR;
+            return;
+        }
+
+        // Check that all key authorization policy requirements are met.
+        keymaster::AuthorizationSet key_auths(characteristics->hw_enforced);
+        key_auths.push_back(characteristics->sw_enforced);
+        keymaster::AuthorizationSet operation_params(inParams);
+        err = enforcement_policy.AuthorizeOperation(purpose, keyid, key_auths, operation_params,
+                                                    0 /* op_handle */,
+                                                    true /* is_begin_operation */);
+        if (err) {
+            result->resultCode = err;
+            return;
+        }
+
         // If there are too many operations abort the oldest operation that was
         // started as pruneable and try again.
         while (err == KM_ERROR_TOO_MANY_OPERATIONS && mOperationMap.hasPruneableOperation()) {
@@ -2495,8 +2516,8 @@ public:
             return;
         }
 
-        sp<IBinder> operationToken = mOperationMap.addOperation(handle, purpose, dev, appToken,
-                                                                characteristics.release(),
+        sp<IBinder> operationToken = mOperationMap.addOperation(handle, keyid, purpose, dev,
+                                                                appToken, characteristics.release(),
                                                                 pruneable);
         if (authToken) {
             mOperationMap.setOperationAuthToken(operationToken, authToken);
@@ -2524,7 +2545,9 @@ public:
         const keymaster1_device_t* dev;
         keymaster_operation_handle_t handle;
         keymaster_purpose_t purpose;
-        if (!mOperationMap.getOperation(token, &handle, &purpose, &dev, NULL)) {
+        keymaster::km_id_t keyid;
+        const keymaster_key_characteristics_t* characteristics;
+        if (!mOperationMap.getOperation(token, &handle, &keyid, &purpose, &dev, &characteristics)) {
             result->resultCode = KM_ERROR_INVALID_OPERATION_HANDLE;
             return;
         }
@@ -2539,6 +2562,18 @@ public:
         size_t consumed = 0;
         keymaster_blob_t output = {NULL, 0};
         keymaster_key_param_set_t outParams = {NULL, 0};
+
+        // Check that all key authorization policy requirements are met.
+        keymaster::AuthorizationSet key_auths(characteristics->hw_enforced);
+        key_auths.push_back(characteristics->sw_enforced);
+        keymaster::AuthorizationSet operation_params(inParams);
+        result->resultCode =
+                enforcement_policy.AuthorizeOperation(purpose, keyid, key_auths,
+                                                      operation_params, handle,
+                                                      false /* is_begin_operation */);
+        if (result->resultCode) {
+            return;
+        }
 
         keymaster_error_t err = dev->update(dev, handle, &inParams, &input, &consumed, &outParams,
                                             &output);
@@ -2562,7 +2597,9 @@ public:
         const keymaster1_device_t* dev;
         keymaster_operation_handle_t handle;
         keymaster_purpose_t purpose;
-        if (!mOperationMap.getOperation(token, &handle, &purpose, &dev, NULL)) {
+        keymaster::km_id_t keyid;
+        const keymaster_key_characteristics_t* characteristics;
+        if (!mOperationMap.getOperation(token, &handle, &keyid, &purpose, &dev, &characteristics)) {
             result->resultCode = KM_ERROR_INVALID_OPERATION_HANDLE;
             return;
         }
@@ -2589,6 +2626,18 @@ public:
         keymaster_blob_t input = {signature, signatureLength};
         keymaster_blob_t output = {NULL, 0};
         keymaster_key_param_set_t outParams = {NULL, 0};
+
+        // Check that all key authorization policy requirements are met.
+        keymaster::AuthorizationSet key_auths(characteristics->hw_enforced);
+        key_auths.push_back(characteristics->sw_enforced);
+        keymaster::AuthorizationSet operation_params(inParams);
+        err = enforcement_policy.AuthorizeOperation(purpose, keyid, key_auths, operation_params,
+                                                    handle, false /* is_begin_operation */);
+        if (err) {
+            result->resultCode = err;
+            return;
+        }
+
         err = dev->finish(dev, handle, &inParams, &input, &outParams, &output);
         // Remove the operation regardless of the result
         mOperationMap.removeOperation(token);
@@ -2607,7 +2656,8 @@ public:
         const keymaster1_device_t* dev;
         keymaster_operation_handle_t handle;
         keymaster_purpose_t purpose;
-        if (!mOperationMap.getOperation(token, &handle, &purpose, &dev, NULL)) {
+        keymaster::km_id_t keyid;
+        if (!mOperationMap.getOperation(token, &handle, &keyid, &purpose, &dev, NULL)) {
             return KM_ERROR_INVALID_OPERATION_HANDLE;
         }
         mOperationMap.removeOperation(token);
@@ -2629,7 +2679,8 @@ public:
         keymaster_operation_handle_t handle;
         const keymaster_key_characteristics_t* characteristics;
         keymaster_purpose_t purpose;
-        if (!mOperationMap.getOperation(token, &handle, &purpose, &dev, &characteristics)) {
+        keymaster::km_id_t keyid;
+        if (!mOperationMap.getOperation(token, &handle, &keyid, &purpose, &dev, &characteristics)) {
             return false;
         }
         const hw_auth_token_t* authToken = NULL;
@@ -2894,7 +2945,9 @@ private:
             keymaster_operation_handle_t handle;
             const keymaster_key_characteristics_t* characteristics = NULL;
             keymaster_purpose_t purpose;
-            if (!mOperationMap.getOperation(token, &handle, &purpose, &dev, &characteristics)) {
+            keymaster::km_id_t keyid;
+            if (!mOperationMap.getOperation(token, &handle, &keyid, &purpose, &dev,
+                                            &characteristics)) {
                 return KM_ERROR_INVALID_OPERATION_HANDLE;
             }
             int32_t result = getAuthToken(characteristics, handle, purpose, &authToken);
@@ -3034,6 +3087,7 @@ private:
     ::KeyStore* mKeyStore;
     OperationMap mOperationMap;
     keymaster::AuthTokenTable mAuthTokenTable;
+    KeystoreKeymasterEnforcement enforcement_policy;
 };
 
 }; // namespace android
