@@ -103,8 +103,12 @@ void OperationMap::removeOperationTracking(sp<IBinder> token, sp<IBinder> appTok
     }
 }
 
-bool OperationMap::hasPruneableOperation() {
+bool OperationMap::hasPruneableOperation() const {
     return mLru.size() != 0;
+}
+
+size_t OperationMap::getPruneableOperationCount() const {
+    return mLru.size();
 }
 
 sp<IBinder> OperationMap::getOldestPruneableOperation() {
