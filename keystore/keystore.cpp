@@ -2478,8 +2478,6 @@ public:
             }
         }
         keymaster_key_param_set_t inParams = {opParams.data(), opParams.size()};
-        keymaster_key_param_set_t outParams = {NULL, 0};
-        err = dev->begin(dev, purpose, &key, &inParams, &outParams, &handle);
 
         // Create a keyid for this key.
         keymaster::km_id_t keyid;
@@ -2500,6 +2498,9 @@ public:
             result->resultCode = err;
             return;
         }
+
+        keymaster_key_param_set_t outParams = {NULL, 0};
+        err = dev->begin(dev, purpose, &key, &inParams, &outParams, &handle);
 
         // If there are too many operations abort the oldest operation that was
         // started as pruneable and try again.
