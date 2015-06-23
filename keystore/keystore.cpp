@@ -2506,7 +2506,16 @@ public:
         while (err == KM_ERROR_TOO_MANY_OPERATIONS && mOperationMap.hasPruneableOperation()) {
             sp<IBinder> oldest = mOperationMap.getOldestPruneableOperation();
             ALOGD("Ran out of operation handles, trying to prune %p", oldest.get());
-            if (abort(oldest) != ::NO_ERROR) {
+
+            // We mostly ignore errors from abort() below because all we care about is whether at
+            // least one pruneable operation has been removed.
+            size_t op_count_before = mOperationMap.getPruneableOperationCount();
+            int abort_error = abort(oldest);
+            size_t op_count_after = mOperationMap.getPruneableOperationCount();
+            if (op_count_after >= op_count_before) {
+                // Failed to create space for a new operation. Bail to avoid an infinite loop.
+                ALOGE("Failed to remove pruneable operation %p, error: %d",
+                      oldest.get(), abort_error);
                 break;
             }
             err = dev->begin(dev, purpose, &key, &inParams, &outParams, &handle);
