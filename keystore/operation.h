@@ -56,7 +56,8 @@ public:
                       const keymaster1_device_t** outDev,
                       const keymaster_key_characteristics_t** outCharacteristics);
     bool removeOperation(sp<IBinder> token);
-    bool hasPruneableOperation();
+    bool hasPruneableOperation() const;
+    size_t getPruneableOperationCount() const;
     bool getOperationAuthToken(sp<IBinder> token, const hw_auth_token_t** outToken);
     bool setOperationAuthToken(sp<IBinder> token, const hw_auth_token_t* authToken);
     sp<IBinder> getOldestPruneableOperation();
