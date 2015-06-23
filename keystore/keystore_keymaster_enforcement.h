@@ -38,15 +38,38 @@ class KeystoreKeymasterEnforcement : public keymaster::KeymasterEnforcement {
     }
 
     bool activation_date_valid(uint64_t activation_date) const override {
-        // Convert java date to time_t, non-portably.
-        time_t activation_time = activation_date / 1000;
-        return difftime(time(NULL), activation_time) >= 0;
+        time_t now = time(NULL);
+        if (now == static_cast<time_t>(-1)) {
+            // Failed to obtain current time -- fail safe: activation_date hasn't yet occurred.
+            return false;
+        } else if (now < 0) {
+            // Current time is prior to start of the epoch -- activation_date hasn't yet occurred.
+            return false;
+        }
+
+        // time(NULL) returns seconds since epoch and "loses" milliseconds information. We thus add
+        // 999 ms to now_date to avoid a situation where an activation_date of up to 999ms in the
+        // past may still be considered to still be in the future. This can be removed once
+        // time(NULL) is replaced by a millisecond-precise source of time.
+        uint64_t now_date = static_cast<uint64_t>(now) * 1000 + 999;
+        return now_date >= activation_date;
     }
 
     bool expiration_date_passed(uint64_t expiration_date) const override {
-        // Convert jave date to time_t, non-portably.
-        time_t expiration_time = expiration_date / 1000;
-        return difftime(time(NULL), expiration_time) > 0;
+        time_t now = time(NULL);
+        if (now == static_cast<time_t>(-1)) {
+            // Failed to obtain current time -- fail safe: expiration_date has passed.
+            return true;
+        } else if (now < 0) {
+            // Current time is prior to start of the epoch: expiration_date hasn't yet occurred.
+            return false;
+        }
+
+        // time(NULL) returns seconds since epoch and "loses" milliseconds information. As a result,
+        // expiration_date of up to 999 ms in the past may still be considered in the future. This
+        // is OK.
+        uint64_t now_date = static_cast<uint64_t>(now) * 1000;
+        return now_date > expiration_date;
     }
 
     bool auth_token_timed_out(const hw_auth_token_t&, uint32_t) const {
