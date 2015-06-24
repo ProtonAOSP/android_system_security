@@ -216,14 +216,14 @@ void writeKeymasterArgumentToParcel(const keymaster_key_param_t& param, Parcel* 
             out->writeInt32(param.enumerated);
             break;
         }
-        case KM_INT:
-        case KM_INT_REP: {
+        case KM_UINT:
+        case KM_UINT_REP: {
             out->writeInt32(param.tag);
             out->writeInt32(param.integer);
             break;
         }
-        case KM_LONG:
-        case KM_LONG_REP: {
+        case KM_ULONG:
+        case KM_ULONG_REP: {
             out->writeInt32(param.tag);
             out->writeInt64(param.long_integer);
             break;
@@ -268,14 +268,14 @@ bool readKeymasterArgumentFromParcel(const Parcel& in, keymaster_key_param_t* ou
             *out = keymaster_param_enum(tag, value);
             break;
         }
-        case KM_INT:
-        case KM_INT_REP: {
+        case KM_UINT:
+        case KM_UINT_REP: {
             uint32_t value = in.readInt32();
             *out = keymaster_param_int(tag, value);
             break;
         }
-        case KM_LONG:
-        case KM_LONG_REP: {
+        case KM_ULONG:
+        case KM_ULONG_REP: {
             uint64_t value = in.readInt64();
             *out = keymaster_param_long(tag, value);
             break;
