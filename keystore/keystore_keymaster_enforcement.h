@@ -73,9 +73,9 @@ class KeystoreKeymasterEnforcement : public keymaster::KeymasterEnforcement {
     }
 
     bool auth_token_timed_out(const hw_auth_token_t&, uint32_t) const {
-        // Non-secure world cannot check token timeouts because it doesn't have access to the secure
-        // clock.  Assume the token is good.
-        return true;
+        // Assume the token has not timed out, because AuthTokenTable would not have returned it if
+        // the timeout were past.  Secure hardware will also check timeouts if it supports them.
+        return false;
     }
 
     bool ValidateTokenSignature(const hw_auth_token_t&) const override {
