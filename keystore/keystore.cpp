@@ -669,6 +669,10 @@ public:
             return SYSTEM_ERROR;
         }
 
+        if (fileLength == 0) {
+            return VALUE_CORRUPTED;
+        }
+
         if (isEncrypted() && (state != STATE_NO_ERROR)) {
             return LOCKED;
         }
@@ -1208,6 +1212,10 @@ public:
     ResponseCode del(const char *filename, const BlobType type, uid_t userId) {
         Blob keyBlob;
         ResponseCode rc = get(filename, &keyBlob, type, userId);
+        if (rc == ::VALUE_CORRUPTED) {
+            // The file is corrupt, the best we can do is rm it.
+            return (unlink(filename) && errno != ENOENT) ? ::SYSTEM_ERROR : ::NO_ERROR;
+        }
         if (rc != ::NO_ERROR) {
             return rc;
         }
@@ -1710,7 +1718,6 @@ public:
         ResponseCode responseCode = mKeyStore->getKeyForName(&keyBlob, name8, callingUid,
                 TYPE_GENERIC);
         if (responseCode != ::NO_ERROR) {
-            ALOGW("Could not read %s", name8.string());
             *item = NULL;
             *itemLength = 0;
             return responseCode;
