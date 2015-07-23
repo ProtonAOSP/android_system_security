@@ -1912,7 +1912,7 @@ public:
         }
 
         KeymasterArguments params;
-        addLegacyKeyAuthorizations(params.params);
+        addLegacyKeyAuthorizations(params.params, keyType);
 
         switch (keyType) {
             case EVP_PKEY_EC: {
@@ -1979,8 +1979,6 @@ public:
 
     int32_t import(const String16& name, const uint8_t* data, size_t length, int targetUid,
             int32_t flags) {
-        KeymasterArguments params;
-        addLegacyKeyAuthorizations(params.params);
         const uint8_t* ptr = data;
 
         Unique_PKCS8_PRIV_KEY_INFO pkcs8(d2i_PKCS8_PRIV_KEY_INFO(NULL, &ptr, length));
@@ -1992,6 +1990,8 @@ public:
             return ::SYSTEM_ERROR;
         }
         int type = EVP_PKEY_type(pkey->type);
+        KeymasterArguments params;
+        addLegacyKeyAuthorizations(params.params, type);
         switch (type) {
             case EVP_PKEY_RSA:
                 params.params.push_back(keymaster_param_enum(KM_TAG_ALGORITHM, KM_ALGORITHM_RSA));
@@ -2990,13 +2990,25 @@ private:
         return ::SYSTEM_ERROR;
     }
 
-    void addLegacyKeyAuthorizations(std::vector<keymaster_key_param_t>& params) {
+    void addLegacyKeyAuthorizations(std::vector<keymaster_key_param_t>& params, int keyType) {
         params.push_back(keymaster_param_enum(KM_TAG_PURPOSE, KM_PURPOSE_SIGN));
         params.push_back(keymaster_param_enum(KM_TAG_PURPOSE, KM_PURPOSE_VERIFY));
         params.push_back(keymaster_param_enum(KM_TAG_PURPOSE, KM_PURPOSE_ENCRYPT));
         params.push_back(keymaster_param_enum(KM_TAG_PURPOSE, KM_PURPOSE_DECRYPT));
         params.push_back(keymaster_param_enum(KM_TAG_PADDING, KM_PAD_NONE));
+        if (keyType == EVP_PKEY_RSA) {
+            params.push_back(keymaster_param_enum(KM_TAG_PADDING, KM_PAD_RSA_PKCS1_1_5_SIGN));
+            params.push_back(keymaster_param_enum(KM_TAG_PADDING, KM_PAD_RSA_PKCS1_1_5_ENCRYPT));
+            params.push_back(keymaster_param_enum(KM_TAG_PADDING, KM_PAD_RSA_PSS));
+            params.push_back(keymaster_param_enum(KM_TAG_PADDING, KM_PAD_RSA_OAEP));
+        }
         params.push_back(keymaster_param_enum(KM_TAG_DIGEST, KM_DIGEST_NONE));
+        params.push_back(keymaster_param_enum(KM_TAG_DIGEST, KM_DIGEST_MD5));
+        params.push_back(keymaster_param_enum(KM_TAG_DIGEST, KM_DIGEST_SHA1));
+        params.push_back(keymaster_param_enum(KM_TAG_DIGEST, KM_DIGEST_SHA_2_224));
+        params.push_back(keymaster_param_enum(KM_TAG_DIGEST, KM_DIGEST_SHA_2_256));
+        params.push_back(keymaster_param_enum(KM_TAG_DIGEST, KM_DIGEST_SHA_2_384));
+        params.push_back(keymaster_param_enum(KM_TAG_DIGEST, KM_DIGEST_SHA_2_512));
         params.push_back(keymaster_param_bool(KM_TAG_ALL_USERS));
         params.push_back(keymaster_param_bool(KM_TAG_NO_AUTH_REQUIRED));
         params.push_back(keymaster_param_date(KM_TAG_ORIGINATION_EXPIRE_DATETIME, LLONG_MAX));
