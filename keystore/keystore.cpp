@@ -80,6 +80,7 @@
 #define VALUE_SIZE      32768
 #define PASSWORD_SIZE   VALUE_SIZE
 
+using keymaster::SoftKeymasterDevice;
 
 struct BIGNUM_Delete {
     void operator()(BIGNUM* p) const {
@@ -109,36 +110,112 @@ struct PKCS8_PRIV_KEY_INFO_Delete {
 };
 typedef UniquePtr<PKCS8_PRIV_KEY_INFO, PKCS8_PRIV_KEY_INFO_Delete> Unique_PKCS8_PRIV_KEY_INFO;
 
-static int keymaster_device_initialize(keymaster1_device_t** dev) {
-    int rc;
+static int keymaster0_device_initialize(const hw_module_t* mod, keymaster1_device_t** dev) {
+    assert(mod->module_api_version < KEYMASTER_MODULE_API_VERSION_1_0);
+    ALOGI("Found keymaster0 module %s, version %x", mod->name, mod->module_api_version);
 
-    const hw_module_t* mod;
-    keymaster::SoftKeymasterDevice* softkeymaster = NULL;
-    rc = hw_get_module_by_class(KEYSTORE_HARDWARE_MODULE_ID, NULL, &mod);
+    UniquePtr<SoftKeymasterDevice> soft_keymaster(new SoftKeymasterDevice);
+    keymaster0_device_t* km0_device = NULL;
+    keymaster_error_t error = KM_ERROR_OK;
+
+    int rc = keymaster0_open(mod, &km0_device);
     if (rc) {
-        ALOGE("could not find any keystore module");
-        goto out;
+        ALOGE("Error opening keystore keymaster0 device.");
+        goto err;
     }
 
-    rc = mod->methods->open(mod, KEYSTORE_KEYMASTER, reinterpret_cast<struct hw_device_t**>(dev));
-    if (rc) {
-        ALOGE("could not open keymaster device in %s (%s)",
-            KEYSTORE_HARDWARE_MODULE_ID, strerror(-rc));
-        goto out;
-    }
-
-    // Wrap older hardware modules with a softkeymaster adapter.
-    if ((*dev)->common.module->module_api_version >= KEYMASTER_MODULE_API_VERSION_1_0) {
+    if (km0_device->flags & KEYMASTER_SOFTWARE_ONLY) {
+        ALOGI("Keymaster0 module is software-only.  Using SoftKeymasterDevice instead.");
+        km0_device->common.close(&km0_device->common);
+        km0_device = NULL;
+        // SoftKeymasterDevice will be deleted by keymaster_device_release()
+        *dev = soft_keymaster.release()->keymaster_device();
         return 0;
     }
-    softkeymaster =
-            new keymaster::SoftKeymasterDevice(reinterpret_cast<keymaster0_device_t*>(*dev));
-    *dev = softkeymaster->keymaster_device();
+
+    ALOGE("Wrapping keymaster0 module %s with SoftKeymasterDevice", mod->name);
+    error = soft_keymaster->SetHardwareDevice(km0_device);
+    km0_device = NULL;  // SoftKeymasterDevice has taken ownership.
+    if (error != KM_ERROR_OK) {
+        ALOGE("Got error %d from SetHardwareDevice", error);
+        rc = error;
+        goto err;
+    }
+
+    // SoftKeymasterDevice will be deleted by keymaster_device_release()
+    *dev = soft_keymaster.release()->keymaster_device();
     return 0;
 
-out:
+err:
+    if (km0_device)
+        km0_device->common.close(&km0_device->common);
     *dev = NULL;
     return rc;
+}
+
+static int keymaster1_device_initialize(const hw_module_t* mod, keymaster1_device_t** dev) {
+    assert(mod->module_api_version >= KEYMASTER_MODULE_API_VERSION_1_0);
+    ALOGI("Found keymaster1 module %s, version %x", mod->name, mod->module_api_version);
+
+    UniquePtr<SoftKeymasterDevice> soft_keymaster(new SoftKeymasterDevice);
+    keymaster1_device_t* km1_device = NULL;
+    keymaster_error_t error = KM_ERROR_OK;
+
+    int rc = keymaster1_open(mod, &km1_device);
+    if (rc) {
+        ALOGE("Error %d opening keystore keymaster1 device", rc);
+        goto err;
+    }
+
+    error = soft_keymaster->SetHardwareDevice(km1_device);
+    km1_device = NULL;  // SoftKeymasterDevice has taken ownership.
+    if (error != KM_ERROR_OK) {
+        ALOGE("Got error %d from SetHardwareDevice", error);
+        rc = error;
+        goto err;
+    }
+
+    if (!soft_keymaster->Keymaster1DeviceIsGood()) {
+        ALOGI("Keymaster1 module is incomplete, using SoftKeymasterDevice wrapper");
+        // SoftKeymasterDevice will be deleted by keymaster_device_release()
+        *dev = soft_keymaster.release()->keymaster_device();
+        return 0;
+    } else {
+        ALOGI("Keymaster1 module is good, destroying wrapper and re-opening");
+        soft_keymaster.reset(NULL);
+        rc = keymaster1_open(mod, &km1_device);
+        if (rc) {
+            ALOGE("Error %d re-opening keystore keymaster1 device.", rc);
+            goto err;
+        }
+        *dev = km1_device;
+        return 0;
+    }
+
+err:
+    if (km1_device)
+        km1_device->common.close(&km1_device->common);
+    *dev = NULL;
+    return rc;
+
+}
+
+static int keymaster_device_initialize(keymaster1_device_t** dev) {
+    const hw_module_t* mod;
+
+    int rc = hw_get_module_by_class(KEYSTORE_HARDWARE_MODULE_ID, NULL, &mod);
+    if (rc) {
+        ALOGI("Could not find any keystore module, using software-only implementation.");
+        // SoftKeymasterDevice will be deleted by keymaster_device_release()
+        *dev = (new SoftKeymasterDevice)->keymaster_device();
+        return 0;
+    }
+
+    if (mod->module_api_version < KEYMASTER_MODULE_API_VERSION_1_0) {
+        return keymaster0_device_initialize(mod, dev);
+    } else {
+        return keymaster1_device_initialize(mod, dev);
+    }
 }
 
 // softkeymaster_logger appears not to be used in keystore, but it installs itself as the
@@ -146,15 +223,41 @@ out:
 static keymaster::SoftKeymasterLogger softkeymaster_logger;
 
 static int fallback_keymaster_device_initialize(keymaster1_device_t** dev) {
-    keymaster::SoftKeymasterDevice* softkeymaster =
-            new keymaster::SoftKeymasterDevice();
-    *dev = softkeymaster->keymaster_device();
-    // softkeymaster will be freed by *dev->close_device; don't delete here.
+    *dev = (new SoftKeymasterDevice)->keymaster_device();
+    // SoftKeymasterDevice will be deleted by keymaster_device_release()
     return 0;
 }
 
 static void keymaster_device_release(keymaster1_device_t* dev) {
     dev->common.close(&dev->common);
+}
+
+static void add_legacy_key_authorizations(int keyType, std::vector<keymaster_key_param_t>* params) {
+    params->push_back(keymaster_param_enum(KM_TAG_PURPOSE, KM_PURPOSE_SIGN));
+    params->push_back(keymaster_param_enum(KM_TAG_PURPOSE, KM_PURPOSE_VERIFY));
+    params->push_back(keymaster_param_enum(KM_TAG_PURPOSE, KM_PURPOSE_ENCRYPT));
+    params->push_back(keymaster_param_enum(KM_TAG_PURPOSE, KM_PURPOSE_DECRYPT));
+    params->push_back(keymaster_param_enum(KM_TAG_PADDING, KM_PAD_NONE));
+    if (keyType == EVP_PKEY_RSA) {
+        params->push_back(keymaster_param_enum(KM_TAG_PADDING, KM_PAD_RSA_PKCS1_1_5_SIGN));
+        params->push_back(keymaster_param_enum(KM_TAG_PADDING, KM_PAD_RSA_PKCS1_1_5_ENCRYPT));
+        params->push_back(keymaster_param_enum(KM_TAG_PADDING, KM_PAD_RSA_PSS));
+        params->push_back(keymaster_param_enum(KM_TAG_PADDING, KM_PAD_RSA_OAEP));
+    }
+    params->push_back(keymaster_param_enum(KM_TAG_DIGEST, KM_DIGEST_NONE));
+    params->push_back(keymaster_param_enum(KM_TAG_DIGEST, KM_DIGEST_MD5));
+    params->push_back(keymaster_param_enum(KM_TAG_DIGEST, KM_DIGEST_SHA1));
+    params->push_back(keymaster_param_enum(KM_TAG_DIGEST, KM_DIGEST_SHA_2_224));
+    params->push_back(keymaster_param_enum(KM_TAG_DIGEST, KM_DIGEST_SHA_2_256));
+    params->push_back(keymaster_param_enum(KM_TAG_DIGEST, KM_DIGEST_SHA_2_384));
+    params->push_back(keymaster_param_enum(KM_TAG_DIGEST, KM_DIGEST_SHA_2_512));
+    params->push_back(keymaster_param_bool(KM_TAG_ALL_USERS));
+    params->push_back(keymaster_param_bool(KM_TAG_NO_AUTH_REQUIRED));
+    params->push_back(keymaster_param_date(KM_TAG_ORIGINATION_EXPIRE_DATETIME, LLONG_MAX));
+    params->push_back(keymaster_param_date(KM_TAG_USAGE_EXPIRE_DATETIME, LLONG_MAX));
+    params->push_back(keymaster_param_date(KM_TAG_ACTIVE_DATETIME, 0));
+    uint64_t now = keymaster::java_time(time(NULL));
+    params->push_back(keymaster_param_date(KM_TAG_CREATION_DATETIME, now));
 }
 
 /***************
@@ -1250,9 +1353,11 @@ public:
         }
 
         if (keyBlob.getType() == ::TYPE_KEY_PAIR) {
-            // A device doesn't have to implement delete_keypair.
-            if (mDevice->delete_keypair != NULL && !keyBlob.isFallback()) {
-                if (mDevice->delete_keypair(mDevice, keyBlob.getValue(), keyBlob.getLength())) {
+            // A device doesn't have to implement delete_key.
+            if (mDevice->delete_key != NULL && !keyBlob.isFallback()) {
+                keymaster_key_blob_t blob = {keyBlob.getValue(),
+                                             static_cast<size_t>(keyBlob.getLength())};
+                if (mDevice->delete_key(mDevice, &blob)) {
                     rc = ::SYSTEM_ERROR;
                 }
             }
@@ -1345,35 +1450,58 @@ public:
 
     ResponseCode importKey(const uint8_t* key, size_t keyLen, const char* filename, uid_t userId,
             int32_t flags) {
-        uint8_t* data;
-        size_t dataLength;
-        int rc;
-
-        if (mDevice->import_keypair == NULL) {
-            ALOGE("Keymaster doesn't support import!");
-            return SYSTEM_ERROR;
+        Unique_PKCS8_PRIV_KEY_INFO pkcs8(d2i_PKCS8_PRIV_KEY_INFO(NULL, &key, keyLen));
+        if (!pkcs8.get()) {
+            return ::SYSTEM_ERROR;
+        }
+        Unique_EVP_PKEY pkey(EVP_PKCS82PKEY(pkcs8.get()));
+        if (!pkey.get()) {
+            return ::SYSTEM_ERROR;
+        }
+        int type = EVP_PKEY_type(pkey->type);
+        android::KeymasterArguments params;
+        add_legacy_key_authorizations(type, &params.params);
+        switch (type) {
+            case EVP_PKEY_RSA:
+                params.params.push_back(keymaster_param_enum(KM_TAG_ALGORITHM, KM_ALGORITHM_RSA));
+                break;
+            case EVP_PKEY_EC:
+                params.params.push_back(keymaster_param_enum(KM_TAG_ALGORITHM,
+                                                             KM_ALGORITHM_EC));
+                break;
+            default:
+                ALOGW("Unsupported key type %d", type);
+                return ::SYSTEM_ERROR;
         }
 
+        std::vector<keymaster_key_param_t> opParams(params.params);
+        const keymaster_key_param_set_t inParams = {opParams.data(), opParams.size()};
+        keymaster_blob_t input = {key, keyLen};
+        keymaster_key_blob_t blob = {nullptr, 0};
         bool isFallback = false;
-        rc = mDevice->import_keypair(mDevice, key, keyLen, &data, &dataLength);
-        if (rc) {
+        keymaster_error_t error = mDevice->import_key(mDevice, &inParams, KM_KEY_FORMAT_PKCS8,
+                                                      &input, &blob, NULL /* characteristics */);
+        if (error != KM_ERROR_OK){
+            ALOGE("Keymaster error %d importing key pair, falling back", error);
+
             /*
-             * Maybe the device doesn't support this type of key. Try to use the
-             * software fallback keymaster implementation. This is a little bit
-             * lazier than checking the PKCS#8 key type, but the software
-             * implementation will do that anyway.
+             * There should be no way to get here.  Fallback shouldn't ever really happen
+             * because the main device may be many (SW, KM0/SW hybrid, KM1/SW hybrid), but it must
+             * provide full support of the API.  In any case, we'll do the fallback just for
+             * consistency... and I suppose to cover for broken HW implementations.
              */
-            rc = mFallbackDevice->import_keypair(mFallbackDevice, key, keyLen, &data, &dataLength);
+            error = mFallbackDevice->import_key(mFallbackDevice, &inParams, KM_KEY_FORMAT_PKCS8,
+                                                &input, &blob, NULL /* characteristics */);
             isFallback = true;
 
-            if (rc) {
-                ALOGE("Error while importing keypair: %d", rc);
+            if (error) {
+                ALOGE("Keymaster error while importing key pair with fallback: %d", error);
                 return SYSTEM_ERROR;
             }
         }
 
-        Blob keyBlob(data, dataLength, NULL, 0, TYPE_KEY_PAIR);
-        free(data);
+        Blob keyBlob(blob.key_material, blob.key_material_size, NULL, 0, TYPE_KEYMASTER_10);
+        free(const_cast<uint8_t*>(blob.key_material));
 
         keyBlob.setEncrypted(flags & KEYSTORE_FLAG_ENCRYPTED);
         keyBlob.setFallback(isFallback);
@@ -1941,7 +2069,7 @@ public:
         }
 
         KeymasterArguments params;
-        addLegacyKeyAuthorizations(params.params, keyType);
+        add_legacy_key_authorizations(keyType, &params.params);
 
         switch (keyType) {
             case EVP_PKEY_EC: {
@@ -2020,7 +2148,7 @@ public:
         }
         int type = EVP_PKEY_type(pkey->type);
         KeymasterArguments params;
-        addLegacyKeyAuthorizations(params.params, type);
+        add_legacy_key_authorizations(type, &params.params);
         switch (type) {
             case EVP_PKEY_RSA:
                 params.params.push_back(keymaster_param_enum(KM_TAG_ALGORITHM, KM_ALGORITHM_RSA));
@@ -2293,6 +2421,7 @@ public:
         // If the HW device didn't support generate_key or generate_key failed
         // fall back to the software implementation.
         if (rc && fallback->generate_key != NULL) {
+            ALOGW("Primary keymaster device failed to generate key, falling back to SW.");
             isFallback = true;
             if (!entropy) {
                 rc = KM_ERROR_OK;
@@ -2396,6 +2525,7 @@ public:
             rc = device->import_key(device, &inParams, format,&input, &blob, &out);
         }
         if (rc && fallback->import_key != NULL) {
+            ALOGW("Primary keymaster device failed to import key, falling back to SW.");
             isFallback = true;
             rc = fallback->import_key(fallback, &inParams, format, &input, &blob, &out);
         }
@@ -3017,34 +3147,6 @@ private:
             return result;
         }
         return ::SYSTEM_ERROR;
-    }
-
-    void addLegacyKeyAuthorizations(std::vector<keymaster_key_param_t>& params, int keyType) {
-        params.push_back(keymaster_param_enum(KM_TAG_PURPOSE, KM_PURPOSE_SIGN));
-        params.push_back(keymaster_param_enum(KM_TAG_PURPOSE, KM_PURPOSE_VERIFY));
-        params.push_back(keymaster_param_enum(KM_TAG_PURPOSE, KM_PURPOSE_ENCRYPT));
-        params.push_back(keymaster_param_enum(KM_TAG_PURPOSE, KM_PURPOSE_DECRYPT));
-        params.push_back(keymaster_param_enum(KM_TAG_PADDING, KM_PAD_NONE));
-        if (keyType == EVP_PKEY_RSA) {
-            params.push_back(keymaster_param_enum(KM_TAG_PADDING, KM_PAD_RSA_PKCS1_1_5_SIGN));
-            params.push_back(keymaster_param_enum(KM_TAG_PADDING, KM_PAD_RSA_PKCS1_1_5_ENCRYPT));
-            params.push_back(keymaster_param_enum(KM_TAG_PADDING, KM_PAD_RSA_PSS));
-            params.push_back(keymaster_param_enum(KM_TAG_PADDING, KM_PAD_RSA_OAEP));
-        }
-        params.push_back(keymaster_param_enum(KM_TAG_DIGEST, KM_DIGEST_NONE));
-        params.push_back(keymaster_param_enum(KM_TAG_DIGEST, KM_DIGEST_MD5));
-        params.push_back(keymaster_param_enum(KM_TAG_DIGEST, KM_DIGEST_SHA1));
-        params.push_back(keymaster_param_enum(KM_TAG_DIGEST, KM_DIGEST_SHA_2_224));
-        params.push_back(keymaster_param_enum(KM_TAG_DIGEST, KM_DIGEST_SHA_2_256));
-        params.push_back(keymaster_param_enum(KM_TAG_DIGEST, KM_DIGEST_SHA_2_384));
-        params.push_back(keymaster_param_enum(KM_TAG_DIGEST, KM_DIGEST_SHA_2_512));
-        params.push_back(keymaster_param_bool(KM_TAG_ALL_USERS));
-        params.push_back(keymaster_param_bool(KM_TAG_NO_AUTH_REQUIRED));
-        params.push_back(keymaster_param_date(KM_TAG_ORIGINATION_EXPIRE_DATETIME, LLONG_MAX));
-        params.push_back(keymaster_param_date(KM_TAG_USAGE_EXPIRE_DATETIME, LLONG_MAX));
-        params.push_back(keymaster_param_date(KM_TAG_ACTIVE_DATETIME, 0));
-        uint64_t now = keymaster::java_time(time(NULL));
-        params.push_back(keymaster_param_date(KM_TAG_CREATION_DATETIME, now));
     }
 
     keymaster_key_param_t* getKeyAlgorithm(keymaster_key_characteristics_t* characteristics) {
