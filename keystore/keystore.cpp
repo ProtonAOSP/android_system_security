@@ -485,8 +485,16 @@ static const uint8_t CURRENT_BLOB_VERSION = 2;
 
 class Blob {
 public:
-    Blob(const uint8_t* value, int32_t valueLength, const uint8_t* info, uint8_t infoLength,
+    Blob(const uint8_t* value, size_t valueLength, const uint8_t* info, uint8_t infoLength,
             BlobType type) {
+        if (valueLength > sizeof(mBlob.value)) {
+            valueLength = sizeof(mBlob.value);
+            ALOGW("Provided blob length too large");
+        }
+        if (infoLength + valueLength > sizeof(mBlob.value)) {
+            infoLength = sizeof(mBlob.value) - valueLength;
+            ALOGW("Provided info length too large");
+        }
         mBlob.length = valueLength;
         memcpy(mBlob.value, value, valueLength);
 
