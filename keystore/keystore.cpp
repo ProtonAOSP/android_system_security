@@ -508,12 +508,12 @@ public:
     Blob(const uint8_t* value, size_t valueLength, const uint8_t* info, uint8_t infoLength,
             BlobType type) {
         memset(&mBlob, 0, sizeof(mBlob));
-        if (valueLength > sizeof(mBlob.value)) {
-            valueLength = sizeof(mBlob.value);
+        if (valueLength > VALUE_SIZE) {
+            valueLength = VALUE_SIZE;
             ALOGW("Provided blob length too large");
         }
-        if (infoLength + valueLength > sizeof(mBlob.value)) {
-            infoLength = sizeof(mBlob.value) - valueLength;
+        if (infoLength + valueLength > VALUE_SIZE) {
+            infoLength = VALUE_SIZE - valueLength;
             ALOGW("Provided info length too large");
         }
         mBlob.length = valueLength;
