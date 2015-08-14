@@ -30,7 +30,7 @@ sp<IBinder> OperationMap::addOperation(keymaster_operation_handle_t handle,
                                        keymaster_key_characteristics_t* characteristics,
                                        bool pruneable) {
     sp<IBinder> token = new BBinder();
-    mMap[token] = std::move(Operation(handle, dev, characteristics, appToken));
+    mMap[token] = Operation(handle, dev, characteristics, appToken);
     if (pruneable) {
         mLru.push_back(token);
     }
