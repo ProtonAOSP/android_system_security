@@ -37,6 +37,7 @@ LOCAL_SHARED_LIBRARIES := \
 	libkeymaster1
 LOCAL_MODULE := keystore
 LOCAL_MODULE_TAGS := optional
+LOCAL_INIT_RC := keystore.rc
 LOCAL_C_INCLUES := system/keymaster/
 LOCAL_ADDITIONAL_DEPENDENCIES := $(LOCAL_PATH)/Android.mk
 include $(BUILD_EXECUTABLE)
