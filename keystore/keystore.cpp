@@ -256,8 +256,6 @@ static void add_legacy_key_authorizations(int keyType, std::vector<keymaster_key
     params->push_back(keymaster_param_date(KM_TAG_ORIGINATION_EXPIRE_DATETIME, LLONG_MAX));
     params->push_back(keymaster_param_date(KM_TAG_USAGE_EXPIRE_DATETIME, LLONG_MAX));
     params->push_back(keymaster_param_date(KM_TAG_ACTIVE_DATETIME, 0));
-    uint64_t now = keymaster::java_time(time(NULL));
-    params->push_back(keymaster_param_date(KM_TAG_CREATION_DATETIME, now));
 }
 
 /***************
