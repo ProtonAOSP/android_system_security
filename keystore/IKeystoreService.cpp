@@ -418,11 +418,12 @@ public:
         return ret;
     }
 
-    virtual int32_t get(const String16& name, uint8_t** item, size_t* itemLength)
+    virtual int32_t get(const String16& name, int32_t uid, uint8_t** item, size_t* itemLength)
     {
         Parcel data, reply;
         data.writeInterfaceToken(IKeystoreService::getInterfaceDescriptor());
         data.writeString16(name);
+        data.writeInt32(uid);
         status_t status = remote()->transact(BnKeystoreService::GET, data, &reply);
         if (status != NO_ERROR) {
             ALOGD("get() could not contact remote: %d\n", status);
@@ -833,11 +834,12 @@ public:
         return ret;
     }
 
-    int64_t getmtime(const String16& name)
+    int64_t getmtime(const String16& name, int32_t uid)
     {
         Parcel data, reply;
         data.writeInterfaceToken(IKeystoreService::getInterfaceDescriptor());
         data.writeString16(name);
+        data.writeInt32(uid);
         status_t status = remote()->transact(BnKeystoreService::GETMTIME, data, &reply);
         if (status != NO_ERROR) {
             ALOGD("getmtime() could not contact remote: %d\n", status);
@@ -963,7 +965,7 @@ public:
     virtual int32_t getKeyCharacteristics(const String16& name,
                                           const keymaster_blob_t* clientId,
                                           const keymaster_blob_t* appData,
-                                          KeyCharacteristics* outCharacteristics)
+                                          int32_t uid, KeyCharacteristics* outCharacteristics)
     {
         Parcel data, reply;
         data.writeInterfaceToken(IKeystoreService::getInterfaceDescriptor());
@@ -978,6 +980,7 @@ public:
         } else {
             data.writeInt32(-1);
         }
+        data.writeInt32(uid);
         status_t status = remote()->transact(BnKeystoreService::GET_KEY_CHARACTERISTICS,
                                              data, &reply);
         if (status != NO_ERROR) {
@@ -1028,7 +1031,7 @@ public:
 
     virtual void exportKey(const String16& name, keymaster_key_format_t format,
                            const keymaster_blob_t* clientId,
-                           const keymaster_blob_t* appData, ExportResult* result)
+                           const keymaster_blob_t* appData, int32_t uid, ExportResult* result)
     {
         if (!result) {
             return;
@@ -1048,6 +1051,7 @@ public:
         } else {
             data.writeInt32(-1);
         }
+        data.writeInt32(uid);
         status_t status = remote()->transact(BnKeystoreService::EXPORT_KEY, data, &reply);
         if (status != NO_ERROR) {
             ALOGD("exportKey() could not contact remote: %d\n", status);
@@ -1068,7 +1072,7 @@ public:
     virtual void begin(const sp<IBinder>& appToken, const String16& name,
                        keymaster_purpose_t purpose, bool pruneable,
                        const KeymasterArguments& params, const uint8_t* entropy,
-                       size_t entropyLength, OperationResult* result)
+                       size_t entropyLength, int32_t uid, OperationResult* result)
     {
         if (!result) {
             return;
@@ -1082,6 +1086,7 @@ public:
         data.writeInt32(1);
         params.writeToParcel(&data);
         data.writeByteArray(entropyLength, entropy);
+        data.writeInt32(uid);
         status_t status = remote()->transact(BnKeystoreService::BEGIN, data, &reply);
         if (status != NO_ERROR) {
             ALOGD("begin() could not contact remote: %d\n", status);
@@ -1278,9 +1283,10 @@ status_t BnKeystoreService::onTransact(
         case GET: {
             CHECK_INTERFACE(IKeystoreService, data, reply);
             String16 name = data.readString16();
+            int32_t uid = data.readInt32();
             void* out = NULL;
             size_t outSize = 0;
-            int32_t ret = get(name, (uint8_t**) &out, &outSize);
+            int32_t ret = get(name, uid, (uint8_t**) &out, &outSize);
             reply->writeNoException();
             if (ret == 1) {
                 reply->writeInt32(outSize);
@@ -1524,7 +1530,8 @@ status_t BnKeystoreService::onTransact(
         case GETMTIME: {
             CHECK_INTERFACE(IKeystoreService, data, reply);
             String16 name = data.readString16();
-            int64_t ret = getmtime(name);
+            int32_t uid = data.readInt32();
+            int64_t ret = getmtime(name, uid);
             reply->writeNoException();
             reply->writeInt64(ret);
             return NO_ERROR;
@@ -1592,8 +1599,9 @@ status_t BnKeystoreService::onTransact(
             String16 name = data.readString16();
             std::unique_ptr<keymaster_blob_t> clientId = readKeymasterBlob(data);
             std::unique_ptr<keymaster_blob_t> appData = readKeymasterBlob(data);
+            int32_t uid = data.readInt32();
             KeyCharacteristics outCharacteristics;
-            int ret = getKeyCharacteristics(name, clientId.get(), appData.get(),
+            int ret = getKeyCharacteristics(name, clientId.get(), appData.get(), uid,
                                             &outCharacteristics);
             reply->writeNoException();
             reply->writeInt32(ret);
@@ -1630,8 +1638,9 @@ status_t BnKeystoreService::onTransact(
             keymaster_key_format_t format = static_cast<keymaster_key_format_t>(data.readInt32());
             std::unique_ptr<keymaster_blob_t> clientId = readKeymasterBlob(data);
             std::unique_ptr<keymaster_blob_t> appData = readKeymasterBlob(data);
+            int32_t uid = data.readInt32();
             ExportResult result;
-            exportKey(name, format, clientId.get(), appData.get(), &result);
+            exportKey(name, format, clientId.get(), appData.get(), uid, &result);
             reply->writeNoException();
             reply->writeInt32(1);
             result.writeToParcel(reply);
@@ -1651,8 +1660,9 @@ status_t BnKeystoreService::onTransact(
             const uint8_t* entropy = NULL;
             size_t entropyLength = 0;
             readByteArray(data, &entropy, &entropyLength);
+            int32_t uid = data.readInt32();
             OperationResult result;
-            begin(token, name, purpose, pruneable, args, entropy, entropyLength, &result);
+            begin(token, name, purpose, pruneable, args, entropy, entropyLength, uid, &result);
             reply->writeNoException();
             reply->writeInt32(1);
             result.writeToParcel(reply);

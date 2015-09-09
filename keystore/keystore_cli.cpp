@@ -117,6 +117,36 @@ static const char* responses[] = {
         } \
     } while (0)
 
+#define SINGLE_ARG_PLUS_UID_DATA_RETURN(cmd) \
+    do { \
+        if (strcmp(argv[1], #cmd) == 0) { \
+            if (argc < 3) { \
+                fprintf(stderr, "Usage: %s " #cmd " <name> <uid>\n", argv[0]); \
+                return 1; \
+            } \
+            uint8_t* data; \
+            size_t dataSize; \
+            int uid = -1; \
+            if (argc > 3) { \
+                uid = atoi(argv[3]); \
+                fprintf(stderr, "Running as uid %d\n", uid); \
+            } \
+            int32_t ret = service->cmd(String16(argv[2]), uid, &data, &dataSize); \
+            if (ret < 0) { \
+                fprintf(stderr, "%s: could not connect: %d\n", argv[0], ret); \
+                return 1; \
+            } else if (ret != ::NO_ERROR) { \
+                fprintf(stderr, "%s: " #cmd ": %s (%d)\n", argv[0], responses[ret], ret); \
+                return 1; \
+            } else { \
+                fwrite(data, dataSize, 1, stdout); \
+                fflush(stdout); \
+                free(data); \
+                return 0; \
+            } \
+        } \
+    } while (0)
+
 #define STING_ARG_DATA_STDIN_INT_RETURN(cmd) \
     do { \
         if (strcmp(argv[1], #cmd) == 0) { \
@@ -203,7 +233,7 @@ int main(int argc, char* argv[])
 
     SINGLE_INT_ARG_INT_RETURN(getState);
 
-    SINGLE_ARG_DATA_RETURN(get);
+    SINGLE_ARG_PLUS_UID_DATA_RETURN(get);
 
     // TODO: insert
 

@@ -31,7 +31,7 @@ ssize_t keystore_get(const char *key, size_t keyLength, uint8_t** value) {
     }
 
     size_t valueLength;
-    int32_t ret = service->get(String16(key, keyLength), value, &valueLength);
+    int32_t ret = service->get(String16(key, keyLength), -1, value, &valueLength);
     if (ret < 0) {
         return -1;
     } else if (ret != ::NO_ERROR) {

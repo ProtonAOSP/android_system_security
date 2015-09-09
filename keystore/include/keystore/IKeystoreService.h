@@ -140,7 +140,7 @@ public:
 
     virtual int32_t getState(int32_t userId) = 0;
 
-    virtual int32_t get(const String16& name, uint8_t** item, size_t* itemLength) = 0;
+    virtual int32_t get(const String16& name, int32_t uid, uint8_t** item, size_t* itemLength) = 0;
 
     virtual int32_t insert(const String16& name, const uint8_t* item, size_t itemLength, int uid,
             int32_t flags) = 0;
@@ -179,7 +179,7 @@ public:
 
     virtual int32_t ungrant(const String16& name, int32_t granteeUid) = 0;
 
-    virtual int64_t getmtime(const String16& name) = 0;
+    virtual int64_t getmtime(const String16& name, int32_t uid) = 0;
 
     virtual int32_t duplicate(const String16& srcKey, int32_t srcUid, const String16& destKey,
             int32_t destUid) = 0;
@@ -197,6 +197,7 @@ public:
     virtual int32_t getKeyCharacteristics(const String16& name,
                                           const keymaster_blob_t* clientId,
                                           const keymaster_blob_t* appData,
+                                          int32_t uid,
                                           KeyCharacteristics* outCharacteristics) = 0;
 
     virtual int32_t importKey(const String16& name, const KeymasterArguments&  params,
@@ -206,12 +207,12 @@ public:
 
     virtual void exportKey(const String16& name, keymaster_key_format_t format,
                            const keymaster_blob_t* clientId,
-                           const keymaster_blob_t* appData, ExportResult* result) = 0;
+                           const keymaster_blob_t* appData, int32_t uid, ExportResult* result) = 0;
 
     virtual void begin(const sp<IBinder>& apptoken, const String16& name,
                        keymaster_purpose_t purpose, bool pruneable,
                        const KeymasterArguments& params, const uint8_t* entropy,
-                       size_t entropyLength, OperationResult* result) = 0;
+                       size_t entropyLength, int32_t uid, OperationResult* result) = 0;
 
     virtual void update(const sp<IBinder>& token, const KeymasterArguments& params,
                         const uint8_t* data, size_t dataLength, OperationResult* result) = 0;

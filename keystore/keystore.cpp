@@ -1840,16 +1840,16 @@ public:
         return mKeyStore->getState(userId);
     }
 
-    int32_t get(const String16& name, uint8_t** item, size_t* itemLength) {
-        if (!checkBinderPermission(P_GET)) {
+    int32_t get(const String16& name, int32_t uid, uint8_t** item, size_t* itemLength) {
+        uid_t targetUid = getEffectiveUid(uid);
+        if (!checkBinderPermission(P_GET, targetUid)) {
             return ::PERMISSION_DENIED;
         }
 
-        uid_t callingUid = IPCThreadState::self()->getCallingUid();
         String8 name8(name);
         Blob keyBlob;
 
-        ResponseCode responseCode = mKeyStore->getKeyForName(&keyBlob, name8, callingUid,
+        ResponseCode responseCode = mKeyStore->getKeyForName(&keyBlob, name8, targetUid,
                 TYPE_GENERIC);
         if (responseCode != ::NO_ERROR) {
             *item = NULL;
@@ -2176,7 +2176,7 @@ public:
      */
     int32_t get_pubkey(const String16& name, uint8_t** pubkey, size_t* pubkeyLength) {
         ExportResult result;
-        exportKey(name, KM_KEY_FORMAT_X509, NULL, NULL, &result);
+        exportKey(name, KM_KEY_FORMAT_X509, NULL, NULL, UID_SELF, &result);
         if (result.resultCode != ::NO_ERROR) {
             ALOGW("export failed: %d", result.resultCode);
             return translateResultToLegacyResult(result.resultCode);
@@ -2222,15 +2222,15 @@ public:
         return mKeyStore->removeGrant(filename.string(), granteeUid) ? ::NO_ERROR : ::KEY_NOT_FOUND;
     }
 
-    int64_t getmtime(const String16& name) {
-        uid_t callingUid = IPCThreadState::self()->getCallingUid();
-        if (!checkBinderPermission(P_GET)) {
-            ALOGW("permission denied for %d: getmtime", callingUid);
+    int64_t getmtime(const String16& name, int32_t uid) {
+        uid_t targetUid = getEffectiveUid(uid);
+        if (!checkBinderPermission(P_GET, targetUid)) {
+            ALOGW("permission denied for %d: getmtime", targetUid);
             return -1L;
         }
 
         String8 name8(name);
-        String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, callingUid));
+        String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, targetUid));
 
         if (access(filename.string(), R_OK) == -1) {
             ALOGW("could not access %s for getmtime", filename.string());
@@ -2440,18 +2440,25 @@ public:
     int32_t getKeyCharacteristics(const String16& name,
                                   const keymaster_blob_t* clientId,
                                   const keymaster_blob_t* appData,
+                                  int32_t uid,
                                   KeyCharacteristics* outCharacteristics) {
         if (!outCharacteristics) {
             return KM_ERROR_UNEXPECTED_NULL_POINTER;
         }
 
+        uid_t targetUid = getEffectiveUid(uid);
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
+        if (!is_granted_to(callingUid, targetUid)) {
+            ALOGW("uid %d not permitted to act for uid %d in getKeyCharacteristics", callingUid,
+                  targetUid);
+            return ::PERMISSION_DENIED;
+        }
 
         Blob keyBlob;
         String8 name8(name);
         int rc;
 
-        ResponseCode responseCode = mKeyStore->getKeyForName(&keyBlob, name8, callingUid,
+        ResponseCode responseCode = mKeyStore->getKeyForName(&keyBlob, name8, targetUid,
                 TYPE_KEYMASTER_10);
         if (responseCode != ::NO_ERROR) {
             return responseCode;
@@ -2532,15 +2539,22 @@ public:
 
     void exportKey(const String16& name, keymaster_key_format_t format,
                            const keymaster_blob_t* clientId,
-                           const keymaster_blob_t* appData, ExportResult* result) {
+                           const keymaster_blob_t* appData, int32_t uid, ExportResult* result) {
 
+        uid_t targetUid = getEffectiveUid(uid);
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
+        if (!is_granted_to(callingUid, targetUid)) {
+            ALOGW("uid %d not permitted to act for uid %d in exportKey", callingUid,
+                  targetUid);
+            result->resultCode = ::PERMISSION_DENIED;
+            return;
+        }
 
         Blob keyBlob;
         String8 name8(name);
         int rc;
 
-        ResponseCode responseCode = mKeyStore->getKeyForName(&keyBlob, name8, callingUid,
+        ResponseCode responseCode = mKeyStore->getKeyForName(&keyBlob, name8, targetUid,
                 TYPE_KEYMASTER_10);
         if (responseCode != ::NO_ERROR) {
             result->resultCode = responseCode;
@@ -2564,8 +2578,15 @@ public:
 
     void begin(const sp<IBinder>& appToken, const String16& name, keymaster_purpose_t purpose,
                bool pruneable, const KeymasterArguments& params, const uint8_t* entropy,
-               size_t entropyLength, OperationResult* result) {
+               size_t entropyLength, int32_t uid, OperationResult* result) {
         uid_t callingUid = IPCThreadState::self()->getCallingUid();
+        uid_t targetUid = getEffectiveUid(uid);
+        if (!is_granted_to(callingUid, targetUid)) {
+            ALOGW("uid %d not permitted to act for uid %d in begin", callingUid,
+                  targetUid);
+            result->resultCode = ::PERMISSION_DENIED;
+            return;
+        }
         if (!pruneable && get_app_id(callingUid) != AID_SYSTEM) {
             ALOGE("Non-system uid %d trying to start non-pruneable operation", callingUid);
             result->resultCode = ::PERMISSION_DENIED;
@@ -2577,7 +2598,7 @@ public:
         }
         Blob keyBlob;
         String8 name8(name);
-        ResponseCode responseCode = mKeyStore->getKeyForName(&keyBlob, name8, callingUid,
+        ResponseCode responseCode = mKeyStore->getKeyForName(&keyBlob, name8, targetUid,
                 TYPE_KEYMASTER_10);
         if (responseCode != ::NO_ERROR) {
             result->resultCode = responseCode;
@@ -3147,7 +3168,7 @@ private:
 
         // Look up the algorithm of the key.
         KeyCharacteristics characteristics;
-        int32_t rc = getKeyCharacteristics(name, NULL, NULL, &characteristics);
+        int32_t rc = getKeyCharacteristics(name, NULL, NULL, UID_SELF, &characteristics);
         if (rc != ::NO_ERROR) {
             ALOGE("Failed to get key characteristics");
             return;
@@ -3171,7 +3192,7 @@ private:
         sp<IBinder> appToken(new BBinder);
         sp<IBinder> token;
 
-        begin(appToken, name, purpose, true, inArgs, NULL, 0, &result);
+        begin(appToken, name, purpose, true, inArgs, NULL, 0, UID_SELF, &result);
         if (result.resultCode != ResponseCode::NO_ERROR) {
             if (result.resultCode == ::KEY_NOT_FOUND) {
                 ALOGW("Key not found");
