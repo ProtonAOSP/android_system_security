@@ -328,6 +328,11 @@ static struct user_perm {
 static const perm_t DEFAULT_PERMS = static_cast<perm_t>(P_GET_STATE | P_GET | P_INSERT | P_DELETE
                                                         | P_EXIST | P_LIST | P_SIGN | P_VERIFY);
 
+struct audit_data {
+    pid_t pid;
+    uid_t uid;
+};
+
 static char *tctx;
 static int ks_is_selinux_enabled;
 
@@ -357,11 +362,24 @@ static uid_t get_user_id(uid_t uid) {
     return uid / AID_USER;
 }
 
-static bool keystore_selinux_check_access(uid_t /*uid*/, perm_t perm, pid_t spid) {
+static int audit_callback(void *data, security_class_t /* cls */, char *buf, size_t len)
+{
+    struct audit_data *ad = reinterpret_cast<struct audit_data *>(data);
+    if (!ad) {
+        ALOGE("No keystore audit data");
+        return 0;
+    }
+
+    snprintf(buf, len, "pid=%d uid=%d", ad->pid, ad->uid);
+    return 0;
+}
+
+static bool keystore_selinux_check_access(uid_t uid, perm_t perm, pid_t spid) {
     if (!ks_is_selinux_enabled) {
         return true;
     }
 
+    audit_data ad;
     char *sctx = NULL;
     const char *selinux_class = "keystore_key";
     const char *str_perm = get_perm_label(perm);
@@ -375,8 +393,11 @@ static bool keystore_selinux_check_access(uid_t /*uid*/, perm_t perm, pid_t spid
         return false;
     }
 
+    ad.pid = spid;
+    ad.uid = uid;
+
     bool allowed = selinux_check_access(sctx, tctx, selinux_class, str_perm,
-            NULL) == 0;
+            reinterpret_cast<void *>(&ad)) == 0;
     freecon(sctx);
     return allowed;
 }
@@ -3324,6 +3345,8 @@ int main(int argc, char* argv[]) {
     ks_is_selinux_enabled = is_selinux_enabled();
     if (ks_is_selinux_enabled) {
         union selinux_callback cb;
+        cb.func_audit = audit_callback;
+        selinux_set_callback(SELINUX_CB_AUDIT, cb);
         cb.func_log = selinux_log_callback;
         selinux_set_callback(SELINUX_CB_LOG, cb);
         if (getcon(&tctx) != 0) {
