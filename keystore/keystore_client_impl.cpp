@@ -56,6 +56,13 @@ std::string ByteArrayAsString(const uint8_t* data, size_t data_size) {
     return std::string(reinterpret_cast<const char*>(data), data_size);
 }
 
+void CopyParameters(const AuthorizationSet& in, std::vector<keymaster_key_param_t>* out) {
+  keymaster_key_param_set_t tmp;
+  in.CopyToParamSet(&tmp);
+  out->assign(&tmp.params[0], &tmp.params[tmp.length]);
+  free(tmp.params);
+}
+
 }  // namespace
 
 namespace keystore {
@@ -196,7 +203,7 @@ int32_t KeystoreClientImpl::generateKey(const std::string& key_name,
                                         AuthorizationSet* software_enforced_characteristics) {
     String16 key_name16(key_name.data(), key_name.size());
     KeymasterArguments key_arguments;
-    key_arguments.params.assign(key_parameters.begin(), key_parameters.end());
+    CopyParameters(key_parameters, &key_arguments.params);
     KeyCharacteristics characteristics;
     int32_t result =
         keystore_->generateKey(key_name16, key_arguments, NULL /*entropy*/, 0 /*entropyLength*/,
@@ -229,7 +236,7 @@ int32_t KeystoreClientImpl::importKey(const std::string& key_name,
                                       AuthorizationSet* software_enforced_characteristics) {
     String16 key_name16(key_name.data(), key_name.size());
     KeymasterArguments key_arguments;
-    key_arguments.params.assign(key_parameters.begin(), key_parameters.end());
+    CopyParameters(key_parameters, &key_arguments.params);
     KeyCharacteristics characteristics;
     int32_t result =
         keystore_->importKey(key_name16, key_arguments, key_format, StringAsByteArray(key_data),
@@ -267,7 +274,7 @@ int32_t KeystoreClientImpl::beginOperation(keymaster_purpose_t purpose, const st
     android::sp<android::IBinder> token(new android::BBinder);
     String16 key_name16(key_name.data(), key_name.size());
     KeymasterArguments input_arguments;
-    input_arguments.params.assign(input_parameters.begin(), input_parameters.end());
+    CopyParameters(input_parameters, &input_arguments.params);
     OperationResult result;
     keystore_->begin(token, key_name16, purpose, true /*pruneable*/, input_arguments,
                      NULL /*entropy*/, 0 /*entropyLength*/, &result);
@@ -293,7 +300,7 @@ int32_t KeystoreClientImpl::updateOperation(keymaster_operation_handle_t handle,
         return KM_ERROR_INVALID_OPERATION_HANDLE;
     }
     KeymasterArguments input_arguments;
-    input_arguments.params.assign(input_parameters.begin(), input_parameters.end());
+    CopyParameters(input_parameters, &input_arguments.params);
     OperationResult result;
     keystore_->update(active_operations_[handle], input_arguments, StringAsByteArray(input_data),
                       input_data.size(), &result);
@@ -318,7 +325,7 @@ int32_t KeystoreClientImpl::finishOperation(keymaster_operation_handle_t handle,
         return KM_ERROR_INVALID_OPERATION_HANDLE;
     }
     KeymasterArguments input_arguments;
-    input_arguments.params.assign(input_parameters.begin(), input_parameters.end());
+    CopyParameters(input_parameters, &input_arguments.params);
     OperationResult result;
     keystore_->finish(active_operations_[handle], input_arguments,
                       StringAsByteArray(signature_to_verify), signature_to_verify.size(),
