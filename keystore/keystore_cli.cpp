@@ -104,7 +104,7 @@ static const char* responses[] = {
             int uid = -1; \
             if (argc > 3) { \
                 uid = atoi(argv[3]); \
-                fprintf(stderr, "Running as uid %d\n", uid); \
+                fprintf(stderr, "Working with uid %d\n", uid); \
             } \
             int32_t ret = service->cmd(String16(argv[2]), uid); \
             if (ret < 0) { \
@@ -117,17 +117,28 @@ static const char* responses[] = {
         } \
     } while (0)
 
-#define STING_ARG_DATA_STDIN_INT_RETURN(cmd) \
+#define STING_ARG_DATA_STDIN_PLUS_UID_PLUS_FLAGS_INT_RETURN(cmd) \
     do { \
         if (strcmp(argv[1], #cmd) == 0) { \
             if (argc < 3) { \
-                fprintf(stderr, "Usage: %s " #cmd " <name>\n", argv[0]); \
+                fprintf(stderr, "Usage: %s " #cmd " <name> [<uid>, <flags>]\n", argv[0]); \
                 return 1; \
             } \
             uint8_t* data; \
             size_t dataSize; \
             read_input(&data, &dataSize); \
-            int32_t ret = service->cmd(String16(argv[2]), data, dataSize); \
+            int uid = -1; \
+            if (argc > 3) { \
+                uid = atoi(argv[3]); \
+                fprintf(stderr, "Working with uid %d\n", uid); \
+            } \
+            int32_t flags = 0; \
+            if (argc > 4) { \
+                flags = int32_t(atoi(argv[4])); \
+                fprintf(stderr, "Using flags %04x\n", flags); \
+            } \
+            int32_t ret = service->cmd(String16(argv[2]), data, dataSize, uid, flags); \
+            free(data); \
             if (ret < 0) { \
                 fprintf(stderr, "%s: could not connect: %d\n", argv[0], ret); \
                 return 1; \
@@ -151,14 +162,16 @@ static const char* responses[] = {
             if (ret < 0) { \
                 fprintf(stderr, "%s: could not connect: %d\n", argv[0], ret); \
                 return 1; \
-            } else if (ret != ::NO_ERROR) { \
+            } else if (ret) { \
                 fprintf(stderr, "%s: " #cmd ": %s (%d)\n", argv[0], responses[ret], ret); \
                 return 1; \
-            } else { \
+            } else if (dataSize) { \
                 fwrite(data, dataSize, 1, stdout); \
                 fflush(stdout); \
                 free(data); \
                 return 0; \
+            } else { \
+                return 1; \
             } \
         } \
     } while (0)
@@ -179,6 +192,39 @@ static int list(sp<IKeystoreService> service, const String16& name, int uid) {
         }
         return 0;
     }
+}
+
+#define BUF_SIZE 1024
+static void read_input(uint8_t** data, size_t* dataSize) {
+    char buffer[BUF_SIZE];
+    size_t contentSize = 0;
+    char *content = (char *) malloc(sizeof(char) * BUF_SIZE);
+
+    if (content == NULL) {
+        fprintf(stderr, "read_input: failed to allocate content");
+        exit(1);
+    }
+    content[0] = '\0';
+    while (fgets(buffer, BUF_SIZE, stdin)) {
+        char *old = content;
+        contentSize += strlen(buffer);
+        content = (char *) realloc(content, contentSize);
+        if (content == NULL) {
+            fprintf(stderr, "read_input: failed to reallocate content.");
+            free(old);
+            exit(1);
+        }
+        strcat(content, buffer);
+    }
+
+    if (ferror(stdin)) {
+        free(content);
+        fprintf(stderr, "read_input: error reading from stdin.");
+        exit(1);
+    }
+
+    *data = (uint8_t*) content;
+    *dataSize = contentSize;
 }
 
 int main(int argc, char* argv[])
@@ -205,7 +251,7 @@ int main(int argc, char* argv[])
 
     SINGLE_ARG_DATA_RETURN(get);
 
-    // TODO: insert
+    STING_ARG_DATA_STDIN_PLUS_UID_PLUS_FLAGS_INT_RETURN(insert);
 
     SINGLE_ARG_PLUS_UID_INT_RETURN(del);
 
@@ -230,7 +276,7 @@ int main(int argc, char* argv[])
 
     SINGLE_ARG_DATA_RETURN(get_pubkey);
 
-    // TODO: grant
+    SINGLE_ARG_PLUS_UID_INT_RETURN(grant);
 
     // TODO: ungrant
 
