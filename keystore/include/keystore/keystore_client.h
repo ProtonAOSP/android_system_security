@@ -53,6 +53,33 @@ class KeystoreClient {
     KeystoreClient() = default;
     virtual ~KeystoreClient() = default;
 
+    // Encrypts and authenticates |data| with minimal configuration for local
+    // decryption. If a key identified by |key_name| does not already exist it
+    // will be generated. On success returns true and populates |encrypted_data|.
+    // Note: implementations may generate more than one key but they will always
+    // have |key_name| as a prefix.
+    virtual bool encryptWithAuthentication(const std::string& key_name, const std::string& data,
+                                           std::string* encrypted_data) = 0;
+
+    // Decrypts and authenticates |encrypted_data| as output by
+    // EncryptWithAuthentication using the key(s) identified by |key_name|. On
+    // success returns true and populates |data|.
+    virtual bool decryptWithAuthentication(const std::string& key_name,
+                                           const std::string& encrypted_data,
+                                           std::string* data) = 0;
+
+    // Performs a Begin/Update/Finish sequence for an operation. The |purpose|,
+    // |key_name|, |input_parameters|, and |output_parameters| are as in
+    // BeginOperation. The |input_data| is as in UpdateOperation. The
+    // |signature_to_verify| and |output_data| are as in FinishOperation. On
+    // success returns true.
+    virtual bool oneShotOperation(keymaster_purpose_t purpose, const std::string& key_name,
+                                  const keymaster::AuthorizationSet& input_parameters,
+                                  const std::string& input_data,
+                                  const std::string& signature_to_verify,
+                                  keymaster::AuthorizationSet* output_parameters,
+                                  std::string* output_data) = 0;
+
     // Adds |entropy| to the random number generator. Returns KM_ERROR_OK on
     // success and a Keystore ResponseCode or keymaster_error_t on failure.
     virtual int32_t addRandomNumberGeneratorEntropy(const std::string& entropy) = 0;
@@ -112,9 +139,9 @@ class KeystoreClient {
 
     // Continues the operation associated with |handle| using the given
     // |input_parameters| and |input_data|. On success, the
-    // |num_input_bytes_consumed|, any |output_parameters|, and any |output_data|
-    // is populated. Returns KM_ERROR_OK on success and a Keystore ResponseCode or
-    // keymaster_error_t on failure.
+    // |num_input_bytes_consumed| and any |output_parameters| are populated. Any
+    // |output_data| will be appended. Returns KM_ERROR_OK on success and a
+    // Keystore ResponseCode or keymaster_error_t on failure.
     virtual int32_t updateOperation(keymaster_operation_handle_t handle,
                                     const keymaster::AuthorizationSet& input_parameters,
                                     const std::string& input_data, size_t* num_input_bytes_consumed,
@@ -123,9 +150,9 @@ class KeystoreClient {
 
     // Finishes the operation associated with |handle| using the given
     // |input_parameters| and, if necessary, a |signature_to_verify|. On success,
-    // any |output_parameters| and final |output_data| are populated. Returns
-    // KM_ERROR_OK on success and a Keystore ResponseCode or keymaster_error_t on
-    // failure.
+    // any |output_parameters| are populated and |output_data| is appended.
+    // Returns KM_ERROR_OK on success and a Keystore ResponseCode or
+    // keymaster_error_t on failure.
     virtual int32_t finishOperation(keymaster_operation_handle_t handle,
                                     const keymaster::AuthorizationSet& input_parameters,
                                     const std::string& signature_to_verify,

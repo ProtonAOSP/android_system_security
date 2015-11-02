@@ -16,6 +16,12 @@
 
 LOCAL_PATH := $(call my-dir)
 
+# This has to be lazy-resolved because it depends on the LOCAL_MODULE_CLASS
+# which varies depending on what is being built.
+define keystore_proto_include
+$(call local-generated-sources-dir)/proto/$(LOCAL_PATH)
+endef
+
 include $(CLEAR_VARS)
 ifeq ($(USE_32_BIT_KEYSTORE), true)
 LOCAL_MULTILIB := 32
@@ -68,6 +74,7 @@ LOCAL_SHARED_LIBRARIES := \
 	libkeystore_binder
 LOCAL_MODULE := keystore_cli_v2
 LOCAL_MODULE_TAGS := debug
+LOCAL_C_INCLUDES := $(LOCAL_PATH)/include external/gtest/include
 LOCAL_ADDITIONAL_DEPENDENCIES := $(LOCAL_PATH)/Android.mk
 include $(BUILD_EXECUTABLE)
 
@@ -80,17 +87,20 @@ LOCAL_CFLAGS := -Wall -Wextra -Werror
 LOCAL_SRC_FILES := \
 	IKeystoreService.cpp \
 	keyblob_utils.cpp \
+	keystore_client.proto \
 	keystore_client_impl.cpp \
 	keystore_get.cpp
 LOCAL_SHARED_LIBRARIES := \
 	libbinder \
 	libkeymaster_messages \
 	liblog \
+	libprotobuf-cpp-lite \
 	libsoftkeymasterdevice \
 	libutils
+LOCAL_MODULE_CLASS := SHARED_LIBRARIES
 LOCAL_MODULE := libkeystore_binder
 LOCAL_MODULE_TAGS := optional
-LOCAL_C_INCLUDES := $(LOCAL_PATH)/include
+LOCAL_C_INCLUDES := $(LOCAL_PATH)/include $(call keystore_proto_include)
 LOCAL_EXPORT_C_INCLUDE_DIRS := $(LOCAL_PATH)/include
 LOCAL_CLANG := true
 LOCAL_SANITIZE := integer
