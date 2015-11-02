@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "base/command_line.h"
+#include "base/files/file_util.h"
 #include "keymaster/authorization_set.h"
 #include "keystore/keystore_client_impl.h"
 
@@ -38,12 +39,32 @@ void PrintUsageAndExit() {
            "          delete-all\n"
            "          exists --name=<key_name>\n"
            "          list [--prefix=<key_name_prefix>]\n"
-           "          sign-verify --name=<key_name>\n");
+           "          sign-verify --name=<key_name>\n"
+           "          [en|de]crypt --name=<key_name> --in=<file> --out=<file>\n");
     exit(1);
 }
 
 std::unique_ptr<KeystoreClient> CreateKeystoreInstance() {
     return std::unique_ptr<KeystoreClient>(new keystore::KeystoreClientImpl);
+}
+
+std::string ReadFile(const std::string& filename) {
+    std::string content;
+    base::FilePath path(filename);
+    if (!base::ReadFileToString(path, &content)) {
+        printf("Failed to read file: %s\n", filename.c_str());
+        exit(1);
+    }
+    return content;
+}
+
+void WriteFile(const std::string& filename, const std::string& content) {
+    base::FilePath path(filename);
+    int size = content.size();
+    if (base::WriteFile(path, content.data(), size) != size) {
+        printf("Failed to write file: %s\n", filename.c_str());
+        exit(1);
+    }
 }
 
 int AddEntropy(const std::string& input) {
@@ -157,6 +178,7 @@ int SignAndVerify(const std::string& name) {
     printf("Sign: %zu bytes.\n", output_data.size());
     // We have a signature, now verify it.
     std::string signature_to_verify = output_data;
+    output_data.clear();
     result = keystore->beginOperation(KM_PURPOSE_VERIFY, name, sign_params.build(), &output_params,
                                       &handle);
     if (result != KM_ERROR_OK) {
@@ -180,6 +202,32 @@ int SignAndVerify(const std::string& name) {
         return result;
     }
     printf("Verify: OK\n");
+    return 0;
+}
+
+int Encrypt(const std::string& key_name, const std::string& input_filename,
+            const std::string& output_filename) {
+    std::unique_ptr<KeystoreClient> keystore = CreateKeystoreInstance();
+    std::string input = ReadFile(input_filename);
+    std::string output;
+    if (!keystore->encryptWithAuthentication(key_name, input, &output)) {
+        printf("EncryptWithAuthentication failed.\n");
+        return 1;
+    }
+    WriteFile(output_filename, output);
+    return 0;
+}
+
+int Decrypt(const std::string& key_name, const std::string& input_filename,
+            const std::string& output_filename) {
+    std::unique_ptr<KeystoreClient> keystore = CreateKeystoreInstance();
+    std::string input = ReadFile(input_filename);
+    std::string output;
+    if (!keystore->decryptWithAuthentication(key_name, input, &output)) {
+        printf("DecryptWithAuthentication failed.\n");
+        return 1;
+    }
+    WriteFile(output_filename, output);
     return 0;
 }
 
@@ -210,6 +258,14 @@ int main(int argc, char** argv) {
         return List(command_line->GetSwitchValueASCII("prefix"));
     } else if (args[0] == "sign-verify") {
         return SignAndVerify(command_line->GetSwitchValueASCII("name"));
+    } else if (args[0] == "encrypt") {
+        return Encrypt(command_line->GetSwitchValueASCII("name"),
+                       command_line->GetSwitchValueASCII("in"),
+                       command_line->GetSwitchValueASCII("out"));
+    } else if (args[0] == "decrypt") {
+        return Decrypt(command_line->GetSwitchValueASCII("name"),
+                       command_line->GetSwitchValueASCII("in"),
+                       command_line->GetSwitchValueASCII("out"));
     } else {
         PrintUsageAndExit();
     }
