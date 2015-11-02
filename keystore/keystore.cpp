@@ -79,6 +79,7 @@
 #define KEY_SIZE        ((NAME_MAX - 15) / 2)
 #define VALUE_SIZE      32768
 #define PASSWORD_SIZE   VALUE_SIZE
+const size_t MAX_OPERATIONS = 15;
 
 using keymaster::SoftKeymasterDevice;
 
@@ -2689,23 +2690,26 @@ public:
         }
 
         keymaster_key_param_set_t outParams = {NULL, 0};
+
+        // If there are more than MAX_OPERATIONS, abort the oldest operation that was started as
+        // pruneable.
+        while (mOperationMap.getOperationCount() >= MAX_OPERATIONS) {
+            ALOGD("Reached or exceeded concurrent operations limit");
+            if (!pruneOperation()) {
+                break;
+            }
+        }
+
         err = dev->begin(dev, purpose, &key, &inParams, &outParams, &handle);
+        if (err != KM_ERROR_OK) {
+            ALOGE("Got error %d from begin()", err);
+        }
 
         // If there are too many operations abort the oldest operation that was
         // started as pruneable and try again.
         while (err == KM_ERROR_TOO_MANY_OPERATIONS && mOperationMap.hasPruneableOperation()) {
-            sp<IBinder> oldest = mOperationMap.getOldestPruneableOperation();
-            ALOGD("Ran out of operation handles, trying to prune %p", oldest.get());
-
-            // We mostly ignore errors from abort() below because all we care about is whether at
-            // least one pruneable operation has been removed.
-            size_t op_count_before = mOperationMap.getPruneableOperationCount();
-            int abort_error = abort(oldest);
-            size_t op_count_after = mOperationMap.getPruneableOperationCount();
-            if (op_count_after >= op_count_before) {
-                // Failed to create space for a new operation. Bail to avoid an infinite loop.
-                ALOGE("Failed to remove pruneable operation %p, error: %d",
-                      oldest.get(), abort_error);
+            ALOGE("Ran out of operation handles");
+            if (!pruneOperation()) {
                 break;
             }
             err = dev->begin(dev, purpose, &key, &inParams, &outParams, &handle);
@@ -2907,6 +2911,24 @@ public:
 
 private:
     static const int32_t UID_SELF = -1;
+
+    /**
+     * Prune the oldest pruneable operation.
+     */
+    inline bool pruneOperation() {
+        sp<IBinder> oldest = mOperationMap.getOldestPruneableOperation();
+        ALOGD("Trying to prune operation %p", oldest.get());
+        size_t op_count_before_abort = mOperationMap.getOperationCount();
+        // We mostly ignore errors from abort() because all we care about is whether at least
+        // one operation has been removed.
+        int abort_error = abort(oldest);
+        if (mOperationMap.getOperationCount() >= op_count_before_abort) {
+            ALOGE("Failed to abort pruneable operation %p, error: %d", oldest.get(),
+                  abort_error);
+            return false;
+        }
+        return true;
+    }
 
     /**
      * Get the effective target uid for a binder operation that takes an
