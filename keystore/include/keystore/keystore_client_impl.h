@@ -34,6 +34,15 @@ class KeystoreClientImpl : public KeystoreClient {
     ~KeystoreClientImpl() override = default;
 
     // KeystoreClient methods.
+    bool encryptWithAuthentication(const std::string& key_name, const std::string& data,
+                                   std::string* encrypted_data) override;
+    bool decryptWithAuthentication(const std::string& key_name, const std::string& encrypted_data,
+                                   std::string* data) override;
+    bool oneShotOperation(keymaster_purpose_t purpose, const std::string& key_name,
+                          const keymaster::AuthorizationSet& input_parameters,
+                          const std::string& input_data, const std::string& signature_to_verify,
+                          keymaster::AuthorizationSet* output_parameters,
+                          std::string* output_data) override;
     int32_t addRandomNumberGeneratorEntropy(const std::string& entropy) override;
     int32_t generateKey(const std::string& key_name,
                         const keymaster::AuthorizationSet& key_parameters,
@@ -71,18 +80,36 @@ class KeystoreClientImpl : public KeystoreClient {
     bool listKeys(const std::string& prefix, std::vector<std::string>* key_name_list) override;
 
   private:
-    android::sp<android::IServiceManager> service_manager_;
-    android::sp<android::IBinder> keystore_binder_;
-    android::sp<android::IKeystoreService> keystore_;
-    keymaster_operation_handle_t next_virtual_handle_ = 1;
-    std::map<keymaster_operation_handle_t, android::sp<android::IBinder>> active_operations_;
-
     // Returns an available virtual operation handle.
     keymaster_operation_handle_t getNextVirtualHandle();
 
     // Maps a keystore error code to a code where all success cases use
     // KM_ERROR_OK (not keystore's NO_ERROR).
     int32_t mapKeystoreError(int32_t keystore_error);
+
+    // Creates an encryption key suitable for EncryptWithAuthentication or
+    // verifies attributes if the key already exists. Returns true on success.
+    bool createOrVerifyEncryptionKey(const std::string& key_name);
+
+    // Creates an authentication key suitable for EncryptWithAuthentication or
+    // verifies attributes if the key already exists. Returns true on success.
+    bool createOrVerifyAuthenticationKey(const std::string& key_name);
+
+    // Verifies attributes of an encryption key suitable for
+    // EncryptWithAuthentication. Returns true on success and populates |verified|
+    // with the result of the verification.
+    bool verifyEncryptionKeyAttributes(const std::string& key_name, bool* verified);
+
+    // Verifies attributes of an authentication key suitable for
+    // EncryptWithAuthentication. Returns true on success and populates |verified|
+    // with the result of the verification.
+    bool verifyAuthenticationKeyAttributes(const std::string& key_name, bool* verified);
+
+    android::sp<android::IServiceManager> service_manager_;
+    android::sp<android::IBinder> keystore_binder_;
+    android::sp<android::IKeystoreService> keystore_;
+    keymaster_operation_handle_t next_virtual_handle_ = 1;
+    std::map<keymaster_operation_handle_t, android::sp<android::IBinder>> active_operations_;
 
     DISALLOW_COPY_AND_ASSIGN(KeystoreClientImpl);
 };

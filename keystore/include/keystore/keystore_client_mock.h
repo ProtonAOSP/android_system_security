@@ -29,6 +29,17 @@ class KeystoreClientMock : public KeystoreClient {
     KeystoreClientMock() = default;
     ~KeystoreClientMock() = default;
 
+    MOCK_METHOD3(encryptWithAuthentication,
+                 bool(const std::string& key_name, const std::string& data,
+                      std::string* encrypted_data));
+    MOCK_METHOD3(decryptWithAuthentication,
+                 bool(const std::string& key_name, const std::string& encrypted_data,
+                      std::string* data));
+    MOCK_METHOD7(oneShotOperation,
+                 bool(keymaster_purpose_t purpose, const std::string& key_name,
+                      const keymaster::AuthorizationSet& input_parameters,
+                      const std::string& input_data, const std::string& signature_to_verify,
+                      keymaster::AuthorizationSet* output_parameters, std::string* output_data));
     MOCK_METHOD1(addRandomNumberGeneratorEntropy, int32_t(const std::string& entropy));
     MOCK_METHOD4(generateKey,
                  int32_t(const std::string& key_name,
