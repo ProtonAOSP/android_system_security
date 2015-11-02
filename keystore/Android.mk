@@ -63,7 +63,7 @@ include $(CLEAR_VARS)
 ifeq ($(USE_32_BIT_KEYSTORE), true)
 LOCAL_MULTILIB := 32
 endif
-LOCAL_CFLAGS := -Wall -Wextra -Werror
+LOCAL_CFLAGS := -Wall -Wextra -Werror -Wno-unused-parameter
 LOCAL_SRC_FILES := keystore_cli_v2.cpp
 LOCAL_SHARED_LIBRARIES := \
 	libchrome \
