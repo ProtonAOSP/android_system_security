@@ -57,6 +57,7 @@ public:
                       const keymaster_key_characteristics_t** outCharacteristics);
     bool removeOperation(sp<IBinder> token);
     bool hasPruneableOperation() const;
+    size_t getOperationCount() const { return mMap.size(); }
     size_t getPruneableOperationCount() const;
     bool getOperationAuthToken(sp<IBinder> token, const hw_auth_token_t** outToken);
     bool setOperationAuthToken(sp<IBinder> token, const hw_auth_token_t* authToken);
