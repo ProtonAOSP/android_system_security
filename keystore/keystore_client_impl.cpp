@@ -222,7 +222,7 @@ KeystoreClientImpl::getKeyCharacteristics(const std::string& key_name,
     keymaster_blob_t app_data_blob = {nullptr, 0};
     KeyCharacteristics characteristics;
     int32_t result = keystore_->getKeyCharacteristics(key_name16, &client_id_blob, &app_data_blob,
-                                                      &characteristics);
+                                                      kDefaultUID, &characteristics);
     hardware_enforced_characteristics->Reinitialize(characteristics.characteristics.hw_enforced);
     software_enforced_characteristics->Reinitialize(characteristics.characteristics.sw_enforced);
     return mapKeystoreError(result);
@@ -253,7 +253,7 @@ int32_t KeystoreClientImpl::exportKey(keymaster_key_format_t export_format,
     keymaster_blob_t app_data_blob = {nullptr, 0};
     ExportResult export_result;
     keystore_->exportKey(key_name16, export_format, &client_id_blob, &app_data_blob,
-                         &export_result);
+                         kDefaultUID, &export_result);
     *export_data = ByteArrayAsString(export_result.exportData.get(), export_result.dataLength);
     return mapKeystoreError(export_result.resultCode);
 }
@@ -277,7 +277,7 @@ int32_t KeystoreClientImpl::beginOperation(keymaster_purpose_t purpose, const st
     CopyParameters(input_parameters, &input_arguments.params);
     OperationResult result;
     keystore_->begin(token, key_name16, purpose, true /*pruneable*/, input_arguments,
-                     NULL /*entropy*/, 0 /*entropyLength*/, &result);
+                     NULL /*entropy*/, 0 /*entropyLength*/, kDefaultUID, &result);
     int32_t error_code = mapKeystoreError(result.resultCode);
     if (error_code == KM_ERROR_OK) {
         *handle = getNextVirtualHandle();
