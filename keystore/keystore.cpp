@@ -941,6 +941,38 @@ public:
         }
         memcpy(mMasterKey, src->mMasterKey, MASTER_KEY_SIZE_BYTES);
         setupMasterKeys();
+        return copyMasterKeyFile(src);
+    }
+
+    ResponseCode copyMasterKeyFile(UserState* src) {
+        /* Copy the master key file to the new user.
+         * Unfortunately we don't have the src user's password so we cannot
+         * generate a new file with a new salt.
+         */
+        int in = TEMP_FAILURE_RETRY(open(src->getMasterKeyFileName(), O_RDONLY));
+        if (in < 0) {
+            return ::SYSTEM_ERROR;
+        }
+        blob rawBlob;
+        size_t length = readFully(in, (uint8_t*) &rawBlob, sizeof(rawBlob));
+        if (close(in) != 0) {
+            return ::SYSTEM_ERROR;
+        }
+        int out = TEMP_FAILURE_RETRY(open(mMasterKeyFile,
+                O_WRONLY | O_TRUNC | O_CREAT, S_IRUSR | S_IWUSR));
+        if (out < 0) {
+            return ::SYSTEM_ERROR;
+        }
+        size_t outLength = writeFully(out, (uint8_t*) &rawBlob, length);
+        if (close(out) != 0) {
+            return ::SYSTEM_ERROR;
+        }
+        if (outLength != length) {
+            ALOGW("blob not fully written %zu != %zu", outLength, length);
+            unlink(mMasterKeyFile);
+            return ::SYSTEM_ERROR;
+        }
+
         return ::NO_ERROR;
     }
 
@@ -2001,10 +2033,12 @@ public:
         }
         // Unconditionally clear the keystore, just to be safe.
         mKeyStore->resetUser(userId, false);
-
-        // If the user has a parent user then use the parent's
-        // masterkey/password, otherwise there's nothing to do.
         if (parentId != -1) {
+            // This profile must share the same master key password as the parent
+            // profile. Because the password of the parent profile is not known
+            // here, the best we can do is copy the parent's master key and master
+            // key file. This makes this profile use the same master key as the
+            // parent profile, forever.
             return mKeyStore->copyMasterKey(parentId, userId);
         } else {
             return ::NO_ERROR;
@@ -2042,7 +2076,17 @@ public:
 
         State state = mKeyStore->getState(userId);
         if (state != ::STATE_LOCKED) {
-            ALOGI("calling unlock when not locked, ignoring.");
+            switch (state) {
+                case ::STATE_NO_ERROR:
+                    ALOGI("calling unlock when already unlocked, ignoring.");
+                    break;
+                case ::STATE_UNINITIALIZED:
+                    ALOGE("unlock called on uninitialized keystore.");
+                    break;
+                default:
+                    ALOGE("unlock called on keystore in unknown state: %d", state);
+                    break;
+            }
             return state;
         }
 
