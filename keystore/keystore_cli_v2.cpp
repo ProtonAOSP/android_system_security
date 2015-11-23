@@ -126,6 +126,12 @@ const char* StringifyTag(keymaster_tag_t tag) {
         return "KM_TAG_AUTH_TOKEN";
     case KM_TAG_MAC_LENGTH:
         return "KM_TAG_MAC_LENGTH";
+    case KM_TAG_KDF:
+        return "KM_TAG_KDF";
+    case KM_TAG_EC_CURVE:
+        return "KM_TAG_EC_CURVE";
+    case KM_TAG_ECIES_SINGLE_HASH_MODE:
+        return "KM_TAG_ECIES_SINGLE_HASH_MODE";
     }
     return "<Unknown>";
 }
