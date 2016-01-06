@@ -132,6 +132,18 @@ const char* StringifyTag(keymaster_tag_t tag) {
         return "KM_TAG_EC_CURVE";
     case KM_TAG_ECIES_SINGLE_HASH_MODE:
         return "KM_TAG_ECIES_SINGLE_HASH_MODE";
+    case KM_TAG_OS_VERSION:
+        return "KM_TAG_OS_VERSION";
+    case KM_TAG_OS_PATCHLEVEL:
+        return "KM_TAG_OS_PATCHLEVEL";
+    case KM_TAG_EXPORTABLE:
+        return "KM_TAG_EXPORTABLE";
+    case KM_TAG_UNIQUE_ID:
+        return "KM_TAG_UNIQUE_ID";
+    case KM_TAG_INCLUDE_UNIQUE_ID:
+        return "KM_TAG_INCLUDE_UNIQUE_ID";
+    case KM_TAG_RESET_SINCE_ID_ROTATION:
+        return "KM_TAG_RESET_SINCE_ID_ROTATION";
     }
     return "<Unknown>";
 }
