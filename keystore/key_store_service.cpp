@@ -1076,6 +1076,40 @@ int32_t KeyStoreService::addAuthToken(const uint8_t* token, size_t length) {
     return ::NO_ERROR;
 }
 
+int32_t KeyStoreService::attestKey(const String16& name, const KeymasterArguments& params,
+                                   KeymasterCertificateChain* outChain) {
+    if (!outChain)
+        return KM_ERROR_OUTPUT_PARAMETER_NULL;
+
+    if (!checkAllowedOperationParams(params.params)) {
+        return KM_ERROR_INVALID_ARGUMENT;
+    }
+
+    uid_t callingUid = IPCThreadState::self()->getCallingUid();
+
+    Blob keyBlob;
+    String8 name8(name);
+    ResponseCode responseCode =
+        mKeyStore->getKeyForName(&keyBlob, name8, callingUid, TYPE_KEYMASTER_10);
+    if (responseCode != ::NO_ERROR) {
+        return responseCode;
+    }
+
+    keymaster_key_blob_t key = {keyBlob.getValue(),
+                                static_cast<size_t>(std::max(0, keyBlob.getLength()))};
+    auto* dev = mKeyStore->getDeviceForBlob(keyBlob);
+    if (!dev->attest_key)
+        return KM_ERROR_UNIMPLEMENTED;
+
+    const keymaster_key_param_set_t in_params = {
+        const_cast<keymaster_key_param_t*>(params.params.data()), params.params.size()};
+    outChain->chain = {nullptr, 0};
+    int32_t rc = dev->attest_key(dev, &key, &in_params, &outChain->chain);
+    if (rc)
+        return rc;
+    return ::NO_ERROR;
+}
+
 /**
  * Prune the oldest pruneable operation.
  */
