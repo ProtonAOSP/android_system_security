@@ -21,12 +21,10 @@
 
 namespace android {
 OperationMap::OperationMap(IBinder::DeathRecipient* deathRecipient)
-        : mDeathRecipient(deathRecipient) {
-}
+    : mDeathRecipient(deathRecipient) {}
 
-sp<IBinder> OperationMap::addOperation(keymaster_operation_handle_t handle,
-                                       uint64_t keyid, keymaster_purpose_t purpose,
-                                       const keymaster1_device_t* dev,
+sp<IBinder> OperationMap::addOperation(keymaster_operation_handle_t handle, uint64_t keyid,
+                                       keymaster_purpose_t purpose, const keymaster2_device_t* dev,
                                        sp<IBinder> appToken,
                                        keymaster_key_characteristics_t* characteristics,
                                        bool pruneable) {
@@ -44,7 +42,7 @@ sp<IBinder> OperationMap::addOperation(keymaster_operation_handle_t handle,
 
 bool OperationMap::getOperation(sp<IBinder> token, keymaster_operation_handle_t* outHandle,
                                 uint64_t* outKeyid, keymaster_purpose_t* outPurpose,
-                                const keymaster1_device_t** outDevice,
+                                const keymaster2_device_t** outDevice,
                                 const keymaster_key_characteristics_t** outCharacteristics) {
     if (!outHandle || !outDevice) {
         return false;
@@ -146,20 +144,13 @@ std::vector<sp<IBinder>> OperationMap::getOperationsForToken(sp<IBinder> appToke
     }
 }
 
-OperationMap::Operation::Operation(keymaster_operation_handle_t handle_,
-                                   uint64_t keyid_,
-                                   keymaster_purpose_t purpose_,
-                                   const keymaster1_device_t* device_,
+OperationMap::Operation::Operation(keymaster_operation_handle_t handle_, uint64_t keyid_,
+                                   keymaster_purpose_t purpose_, const keymaster2_device_t* device_,
                                    keymaster_key_characteristics_t* characteristics_,
                                    sp<IBinder> appToken_)
-    : handle(handle_),
-      keyid(keyid_),
-      purpose(purpose_),
-      device(device_),
-      characteristics(characteristics_),
-      appToken(appToken_) {
-}
+    : handle(handle_), keyid(keyid_), purpose(purpose_), device(device_),
+      characteristics(characteristics_), appToken(appToken_) {}
 
-OperationMap::Operation::Operation() : handle(0), device(NULL), characteristics(), appToken(NULL) {
-}
-} // namespace android
+OperationMap::Operation::Operation() : handle(0), device(NULL), characteristics(), appToken(NULL) {}
+
+}  // namespace android
