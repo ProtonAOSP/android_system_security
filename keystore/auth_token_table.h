@@ -20,8 +20,8 @@
 #include <hardware/hw_auth_token.h>
 #include <keymaster/authorization_set.h>
 
-#ifndef SYSTEM_KEYMASTER_AUTH_TOKEN_TABLE_H
-#define SYSTEM_KEYMASTER_AUTH_TOKEN_TABLE_H
+#ifndef KEYSTORE_AUTH_TOKEN_TABLE_H_
+#define KEYSTORE_AUTH_TOKEN_TABLE_H_
 
 namespace keymaster {
 
@@ -160,4 +160,4 @@ class AuthTokenTable {
 
 }  // namespace keymaster
 
-#endif  // SYSTEM_KEYMASTER_AUTH_TOKEN_TABLE_H
+#endif  // KEYSTORE_AUTH_TOKEN_TABLE_H_
