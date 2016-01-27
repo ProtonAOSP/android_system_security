@@ -561,8 +561,8 @@ int32_t KeyStoreService::clear_uid(int64_t targetUid64) {
 }
 
 int32_t KeyStoreService::addRngEntropy(const uint8_t* data, size_t dataLength) {
-    const keymaster1_device_t* device = mKeyStore->getDevice();
-    const keymaster1_device_t* fallback = mKeyStore->getFallbackDevice();
+    const auto* device = mKeyStore->getDevice();
+    const auto* fallback = mKeyStore->getFallbackDevice();
     int32_t devResult = KM_ERROR_UNIMPLEMENTED;
     int32_t fallbackResult = KM_ERROR_UNIMPLEMENTED;
     if (device->common.module->module_api_version >= KEYMASTER_MODULE_API_VERSION_1_0 &&
@@ -593,10 +593,10 @@ int32_t KeyStoreService::generateKey(const String16& name, const KeymasterArgume
     rc = KM_ERROR_UNIMPLEMENTED;
     bool isFallback = false;
     keymaster_key_blob_t blob;
-    keymaster_key_characteristics_t* out = NULL;
+    keymaster_key_characteristics_t out = {{nullptr, 0}, {nullptr, 0}};
 
-    const keymaster1_device_t* device = mKeyStore->getDevice();
-    const keymaster1_device_t* fallback = mKeyStore->getFallbackDevice();
+    const auto* device = mKeyStore->getDevice();
+    const auto* fallback = mKeyStore->getFallbackDevice();
     std::vector<keymaster_key_param_t> opParams(params.params);
     const keymaster_key_param_set_t inParams = {opParams.data(), opParams.size()};
     if (device == NULL) {
@@ -613,7 +613,8 @@ int32_t KeyStoreService::generateKey(const String16& name, const KeymasterArgume
             rc = KM_ERROR_UNIMPLEMENTED;
         }
         if (rc == KM_ERROR_OK) {
-            rc = device->generate_key(device, &inParams, &blob, &out);
+            rc =
+                device->generate_key(device, &inParams, &blob, outCharacteristics ? &out : nullptr);
         }
     }
     // If the HW device didn't support generate_key or generate_key failed
@@ -629,17 +630,13 @@ int32_t KeyStoreService::generateKey(const String16& name, const KeymasterArgume
             rc = KM_ERROR_UNIMPLEMENTED;
         }
         if (rc == KM_ERROR_OK) {
-            rc = fallback->generate_key(fallback, &inParams, &blob, &out);
+            rc = fallback->generate_key(fallback, &inParams, &blob,
+                                        outCharacteristics ? &out : nullptr);
         }
     }
 
-    if (out) {
-        if (outCharacteristics) {
-            outCharacteristics->characteristics = *out;
-        } else {
-            keymaster_free_characteristics(out);
-        }
-        free(out);
+    if (outCharacteristics) {
+        outCharacteristics->characteristics = out;
     }
 
     if (rc) {
@@ -686,18 +683,19 @@ int32_t KeyStoreService::getKeyCharacteristics(const String16& name,
     keymaster_key_blob_t key;
     key.key_material_size = keyBlob.getLength();
     key.key_material = keyBlob.getValue();
-    keymaster1_device_t* dev = mKeyStore->getDeviceForBlob(keyBlob);
-    keymaster_key_characteristics_t* out = NULL;
+    auto* dev = mKeyStore->getDeviceForBlob(keyBlob);
+    keymaster_key_characteristics_t out = {{nullptr, 0}, {nullptr, 0}};
     if (!dev->get_key_characteristics) {
-        ALOGW("device does not implement get_key_characteristics");
+        ALOGE("device does not implement get_key_characteristics");
         return KM_ERROR_UNIMPLEMENTED;
     }
     rc = dev->get_key_characteristics(dev, &key, clientId, appData, &out);
-    if (out) {
-        outCharacteristics->characteristics = *out;
-        free(out);
+    if (rc != KM_ERROR_OK) {
+        return rc;
     }
-    return rc ? rc : ::NO_ERROR;
+
+    outCharacteristics->characteristics = out;
+    return ::NO_ERROR;
 }
 
 int32_t KeyStoreService::importKey(const String16& name, const KeymasterArguments& params,
@@ -713,10 +711,10 @@ int32_t KeyStoreService::importKey(const String16& name, const KeymasterArgument
     rc = KM_ERROR_UNIMPLEMENTED;
     bool isFallback = false;
     keymaster_key_blob_t blob;
-    keymaster_key_characteristics_t* out = NULL;
+    keymaster_key_characteristics_t out = {{nullptr, 0}, {nullptr, 0}};
 
-    const keymaster1_device_t* device = mKeyStore->getDevice();
-    const keymaster1_device_t* fallback = mKeyStore->getFallbackDevice();
+    const auto* device = mKeyStore->getDevice();
+    const auto* fallback = mKeyStore->getFallbackDevice();
     std::vector<keymaster_key_param_t> opParams(params.params);
     const keymaster_key_param_set_t inParams = {opParams.data(), opParams.size()};
     const keymaster_blob_t input = {keyData, keyLength};
@@ -725,21 +723,19 @@ int32_t KeyStoreService::importKey(const String16& name, const KeymasterArgument
     }
     if (device->common.module->module_api_version >= KEYMASTER_MODULE_API_VERSION_1_0 &&
         device->import_key != NULL) {
-        rc = device->import_key(device, &inParams, format, &input, &blob, &out);
+        rc = device->import_key(device, &inParams, format, &input, &blob,
+                                outCharacteristics ? &out : nullptr);
     }
     if (rc && fallback->import_key != NULL) {
         ALOGW("Primary keymaster device failed to import key, falling back to SW.");
         isFallback = true;
-        rc = fallback->import_key(fallback, &inParams, format, &input, &blob, &out);
+        rc = fallback->import_key(fallback, &inParams, format, &input, &blob,
+                                  outCharacteristics ? &out : nullptr);
     }
-    if (out) {
-        if (outCharacteristics) {
-            outCharacteristics->characteristics = *out;
-        } else {
-            keymaster_free_characteristics(out);
-        }
-        free(out);
+    if (outCharacteristics) {
+        outCharacteristics->characteristics = out;
     }
+
     if (rc) {
         return rc;
     }
@@ -751,7 +747,7 @@ int32_t KeyStoreService::importKey(const String16& name, const KeymasterArgument
     keyBlob.setFallback(isFallback);
     keyBlob.setEncrypted(flags & KEYSTORE_FLAG_ENCRYPTED);
 
-    free((void*)blob.key_material);
+    free(const_cast<uint8_t*>(blob.key_material));
 
     return mKeyStore->put(filename.string(), &keyBlob, get_user_id(uid));
 }
@@ -781,7 +777,7 @@ void KeyStoreService::exportKey(const String16& name, keymaster_key_format_t for
     keymaster_key_blob_t key;
     key.key_material_size = keyBlob.getLength();
     key.key_material = keyBlob.getValue();
-    keymaster1_device_t* dev = mKeyStore->getDeviceForBlob(keyBlob);
+    auto* dev = mKeyStore->getDeviceForBlob(keyBlob);
     if (!dev->export_key) {
         result->resultCode = KM_ERROR_UNIMPLEMENTED;
         return;
@@ -825,7 +821,7 @@ void KeyStoreService::begin(const sp<IBinder>& appToken, const String16& name,
     key.key_material_size = keyBlob.getLength();
     key.key_material = keyBlob.getValue();
     keymaster_operation_handle_t handle;
-    keymaster1_device_t* dev = mKeyStore->getDeviceForBlob(keyBlob);
+    auto* dev = mKeyStore->getDeviceForBlob(keyBlob);
     keymaster_error_t err = KM_ERROR_UNIMPLEMENTED;
     std::vector<keymaster_key_param_t> opParams(params.params);
     Unique_keymaster_key_characteristics characteristics;
@@ -934,7 +930,7 @@ void KeyStoreService::update(const sp<IBinder>& token, const KeymasterArguments&
         result->resultCode = KM_ERROR_INVALID_ARGUMENT;
         return;
     }
-    const keymaster1_device_t* dev;
+    const keymaster2_device_t* dev;
     keymaster_operation_handle_t handle;
     keymaster_purpose_t purpose;
     keymaster::km_id_t keyid;
@@ -985,7 +981,7 @@ void KeyStoreService::finish(const sp<IBinder>& token, const KeymasterArguments&
         result->resultCode = KM_ERROR_INVALID_ARGUMENT;
         return;
     }
-    const keymaster1_device_t* dev;
+    const keymaster2_device_t* dev;
     keymaster_operation_handle_t handle;
     keymaster_purpose_t purpose;
     keymaster::km_id_t keyid;
@@ -1014,9 +1010,10 @@ void KeyStoreService::finish(const sp<IBinder>& token, const KeymasterArguments&
     }
 
     keymaster_key_param_set_t inParams = {opParams.data(), opParams.size()};
-    keymaster_blob_t input = {signature, signatureLength};
-    keymaster_blob_t output = {NULL, 0};
-    keymaster_key_param_set_t outParams = {NULL, 0};
+    keymaster_blob_t input = {nullptr, 0};
+    keymaster_blob_t sig = {signature, signatureLength};
+    keymaster_blob_t output = {nullptr, 0};
+    keymaster_key_param_set_t outParams = {nullptr, 0};
 
     // Check that all key authorization policy requirements are met.
     keymaster::AuthorizationSet key_auths(characteristics->hw_enforced);
@@ -1029,7 +1026,9 @@ void KeyStoreService::finish(const sp<IBinder>& token, const KeymasterArguments&
         return;
     }
 
-    err = dev->finish(dev, handle, &inParams, &input, &outParams, &output);
+    err =
+        dev->finish(dev, handle, &inParams, &input /* TODO(swillden): wire up input to finish() */,
+                    &sig, &outParams, &output);
     // Remove the operation regardless of the result
     mOperationMap.removeOperation(token);
     mAuthTokenTable.MarkCompleted(handle);
@@ -1044,7 +1043,7 @@ void KeyStoreService::finish(const sp<IBinder>& token, const KeymasterArguments&
 }
 
 int32_t KeyStoreService::abort(const sp<IBinder>& token) {
-    const keymaster1_device_t* dev;
+    const keymaster2_device_t* dev;
     keymaster_operation_handle_t handle;
     keymaster_purpose_t purpose;
     keymaster::km_id_t keyid;
@@ -1066,7 +1065,7 @@ int32_t KeyStoreService::abort(const sp<IBinder>& token) {
 }
 
 bool KeyStoreService::isOperationAuthorized(const sp<IBinder>& token) {
-    const keymaster1_device_t* dev;
+    const keymaster2_device_t* dev;
     keymaster_operation_handle_t handle;
     const keymaster_key_characteristics_t* characteristics;
     keymaster_purpose_t purpose;
@@ -1204,7 +1203,7 @@ bool KeyStoreService::isKeystoreUnlocked(State state) {
     return false;
 }
 
-bool KeyStoreService::isKeyTypeSupported(const keymaster1_device_t* device,
+bool KeyStoreService::isKeyTypeSupported(const keymaster2_device_t* device,
                                          keymaster_keypair_t keyType) {
     const int32_t device_api = device->common.module->module_api_version;
     if (device_api == KEYMASTER_MODULE_API_VERSION_0_2) {
@@ -1250,7 +1249,7 @@ bool KeyStoreService::checkAllowedOperationParams(
 }
 
 keymaster_error_t KeyStoreService::getOperationCharacteristics(
-    const keymaster_key_blob_t& key, const keymaster1_device_t* dev,
+    const keymaster_key_blob_t& key, const keymaster2_device_t* dev,
     const std::vector<keymaster_key_param_t>& params, keymaster_key_characteristics_t* out) {
     UniquePtr<keymaster_blob_t> appId;
     UniquePtr<keymaster_blob_t> appData;
@@ -1265,15 +1264,14 @@ keymaster_error_t KeyStoreService::getOperationCharacteristics(
             appData->data_length = param.blob.data_length;
         }
     }
-    keymaster_key_characteristics_t* result = NULL;
+    keymaster_key_characteristics_t result = {{nullptr, 0}, {nullptr, 0}};
     if (!dev->get_key_characteristics) {
         return KM_ERROR_UNIMPLEMENTED;
     }
     keymaster_error_t error =
         dev->get_key_characteristics(dev, &key, appId.get(), appData.get(), &result);
-    if (result) {
-        *out = *result;
-        free(result);
+    if (error == KM_ERROR_OK) {
+        *out = result;
     }
     return error;
 }
@@ -1343,7 +1341,7 @@ int32_t KeyStoreService::addOperationAuthTokenIfNeeded(sp<IBinder> token,
     const hw_auth_token_t* authToken = NULL;
     mOperationMap.getOperationAuthToken(token, &authToken);
     if (!authToken) {
-        const keymaster1_device_t* dev;
+        const keymaster2_device_t* dev;
         keymaster_operation_handle_t handle;
         const keymaster_key_characteristics_t* characteristics = NULL;
         keymaster_purpose_t purpose;

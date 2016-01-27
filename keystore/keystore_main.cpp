@@ -38,7 +38,7 @@
 
 using keymaster::SoftKeymasterDevice;
 
-static int keymaster0_device_initialize(const hw_module_t* mod, keymaster1_device_t** dev) {
+static int keymaster0_device_initialize(const hw_module_t* mod, keymaster2_device_t** dev) {
     assert(mod->module_api_version < KEYMASTER_MODULE_API_VERSION_1_0);
     ALOGI("Found keymaster0 module %s, version %x", mod->name, mod->module_api_version);
 
@@ -57,11 +57,11 @@ static int keymaster0_device_initialize(const hw_module_t* mod, keymaster1_devic
         km0_device->common.close(&km0_device->common);
         km0_device = NULL;
         // SoftKeymasterDevice will be deleted by keymaster_device_release()
-        *dev = soft_keymaster.release()->keymaster_device();
+        *dev = soft_keymaster.release()->keymaster2_device();
         return 0;
     }
 
-    ALOGE("Wrapping keymaster0 module %s with SoftKeymasterDevice", mod->name);
+    ALOGD("Wrapping keymaster0 module %s with SoftKeymasterDevice", mod->name);
     error = soft_keymaster->SetHardwareDevice(km0_device);
     km0_device = NULL;  // SoftKeymasterDevice has taken ownership.
     if (error != KM_ERROR_OK) {
@@ -70,8 +70,8 @@ static int keymaster0_device_initialize(const hw_module_t* mod, keymaster1_devic
         goto err;
     }
 
-    // SoftKeymasterDevice will be deleted by keymaster_device_release()
-    *dev = soft_keymaster.release()->keymaster_device();
+    // SoftKeymasterDevice will be deleted by  keymaster_device_release()
+    *dev = soft_keymaster.release()->keymaster2_device();
     return 0;
 
 err:
@@ -81,12 +81,12 @@ err:
     return rc;
 }
 
-static int keymaster1_device_initialize(const hw_module_t* mod, keymaster1_device_t** dev) {
+static int keymaster1_device_initialize(const hw_module_t* mod, keymaster2_device_t** dev) {
     assert(mod->module_api_version >= KEYMASTER_MODULE_API_VERSION_1_0);
     ALOGI("Found keymaster1 module %s, version %x", mod->name, mod->module_api_version);
 
     UniquePtr<SoftKeymasterDevice> soft_keymaster(new SoftKeymasterDevice);
-    keymaster1_device_t* km1_device = NULL;
+    keymaster1_device_t* km1_device = nullptr;
     keymaster_error_t error = KM_ERROR_OK;
 
     int rc = keymaster1_open(mod, &km1_device);
@@ -95,30 +95,18 @@ static int keymaster1_device_initialize(const hw_module_t* mod, keymaster1_devic
         goto err;
     }
 
+    ALOGD("Wrapping keymaster1 module %s with SofKeymasterDevice", mod->name);
     error = soft_keymaster->SetHardwareDevice(km1_device);
-    km1_device = NULL;  // SoftKeymasterDevice has taken ownership.
+    km1_device = nullptr;  // SoftKeymasterDevice has taken ownership.
     if (error != KM_ERROR_OK) {
         ALOGE("Got error %d from SetHardwareDevice", error);
         rc = error;
         goto err;
     }
 
-    if (!soft_keymaster->Keymaster1DeviceIsGood()) {
-        ALOGI("Keymaster1 module is incomplete, using SoftKeymasterDevice wrapper");
-        // SoftKeymasterDevice will be deleted by keymaster_device_release()
-        *dev = soft_keymaster.release()->keymaster_device();
-        return 0;
-    } else {
-        ALOGI("Keymaster1 module is good, destroying wrapper and re-opening");
-        soft_keymaster.reset(NULL);
-        rc = keymaster1_open(mod, &km1_device);
-        if (rc) {
-            ALOGE("Error %d re-opening keystore keymaster1 device.", rc);
-            goto err;
-        }
-        *dev = km1_device;
-        return 0;
-    }
+    // SoftKeymasterDevice will be deleted by keymaster_device_release()
+    *dev = soft_keymaster.release()->keymaster2_device();
+    return 0;
 
 err:
     if (km1_device)
@@ -127,21 +115,46 @@ err:
     return rc;
 }
 
-static int keymaster_device_initialize(keymaster1_device_t** dev) {
+static int keymaster2_device_initialize(const hw_module_t* mod, keymaster2_device_t** dev) {
+    assert(mod->module_api_version >= KEYMASTER_MODULE_API_VERSION_2_0);
+    ALOGI("Found keymaster2 module %s, version %x", mod->name, mod->module_api_version);
+
+    UniquePtr<SoftKeymasterDevice> soft_keymaster(new SoftKeymasterDevice);
+    keymaster2_device_t* km2_device = nullptr;
+
+    int rc = keymaster2_open(mod, &km2_device);
+    if (rc) {
+        ALOGE("Error %d opening keystore keymaster2 device", rc);
+        goto err;
+    }
+
+    *dev = km2_device;
+    return 0;
+
+err:
+    if (km2_device)
+        km2_device->common.close(&km2_device->common);
+    *dev = nullptr;
+    return rc;
+}
+
+static int keymaster_device_initialize(keymaster2_device_t** dev) {
     const hw_module_t* mod;
 
     int rc = hw_get_module_by_class(KEYSTORE_HARDWARE_MODULE_ID, NULL, &mod);
     if (rc) {
         ALOGI("Could not find any keystore module, using software-only implementation.");
         // SoftKeymasterDevice will be deleted by keymaster_device_release()
-        *dev = (new SoftKeymasterDevice)->keymaster_device();
+        *dev = (new SoftKeymasterDevice)->keymaster2_device();
         return 0;
     }
 
     if (mod->module_api_version < KEYMASTER_MODULE_API_VERSION_1_0) {
         return keymaster0_device_initialize(mod, dev);
-    } else {
+    } else if (mod->module_api_version == KEYMASTER_MODULE_API_VERSION_1_0) {
         return keymaster1_device_initialize(mod, dev);
+    } else {
+        return keymaster2_device_initialize(mod, dev);
     }
 }
 
@@ -149,13 +162,13 @@ static int keymaster_device_initialize(keymaster1_device_t** dev) {
 // logger used by SoftKeymasterDevice.
 static keymaster::SoftKeymasterLogger softkeymaster_logger;
 
-static int fallback_keymaster_device_initialize(keymaster1_device_t** dev) {
-    *dev = (new SoftKeymasterDevice)->keymaster_device();
+static int fallback_keymaster_device_initialize(keymaster2_device_t** dev) {
+    *dev = (new SoftKeymasterDevice)->keymaster2_device();
     // SoftKeymasterDevice will be deleted by keymaster_device_release()
     return 0;
 }
 
-static void keymaster_device_release(keymaster1_device_t* dev) {
+static void keymaster_device_release(keymaster2_device_t* dev) {
     dev->common.close(&dev->common);
 }
 
@@ -174,13 +187,13 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    keymaster1_device_t* dev;
+    keymaster2_device_t* dev;
     if (keymaster_device_initialize(&dev)) {
         ALOGE("keystore keymaster could not be initialized; exiting");
         return 1;
     }
 
-    keymaster1_device_t* fallback;
+    keymaster2_device_t* fallback;
     if (fallback_keymaster_device_initialize(&fallback)) {
         ALOGE("software keymaster could not be initialized; exiting");
         return 1;

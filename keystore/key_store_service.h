@@ -162,7 +162,7 @@ class KeyStoreService : public BnKeystoreService, public IBinder::DeathRecipient
 
     bool isKeystoreUnlocked(State state);
 
-    bool isKeyTypeSupported(const keymaster1_device_t* device, keymaster_keypair_t keyType);
+    bool isKeyTypeSupported(const keymaster2_device_t* device, keymaster_keypair_t keyType);
 
     /**
      * Check that all keymaster_key_param_t's provided by the application are
@@ -171,7 +171,7 @@ class KeyStoreService : public BnKeystoreService, public IBinder::DeathRecipient
     bool checkAllowedOperationParams(const std::vector<keymaster_key_param_t>& params);
 
     keymaster_error_t getOperationCharacteristics(const keymaster_key_blob_t& key,
-                                                  const keymaster1_device_t* dev,
+                                                  const keymaster2_device_t* dev,
                                                   const std::vector<keymaster_key_param_t>& params,
                                                   keymaster_key_characteristics_t* out);
 

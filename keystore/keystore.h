@@ -19,7 +19,7 @@
 
 #include "user_state.h"
 
-#include <hardware/keymaster1.h>
+#include <hardware/keymaster2.h>
 
 #include <utils/Vector.h>
 
@@ -32,20 +32,14 @@ typedef struct {
 
 class KeyStore {
   public:
-    KeyStore(Entropy* entropy, keymaster1_device_t* device, keymaster1_device_t* fallback);
+    KeyStore(Entropy* entropy, keymaster2_device_t* device, keymaster2_device_t* fallback);
     ~KeyStore();
 
-    /**
-     * Depending on the hardware keymaster version is this may return a
-     * keymaster0_device_t* cast to a keymaster1_device_t*. All methods from
-     * keymaster0 are safe to call, calls to keymaster1_device_t methods should
-     * be guarded by a check on the device's version.
-     */
-    keymaster1_device_t* getDevice() const { return mDevice; }
+    keymaster2_device_t* getDevice() const { return mDevice; }
 
-    keymaster1_device_t* getFallbackDevice() const { return mFallbackDevice; }
+    keymaster2_device_t* getFallbackDevice() const { return mFallbackDevice; }
 
-    keymaster1_device_t* getDeviceForBlob(const Blob& blob) const {
+    keymaster2_device_t* getDeviceForBlob(const Blob& blob) const {
         return blob.isFallback() ? mFallbackDevice : mDevice;
     }
 
@@ -119,8 +113,8 @@ class KeyStore {
     static const android::String16 sRSAKeyType;
     Entropy* mEntropy;
 
-    keymaster1_device_t* mDevice;
-    keymaster1_device_t* mFallbackDevice;
+    keymaster2_device_t* mDevice;
+    keymaster2_device_t* mFallbackDevice;
 
     android::Vector<UserState*> mMasterKeys;
 
