@@ -34,7 +34,7 @@ const char* KeyStore::sMetaDataFile = ".metadata";
 const android::String16 KeyStore::sRSAKeyType("RSA");
 const android::String16 KeyStore::sECKeyType("EC");
 
-KeyStore::KeyStore(Entropy* entropy, keymaster1_device_t* device, keymaster1_device_t* fallback)
+KeyStore::KeyStore(Entropy* entropy, keymaster2_device_t* device, keymaster2_device_t* fallback)
     : mEntropy(entropy), mDevice(device), mFallbackDevice(fallback) {
     memset(&mMetaData, '\0', sizeof(mMetaData));
 }
@@ -293,7 +293,7 @@ ResponseCode KeyStore::del(const char* filename, const BlobType type, uid_t user
         }
     }
     if (keyBlob.getType() == ::TYPE_KEYMASTER_10) {
-        keymaster1_device_t* dev = getDeviceForBlob(keyBlob);
+        auto* dev = getDeviceForBlob(keyBlob);
         if (dev->delete_key) {
             keymaster_key_blob_t blob;
             blob.key_material = keyBlob.getValue();
