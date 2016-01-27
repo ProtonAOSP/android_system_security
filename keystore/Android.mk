@@ -27,7 +27,18 @@ ifeq ($(USE_32_BIT_KEYSTORE), true)
 LOCAL_MULTILIB := 32
 endif
 LOCAL_CFLAGS := -Wall -Wextra -Werror -Wunused
-LOCAL_SRC_FILES := keystore.cpp keyblob_utils.cpp operation.cpp auth_token_table.cpp
+LOCAL_SRC_FILES := \
+	auth_token_table.cpp \
+	blob.cpp \
+	entropy.cpp \
+	key_store_service.cpp \
+	keyblob_utils.cpp \
+	keystore.cpp \
+	keystore_main.cpp \
+	keystore_utils.cpp \
+	operation.cpp \
+	permissions.cpp \
+	user_state.cpp
 LOCAL_SHARED_LIBRARIES := \
 	libbinder \
 	libcutils \
