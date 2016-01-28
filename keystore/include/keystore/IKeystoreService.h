@@ -90,6 +90,16 @@ struct KeyCharacteristics {
     keymaster_key_characteristics_t characteristics;
 };
 
+// struct for serializing keymaster_cert_chain_t's
+struct KeymasterCertificateChain {
+    KeymasterCertificateChain();
+    ~KeymasterCertificateChain();
+    void readFromParcel(const Parcel& in);
+    void writeToParcel(Parcel* out) const;
+
+    keymaster_cert_chain_t chain;
+};
+
 bool readKeymasterArgumentFromParcel(const Parcel& in, keymaster_key_param_t* out);
 void writeKeymasterArgumentToParcel(const keymaster_key_param_t& param, Parcel* out);
 
@@ -134,6 +144,7 @@ public:
         ADD_AUTH_TOKEN = IBinder::FIRST_CALL_TRANSACTION + 32,
         ON_USER_ADDED = IBinder::FIRST_CALL_TRANSACTION + 33,
         ON_USER_REMOVED = IBinder::FIRST_CALL_TRANSACTION + 34,
+        ATTEST_KEY = IBinder::FIRST_CALL_TRANSACTION + 35,
     };
 
     DECLARE_META_INTERFACE(KeystoreService);
@@ -231,6 +242,9 @@ public:
     virtual int32_t onUserAdded(int32_t userId, int32_t parentId) = 0;
 
     virtual int32_t onUserRemoved(int32_t userId) = 0;
+
+    virtual int32_t attestKey(const String16& name, const KeymasterArguments& params,
+                              KeymasterCertificateChain* outChain) = 0;
 
 };
 
