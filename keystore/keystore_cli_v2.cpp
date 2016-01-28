@@ -20,6 +20,7 @@
 #include "base/command_line.h"
 #include "base/files/file_util.h"
 #include "keymaster/authorization_set.h"
+#include "keymaster/keymaster_tags.h"
 #include "keystore/keystore_client_impl.h"
 
 using base::CommandLine;
@@ -56,102 +57,14 @@ std::unique_ptr<KeystoreClient> CreateKeystoreInstance() {
     return std::unique_ptr<KeystoreClient>(new keystore::KeystoreClientImpl);
 }
 
-const char* StringifyTag(keymaster_tag_t tag) {
-    switch (tag) {
-    case KM_TAG_INVALID:
-        return "KM_TAG_INVALID";
-    case KM_TAG_PURPOSE:
-        return "KM_TAG_PURPOSE";
-    case KM_TAG_ALGORITHM:
-        return "KM_TAG_ALGORITHM";
-    case KM_TAG_KEY_SIZE:
-        return "KM_TAG_KEY_SIZE";
-    case KM_TAG_BLOCK_MODE:
-        return "KM_TAG_BLOCK_MODE";
-    case KM_TAG_DIGEST:
-        return "KM_TAG_DIGEST";
-    case KM_TAG_PADDING:
-        return "KM_TAG_PADDING";
-    case KM_TAG_CALLER_NONCE:
-        return "KM_TAG_CALLER_NONCE";
-    case KM_TAG_MIN_MAC_LENGTH:
-        return "KM_TAG_MIN_MAC_LENGTH";
-    case KM_TAG_RSA_PUBLIC_EXPONENT:
-        return "KM_TAG_RSA_PUBLIC_EXPONENT";
-    case KM_TAG_BLOB_USAGE_REQUIREMENTS:
-        return "KM_TAG_BLOB_USAGE_REQUIREMENTS";
-    case KM_TAG_BOOTLOADER_ONLY:
-        return "KM_TAG_BOOTLOADER_ONLY";
-    case KM_TAG_ACTIVE_DATETIME:
-        return "KM_TAG_ACTIVE_DATETIME";
-    case KM_TAG_ORIGINATION_EXPIRE_DATETIME:
-        return "KM_TAG_ORIGINATION_EXPIRE_DATETIME";
-    case KM_TAG_USAGE_EXPIRE_DATETIME:
-        return "KM_TAG_USAGE_EXPIRE_DATETIME";
-    case KM_TAG_MIN_SECONDS_BETWEEN_OPS:
-        return "KM_TAG_MIN_SECONDS_BETWEEN_OPS";
-    case KM_TAG_MAX_USES_PER_BOOT:
-        return "KM_TAG_MAX_USES_PER_BOOT";
-    case KM_TAG_ALL_USERS:
-        return "KM_TAG_ALL_USERS";
-    case KM_TAG_USER_ID:
-        return "KM_TAG_USER_ID";
-    case KM_TAG_USER_SECURE_ID:
-        return "KM_TAG_USER_SECURE_ID";
-    case KM_TAG_NO_AUTH_REQUIRED:
-        return "KM_TAG_NO_AUTH_REQUIRED";
-    case KM_TAG_USER_AUTH_TYPE:
-        return "KM_TAG_USER_AUTH_TYPE";
-    case KM_TAG_AUTH_TIMEOUT:
-        return "KM_TAG_AUTH_TIMEOUT";
-    case KM_TAG_ALL_APPLICATIONS:
-        return "KM_TAG_ALL_APPLICATIONS";
-    case KM_TAG_APPLICATION_ID:
-        return "KM_TAG_APPLICATION_ID";
-    case KM_TAG_APPLICATION_DATA:
-        return "KM_TAG_APPLICATION_DATA";
-    case KM_TAG_CREATION_DATETIME:
-        return "KM_TAG_CREATION_DATETIME";
-    case KM_TAG_ORIGIN:
-        return "KM_TAG_ORIGIN";
-    case KM_TAG_ROLLBACK_RESISTANT:
-        return "KM_TAG_ROLLBACK_RESISTANT";
-    case KM_TAG_ROOT_OF_TRUST:
-        return "KM_TAG_ROOT_OF_TRUST";
-    case KM_TAG_ASSOCIATED_DATA:
-        return "KM_TAG_ASSOCIATED_DATA";
-    case KM_TAG_NONCE:
-        return "KM_TAG_NONCE";
-    case KM_TAG_AUTH_TOKEN:
-        return "KM_TAG_AUTH_TOKEN";
-    case KM_TAG_MAC_LENGTH:
-        return "KM_TAG_MAC_LENGTH";
-    case KM_TAG_KDF:
-        return "KM_TAG_KDF";
-    case KM_TAG_EC_CURVE:
-        return "KM_TAG_EC_CURVE";
-    case KM_TAG_ECIES_SINGLE_HASH_MODE:
-        return "KM_TAG_ECIES_SINGLE_HASH_MODE";
-    case KM_TAG_OS_VERSION:
-        return "KM_TAG_OS_VERSION";
-    case KM_TAG_OS_PATCHLEVEL:
-        return "KM_TAG_OS_PATCHLEVEL";
-    case KM_TAG_EXPORTABLE:
-        return "KM_TAG_EXPORTABLE";
-    case KM_TAG_UNIQUE_ID:
-        return "KM_TAG_UNIQUE_ID";
-    case KM_TAG_INCLUDE_UNIQUE_ID:
-        return "KM_TAG_INCLUDE_UNIQUE_ID";
-    case KM_TAG_RESET_SINCE_ID_ROTATION:
-        return "KM_TAG_RESET_SINCE_ID_ROTATION";
-    }
-    return "<Unknown>";
-}
+#ifndef KEYMASTER_NAME_TAGS
+#erro KEYMASTER_NAME_TAGS must be defined
+#endif
 
 void PrintTags(const AuthorizationSet& parameters) {
     const keymaster_key_param_t* iter = nullptr;
     for (iter = parameters.begin(); iter != parameters.end(); ++iter) {
-        printf("  %s\n", StringifyTag(iter->tag));
+        printf("  %s\n", keymaster::StringifyTag(iter->tag));
     }
 }
 
