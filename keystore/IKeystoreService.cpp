@@ -269,7 +269,6 @@ void KeymasterCertificateChain::writeToParcel(Parcel* out) const {
     out->writeInt32(chain.entry_count);
     for (size_t i = 0; i < chain.entry_count; ++i) {
         if (chain.entries[i].data) {
-            out->writeInt32(1); // Tell Java side that object is not NULL
             out->writeInt32(chain.entries[i].data_length);
             void* buf = out->writeInplace(chain.entries[i].data_length);
             if (buf) {
@@ -1844,6 +1843,22 @@ status_t BnKeystoreService::onTransact(
             int32_t result = onUserRemoved(userId);
             reply->writeNoException();
             reply->writeInt32(result);
+
+            return NO_ERROR;
+        }
+        case ATTEST_KEY: {
+            CHECK_INTERFACE(IKeystoreService, data, reply);
+            String16 name = data.readString16();
+            KeymasterArguments params;
+            if (data.readInt32() != 0) {
+                params.readFromParcel(data);
+            }
+            KeymasterCertificateChain chain;
+            int ret = attestKey(name, params, &chain);
+            reply->writeNoException();
+            reply->writeInt32(ret);
+            reply->writeInt32(1);
+            chain.writeToParcel(reply);
 
             return NO_ERROR;
         }
