@@ -208,14 +208,8 @@ static EVP_PKEY* unwrap_key(const uint8_t* keyBlob, const size_t keyBlobLength) 
         return NULL;
     }
 
-    Unique_EVP_PKEY pkey(EVP_PKEY_new());
+    Unique_EVP_PKEY pkey(d2i_PrivateKey(type, nullptr, &p, privateLen));
     if (pkey.get() == NULL) {
-        logOpenSSLError("unwrap_key");
-        return NULL;
-    }
-    EVP_PKEY* tmp = pkey.get();
-
-    if (d2i_PrivateKey(type, &tmp, &p, privateLen) == NULL) {
         logOpenSSLError("unwrap_key");
         return NULL;
     }
