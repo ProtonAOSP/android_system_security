@@ -97,6 +97,8 @@ struct KeymasterCertificateChain {
     void readFromParcel(const Parcel& in);
     void writeToParcel(Parcel* out) const;
 
+    void FreeChain();
+
     keymaster_cert_chain_t chain;
 };
 

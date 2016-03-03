@@ -221,31 +221,44 @@ static bool readKeymasterBlob(const Parcel& in, keymaster_blob_t* blob) {
         return false;
     }
 
-    blob->data_length = 0;
     ssize_t length = in.readInt32();
     if (length <= 0) {
-        blob->data = nullptr;
         return false;
     }
 
-    blob->data = reinterpret_cast<const uint8_t*>(in.readInplace(length));
-    if (blob->data) {
-        blob->data_length = static_cast<size_t>(length);
-    }
+    blob->data = reinterpret_cast<const uint8_t*>(malloc(length));
+    if (!blob->data)
+        return false;
+
+    const void* buf = in.readInplace(length);
+    if (!buf)
+        return false;
+
+    blob->data_length = static_cast<size_t>(length);
+    memcpy(const_cast<uint8_t*>(blob->data), buf, length);
+
     return true;
 }
 
 void KeymasterCertificateChain::readFromParcel(const Parcel& in) {
+    keymaster_free_cert_chain(&chain);
+
     ssize_t count = in.readInt32();
     size_t ucount = count;
-    if (count < 0) {
-        ucount = 0;
+    if (count <= 0) {
+        return;
     }
-    keymaster_free_cert_chain(&chain);
-    chain.entries = new keymaster_blob_t[ucount];
+
+    chain.entries = reinterpret_cast<keymaster_blob_t*>(malloc(sizeof(keymaster_blob_t) * ucount));
+    if (!chain.entries) {
+        ALOGE("Error allocating memory for certificate chain");
+        return;
+    }
+
     memset(chain.entries, 0, sizeof(keymaster_blob_t) * ucount);
     for (size_t i = 0; i < ucount; ++i) {
         if (!readKeymasterBlob(in, &chain.entries[i])) {
+            ALOGE("Error reading certificate from parcel");
             keymaster_free_cert_chain(&chain);
             return;
         }
@@ -365,6 +378,7 @@ bool readKeymasterArgumentFromParcel(const Parcel& in, keymaster_key_param_t* ou
                 const void* buf = in.readInplace(ulength);
                 if (!buf || !data) {
                     ALOGE("Failed to allocate buffer for keymaster blob param");
+                    free(data);
                     return false;
                 }
                 memcpy(data, buf, ulength);
