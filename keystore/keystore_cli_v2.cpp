@@ -99,8 +99,7 @@ bool TestKey(const std::string& name, bool required, const AuthorizationSet& par
     printf("%s Key Characteristics:\n", name.c_str());
     PrintKeyCharacteristics(hardware_enforced_characteristics, software_enforced_characteristics);
     bool hardware_backed = (hardware_enforced_characteristics.size() > 0);
-    if (software_enforced_characteristics.GetTagCount(KM_TAG_PURPOSE) > 0 ||
-        software_enforced_characteristics.GetTagCount(KM_TAG_ALGORITHM) > 0 ||
+    if (software_enforced_characteristics.GetTagCount(KM_TAG_ALGORITHM) > 0 ||
         software_enforced_characteristics.GetTagCount(KM_TAG_KEY_SIZE) > 0 ||
         software_enforced_characteristics.GetTagCount(KM_TAG_RSA_PUBLIC_EXPONENT) > 0) {
         VLOG(1) << "Hardware-backed key but required characteristics enforced in software.";
