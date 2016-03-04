@@ -19,6 +19,7 @@
 
 #include "base/command_line.h"
 #include "base/files/file_util.h"
+#include "base/strings/string_util.h"
 #include "keymaster/authorization_set.h"
 #include "keymaster/keymaster_tags.h"
 #include "keystore/keystore_client_impl.h"
@@ -38,7 +39,7 @@ struct TestCase {
 
 void PrintUsageAndExit() {
     printf("Usage: keystore_client_v2 <command> [options]\n");
-    printf("Commands: brillo-platform-test [--prefix=<test_name_prefix>]\n"
+    printf("Commands: brillo-platform-test [--prefix=<test_name_prefix>] [--test_for_0_3]\n"
            "          list-brillo-tests\n"
            "          add-entropy --input=<entropy>\n"
            "          generate --name=<key_name>\n"
@@ -58,7 +59,7 @@ std::unique_ptr<KeystoreClient> CreateKeystoreInstance() {
 }
 
 #ifndef KEYMASTER_NAME_TAGS
-#erro KEYMASTER_NAME_TAGS must be defined
+#error KEYMASTER_NAME_TAGS must be defined
 #endif
 
 void PrintTags(const AuthorizationSet& parameters) {
@@ -82,15 +83,16 @@ bool TestKey(const std::string& name, bool required, const AuthorizationSet& par
     AuthorizationSet software_enforced_characteristics;
     int32_t result = keystore->generateKey("tmp", parameters, &hardware_enforced_characteristics,
                                            &software_enforced_characteristics);
+    const char kBoldRedAbort[] = "\033[1;31mABORT\033[0m";
     if (result != KM_ERROR_OK) {
         LOG(ERROR) << "Failed to generate key: " << result;
-        printf("%s Result: ABORT\n", name.c_str());
+        printf("[%s] %s\n", kBoldRedAbort, name.c_str());
         return false;
     }
     result = keystore->deleteKey("tmp");
     if (result != KM_ERROR_OK) {
         LOG(ERROR) << "Failed to delete key: " << result;
-        printf("%s Result: ABORT\n", name.c_str());
+        printf("[%s] %s\n", kBoldRedAbort, name.c_str());
         return false;
     }
     printf("===============================================================\n");
@@ -100,10 +102,7 @@ bool TestKey(const std::string& name, bool required, const AuthorizationSet& par
     if (software_enforced_characteristics.GetTagCount(KM_TAG_PURPOSE) > 0 ||
         software_enforced_characteristics.GetTagCount(KM_TAG_ALGORITHM) > 0 ||
         software_enforced_characteristics.GetTagCount(KM_TAG_KEY_SIZE) > 0 ||
-        software_enforced_characteristics.GetTagCount(KM_TAG_RSA_PUBLIC_EXPONENT) > 0 ||
-        software_enforced_characteristics.GetTagCount(KM_TAG_DIGEST) > 0 ||
-        software_enforced_characteristics.GetTagCount(KM_TAG_PADDING) > 0 ||
-        software_enforced_characteristics.GetTagCount(KM_TAG_BLOCK_MODE) > 0) {
+        software_enforced_characteristics.GetTagCount(KM_TAG_RSA_PUBLIC_EXPONENT) > 0) {
         VLOG(1) << "Hardware-backed key but required characteristics enforced in software.";
         hardware_backed = false;
     }
@@ -205,12 +204,23 @@ std::vector<TestCase> GetTestCases() {
     return std::vector<TestCase>(&test_cases[0], &test_cases[arraysize(test_cases)]);
 }
 
-int BrilloPlatformTest(const std::string& prefix) {
+int BrilloPlatformTest(const std::string& prefix, bool test_for_0_3) {
+    const char kBoldYellowWarning[] = "\033[1;33mWARNING\033[0m";
+    if (test_for_0_3) {
+        printf("%s: Testing for keymaster v0.3. "
+               "This does not meet Brillo requirements.\n", kBoldYellowWarning);
+    }
     int test_count = 0;
     int fail_count = 0;
     std::vector<TestCase> test_cases = GetTestCases();
     for (const auto& test_case : test_cases) {
-        if (!prefix.empty() && test_case.name.find(prefix) != 0) {
+        if (!prefix.empty() &&
+            !base::StartsWith(test_case.name, prefix, base::CompareCase::SENSITIVE)) {
+            continue;
+        }
+        if (test_for_0_3 &&
+            (base::StartsWith(test_case.name, "AES", base::CompareCase::SENSITIVE) ||
+             base::StartsWith(test_case.name, "HMAC", base::CompareCase::SENSITIVE))) {
             continue;
         }
         ++test_count;
@@ -432,7 +442,8 @@ int main(int argc, char** argv) {
         PrintUsageAndExit();
     }
     if (args[0] == "brillo-platform-test") {
-        return BrilloPlatformTest(command_line->GetSwitchValueASCII("prefix"));
+        return BrilloPlatformTest(command_line->GetSwitchValueASCII("prefix"),
+                                  command_line->HasSwitch("test_for_0_3"));
     } else if (args[0] == "list-brillo-tests") {
         return ListTestCases();
     } else if (args[0] == "add-entropy") {
