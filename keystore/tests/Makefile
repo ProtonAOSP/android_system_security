@@ -31,7 +31,7 @@ else
 COMPILER_SPECIFIC_ARGS=-std=c++0x -fprofile-arcs
 endif
 
-CPPFLAGS=$(INCLUDES) -g -O0 -MD
+CPPFLAGS=$(INCLUDES) -g -O0 -MD -DHOST_BUILD
 CXXFLAGS=-Wall -Werror -Wno-unused -Winit-self -Wpointer-arith	-Wunused-parameter \
         -Werror=sign-compare -Wmissing-declarations -ftest-coverage -fno-permissive \
 	-Wno-deprecated-declarations -fno-exceptions -DKEYMASTER_NAME_TAGS \
@@ -46,7 +46,14 @@ LDLIBS=-lpthread -lstdc++ -lgcov
 # file here (not headers).
 CPPSRCS=\
 	../auth_token_table.cpp \
-	auth_token_table_test.cpp
+	auth_token_table_test.cpp \
+	gtest_main.cpp \
+	$(KEYMASTER)/authorization_set.cpp \
+	$(KEYMASTER)/keymaster_tags.cpp \
+	$(KEYMASTER)/logger.cpp \
+	$(KEYMASTER)/serializable.cpp
+
+CCSRCS=$(GTEST)/src/gtest-all.cc
 
 # This list of binaries determes what gets built and run.  Add each new test binary here.
 BINARIES=\
@@ -60,10 +67,13 @@ BINARIES=\
 
 run: $(BINARIES:=.run)
 
+GTEST_OBJS = $(GTEST)/src/gtest-all.o gtest_main.o
+
 auth_token_table_test: auth_token_table_test.o \
 	../auth_token_table.o \
-	$(GTEST)/src/gtest-all.o \
+	$(GTEST_OBJS) \
 	$(KEYMASTER)/authorization_set.o \
+	$(KEYMASTER)/keymaster_tags.o \
 	$(KEYMASTER)/logger.o \
 	$(KEYMASTER)/serializable.o
 
