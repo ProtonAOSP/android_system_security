@@ -162,6 +162,7 @@ AuthorizationSet GetAESParameters(uint32_t key_size, bool with_gcm_mode) {
         parameters.Authorization(keymaster::TAG_BLOCK_MODE, KM_MODE_ECB);
         parameters.Authorization(keymaster::TAG_BLOCK_MODE, KM_MODE_CBC);
         parameters.Authorization(keymaster::TAG_BLOCK_MODE, KM_MODE_CTR);
+        parameters.Padding(KM_PAD_NONE);
     }
     return parameters.build();
 }
