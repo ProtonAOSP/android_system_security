@@ -23,11 +23,6 @@
 
 using std::vector;
 
-int main(int argc, char** argv) {
-    ::testing::InitGoogleTest(&argc, argv);
-    int result = RUN_ALL_TESTS();
-}
-
 inline bool operator==(const hw_auth_token_t& a, const hw_auth_token_t& b) {
     return (memcmp(&a, &b, sizeof(a)) == 0);
 }
@@ -109,24 +104,24 @@ TEST(AuthTokenTableTest, SimpleAddAndFindTokens) {
 
     const hw_auth_token_t* found;
 
-    ASSERT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(1), 0, &found));
+    ASSERT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(1), KM_PURPOSE_SIGN, 0, &found));
     EXPECT_EQ(1U, found->user_id);
     EXPECT_EQ(2U, found->authenticator_id);
 
-    ASSERT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(2), 0, &found));
+    ASSERT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(2), KM_PURPOSE_SIGN, 0, &found));
     EXPECT_EQ(1U, found->user_id);
     EXPECT_EQ(2U, found->authenticator_id);
 
-    ASSERT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(3), 0, &found));
+    ASSERT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(3), KM_PURPOSE_SIGN, 0, &found));
     EXPECT_EQ(3U, found->user_id);
     EXPECT_EQ(4U, found->authenticator_id);
 
-    ASSERT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(4), 0, &found));
+    ASSERT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(4), KM_PURPOSE_SIGN, 0, &found));
     EXPECT_EQ(3U, found->user_id);
     EXPECT_EQ(4U, found->authenticator_id);
 
     ASSERT_EQ(AuthTokenTable::AUTH_TOKEN_NOT_FOUND,
-              table.FindAuthorization(make_set(5), 0, &found));
+              table.FindAuthorization(make_set(5), KM_PURPOSE_SIGN, 0, &found));
 }
 
 TEST(AuthTokenTableTest, FlushTable) {
@@ -140,9 +135,9 @@ TEST(AuthTokenTableTest, FlushTable) {
 
     // All three should be in the table.
     EXPECT_EQ(3U, table.size());
-    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(1), 0, &found));
-    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(2), 0, &found));
-    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(3), 0, &found));
+    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(1), KM_PURPOSE_SIGN, 0, &found));
+    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(2), KM_PURPOSE_SIGN, 0, &found));
+    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(3), KM_PURPOSE_SIGN, 0, &found));
 
     table.Clear();
     EXPECT_EQ(0U, table.size());
@@ -159,32 +154,32 @@ TEST(AuthTokenTableTest, TableOverflow) {
 
     // All three should be in the table.
     EXPECT_EQ(3U, table.size());
-    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(1), 0, &found));
-    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(2), 0, &found));
-    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(3), 0, &found));
+    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(1), KM_PURPOSE_SIGN, 0, &found));
+    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(2), KM_PURPOSE_SIGN, 0, &found));
+    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(3), KM_PURPOSE_SIGN, 0, &found));
 
     table.AddAuthenticationToken(make_token(4));
 
     // Oldest should be gone.
     EXPECT_EQ(3U, table.size());
     EXPECT_EQ(AuthTokenTable::AUTH_TOKEN_NOT_FOUND,
-              table.FindAuthorization(make_set(1), 0, &found));
+              table.FindAuthorization(make_set(1), KM_PURPOSE_SIGN, 0, &found));
 
     // Others should be there, including the new one (4).  Search for it first, then the others, so
     // 4 becomes the least recently used.
-    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(4), 0, &found));
-    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(2), 0, &found));
-    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(3), 0, &found));
+    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(4), KM_PURPOSE_SIGN, 0, &found));
+    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(2), KM_PURPOSE_SIGN, 0, &found));
+    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(3), KM_PURPOSE_SIGN, 0, &found));
 
     table.AddAuthenticationToken(make_token(5));
 
     // 5 should have replaced 4.
     EXPECT_EQ(3U, table.size());
     EXPECT_EQ(AuthTokenTable::AUTH_TOKEN_NOT_FOUND,
-              table.FindAuthorization(make_set(4), 0, &found));
-    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(2), 0, &found));
-    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(5), 0, &found));
-    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(3), 0, &found));
+              table.FindAuthorization(make_set(4), KM_PURPOSE_SIGN, 0, &found));
+    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(2), KM_PURPOSE_SIGN, 0, &found));
+    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(5), KM_PURPOSE_SIGN, 0, &found));
+    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(3), KM_PURPOSE_SIGN, 0, &found));
 
     table.AddAuthenticationToken(make_token(6));
     table.AddAuthenticationToken(make_token(7));
@@ -192,12 +187,12 @@ TEST(AuthTokenTableTest, TableOverflow) {
     // 2 and 5 should be gone
     EXPECT_EQ(3U, table.size());
     EXPECT_EQ(AuthTokenTable::AUTH_TOKEN_NOT_FOUND,
-              table.FindAuthorization(make_set(2), 0, &found));
+              table.FindAuthorization(make_set(2), KM_PURPOSE_SIGN, 0, &found));
     EXPECT_EQ(AuthTokenTable::AUTH_TOKEN_NOT_FOUND,
-              table.FindAuthorization(make_set(5), 0, &found));
-    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(6), 0, &found));
-    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(7), 0, &found));
-    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(3), 0, &found));
+              table.FindAuthorization(make_set(5), KM_PURPOSE_SIGN, 0, &found));
+    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(6), KM_PURPOSE_SIGN, 0, &found));
+    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(7), KM_PURPOSE_SIGN, 0, &found));
+    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(3), KM_PURPOSE_SIGN, 0, &found));
 
     table.AddAuthenticationToken(make_token(8));
     table.AddAuthenticationToken(make_token(9));
@@ -206,22 +201,23 @@ TEST(AuthTokenTableTest, TableOverflow) {
     // Only the three most recent should be there.
     EXPECT_EQ(3U, table.size());
     EXPECT_EQ(AuthTokenTable::AUTH_TOKEN_NOT_FOUND,
-              table.FindAuthorization(make_set(1), 0, &found));
+              table.FindAuthorization(make_set(1), KM_PURPOSE_SIGN, 0, &found));
     EXPECT_EQ(AuthTokenTable::AUTH_TOKEN_NOT_FOUND,
-              table.FindAuthorization(make_set(2), 0, &found));
+              table.FindAuthorization(make_set(2), KM_PURPOSE_SIGN, 0, &found));
     EXPECT_EQ(AuthTokenTable::AUTH_TOKEN_NOT_FOUND,
-              table.FindAuthorization(make_set(3), 0, &found));
+              table.FindAuthorization(make_set(3), KM_PURPOSE_SIGN, 0, &found));
     EXPECT_EQ(AuthTokenTable::AUTH_TOKEN_NOT_FOUND,
-              table.FindAuthorization(make_set(4), 0, &found));
+              table.FindAuthorization(make_set(4), KM_PURPOSE_SIGN, 0, &found));
     EXPECT_EQ(AuthTokenTable::AUTH_TOKEN_NOT_FOUND,
-              table.FindAuthorization(make_set(5), 0, &found));
+              table.FindAuthorization(make_set(5), KM_PURPOSE_SIGN, 0, &found));
     EXPECT_EQ(AuthTokenTable::AUTH_TOKEN_NOT_FOUND,
-              table.FindAuthorization(make_set(6), 0, &found));
+              table.FindAuthorization(make_set(6), KM_PURPOSE_SIGN, 0, &found));
     EXPECT_EQ(AuthTokenTable::AUTH_TOKEN_NOT_FOUND,
-              table.FindAuthorization(make_set(7), 0, &found));
-    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(8), 0, &found));
-    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(9), 0, &found));
-    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(10), 0, &found));
+              table.FindAuthorization(make_set(7), KM_PURPOSE_SIGN, 0, &found));
+    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(8), KM_PURPOSE_SIGN, 0, &found));
+    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(9), KM_PURPOSE_SIGN, 0, &found));
+    EXPECT_EQ(AuthTokenTable::OK,
+              table.FindAuthorization(make_set(10), KM_PURPOSE_SIGN, 0, &found));
 }
 
 TEST(AuthTokenTableTest, AuthenticationNotRequired) {
@@ -229,8 +225,9 @@ TEST(AuthTokenTableTest, AuthenticationNotRequired) {
     const hw_auth_token_t* found;
 
     EXPECT_EQ(AuthTokenTable::AUTH_NOT_REQUIRED,
-              table.FindAuthorization(AuthorizationSetBuilder().Authorization(TAG_NO_AUTH_REQUIRED),
-                                      0 /* no challenge */, &found));
+              table.FindAuthorization(
+                  AuthorizationSetBuilder().Authorization(TAG_NO_AUTH_REQUIRED).build(),
+                  KM_PURPOSE_SIGN, 0 /* no challenge */, &found));
 }
 
 TEST(AuthTokenTableTest, OperationHandleNotFound) {
@@ -239,14 +236,15 @@ TEST(AuthTokenTableTest, OperationHandleNotFound) {
 
     table.AddAuthenticationToken(make_token(1, 0, 1, 5));
     EXPECT_EQ(AuthTokenTable::AUTH_TOKEN_NOT_FOUND,
-              table.FindAuthorization(make_set(1, 0 /* no timeout */),
+              table.FindAuthorization(make_set(1, 0 /* no timeout */), KM_PURPOSE_SIGN,
                                       2 /* non-matching challenge */, &found));
-    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(1, 0 /* no timeout */),
-                                                          1 /* matching challenge */, &found));
+    EXPECT_EQ(AuthTokenTable::OK,
+              table.FindAuthorization(make_set(1, 0 /* no timeout */), KM_PURPOSE_SIGN,
+                                      1 /* matching challenge */, &found));
     table.MarkCompleted(1);
-    EXPECT_EQ(
-        AuthTokenTable::AUTH_TOKEN_NOT_FOUND,
-        table.FindAuthorization(make_set(1, 0 /* no timeout */), 1 /* used challenge */, &found));
+    EXPECT_EQ(AuthTokenTable::AUTH_TOKEN_NOT_FOUND,
+              table.FindAuthorization(make_set(1, 0 /* no timeout */), KM_PURPOSE_SIGN,
+                                      1 /* used challenge */, &found));
 }
 
 TEST(AuthTokenTableTest, OperationHandleRequired) {
@@ -254,9 +252,9 @@ TEST(AuthTokenTableTest, OperationHandleRequired) {
     const hw_auth_token_t* found;
 
     table.AddAuthenticationToken(make_token(1));
-    EXPECT_EQ(
-        AuthTokenTable::OP_HANDLE_REQUIRED,
-        table.FindAuthorization(make_set(1, 0 /* no timeout */), 0 /* no op handle */, &found));
+    EXPECT_EQ(AuthTokenTable::OP_HANDLE_REQUIRED,
+              table.FindAuthorization(make_set(1, 0 /* no timeout */), KM_PURPOSE_SIGN,
+                                      0 /* no op handle */, &found));
 }
 
 TEST(AuthTokenTableTest, AuthSidChanged) {
@@ -265,7 +263,8 @@ TEST(AuthTokenTableTest, AuthSidChanged) {
 
     table.AddAuthenticationToken(make_token(1, 3, /* op handle */ 1));
     EXPECT_EQ(AuthTokenTable::AUTH_TOKEN_WRONG_SID,
-              table.FindAuthorization(make_set(2, 0 /* no timeout */), 1 /* op handle */, &found));
+              table.FindAuthorization(make_set(2, 0 /* no timeout */), KM_PURPOSE_SIGN,
+                                      1 /* op handle */, &found));
 }
 
 TEST(AuthTokenTableTest, TokenExpired) {
@@ -281,13 +280,18 @@ TEST(AuthTokenTableTest, TokenExpired) {
     // expired.  An additional check of the secure timestamp (in the token) will be made by
     // keymaster when the found token is passed to it.
     table.AddAuthenticationToken(make_token(1, 0));
-    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(key_info, 0 /* no op handle */, &found));
-    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(key_info, 0 /* no op handle */, &found));
-    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(key_info, 0 /* no op handle */, &found));
-    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(key_info, 0 /* no op handle */, &found));
-    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(key_info, 0 /* no op handle */, &found));
+    EXPECT_EQ(AuthTokenTable::OK,
+              table.FindAuthorization(key_info, KM_PURPOSE_SIGN, 0 /* no op handle */, &found));
+    EXPECT_EQ(AuthTokenTable::OK,
+              table.FindAuthorization(key_info, KM_PURPOSE_SIGN, 0 /* no op handle */, &found));
+    EXPECT_EQ(AuthTokenTable::OK,
+              table.FindAuthorization(key_info, KM_PURPOSE_SIGN, 0 /* no op handle */, &found));
+    EXPECT_EQ(AuthTokenTable::OK,
+              table.FindAuthorization(key_info, KM_PURPOSE_SIGN, 0 /* no op handle */, &found));
+    EXPECT_EQ(AuthTokenTable::OK,
+              table.FindAuthorization(key_info, KM_PURPOSE_SIGN, 0 /* no op handle */, &found));
     EXPECT_EQ(AuthTokenTable::AUTH_TOKEN_EXPIRED,
-              table.FindAuthorization(key_info, 0 /* no op handle */, &found));
+              table.FindAuthorization(key_info, KM_PURPOSE_SIGN, 0 /* no op handle */, &found));
 }
 
 TEST(AuthTokenTableTest, MarkNonexistentEntryCompleted) {
@@ -305,7 +309,7 @@ TEST(AuthTokenTableTest, SupersededEntries) {
     table.AddAuthenticationToken(make_token(1, 0, 0, 0));
     table.AddAuthenticationToken(make_token(1, 0, 0, 1));
     EXPECT_EQ(1U, table.size());
-    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(1), 0, &found));
+    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(1), KM_PURPOSE_SIGN, 0, &found));
     EXPECT_EQ(1U, ntoh(found->timestamp));
 
     // Add a third token, this with a different RSID.  It should not be superseded.
@@ -316,9 +320,9 @@ TEST(AuthTokenTableTest, SupersededEntries) {
     table.AddAuthenticationToken(make_token(1, 0, 0, 3));
     table.AddAuthenticationToken(make_token(2, 0, 0, 4));
     EXPECT_EQ(2U, table.size());
-    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(1), 0, &found));
+    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(1), KM_PURPOSE_SIGN, 0, &found));
     EXPECT_EQ(3U, ntoh(found->timestamp));
-    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(2), 0, &found));
+    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(2), KM_PURPOSE_SIGN, 0, &found));
     EXPECT_EQ(4U, ntoh(found->timestamp));
 
     // Add another, this one with a challenge value.  It should supersede the old one since it is
@@ -334,10 +338,12 @@ TEST(AuthTokenTableTest, SupersededEntries) {
     // Should be able to find each of them, by specifying their challenge, with a key that is not
     // timed (timed keys don't care about challenges).
     EXPECT_EQ(AuthTokenTable::OK,
-              table.FindAuthorization(make_set(1, 0 /* no timeout*/), 1 /* challenge */, &found));
+              table.FindAuthorization(make_set(1, 0 /* no timeout*/), KM_PURPOSE_SIGN,
+                                      1 /* challenge */, &found));
     EXPECT_EQ(5U, ntoh(found->timestamp));
     EXPECT_EQ(AuthTokenTable::OK,
-              table.FindAuthorization(make_set(1, 0 /* no timeout */), 2 /* challenge */, &found));
+              table.FindAuthorization(make_set(1, 0 /* no timeout */), KM_PURPOSE_SIGN,
+                                      2 /* challenge */, &found));
     EXPECT_EQ(6U, ntoh(found->timestamp));
 
     // Add another, without a challenge, and the same timestamp as the last one.  This new one
@@ -345,7 +351,8 @@ TEST(AuthTokenTableTest, SupersededEntries) {
     // since it seems unlikely to occur in practice.
     table.AddAuthenticationToken(make_token(1, 0, 0, 6));
     EXPECT_EQ(4U, table.size());
-    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(1), 0 /* challenge */, &found));
+    EXPECT_EQ(AuthTokenTable::OK,
+              table.FindAuthorization(make_set(1), KM_PURPOSE_SIGN, 0 /* challenge */, &found));
     EXPECT_EQ(6U, ntoh(found->timestamp));
 
     // Add another without a challenge but an increased timestamp. This should supersede the
@@ -353,9 +360,11 @@ TEST(AuthTokenTableTest, SupersededEntries) {
     table.AddAuthenticationToken(make_token(1, 0, 0, 7));
     EXPECT_EQ(4U, table.size());
     EXPECT_EQ(AuthTokenTable::OK,
-              table.FindAuthorization(make_set(1, 0 /* no timeout */), 2 /* challenge */, &found));
+              table.FindAuthorization(make_set(1, 0 /* no timeout */), KM_PURPOSE_SIGN,
+                                      2 /* challenge */, &found));
     EXPECT_EQ(6U, ntoh(found->timestamp));
-    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(1), 0 /* challenge */, &found));
+    EXPECT_EQ(AuthTokenTable::OK,
+              table.FindAuthorization(make_set(1), KM_PURPOSE_SIGN, 0 /* challenge */, &found));
     EXPECT_EQ(7U, ntoh(found->timestamp));
 
     // Mark the entry with challenge 2 as complete.  Since there's a newer challenge-free entry, the
@@ -363,8 +372,10 @@ TEST(AuthTokenTableTest, SupersededEntries) {
     table.MarkCompleted(2);
     EXPECT_EQ(3U, table.size());
     EXPECT_EQ(AuthTokenTable::AUTH_TOKEN_NOT_FOUND,
-              table.FindAuthorization(make_set(1, 0 /* no timeout */), 2 /* challenge */, &found));
-    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(1), 0 /* challenge */, &found));
+              table.FindAuthorization(make_set(1, 0 /* no timeout */), KM_PURPOSE_SIGN,
+                                      2 /* challenge */, &found));
+    EXPECT_EQ(AuthTokenTable::OK,
+              table.FindAuthorization(make_set(1), KM_PURPOSE_SIGN, 0 /* challenge */, &found));
     EXPECT_EQ(7U, ntoh(found->timestamp));
 
     // Add another SID 1 entry with a challenge.  It supersedes the previous SID 1 entry with
@@ -373,15 +384,18 @@ TEST(AuthTokenTableTest, SupersededEntries) {
     EXPECT_EQ(3U, table.size());
 
     EXPECT_EQ(AuthTokenTable::OK,
-              table.FindAuthorization(make_set(1, 0 /* no timeout */), 1 /* challenge */, &found));
+              table.FindAuthorization(make_set(1, 0 /* no timeout */), KM_PURPOSE_SIGN,
+                                      1 /* challenge */, &found));
     EXPECT_EQ(5U, ntoh(found->timestamp));
 
     EXPECT_EQ(AuthTokenTable::OK,
-              table.FindAuthorization(make_set(1, 0 /* no timeout */), 3 /* challenge */, &found));
+              table.FindAuthorization(make_set(1, 0 /* no timeout */), KM_PURPOSE_SIGN,
+                                      3 /* challenge */, &found));
     EXPECT_EQ(8U, ntoh(found->timestamp));
 
     // SID 2 entry is still there.
-    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(2), 0 /* challenge */, &found));
+    EXPECT_EQ(AuthTokenTable::OK,
+              table.FindAuthorization(make_set(2), KM_PURPOSE_SIGN, 0 /* challenge */, &found));
     EXPECT_EQ(4U, ntoh(found->timestamp));
 
     // Mark the entry with challenge 3 as complete.  Since the older challenge 1 entry is
@@ -390,10 +404,12 @@ TEST(AuthTokenTableTest, SupersededEntries) {
     EXPECT_EQ(3U, table.size());
 
     EXPECT_EQ(AuthTokenTable::OK,
-              table.FindAuthorization(make_set(1, 0 /* no timeout */), 1 /* challenge */, &found));
+              table.FindAuthorization(make_set(1, 0 /* no timeout */), KM_PURPOSE_SIGN,
+                                      1 /* challenge */, &found));
     EXPECT_EQ(5U, ntoh(found->timestamp));
 
-    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(1), 0 /* challenge */, &found));
+    EXPECT_EQ(AuthTokenTable::OK,
+              table.FindAuthorization(make_set(1), KM_PURPOSE_SIGN, 0 /* challenge */, &found));
     EXPECT_EQ(8U, ntoh(found->timestamp));
 
     // Mark the entry with challenge 1 as complete.  Since there's a newer one (with challenge 3,
@@ -401,8 +417,10 @@ TEST(AuthTokenTableTest, SupersededEntries) {
     table.MarkCompleted(1);
     EXPECT_EQ(2U, table.size());
     EXPECT_EQ(AuthTokenTable::AUTH_TOKEN_NOT_FOUND,
-              table.FindAuthorization(make_set(1, 0 /* no timeout */), 1 /* challenge */, &found));
-    EXPECT_EQ(AuthTokenTable::OK, table.FindAuthorization(make_set(1), 0 /* challenge */, &found));
+              table.FindAuthorization(make_set(1, 0 /* no timeout */), KM_PURPOSE_SIGN,
+                                      1 /* challenge */, &found));
+    EXPECT_EQ(AuthTokenTable::OK,
+              table.FindAuthorization(make_set(1), KM_PURPOSE_SIGN, 0 /* challenge */, &found));
     EXPECT_EQ(8U, ntoh(found->timestamp));
 }
 

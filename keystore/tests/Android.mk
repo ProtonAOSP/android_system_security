@@ -22,10 +22,12 @@ ifeq ($(USE_32_BIT_KEYSTORE), true)
 LOCAL_MULTILIB := 32
 endif
 LOCAL_CFLAGS := -Wall -Wextra -Werror
-LOCAL_SRC_FILES := auth_token_table_test.cpp
-LOCAL_MODULE := auth_token_table_test
+LOCAL_SRC_FILES := \
+	auth_token_table_test.cpp
+LOCAL_MODULE := keystore_unit_tests
+LOCAL_MODULE_TAGS := test
 LOCAL_C_INCLUDES := $(LOCAL_PATH)/include
-LOCAL_STATIC_LIBRARIES := libgtest_main libkeystore_test
+LOCAL_STATIC_LIBRARIES := libgtest_main libkeystore_test liblog
 LOCAL_SHARED_LIBRARIES := libkeymaster_messages
 LOCAL_ADDITIONAL_DEPENDENCIES := $(LOCAL_PATH)/Android.mk
 include $(BUILD_NATIVE_TEST)
