@@ -30,6 +30,11 @@
 #include "defaults.h"
 #include "keystore_utils.h"
 
+using keymaster::AuthorizationSet;
+using keymaster::AuthorizationSetBuilder;
+using keymaster::TAG_APPLICATION_DATA;
+using keymaster::TAG_APPLICATION_ID;
+
 namespace android {
 
 const size_t MAX_OPERATIONS = 15;
@@ -38,6 +43,10 @@ struct BIGNUM_Delete {
     void operator()(BIGNUM* p) const { BN_free(p); }
 };
 typedef UniquePtr<BIGNUM, BIGNUM_Delete> Unique_BIGNUM;
+
+struct Malloc_Delete {
+    void operator()(uint8_t* p) const { free(p); }
+};
 
 void KeyStoreService::binderDied(const wp<IBinder>& who) {
     auto operations = mOperationMap.getOperationsForToken(who.unsafe_get());
@@ -680,16 +689,29 @@ int32_t KeyStoreService::getKeyCharacteristics(const String16& name,
     if (responseCode != ::NO_ERROR) {
         return responseCode;
     }
-    keymaster_key_blob_t key;
-    key.key_material_size = keyBlob.getLength();
-    key.key_material = keyBlob.getValue();
+    keymaster_key_blob_t key = {keyBlob.getValue(), static_cast<size_t>(keyBlob.getLength())};
     auto* dev = mKeyStore->getDeviceForBlob(keyBlob);
-    keymaster_key_characteristics_t out = {{nullptr, 0}, {nullptr, 0}};
+    keymaster_key_characteristics_t out = {};
     if (!dev->get_key_characteristics) {
         ALOGE("device does not implement get_key_characteristics");
         return KM_ERROR_UNIMPLEMENTED;
     }
     rc = dev->get_key_characteristics(dev, &key, clientId, appData, &out);
+    if (rc == KM_ERROR_KEY_REQUIRES_UPGRADE) {
+        AuthorizationSet upgradeParams;
+        if (clientId && clientId->data && clientId->data_length) {
+            upgradeParams.push_back(TAG_APPLICATION_ID, *clientId);
+        }
+        if (appData && appData->data && appData->data_length) {
+            upgradeParams.push_back(TAG_APPLICATION_DATA, *appData);
+        }
+        rc = upgradeKeyBlob(name, targetUid, upgradeParams, &keyBlob);
+        if (rc != ::NO_ERROR) {
+            return rc;
+        }
+        key = {keyBlob.getValue(), static_cast<size_t>(keyBlob.getLength())};
+        rc = dev->get_key_characteristics(dev, &key, clientId, appData, &out);
+    }
     if (rc != KM_ERROR_OK) {
         return rc;
     }
@@ -827,6 +849,16 @@ void KeyStoreService::begin(const sp<IBinder>& appToken, const String16& name,
     Unique_keymaster_key_characteristics characteristics;
     characteristics.reset(new keymaster_key_characteristics_t);
     err = getOperationCharacteristics(key, dev, opParams, characteristics.get());
+    if (err == KM_ERROR_KEY_REQUIRES_UPGRADE) {
+        int32_t rc = upgradeKeyBlob(name, targetUid,
+                                    AuthorizationSet(opParams.data(), opParams.size()), &keyBlob);
+        if (rc != ::NO_ERROR) {
+            result->resultCode = rc;
+            return;
+        }
+        key = {keyBlob.getValue(), static_cast<size_t>(keyBlob.getLength())};
+        err = getOperationCharacteristics(key, dev, opParams, characteristics.get());
+    }
     if (err) {
         result->resultCode = err;
         return;
@@ -1502,6 +1534,47 @@ int32_t KeyStoreService::doLegacySignVerify(const String16& name, const uint8_t*
     }
 
     return ::NO_ERROR;
+}
+
+int32_t KeyStoreService::upgradeKeyBlob(const String16& name, uid_t uid,
+                                        const AuthorizationSet& params, Blob* blob) {
+    // Read the blob rather than assuming the caller provided the right name/uid/blob triplet.
+    String8 name8(name);
+    ResponseCode responseCode = mKeyStore->getKeyForName(blob, name8, uid, TYPE_KEYMASTER_10);
+    if (responseCode != ::NO_ERROR) {
+        return responseCode;
+    }
+
+    keymaster_key_blob_t key = {blob->getValue(), static_cast<size_t>(blob->getLength())};
+    auto* dev = mKeyStore->getDeviceForBlob(*blob);
+    keymaster_key_blob_t upgraded_key;
+    int32_t rc = dev->upgrade_key(dev, &key, &params, &upgraded_key);
+    if (rc != KM_ERROR_OK) {
+        return rc;
+    }
+    UniquePtr<uint8_t, Malloc_Delete> upgraded_key_deleter(
+        const_cast<uint8_t*>(upgraded_key.key_material));
+
+    rc = del(name, uid);
+    if (rc != ::NO_ERROR) {
+        return rc;
+    }
+
+    String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, uid));
+    Blob newBlob(upgraded_key.key_material, upgraded_key.key_material_size, nullptr /* info */,
+                 0 /* infoLength */, ::TYPE_KEYMASTER_10);
+    newBlob.setFallback(blob->isFallback());
+    newBlob.setEncrypted(blob->isEncrypted());
+
+    rc = mKeyStore->put(filename.string(), &newBlob, get_user_id(uid));
+
+    // Re-read blob for caller.  We can't use newBlob because writing it modified it.
+    responseCode = mKeyStore->getKeyForName(blob, name8, uid, TYPE_KEYMASTER_10);
+    if (responseCode != ::NO_ERROR) {
+        return responseCode;
+    }
+
+    return rc;
 }
 
 }  // namespace android
