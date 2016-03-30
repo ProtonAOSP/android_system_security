@@ -17,6 +17,7 @@
 //#define LOG_NDEBUG 0
 #define LOG_TAG "keystore"
 
+#include <keymaster/keymaster_configuration.h>
 #include <keymaster/soft_keymaster_device.h>
 #include <keymaster/soft_keymaster_logger.h>
 
@@ -36,7 +37,23 @@
  * user-defined password. To keep things simple, buffers are always larger than
  * the maximum space we needed, so boundary checks on buffers are omitted. */
 
+using keymaster::AuthorizationSet;
+using keymaster::AuthorizationSetBuilder;
 using keymaster::SoftKeymasterDevice;
+
+static int configure_keymaster_devices(keymaster2_device_t* main, keymaster2_device_t* fallback) {
+    keymaster_error_t error = keymaster::ConfigureDevice(main);
+    if (error != KM_ERROR_OK) {
+        return -1;
+    }
+
+    error = keymaster::ConfigureDevice(fallback);
+    if (error != KM_ERROR_OK) {
+        return -1;
+    }
+
+    return 0;
+}
 
 static int keymaster0_device_initialize(const hw_module_t* mod, keymaster2_device_t** dev) {
     assert(mod->module_api_version < KEYMASTER_MODULE_API_VERSION_1_0);
@@ -196,6 +213,11 @@ int main(int argc, char* argv[]) {
     keymaster2_device_t* fallback;
     if (fallback_keymaster_device_initialize(&fallback)) {
         ALOGE("software keymaster could not be initialized; exiting");
+        return 1;
+    }
+
+    if (configure_keymaster_devices(dev, fallback)) {
+        ALOGE("Keymaster devices could not be configured; exiting");
         return 1;
     }
 
