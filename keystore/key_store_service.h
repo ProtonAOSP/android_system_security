@@ -19,6 +19,8 @@
 
 #include <keystore/IKeystoreService.h>
 
+#include <keymaster/authorization_set.h>
+
 #include "auth_token_table.h"
 #include "keystore.h"
 #include "keystore_keymaster_enforcement.h"
@@ -221,6 +223,17 @@ class KeyStoreService : public BnKeystoreService, public IBinder::DeathRecipient
     int32_t doLegacySignVerify(const String16& name, const uint8_t* data, size_t length,
                                uint8_t** out, size_t* outLength, const uint8_t* signature,
                                size_t signatureLength, keymaster_purpose_t purpose);
+
+    /**
+     * Upgrade a key blob under alias "name", returning the new blob in "blob".  If "blob"
+     * previously contained data, it will be overwritten.
+     *
+     * Returns ::NO_ERROR if the key was upgraded successfully.
+     *         KM_ERROR_VERSION_MISMATCH if called on a key whose patch level is greater than or
+     *         equal to the current system patch level.
+     */
+    int32_t upgradeKeyBlob(const String16& name, uid_t targetUid,
+                           const keymaster::AuthorizationSet& params, Blob* blob);
 
     ::KeyStore* mKeyStore;
     OperationMap mOperationMap;
