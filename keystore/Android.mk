@@ -113,6 +113,7 @@ LOCAL_MODULE := libkeystore_binder
 LOCAL_MODULE_TAGS := optional
 LOCAL_C_INCLUDES := $(LOCAL_PATH)/include $(call keystore_proto_include)
 LOCAL_EXPORT_C_INCLUDE_DIRS := $(LOCAL_PATH)/include
+LOCAL_EXPORT_SHARED_LIBRARY_HEADERS := libbinder
 LOCAL_CLANG := true
 LOCAL_SANITIZE := integer
 LOCAL_ADDITIONAL_DEPENDENCIES := $(LOCAL_PATH)/Android.mk
