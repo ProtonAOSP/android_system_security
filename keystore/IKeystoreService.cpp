@@ -456,7 +456,7 @@ static std::unique_ptr<keymaster_blob_t> readKeymasterBlob(const Parcel& in) {
 class BpKeystoreService: public BpInterface<IKeystoreService>
 {
 public:
-    BpKeystoreService(const sp<IBinder>& impl)
+    explicit BpKeystoreService(const sp<IBinder>& impl)
         : BpInterface<IKeystoreService>(impl)
     {
     }
