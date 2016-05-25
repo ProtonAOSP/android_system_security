@@ -125,7 +125,7 @@ void ensure_keystore_engine() {
  * we've transferred ownership, without triggering a warning by not using the
  * result of release(). */
 #define OWNERSHIP_TRANSFERRED(obj) \
-    typeof (obj.release()) _dummy __attribute__((unused)) = obj.release()
+    typeof ((obj).release()) _dummy __attribute__((unused)) = (obj).release()
 
 const char* rsa_get_key_id(const RSA* rsa) {
   return reinterpret_cast<char*>(
