@@ -29,7 +29,7 @@
 
 class UserState {
   public:
-    UserState(uid_t userId);
+    explicit UserState(uid_t userId);
     ~UserState();
 
     bool initialize();
