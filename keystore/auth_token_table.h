@@ -41,7 +41,7 @@ time_t clock_gettime_raw();
  */
 class AuthTokenTable {
   public:
-    AuthTokenTable(size_t max_entries = 32, time_t (*clock_function)() = clock_gettime_raw)
+    explicit AuthTokenTable(size_t max_entries = 32, time_t (*clock_function)() = clock_gettime_raw)
         : max_entries_(max_entries), clock_function_(clock_function) {}
 
     enum Error {

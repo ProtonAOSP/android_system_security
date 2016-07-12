@@ -46,7 +46,7 @@ typedef std::unique_ptr<keymaster_key_characteristics_t, keymaster_key_character
  */
 class OperationMap {
 public:
-    OperationMap(IBinder::DeathRecipient* deathRecipient);
+    explicit OperationMap(IBinder::DeathRecipient* deathRecipient);
     sp<IBinder> addOperation(keymaster_operation_handle_t handle, uint64_t keyid,
                              keymaster_purpose_t purpose, const keymaster2_device_t* dev,
                              sp<IBinder> appToken, keymaster_key_characteristics_t* characteristics,
