@@ -78,7 +78,7 @@ class Blob {
   public:
     Blob(const uint8_t* value, size_t valueLength, const uint8_t* info, uint8_t infoLength,
          BlobType type);
-    Blob(blob b);
+    explicit Blob(blob b);
 
     Blob();
 
