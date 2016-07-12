@@ -29,7 +29,7 @@ namespace android {
 
 class KeyStoreService : public BnKeystoreService, public IBinder::DeathRecipient {
   public:
-    KeyStoreService(KeyStore* keyStore) : mKeyStore(keyStore), mOperationMap(this) {}
+    explicit KeyStoreService(KeyStore* keyStore) : mKeyStore(keyStore), mOperationMap(this) {}
 
     void binderDied(const wp<IBinder>& who);
 
