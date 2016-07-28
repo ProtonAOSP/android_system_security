@@ -50,7 +50,7 @@ struct Malloc_Delete {
 
 void KeyStoreService::binderDied(const wp<IBinder>& who) {
     auto operations = mOperationMap.getOperationsForToken(who.unsafe_get());
-    for (auto token : operations) {
+    for (const auto& token : operations) {
         abort(token);
     }
 }
@@ -307,7 +307,7 @@ int32_t KeyStoreService::generate(const String16& name, int32_t targetUid, int32
             ALOGI("invalid number of arguments: %zu", args->size());
             return ::SYSTEM_ERROR;
         } else if (args->size() == 1) {
-            sp<KeystoreArg> expArg = args->itemAt(0);
+            const sp<KeystoreArg>& expArg = args->itemAt(0);
             if (expArg != NULL) {
                 Unique_BIGNUM pubExpBn(BN_bin2bn(
                     reinterpret_cast<const unsigned char*>(expArg->data()), expArg->size(), NULL));
@@ -1402,7 +1402,7 @@ inline void KeyStoreService::addAuthToParams(std::vector<keymaster_key_param_t>*
  *         KM_ERROR_INVALID_OPERATION_HANDLE if token is not a valid
  *         operation token.
  */
-int32_t KeyStoreService::addOperationAuthTokenIfNeeded(sp<IBinder> token,
+int32_t KeyStoreService::addOperationAuthTokenIfNeeded(const sp<IBinder>& token,
                                                        std::vector<keymaster_key_param_t>* params) {
     const hw_auth_token_t* authToken = NULL;
     mOperationMap.getOperationAuthToken(token, &authToken);

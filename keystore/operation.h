@@ -49,24 +49,24 @@ public:
     explicit OperationMap(IBinder::DeathRecipient* deathRecipient);
     sp<IBinder> addOperation(keymaster_operation_handle_t handle, uint64_t keyid,
                              keymaster_purpose_t purpose, const keymaster2_device_t* dev,
-                             sp<IBinder> appToken, keymaster_key_characteristics_t* characteristics,
+                             const sp<IBinder>& appToken, keymaster_key_characteristics_t* characteristics,
                              bool pruneable);
-    bool getOperation(sp<IBinder> token, keymaster_operation_handle_t* outHandle,
+    bool getOperation(const sp<IBinder>& token, keymaster_operation_handle_t* outHandle,
                       uint64_t* outKeyid, keymaster_purpose_t* outPurpose,
                       const keymaster2_device_t** outDev,
                       const keymaster_key_characteristics_t** outCharacteristics);
-    bool removeOperation(sp<IBinder> token);
+    bool removeOperation(const sp<IBinder>& token);
     bool hasPruneableOperation() const;
     size_t getOperationCount() const { return mMap.size(); }
     size_t getPruneableOperationCount() const;
-    bool getOperationAuthToken(sp<IBinder> token, const hw_auth_token_t** outToken);
-    bool setOperationAuthToken(sp<IBinder> token, const hw_auth_token_t* authToken);
+    bool getOperationAuthToken(const sp<IBinder>& token, const hw_auth_token_t** outToken);
+    bool setOperationAuthToken(const sp<IBinder>& token, const hw_auth_token_t* authToken);
     sp<IBinder> getOldestPruneableOperation();
-    std::vector<sp<IBinder>> getOperationsForToken(sp<IBinder> appToken);
+    std::vector<sp<IBinder>> getOperationsForToken(const sp<IBinder>& appToken);
 
 private:
-    void updateLru(sp<IBinder> token);
-    void removeOperationTracking(sp<IBinder> token, sp<IBinder> appToken);
+    void updateLru(const sp<IBinder>& token);
+    void removeOperationTracking(const sp<IBinder>& token, const sp<IBinder>& appToken);
     struct Operation {
         Operation();
         Operation(keymaster_operation_handle_t handle, uint64_t keyid, keymaster_purpose_t purpose,
