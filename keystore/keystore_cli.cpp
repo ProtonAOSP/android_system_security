@@ -176,7 +176,7 @@ static const char* responses[] = {
         } \
     } while (0)
 
-static int list(sp<IKeystoreService> service, const String16& name, int uid) {
+static int list(const sp<IKeystoreService>& service, const String16& name, int uid) {
     Vector<String16> matches;
     int32_t ret = service->list(name, uid, &matches);
     if (ret < 0) {
