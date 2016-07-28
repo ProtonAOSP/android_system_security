@@ -25,7 +25,7 @@ OperationMap::OperationMap(IBinder::DeathRecipient* deathRecipient)
 
 sp<IBinder> OperationMap::addOperation(keymaster_operation_handle_t handle, uint64_t keyid,
                                        keymaster_purpose_t purpose, const keymaster2_device_t* dev,
-                                       sp<IBinder> appToken,
+                                       const sp<IBinder>& appToken,
                                        keymaster_key_characteristics_t* characteristics,
                                        bool pruneable) {
     sp<IBinder> token = new BBinder();
@@ -40,7 +40,7 @@ sp<IBinder> OperationMap::addOperation(keymaster_operation_handle_t handle, uint
     return token;
 }
 
-bool OperationMap::getOperation(sp<IBinder> token, keymaster_operation_handle_t* outHandle,
+bool OperationMap::getOperation(const sp<IBinder>& token, keymaster_operation_handle_t* outHandle,
                                 uint64_t* outKeyid, keymaster_purpose_t* outPurpose,
                                 const keymaster2_device_t** outDevice,
                                 const keymaster_key_characteristics_t** outCharacteristics) {
@@ -63,7 +63,7 @@ bool OperationMap::getOperation(sp<IBinder> token, keymaster_operation_handle_t*
     return true;
 }
 
-void OperationMap::updateLru(sp<IBinder> token) {
+void OperationMap::updateLru(const sp<IBinder>& token) {
     auto lruEntry = std::find(mLru.begin(), mLru.end(), token);
     if (lruEntry != mLru.end()) {
         mLru.erase(lruEntry);
@@ -71,7 +71,7 @@ void OperationMap::updateLru(sp<IBinder> token) {
     }
 }
 
-bool OperationMap::removeOperation(sp<IBinder> token) {
+bool OperationMap::removeOperation(const sp<IBinder>& token) {
     auto entry = mMap.find(token);
     if (entry == mMap.end()) {
         return false;
@@ -86,7 +86,7 @@ bool OperationMap::removeOperation(sp<IBinder> token) {
     return true;
 }
 
-void OperationMap::removeOperationTracking(sp<IBinder> token, sp<IBinder> appToken) {
+void OperationMap::removeOperationTracking(const sp<IBinder>& token, const sp<IBinder>& appToken) {
     auto appEntry = mAppTokenMap.find(appToken);
     if (appEntry == mAppTokenMap.end()) {
         ALOGE("Entry for %p contains unmapped application token %p", token.get(), appToken.get());
@@ -116,7 +116,7 @@ sp<IBinder> OperationMap::getOldestPruneableOperation() {
     return mLru[0];
 }
 
-bool OperationMap::getOperationAuthToken(sp<IBinder> token, const hw_auth_token_t** outToken) {
+bool OperationMap::getOperationAuthToken(const sp<IBinder>& token, const hw_auth_token_t** outToken) {
     auto entry = mMap.find(token);
     if (entry == mMap.end()) {
         return false;
@@ -125,7 +125,7 @@ bool OperationMap::getOperationAuthToken(sp<IBinder> token, const hw_auth_token_
     return true;
 }
 
-bool OperationMap::setOperationAuthToken(sp<IBinder> token, const hw_auth_token_t* authToken) {
+bool OperationMap::setOperationAuthToken(const sp<IBinder>& token, const hw_auth_token_t* authToken) {
     auto entry = mMap.find(token);
     if (entry == mMap.end()) {
         return false;
@@ -135,7 +135,7 @@ bool OperationMap::setOperationAuthToken(sp<IBinder> token, const hw_auth_token_
     return true;
 }
 
-std::vector<sp<IBinder>> OperationMap::getOperationsForToken(sp<IBinder> appToken) {
+std::vector<sp<IBinder>> OperationMap::getOperationsForToken(const sp<IBinder>& appToken) {
     auto appEntry = mAppTokenMap.find(appToken);
     if (appEntry != mAppTokenMap.end()) {
         return appEntry->second;
