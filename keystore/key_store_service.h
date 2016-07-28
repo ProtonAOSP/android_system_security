@@ -207,7 +207,7 @@ class KeyStoreService : public BnKeystoreService, public IBinder::DeathRecipient
      *         KM_ERROR_INVALID_OPERATION_HANDLE if token is not a valid
      *         operation token.
      */
-    int32_t addOperationAuthTokenIfNeeded(sp<IBinder> token,
+    int32_t addOperationAuthTokenIfNeeded(const sp<IBinder>& token,
                                           std::vector<keymaster_key_param_t>* params);
 
     /**
