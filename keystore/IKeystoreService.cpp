@@ -1352,6 +1352,24 @@ public:
         return ret;
     }
 
+    virtual int32_t onDeviceOffBody()
+    {
+        Parcel data, reply;
+        data.writeInterfaceToken(IKeystoreService::getInterfaceDescriptor());
+        status_t status = remote()->transact(BnKeystoreService::ON_DEVICE_OFF_BODY, data, &reply);
+        if (status != NO_ERROR) {
+            ALOGD("onDeviceOffBody() could not contact remote: %d\n", status);
+            return -1;
+        }
+        int32_t err = reply.readExceptionCode();
+        int32_t ret = reply.readInt32();
+        if (err < 0) {
+            ALOGD("onDeviceOffBody() caught exception %d\n", err);
+            return -1;
+        }
+        return ret;
+    }
+
 };
 
 IMPLEMENT_META_INTERFACE(KeystoreService, "android.security.IKeystoreService");
@@ -1859,6 +1877,14 @@ status_t BnKeystoreService::onTransact(
             reply->writeInt32(ret);
             reply->writeInt32(1);
             chain.writeToParcel(reply);
+
+            return NO_ERROR;
+        }
+        case ON_DEVICE_OFF_BODY: {
+            CHECK_INTERFACE(IKeystoreService, data, reply);
+            int32_t ret = onDeviceOffBody();
+            reply->writeNoException();
+            reply->writeInt32(ret);
 
             return NO_ERROR;
         }

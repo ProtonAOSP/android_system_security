@@ -42,7 +42,7 @@ time_t clock_gettime_raw();
 class AuthTokenTable {
   public:
     AuthTokenTable(size_t max_entries = 32, time_t (*clock_function)() = clock_gettime_raw)
-        : max_entries_(max_entries), clock_function_(clock_function) {}
+        : max_entries_(max_entries), last_off_body_(clock_function()), clock_function_(clock_function) {}
 
     enum Error {
         OK,
@@ -94,6 +94,12 @@ class AuthTokenTable {
      * superseded by new tokens.
      */
     void MarkCompleted(const keymaster_operation_handle_t op_handle);
+
+    /**
+     * Update the last_off_body_ timestamp so that tokens which remain authorized only so long as
+     * the device stays on body can be revoked.
+     */
+    void onDeviceOffBody();
 
     void Clear();
 
@@ -155,6 +161,7 @@ class AuthTokenTable {
 
     std::vector<Entry> entries_;
     size_t max_entries_;
+    time_t last_off_body_;
     time_t (*clock_function_)();
 };
 

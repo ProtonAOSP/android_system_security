@@ -115,23 +115,39 @@ static int encode_key(char* out, const android::String8& keyName) {
     return length;
 }
 
-android::String8 KeyStore::getKeyName(const android::String8& keyName) {
+android::String8 KeyStore::getKeyName(const android::String8& keyName, const BlobType type) {
     char encoded[encode_key_length(keyName) + 1];  // add 1 for null char
     encode_key(encoded, keyName);
-    return android::String8(encoded);
+    if (type == TYPE_KEY_CHARACTERISTICS) {
+        return android::String8::format(".chr_%s", encoded);
+    } else {
+        return android::String8(encoded);
+    }
 }
 
-android::String8 KeyStore::getKeyNameForUid(const android::String8& keyName, uid_t uid) {
+android::String8 KeyStore::getKeyNameForUid(
+    const android::String8& keyName, uid_t uid, const BlobType type) {
     char encoded[encode_key_length(keyName) + 1];  // add 1 for null char
     encode_key(encoded, keyName);
-    return android::String8::format("%u_%s", uid, encoded);
+    if (type == TYPE_KEY_CHARACTERISTICS) {
+        return android::String8::format(".%u_chr_%s", uid, encoded);
+    } else {
+        return android::String8::format("%u_%s", uid, encoded);
+    }
 }
 
-android::String8 KeyStore::getKeyNameForUidWithDir(const android::String8& keyName, uid_t uid) {
+android::String8 KeyStore::getKeyNameForUidWithDir(
+    const android::String8& keyName, uid_t uid, const BlobType type) {
     char encoded[encode_key_length(keyName) + 1];  // add 1 for null char
     encode_key(encoded, keyName);
-    return android::String8::format("%s/%u_%s", getUserStateByUid(uid)->getUserDirName(), uid,
-                                    encoded);
+
+    if (type == TYPE_KEY_CHARACTERISTICS) {
+        return android::String8::format("%s/.%u_chr_%s", getUserStateByUid(uid)->getUserDirName(),
+                                        uid, encoded);
+    } else {
+        return android::String8::format("%s/%u_%s", getUserStateByUid(uid)->getUserDirName(), uid,
+                                        encoded);
+    }
 }
 
 void KeyStore::resetUser(uid_t userId, bool keepUnenryptedEntries) {
@@ -144,7 +160,7 @@ void KeyStore::resetUser(uid_t userId, bool keepUnenryptedEntries) {
     for (uint32_t i = 0; i < aliases.size(); i++) {
         android::String8 filename(aliases[i]);
         filename = android::String8::format("%s/%s", userState->getUserDirName(),
-                                            getKeyName(filename).string());
+                                            getKeyName(filename, TYPE_ANY).string());
         bool shouldDelete = true;
         if (keepUnenryptedEntries) {
             Blob blob;
@@ -160,6 +176,13 @@ void KeyStore::resetUser(uid_t userId, bool keepUnenryptedEntries) {
         }
         if (shouldDelete) {
             del(filename, ::TYPE_ANY, userId);
+
+            // del() will fail silently if no cached characteristics are present for this alias.
+            android::String8 chr_filename(aliases[i]);
+            chr_filename = android::String8::format("%s/%s", userState->getUserDirName(),
+                                            getKeyName(chr_filename,
+                                                TYPE_KEY_CHARACTERISTICS).string());
+            del(chr_filename, ::TYPE_KEY_CHARACTERISTICS, userId);
         }
     }
     if (!userState->deleteMasterKey()) {
@@ -485,7 +508,7 @@ bool KeyStore::isHardwareBacked(const android::String16& keyType) const {
 
 ResponseCode KeyStore::getKeyForName(Blob* keyBlob, const android::String8& keyName,
                                      const uid_t uid, const BlobType type) {
-    android::String8 filepath8(getKeyNameForUidWithDir(keyName, uid));
+    android::String8 filepath8(getKeyNameForUidWithDir(keyName, uid, type));
     uid_t userId = get_user_id(uid);
 
     ResponseCode responseCode = get(filepath8.string(), keyBlob, type, userId);
@@ -496,7 +519,7 @@ ResponseCode KeyStore::getKeyForName(Blob* keyBlob, const android::String8& keyN
     // If this is one of the legacy UID->UID mappings, use it.
     uid_t euid = get_keystore_euid(uid);
     if (euid != uid) {
-        filepath8 = getKeyNameForUidWithDir(keyName, euid);
+        filepath8 = getKeyNameForUidWithDir(keyName, euid, type);
         responseCode = get(filepath8.string(), keyBlob, type, userId);
         if (responseCode == NO_ERROR) {
             return responseCode;
@@ -504,7 +527,7 @@ ResponseCode KeyStore::getKeyForName(Blob* keyBlob, const android::String8& keyN
     }
 
     // They might be using a granted key.
-    android::String8 filename8 = getKeyName(keyName);
+    android::String8 filename8 = getKeyName(keyName, type);
     char* end;
     strtoul(filename8.string(), &end, 10);
     if (end[0] != '_' || end[1] == 0) {

@@ -147,6 +147,7 @@ public:
         ON_USER_ADDED = IBinder::FIRST_CALL_TRANSACTION + 33,
         ON_USER_REMOVED = IBinder::FIRST_CALL_TRANSACTION + 34,
         ATTEST_KEY = IBinder::FIRST_CALL_TRANSACTION + 35,
+        ON_DEVICE_OFF_BODY = IBinder::FIRST_CALL_TRANSACTION + 36,
     };
 
     DECLARE_META_INTERFACE(KeystoreService);
@@ -248,6 +249,7 @@ public:
     virtual int32_t attestKey(const String16& name, const KeymasterArguments& params,
                               KeymasterCertificateChain* outChain) = 0;
 
+    virtual int32_t onDeviceOffBody() = 0;
 };
 
 // ----------------------------------------------------------------------------

@@ -97,7 +97,7 @@ int32_t KeyStoreService::insert(const String16& name, const uint8_t* item, size_
     }
 
     String8 name8(name);
-    String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, targetUid));
+    String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, targetUid, ::TYPE_GENERIC));
 
     Blob keyBlob(item, itemLength, NULL, 0, ::TYPE_GENERIC);
     keyBlob.setEncrypted(flags & KEYSTORE_FLAG_ENCRYPTED);
@@ -111,8 +111,16 @@ int32_t KeyStoreService::del(const String16& name, int targetUid) {
         return ::PERMISSION_DENIED;
     }
     String8 name8(name);
-    String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, targetUid));
-    return mKeyStore->del(filename.string(), ::TYPE_ANY, get_user_id(targetUid));
+    String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, targetUid, ::TYPE_ANY));
+    int32_t result = mKeyStore->del(filename.string(), ::TYPE_ANY, get_user_id(targetUid));
+    if (result != ::NO_ERROR) {
+        return result;
+    }
+
+    // Also delete any characteristics files
+    String8 chrFilename(mKeyStore->getKeyNameForUidWithDir(
+        name8, targetUid, ::TYPE_KEY_CHARACTERISTICS));
+    return mKeyStore->del(chrFilename.string(), ::TYPE_KEY_CHARACTERISTICS, get_user_id(targetUid));
 }
 
 int32_t KeyStoreService::exist(const String16& name, int targetUid) {
@@ -122,7 +130,7 @@ int32_t KeyStoreService::exist(const String16& name, int targetUid) {
     }
 
     String8 name8(name);
-    String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, targetUid));
+    String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, targetUid, ::TYPE_ANY));
 
     if (access(filename.string(), R_OK) == -1) {
         return (errno != ENOENT) ? ::SYSTEM_ERROR : ::KEY_NOT_FOUND;
@@ -136,7 +144,7 @@ int32_t KeyStoreService::list(const String16& prefix, int targetUid, Vector<Stri
         return ::PERMISSION_DENIED;
     }
     const String8 prefix8(prefix);
-    String8 filename(mKeyStore->getKeyNameForUid(prefix8, targetUid));
+    String8 filename(mKeyStore->getKeyNameForUid(prefix8, targetUid, TYPE_ANY));
 
     if (mKeyStore->list(filename, matches, get_user_id(targetUid)) != ::NO_ERROR) {
         return ::SYSTEM_ERROR;
@@ -425,7 +433,7 @@ int32_t KeyStoreService::grant(const String16& name, int32_t granteeUid) {
     }
 
     String8 name8(name);
-    String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, callingUid));
+    String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, callingUid, ::TYPE_ANY));
 
     if (access(filename.string(), R_OK) == -1) {
         return (errno != ENOENT) ? ::SYSTEM_ERROR : ::KEY_NOT_FOUND;
@@ -443,7 +451,7 @@ int32_t KeyStoreService::ungrant(const String16& name, int32_t granteeUid) {
     }
 
     String8 name8(name);
-    String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, callingUid));
+    String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, callingUid, ::TYPE_ANY));
 
     if (access(filename.string(), R_OK) == -1) {
         return (errno != ENOENT) ? ::SYSTEM_ERROR : ::KEY_NOT_FOUND;
@@ -460,7 +468,7 @@ int64_t KeyStoreService::getmtime(const String16& name, int32_t uid) {
     }
 
     String8 name8(name);
-    String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, targetUid));
+    String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, targetUid, ::TYPE_ANY));
 
     if (access(filename.string(), R_OK) == -1) {
         ALOGW("could not access %s for getmtime", filename.string());
@@ -484,6 +492,7 @@ int64_t KeyStoreService::getmtime(const String16& name, int32_t uid) {
     return static_cast<int64_t>(s.st_mtime);
 }
 
+// TODO(tuckeris): This is dead code, remove it.  Don't bother copying over key characteristics here
 int32_t KeyStoreService::duplicate(const String16& srcKey, int32_t srcUid, const String16& destKey,
                                    int32_t destUid) {
     uid_t callingUid = IPCThreadState::self()->getCallingUid();
@@ -525,10 +534,10 @@ int32_t KeyStoreService::duplicate(const String16& srcKey, int32_t srcUid, const
     }
 
     String8 source8(srcKey);
-    String8 sourceFile(mKeyStore->getKeyNameForUidWithDir(source8, srcUid));
+    String8 sourceFile(mKeyStore->getKeyNameForUidWithDir(source8, srcUid, ::TYPE_ANY));
 
     String8 target8(destKey);
-    String8 targetFile(mKeyStore->getKeyNameForUidWithDir(target8, destUid));
+    String8 targetFile(mKeyStore->getKeyNameForUidWithDir(target8, destUid, ::TYPE_ANY));
 
     if (access(targetFile.string(), W_OK) != -1 || errno != ENOENT) {
         ALOGD("destination already exists: %s", targetFile.string());
@@ -563,8 +572,13 @@ int32_t KeyStoreService::clear_uid(int64_t targetUid64) {
 
     for (uint32_t i = 0; i < aliases.size(); i++) {
         String8 name8(aliases[i]);
-        String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, targetUid));
+        String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, targetUid, ::TYPE_ANY));
         mKeyStore->del(filename.string(), ::TYPE_ANY, get_user_id(targetUid));
+
+        // del() will fail silently if no cached characteristics are present for this alias.
+        String8 chr_filename(mKeyStore->getKeyNameForUidWithDir(name8, targetUid,
+            ::TYPE_KEY_CHARACTERISTICS));
+        mKeyStore->del(chr_filename.string(), ::TYPE_KEY_CHARACTERISTICS, get_user_id(targetUid));
     }
     return ::NO_ERROR;
 }
@@ -611,6 +625,19 @@ int32_t KeyStoreService::generateKey(const String16& name, const KeymasterArgume
     if (device == NULL) {
         return ::SYSTEM_ERROR;
     }
+
+    // Capture characteristics before they're potentially stripped by the device
+    AuthorizationSet keyCharacteristics(opParams.data(), opParams.size());
+    if (keyCharacteristics.is_valid() != AuthorizationSet::Error::OK) {
+        return KM_ERROR_MEMORY_ALLOCATION_FAILED;
+    }
+    UniquePtr<uint8_t[]> kc_buf;
+    kc_buf.reset(new (std::nothrow) uint8_t[keyCharacteristics.SerializedSize()]);
+    if (!kc_buf.get()) {
+        return KM_ERROR_MEMORY_ALLOCATION_FAILED;
+    }
+    keyCharacteristics.Serialize(kc_buf.get(), kc_buf.get() + keyCharacteristics.SerializedSize());
+
     // TODO: Seed from Linux RNG before this.
     if (device->common.module->module_api_version >= KEYMASTER_MODULE_API_VERSION_1_0 &&
         device->generate_key != NULL) {
@@ -652,16 +679,30 @@ int32_t KeyStoreService::generateKey(const String16& name, const KeymasterArgume
         return rc;
     }
 
+    // Write the key:
     String8 name8(name);
-    String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, uid));
+    String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, uid, ::TYPE_KEYMASTER_10));
 
     Blob keyBlob(blob.key_material, blob.key_material_size, NULL, 0, ::TYPE_KEYMASTER_10);
     keyBlob.setFallback(isFallback);
     keyBlob.setEncrypted(flags & KEYSTORE_FLAG_ENCRYPTED);
 
     free(const_cast<uint8_t*>(blob.key_material));
+    rc = mKeyStore->put(filename.string(), &keyBlob, get_user_id(uid));
 
-    return mKeyStore->put(filename.string(), &keyBlob, get_user_id(uid));
+    if (rc != ::NO_ERROR) {
+        return rc;
+    }
+
+    // Write the characteristics:
+    String8 cFilename(mKeyStore->getKeyNameForUidWithDir(name8, uid, ::TYPE_KEY_CHARACTERISTICS));
+
+    Blob charBlob(kc_buf.get(), keyCharacteristics.SerializedSize(),
+        NULL, 0, ::TYPE_KEY_CHARACTERISTICS);
+    charBlob.setFallback(isFallback);
+    charBlob.setEncrypted(flags & KEYSTORE_FLAG_ENCRYPTED);
+
+    return mKeyStore->put(cFilename.string(), &charBlob, get_user_id(uid));
 }
 
 int32_t KeyStoreService::getKeyCharacteristics(const String16& name,
@@ -743,6 +784,19 @@ int32_t KeyStoreService::importKey(const String16& name, const KeymasterArgument
     if (device == NULL) {
         return ::SYSTEM_ERROR;
     }
+
+    // Capture characteristics before they're potentially stripped
+    AuthorizationSet keyCharacteristics(opParams.data(), opParams.size());
+    if (keyCharacteristics.is_valid() != AuthorizationSet::Error::OK) {
+        return KM_ERROR_MEMORY_ALLOCATION_FAILED;
+    }
+    UniquePtr<uint8_t[]> kc_buf;
+    kc_buf.reset(new (std::nothrow) uint8_t[keyCharacteristics.SerializedSize()]);
+    if (!kc_buf.get()) {
+        return KM_ERROR_MEMORY_ALLOCATION_FAILED;
+    }
+    keyCharacteristics.Serialize(kc_buf.get(), kc_buf.get() + keyCharacteristics.SerializedSize());
+
     if (device->common.module->module_api_version >= KEYMASTER_MODULE_API_VERSION_1_0 &&
         device->import_key != NULL) {
         rc = device->import_key(device, &inParams, format, &input, &blob,
@@ -762,16 +816,30 @@ int32_t KeyStoreService::importKey(const String16& name, const KeymasterArgument
         return rc;
     }
 
+    // Write the key:
     String8 name8(name);
-    String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, uid));
+    String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, uid, ::TYPE_KEYMASTER_10));
 
     Blob keyBlob(blob.key_material, blob.key_material_size, NULL, 0, ::TYPE_KEYMASTER_10);
     keyBlob.setFallback(isFallback);
     keyBlob.setEncrypted(flags & KEYSTORE_FLAG_ENCRYPTED);
 
     free(const_cast<uint8_t*>(blob.key_material));
+    rc = mKeyStore->put(filename.string(), &keyBlob, get_user_id(uid));
 
-    return mKeyStore->put(filename.string(), &keyBlob, get_user_id(uid));
+    if (rc != ::NO_ERROR) {
+        return rc;
+    }
+
+    // Write the characteristics:
+    String8 cFilename(mKeyStore->getKeyNameForUidWithDir(name8, uid, ::TYPE_KEY_CHARACTERISTICS));
+
+    Blob charBlob(kc_buf.get(), keyCharacteristics.SerializedSize(),
+        NULL, 0, ::TYPE_KEY_CHARACTERISTICS);
+    charBlob.setFallback(isFallback);
+    charBlob.setEncrypted(flags & KEYSTORE_FLAG_ENCRYPTED);
+
+    return mKeyStore->put(cFilename.string(), &charBlob, get_user_id(uid));
 }
 
 void KeyStoreService::exportKey(const String16& name, keymaster_key_format_t format,
@@ -864,6 +932,24 @@ void KeyStoreService::begin(const sp<IBinder>& appToken, const String16& name,
         return;
     }
     const hw_auth_token_t* authToken = NULL;
+
+    // Merge these characteristics with the ones cached when the key was generated or imported
+    Blob charBlob;
+    AuthorizationSet persistedCharacteristics;
+    responseCode = mKeyStore->getKeyForName(&charBlob, name8, targetUid, TYPE_KEY_CHARACTERISTICS);
+    if (responseCode == ::NO_ERROR) {
+        const uint8_t* serializedCharacteristics = charBlob.getValue();
+        persistedCharacteristics.Deserialize(&serializedCharacteristics,
+            serializedCharacteristics + charBlob.getLength());
+    } else {
+        ALOGD("Unable to read cached characteristics for key");
+    }
+
+    // Replace the sw_enforced set with those persisted to disk, minus hw_enforced
+    persistedCharacteristics.Union(characteristics.get()->sw_enforced);
+    persistedCharacteristics.Difference(characteristics.get()->hw_enforced);
+    persistedCharacteristics.CopyToParamSet(&characteristics.get()->sw_enforced);
+
     int32_t authResult = getAuthToken(characteristics.get(), 0, purpose, &authToken,
                                       /*failOnTokenMissing*/ false);
     // If per-operation auth is needed we need to begin the operation and
@@ -1158,6 +1244,12 @@ int32_t KeyStoreService::attestKey(const String16& name, const KeymasterArgument
     int32_t rc = dev->attest_key(dev, &key, &in_params, &outChain->chain);
     if (rc)
         return rc;
+    return ::NO_ERROR;
+}
+
+int32_t KeyStoreService::onDeviceOffBody() {
+    // TODO(tuckeris): add permission check.  This should be callable from ClockworkHome only.
+    mAuthTokenTable.onDeviceOffBody();
     return ::NO_ERROR;
 }
 
@@ -1560,7 +1652,7 @@ int32_t KeyStoreService::upgradeKeyBlob(const String16& name, uid_t uid,
         return rc;
     }
 
-    String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, uid));
+    String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, uid, ::TYPE_KEYMASTER_10));
     Blob newBlob(upgraded_key.key_material, upgraded_key.key_material_size, nullptr /* info */,
                  0 /* infoLength */, ::TYPE_KEYMASTER_10);
     newBlob.setFallback(blob->isFallback());

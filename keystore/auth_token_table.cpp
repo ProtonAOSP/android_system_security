@@ -138,6 +138,13 @@ AuthTokenTable::Error AuthTokenTable::FindTimedAuthorization(const std::vector<u
     if (static_cast<int64_t>(newest_match->time_received()) + timeout < static_cast<int64_t>(now))
         return AUTH_TOKEN_EXPIRED;
 
+    if (key_info.GetTagValue(TAG_ALLOW_WHILE_ON_BODY)) {
+        if (static_cast<int64_t>(newest_match->time_received()) <
+            static_cast<int64_t>(last_off_body_)) {
+            return AUTH_TOKEN_EXPIRED;
+        }
+    }
+
     newest_match->UpdateLastUse(now);
     *found = newest_match->token();
     return OK;
@@ -153,6 +160,10 @@ void AuthTokenTable::ExtractSids(const AuthorizationSet& key_info, std::vector<u
 void AuthTokenTable::RemoveEntriesSupersededBy(const Entry& entry) {
     entries_.erase(remove_if(entries_, [&](Entry& e) { return entry.Supersedes(e); }),
                    entries_.end());
+}
+
+void AuthTokenTable::onDeviceOffBody() {
+    last_off_body_ = clock_function_();
 }
 
 void AuthTokenTable::Clear() {
