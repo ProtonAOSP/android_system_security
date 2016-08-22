@@ -117,22 +117,22 @@ static int encode_key(char* out, const android::String8& keyName) {
 }
 
 android::String8 KeyStore::getKeyName(const android::String8& keyName) {
-    char encoded[encode_key_length(keyName) + 1];  // add 1 for null char
-    encode_key(encoded, keyName);
-    return android::String8(encoded);
+    std::vector<char> encoded(encode_key_length(keyName) + 1);  // add 1 for null char
+    encode_key(encoded.data(), keyName);
+    return android::String8(encoded.data());
 }
 
 android::String8 KeyStore::getKeyNameForUid(const android::String8& keyName, uid_t uid) {
-    char encoded[encode_key_length(keyName) + 1];  // add 1 for null char
-    encode_key(encoded, keyName);
-    return android::String8::format("%u_%s", uid, encoded);
+    std::vector<char> encoded(encode_key_length(keyName) + 1);  // add 1 for null char
+    encode_key(encoded.data(), keyName);
+    return android::String8::format("%u_%s", uid, encoded.data());
 }
 
 android::String8 KeyStore::getKeyNameForUidWithDir(const android::String8& keyName, uid_t uid) {
-    char encoded[encode_key_length(keyName) + 1];  // add 1 for null char
-    encode_key(encoded, keyName);
+    std::vector<char> encoded(encode_key_length(keyName) + 1);  // add 1 for null char
+    encode_key(encoded.data(), keyName);
     return android::String8::format("%s/%u_%s", getUserStateByUid(uid)->getUserDirName(), uid,
-                                    encoded);
+                                    encoded.data());
 }
 
 void KeyStore::resetUser(uid_t userId, bool keepUnenryptedEntries) {
