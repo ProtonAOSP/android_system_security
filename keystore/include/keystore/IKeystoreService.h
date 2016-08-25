@@ -81,11 +81,11 @@ struct ExportResult : public ::android::Parcelable {
 };
 
 // struct for serializing keymaster_key_characteristics_t's
-struct KeyCharacteristics {
+struct KeyCharacteristics : public ::android::Parcelable {
     KeyCharacteristics();
     ~KeyCharacteristics();
-    void readFromParcel(const Parcel& in);
-    void writeToParcel(Parcel* out) const;
+    status_t readFromParcel(const Parcel* in) override;
+    status_t writeToParcel(Parcel* out) const override;
 
     keymaster_key_characteristics_t characteristics;
 };

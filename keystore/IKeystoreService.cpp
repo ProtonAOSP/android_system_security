@@ -182,7 +182,8 @@ KeyCharacteristics::~KeyCharacteristics() {
     keymaster_free_characteristics(&characteristics);
 }
 
-void KeyCharacteristics::readFromParcel(const Parcel& in) {
+status_t KeyCharacteristics::readFromParcel(const Parcel* inn) {
+    const Parcel& in = *inn;
     size_t length = 0;
     keymaster_key_param_t* params = readParamList(in, &length);
     characteristics.sw_enforced.params = params;
@@ -191,9 +192,10 @@ void KeyCharacteristics::readFromParcel(const Parcel& in) {
     params = readParamList(in, &length);
     characteristics.hw_enforced.params = params;
     characteristics.hw_enforced.length = length;
+    return OK;
 }
 
-void KeyCharacteristics::writeToParcel(Parcel* out) const {
+status_t KeyCharacteristics::writeToParcel(Parcel* out) const {
     if (characteristics.sw_enforced.params) {
         out->writeInt32(characteristics.sw_enforced.length);
         for (size_t i = 0; i < characteristics.sw_enforced.length; i++) {
@@ -212,6 +214,7 @@ void KeyCharacteristics::writeToParcel(Parcel* out) const {
     } else {
         out->writeInt32(0);
     }
+    return OK;
 }
 
 KeymasterCertificateChain::KeymasterCertificateChain() {
@@ -1024,8 +1027,8 @@ public:
             ALOGD("generateKey() caught exception %d\n", err);
             return KM_ERROR_UNKNOWN_ERROR;
         }
-        if (reply.readInt32() != 0 && outCharacteristics) {
-            outCharacteristics->readFromParcel(reply);
+        if (outCharacteristics) {
+            reply.readParcelable(outCharacteristics);
         }
         return ret;
     }
@@ -1059,8 +1062,8 @@ public:
             ALOGD("getKeyCharacteristics() caught exception %d\n", err);
             return KM_ERROR_UNKNOWN_ERROR;
         }
-        if (reply.readInt32() != 0 && outCharacteristics) {
-            outCharacteristics->readFromParcel(reply);
+        if (outCharacteristics) {
+            reply.readParcelable(outCharacteristics);
         }
         return ret;
     }
@@ -1089,8 +1092,8 @@ public:
             ALOGD("importKey() caught exception %d\n", err);
             return KM_ERROR_UNKNOWN_ERROR;
         }
-        if (reply.readInt32() != 0 && outCharacteristics) {
-            outCharacteristics->readFromParcel(reply);
+        if (outCharacteristics) {
+            reply.readParcelable(outCharacteristics);
         }
         return ret;
     }
@@ -1676,8 +1679,7 @@ status_t BnKeystoreService::onTransact(
                                       &outCharacteristics);
             reply->writeNoException();
             reply->writeInt32(ret);
-            reply->writeInt32(1);
-            outCharacteristics.writeToParcel(reply);
+            reply->writeParcelable(outCharacteristics);
             return NO_ERROR;
         }
         case GET_KEY_CHARACTERISTICS: {
@@ -1690,8 +1692,7 @@ status_t BnKeystoreService::onTransact(
                                             &outCharacteristics);
             reply->writeNoException();
             reply->writeInt32(ret);
-            reply->writeInt32(1);
-            outCharacteristics.writeToParcel(reply);
+            reply->writeParcelable(outCharacteristics);
             return NO_ERROR;
         }
         case IMPORT_KEY: {
@@ -1712,9 +1713,7 @@ status_t BnKeystoreService::onTransact(
                                     &outCharacteristics);
             reply->writeNoException();
             reply->writeInt32(ret);
-            reply->writeInt32(1);
-            outCharacteristics.writeToParcel(reply);
-
+            reply->writeParcelable(outCharacteristics);
             return NO_ERROR;
         }
         case EXPORT_KEY: {
