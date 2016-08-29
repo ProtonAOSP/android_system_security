@@ -3,7 +3,7 @@ IndentWidth: 4
 UseTab: Never
 BreakBeforeBraces: Attach
 AllowShortFunctionsOnASingleLine: Inline
-AllowShortIfStatementsOnASingleLine: false
+AllowShortIfStatementsOnASingleLine: true
 IndentCaseLabels: false
 ColumnLimit: 100
 PointerBindsToType: true

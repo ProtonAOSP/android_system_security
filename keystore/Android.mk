@@ -32,13 +32,15 @@ LOCAL_SRC_FILES := \
 	blob.cpp \
 	entropy.cpp \
 	key_store_service.cpp \
+	keystore_attestation_id.cpp \
 	keyblob_utils.cpp \
 	keystore.cpp \
 	keystore_main.cpp \
 	keystore_utils.cpp \
 	operation.cpp \
 	permissions.cpp \
-	user_state.cpp
+	user_state.cpp \
+	../../../frameworks/base/core/java/android/security/keymaster/IKeyAttestationApplicationIdProvider.aidl
 LOCAL_SHARED_LIBRARIES := \
 	libbinder \
 	libcutils \
@@ -59,6 +61,7 @@ LOCAL_C_INCLUES := system/keymaster/
 LOCAL_CLANG := true
 LOCAL_SANITIZE := integer
 LOCAL_ADDITIONAL_DEPENDENCIES := $(LOCAL_PATH)/Android.mk
+LOCAL_AIDL_INCLUDES := frameworks/base/core/java/
 include $(BUILD_EXECUTABLE)
 
 include $(CLEAR_VARS)
@@ -97,6 +100,9 @@ endif
 LOCAL_CFLAGS := -Wall -Wextra -Werror
 LOCAL_SRC_FILES := \
 	IKeystoreService.cpp \
+	KeyAttestationApplicationId.cpp \
+	KeyAttestationPackageInfo.cpp \
+	Signature.cpp \
 	keyblob_utils.cpp \
 	keystore_client.proto \
 	keystore_client_impl.cpp \

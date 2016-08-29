@@ -28,6 +28,7 @@
 #include <hardware/keymaster_defs.h>
 
 #include "defaults.h"
+#include "keystore_attestation_id.h"
 #include "keystore_utils.h"
 
 using keymaster::AuthorizationSet;
@@ -1129,8 +1130,7 @@ int32_t KeyStoreService::addAuthToken(const uint8_t* token, size_t length) {
 
 int32_t KeyStoreService::attestKey(const String16& name, const KeymasterArguments& params,
                                    KeymasterCertificateChain* outChain) {
-    if (!outChain)
-        return KM_ERROR_OUTPUT_PARAMETER_NULL;
+    if (!outChain) return KM_ERROR_OUTPUT_PARAMETER_NULL;
 
     if (!checkAllowedOperationParams(params.params)) {
         return KM_ERROR_INVALID_ARGUMENT;
@@ -1149,15 +1149,33 @@ int32_t KeyStoreService::attestKey(const String16& name, const KeymasterArgument
     keymaster_key_blob_t key = {keyBlob.getValue(),
                                 static_cast<size_t>(std::max(0, keyBlob.getLength()))};
     auto* dev = mKeyStore->getDeviceForBlob(keyBlob);
-    if (!dev->attest_key)
-        return KM_ERROR_UNIMPLEMENTED;
+    if (!dev->attest_key) return KM_ERROR_UNIMPLEMENTED;
+
+    /* get the attestation application id
+     * the result is actually a pair: .second contains the error code and if this is NO_ERROR
+     *                                .first contains the requested attestation id
+     */
+    auto asn1_attestation_id_result = security::gather_attestation_application_id(callingUid);
+    if (asn1_attestation_id_result.second != android::NO_ERROR) {
+        ALOGE("failed to gather attestation_id");
+        return KM_ERROR_ATTESTATION_APPLICATION_ID_MISSING;
+    }
+
+    /*
+     * Make a mutable copy of the params vector which to append the attestation id to.
+     * The copy is shallow, and the lifetime of the inner objects is the calling scope.
+     */
+    auto mutable_params = params.params;
+
+    mutable_params.push_back({.tag = KM_TAG_ATTESTATION_APPLICATION_ID,
+                              .blob = {asn1_attestation_id_result.first.data(),
+                                       asn1_attestation_id_result.first.size()}});
 
     const keymaster_key_param_set_t in_params = {
-        const_cast<keymaster_key_param_t*>(params.params.data()), params.params.size()};
+        const_cast<keymaster_key_param_t*>(mutable_params.data()), mutable_params.size()};
     outChain->chain = {nullptr, 0};
     int32_t rc = dev->attest_key(dev, &key, &in_params, &outChain->chain);
-    if (rc)
-        return rc;
+    if (rc) return rc;
     return ::NO_ERROR;
 }
 
@@ -1306,6 +1324,8 @@ bool KeyStoreService::checkAllowedOperationParams(
     for (auto param : params) {
         switch (param.tag) {
         case KM_TAG_AUTH_TOKEN:
+        // fall through intended
+        case KM_TAG_ATTESTATION_APPLICATION_ID:
             return false;
         default:
             break;
