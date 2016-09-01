@@ -23,15 +23,39 @@
 namespace android {
 namespace security {
 
+template <typename T> class StatusOr {
+  public:
+    StatusOr(const status_t error) : _status(error), _value() {}
+    StatusOr(const T& value) : _status(NO_ERROR), _value(value) {}
+    StatusOr(T&& value) : _status(NO_ERROR), _value(value) {}
+
+    operator const T&() const { return _value; }
+    operator T&() { return _value; }
+    operator T &&() && { return std::move(_value); }
+
+    bool isOk() const { return NO_ERROR == _status; }
+
+    ::android::status_t status() const { return _status; }
+
+    const T& value() const & { return _value; }
+    T& value() & { return _value; }
+    T&& value() && { return std::move(_value); }
+
+  private:
+    ::android::status_t _status;
+    T _value;
+};
+
 /**
  * Gathers the attestation id for the application determined by uid by querying the package manager
- * As of this writing uids can be shared in android, which is why the asn.1 encoded result may
- * contain more than one application attestation id.
+ * As of this writing uids can be shared in android, which is why the asn.1 encoded attestation
+ * application id may contain more than one package info followed by a set of digests of the
+ * packages signing certificates.
  *
- * @returns .first the asn.1 encoded attestation application id if .second is NO_ERROR. If .second
- *          is not NO_ERROR the content of .first is undefined.
+ * @returns the asn.1 encoded attestation application id or an error code. Check the result with
+ *          .isOk() before accessing.
  */
-std::pair<std::vector<uint8_t>, status_t> gather_attestation_application_id(uid_t uid);
+StatusOr<std::vector<uint8_t>> gather_attestation_application_id(uid_t uid);
 
 }  // namespace security
 }  // namespace android

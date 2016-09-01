@@ -75,13 +75,11 @@ DECLARE_STACK_OF(ASN1_OCTET_STRING);
 typedef struct km_attestation_package_info {
     ASN1_OCTET_STRING* package_name;
     ASN1_INTEGER* version;
-    STACK_OF(ASN1_OCTET_STRING) * signature_digests;
 } KM_ATTESTATION_PACKAGE_INFO;
 
 ASN1_SEQUENCE(KM_ATTESTATION_PACKAGE_INFO) = {
     ASN1_SIMPLE(KM_ATTESTATION_PACKAGE_INFO, package_name, ASN1_OCTET_STRING),
     ASN1_SIMPLE(KM_ATTESTATION_PACKAGE_INFO, version, ASN1_INTEGER),
-    ASN1_SET_OF(KM_ATTESTATION_PACKAGE_INFO, signature_digests, ASN1_OCTET_STRING),
 } ASN1_SEQUENCE_END(KM_ATTESTATION_PACKAGE_INFO);
 IMPLEMENT_ASN1_FUNCTIONS(KM_ATTESTATION_PACKAGE_INFO);
 
@@ -89,10 +87,12 @@ DECLARE_STACK_OF(KM_ATTESTATION_PACKAGE_INFO);
 
 typedef struct km_attestation_application_id {
     STACK_OF(KM_ATTESTATION_PACKAGE_INFO) * package_infos;
+    STACK_OF(ASN1_OCTET_STRING) * signature_digests;
 } KM_ATTESTATION_APPLICATION_ID;
 
 ASN1_SEQUENCE(KM_ATTESTATION_APPLICATION_ID) = {
     ASN1_SET_OF(KM_ATTESTATION_APPLICATION_ID, package_infos, KM_ATTESTATION_PACKAGE_INFO),
+    ASN1_SET_OF(KM_ATTESTATION_APPLICATION_ID, signature_digests, ASN1_OCTET_STRING),
 } ASN1_SEQUENCE_END(KM_ATTESTATION_APPLICATION_ID);
 IMPLEMENT_ASN1_FUNCTIONS(KM_ATTESTATION_APPLICATION_ID);
 }
@@ -122,9 +122,7 @@ namespace {
 using ::android::security::keymaster::KeyAttestationApplicationId;
 using ::android::security::keymaster::KeyAttestationPackageInfo;
 
-status_t build_attestation_package_info(
-    const std::string& pkg_name, const uint32_t pkg_version,
-    const std::vector<std::vector<uint8_t>>& signature_digests,
+status_t build_attestation_package_info(const KeyAttestationPackageInfo& pinfo,
     std::unique_ptr<KM_ATTESTATION_PACKAGE_INFO>* attestation_package_info_ptr) {
 
     if (!attestation_package_info_ptr) return BAD_VALUE;
@@ -133,17 +131,65 @@ status_t build_attestation_package_info(
     attestation_package_info.reset(KM_ATTESTATION_PACKAGE_INFO_new());
     if (!attestation_package_info.get()) return NO_MEMORY;
 
+    if (!pinfo.package_name()) {
+        ALOGE("Key attestation package info lacks package name");
+        return BAD_VALUE;
+    }
+
+    std::string pkg_name(String8(*pinfo.package_name()).string());
     if (!ASN1_OCTET_STRING_set(attestation_package_info->package_name,
                                reinterpret_cast<const unsigned char*>(pkg_name.data()),
                                pkg_name.size())) {
         return UNKNOWN_ERROR;
     }
 
-    auto signature_digest_stack =
-        reinterpret_cast<_STACK*>(attestation_package_info->signature_digests);
+    if (!ASN1_INTEGER_set(attestation_package_info->version, pinfo.version_code())) {
+        return UNKNOWN_ERROR;
+    }
+    return NO_ERROR;
+}
 
-    assert(signature_digest_stack != nullptr);
+StatusOr<std::vector<uint8_t>>
+build_attestation_application_id(const KeyAttestationApplicationId& key_attestation_id) {
+    auto attestation_id =
+        std::unique_ptr<KM_ATTESTATION_APPLICATION_ID>(KM_ATTESTATION_APPLICATION_ID_new());
 
+    auto attestation_pinfo_stack = reinterpret_cast<_STACK*>(attestation_id->package_infos);
+
+    if (key_attestation_id.pinfos_begin() == key_attestation_id.pinfos_end()) return BAD_VALUE;
+
+    for (auto pinfo = key_attestation_id.pinfos_begin(); pinfo != key_attestation_id.pinfos_end();
+         ++pinfo) {
+        if (!pinfo->package_name()) {
+            ALOGE("Key attestation package info lacks package name");
+            return BAD_VALUE;
+        }
+        std::string package_name(String8(*pinfo->package_name()).string());
+        std::unique_ptr<KM_ATTESTATION_PACKAGE_INFO> attestation_package_info;
+        auto rc = build_attestation_package_info(*pinfo, &attestation_package_info);
+        if (rc != NO_ERROR) {
+            ALOGE("Building DER attestation package info failed %d", rc);
+            return rc;
+        }
+        if (!sk_push(attestation_pinfo_stack, attestation_package_info.get())) {
+            return NO_MEMORY;
+        }
+        // if push succeeded, the stack takes ownership
+        attestation_package_info.release();
+    }
+
+    /** Apps can only share a uid iff they were signed with the same certificate(s). Because the
+     *  signature field actually holds the signing certificate, rather than a signature, we can
+     *  simply use the set of signature digests of the first package info.
+     */
+    const auto& pinfo = *key_attestation_id.pinfos_begin();
+    std::vector<std::vector<uint8_t>> signature_digests;
+
+    for (auto sig = pinfo.sigs_begin(); sig != pinfo.sigs_end(); ++sig) {
+        signature_digests.push_back(signature2SHA256(*sig));
+    }
+
+    auto signature_digest_stack = reinterpret_cast<_STACK*>(attestation_id->signature_digests);
     for (auto si : signature_digests) {
         auto asn1_item = std::unique_ptr<ASN1_OCTET_STRING>(ASN1_OCTET_STRING_new());
         if (!asn1_item) return NO_MEMORY;
@@ -156,57 +202,13 @@ status_t build_attestation_package_info(
         asn1_item.release();  // if push succeeded, the stack takes ownership
     }
 
-    if (!ASN1_INTEGER_set(attestation_package_info->version, pkg_version)) {
-        return UNKNOWN_ERROR;
-    }
-
-    return NO_ERROR;
-}
-
-inline std::pair<std::vector<uint8_t>, status_t> wraperror(const status_t status) {
-    return std::pair<std::vector<uint8_t>, status_t>(std::vector<uint8_t>(), status);
-}
-
-std::pair<std::vector<uint8_t>, status_t>
-build_attestation_application_id(const KeyAttestationApplicationId& key_attestation_id) {
-    auto attestation_id =
-        std::unique_ptr<KM_ATTESTATION_APPLICATION_ID>(KM_ATTESTATION_APPLICATION_ID_new());
-
-    auto attestation_pinfo_stack = reinterpret_cast<_STACK*>(attestation_id->package_infos);
-
-    for (auto pinfo = key_attestation_id.pinfos_begin(); pinfo != key_attestation_id.pinfos_end();
-         ++pinfo) {
-        std::vector<std::vector<uint8_t>> signature_digests;
-
-        for (auto sig = pinfo->sigs_begin(); sig != pinfo->sigs_end(); ++sig) {
-            signature_digests.push_back(signature2SHA256(*sig));
-        }
-
-        if (!pinfo->package_name()) {
-            ALOGE("Key attestation package info lacks package name");
-            return wraperror(BAD_VALUE);
-        }
-        std::string package_name(String8(*pinfo->package_name()).string());
-        std::unique_ptr<KM_ATTESTATION_PACKAGE_INFO> attestation_package_info;
-        auto rc = build_attestation_package_info(package_name, pinfo->version_code(),
-                                                 signature_digests, &attestation_package_info);
-        if (rc != NO_ERROR) {
-            ALOGE("Building DER attestation package info failed %d", rc);
-            return wraperror(rc);
-        }
-        if (!sk_push(attestation_pinfo_stack, attestation_package_info.get())) {
-            return wraperror(NO_MEMORY);
-        }
-        // if push succeeded, the stack takes ownership
-        attestation_package_info.release();
-    }
-
     int len = i2d_KM_ATTESTATION_APPLICATION_ID(attestation_id.get(), nullptr);
-    if (len < 0) return wraperror(UNKNOWN_ERROR);
-    auto result = std::make_pair(std::vector<uint8_t>(len), NO_ERROR);
-    uint8_t* p = result.first.data();
+    if (len < 0) return UNKNOWN_ERROR;
+
+    std::vector<uint8_t> result(len);
+    uint8_t* p = result.data();
     len = i2d_KM_ATTESTATION_APPLICATION_ID(attestation_id.get(), &p);
-    if (len < 0) return wraperror(UNKNOWN_ERROR);
+    if (len < 0) return UNKNOWN_ERROR;
 
     return result;
 }
@@ -223,7 +225,7 @@ void unused_functions_silencer() {
 
 }  // namespace
 
-std::pair<std::vector<uint8_t>, status_t> gather_attestation_application_id(uid_t uid) {
+StatusOr<std::vector<uint8_t>> gather_attestation_application_id(uid_t uid) {
     auto& pm = KeyAttestationApplicationIdProvider::get();
 
     /* Get the attestation application ID from package manager */
@@ -232,7 +234,7 @@ std::pair<std::vector<uint8_t>, status_t> gather_attestation_application_id(uid_
     if (!status.isOk()) {
         ALOGE("package manager request for key attestation ID failed with: %s",
               status.exceptionMessage().string());
-        return wraperror(FAILED_TRANSACTION);
+        return FAILED_TRANSACTION;
     }
 
     /* DER encode the attestation application ID */
