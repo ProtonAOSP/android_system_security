@@ -21,6 +21,7 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 
+#include <algorithm>
 #include <sstream>
 
 #include <binder/IPCThreadState.h>
@@ -1130,6 +1131,8 @@ int32_t KeyStoreService::addAuthToken(const uint8_t* token, size_t length) {
     return ::NO_ERROR;
 }
 
+constexpr size_t KEY_ATTESTATION_APPLICATION_ID_MAX_SIZE = 1024;
+
 int32_t KeyStoreService::attestKey(const String16& name, const KeymasterArguments& params,
                                    KeymasterCertificateChain* outChain) {
     if (!outChain) return KM_ERROR_OUTPUT_PARAMETER_NULL;
@@ -1169,7 +1172,7 @@ int32_t KeyStoreService::attestKey(const String16& name, const KeymasterArgument
     mutable_params.push_back(
         {.tag = KM_TAG_ATTESTATION_APPLICATION_ID,
          .blob = {asn1_attestation_id.data(),
-                  asn1_attestation_id.size()}});
+                  std::min(asn1_attestation_id.size(), KEY_ATTESTATION_APPLICATION_ID_MAX_SIZE)}});
 
     const keymaster_key_param_set_t in_params = {
         const_cast<keymaster_key_param_t*>(mutable_params.data()), mutable_params.size()};
