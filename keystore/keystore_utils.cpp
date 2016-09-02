@@ -51,6 +51,10 @@ size_t writeFully(int fd, uint8_t* data, size_t size) {
         data += n;
         remaining -= n;
     }
+    if (TEMP_FAILURE_RETRY(fsync(fd)) == -1) {
+        ALOGW("fsync failed: %s", strerror(errno));
+        return -1;
+    }
     return size;
 }
 
