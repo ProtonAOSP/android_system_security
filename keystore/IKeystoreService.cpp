@@ -226,7 +226,7 @@ static bool readKeymasterBlob(const Parcel& in, keymaster_blob_t* blob) {
         return false;
     }
 
-    blob->data = reinterpret_cast<const uint8_t*>(malloc(length));
+    blob->data = static_cast<const uint8_t*>(malloc(length));
     if (!blob->data)
         return false;
 
