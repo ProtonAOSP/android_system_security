@@ -1693,6 +1693,12 @@ status_t BnKeystoreService::onTransact(
             KeyCharacteristics outCharacteristics;
             int ret = getKeyCharacteristics(name, clientId.get(), appData.get(), uid,
                                             &outCharacteristics);
+            if (clientId.get() && clientId->data) {
+                free(const_cast<void*>(static_cast<const void*>(clientId->data)));
+            }
+            if (appData.get() && appData->data) {
+                free(const_cast<void*>(static_cast<const void*>(appData->data)));
+            }
             reply->writeNoException();
             reply->writeInt32(ret);
             reply->writeInt32(1);
@@ -1731,6 +1737,12 @@ status_t BnKeystoreService::onTransact(
             int32_t uid = data.readInt32();
             ExportResult result;
             exportKey(name, format, clientId.get(), appData.get(), uid, &result);
+            if (clientId.get() && clientId->data) {
+                free(const_cast<void*>(static_cast<const void*>(clientId->data)));
+            }
+            if (appData.get() && appData->data) {
+                free(const_cast<void*>(static_cast<const void*>(appData->data)));
+            }
             reply->writeNoException();
             reply->writeInt32(1);
             result.writeToParcel(reply);
