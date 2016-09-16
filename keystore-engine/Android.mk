@@ -16,33 +16,10 @@ LOCAL_PATH := $(call my-dir)
 
 include $(CLEAR_VARS)
 
+LOCAL_MODULE := libkeystore-engine
 
-ifneq (,$(wildcard $(TOP)/external/boringssl/flavor.mk))
-	include $(TOP)/external/boringssl/flavor.mk
-else
-	include $(TOP)/external/openssl/flavor.mk
-endif
-ifeq ($(OPENSSL_FLAVOR),BoringSSL)
-  LOCAL_MODULE := libkeystore-engine
-
-  LOCAL_SRC_FILES := \
+LOCAL_SRC_FILES := \
 	android_engine.cpp
-else
-  LOCAL_MODULE := libkeystore
-
-  LOCAL_MODULE_RELATIVE_PATH := ssl/engines
-
-  LOCAL_SRC_FILES := \
-	eng_keystore.cpp \
-	keyhandle.cpp \
-	ecdsa_meth.cpp \
-	dsa_meth.cpp \
-	rsa_meth.cpp
-
-  LOCAL_C_INCLUDES += \
-	external/openssl/include \
-	external/openssl
-endif
 
 LOCAL_MODULE_TAGS := optional
 LOCAL_CFLAGS := -fvisibility=hidden -Wall -Werror
