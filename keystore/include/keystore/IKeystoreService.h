@@ -53,11 +53,11 @@ struct KeymasterArguments {
 };
 
 // struct for serializing the results of begin/update/finish
-struct OperationResult {
+struct OperationResult : public ::android::Parcelable {
     OperationResult();
     ~OperationResult();
-    void readFromParcel(const Parcel& in);
-    void writeToParcel(Parcel* out) const;
+    status_t readFromParcel(const Parcel* in) override;
+    status_t writeToParcel(Parcel* out) const override;
 
     int resultCode;
     sp<IBinder> token;
@@ -69,11 +69,11 @@ struct OperationResult {
 };
 
 // struct for serializing the results of export
-struct ExportResult {
+struct ExportResult : public ::android::Parcelable {
     ExportResult();
     ~ExportResult();
-    void readFromParcel(const Parcel& in);
-    void writeToParcel(Parcel* out) const;
+    status_t readFromParcel(const Parcel* in) override;
+    status_t writeToParcel(Parcel* out) const override;
 
     int resultCode;
     std::unique_ptr<uint8_t[], MallocDeleter> exportData;

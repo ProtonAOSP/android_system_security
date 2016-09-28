@@ -55,7 +55,8 @@ OperationResult::OperationResult() : resultCode(0), token(), handle(0), inputCon
 OperationResult::~OperationResult() {
 }
 
-void OperationResult::readFromParcel(const Parcel& in) {
+status_t OperationResult::readFromParcel(const Parcel* inn) {
+    const Parcel& in = *inn;
     resultCode = in.readInt32();
     token = in.readStrongBinder();
     handle = static_cast<keymaster_operation_handle_t>(in.readInt64());
@@ -77,9 +78,10 @@ void OperationResult::readFromParcel(const Parcel& in) {
         }
     }
     outParams.readFromParcel(in);
+    return OK;
 }
 
-void OperationResult::writeToParcel(Parcel* out) const {
+status_t OperationResult::writeToParcel(Parcel* out) const {
     out->writeInt32(resultCode);
     out->writeStrongBinder(token);
     out->writeInt64(handle);
@@ -94,6 +96,7 @@ void OperationResult::writeToParcel(Parcel* out) const {
         }
     }
     outParams.writeToParcel(out);
+    return OK;
 }
 
 ExportResult::ExportResult() : resultCode(0), exportData(NULL), dataLength(0) {
@@ -102,7 +105,8 @@ ExportResult::ExportResult() : resultCode(0), exportData(NULL), dataLength(0) {
 ExportResult::~ExportResult() {
 }
 
-void ExportResult::readFromParcel(const Parcel& in) {
+status_t ExportResult::readFromParcel(const Parcel* inn) {
+    const Parcel& in = *inn;
     resultCode = in.readInt32();
     ssize_t length = in.readInt32();
     dataLength = 0;
@@ -120,9 +124,10 @@ void ExportResult::readFromParcel(const Parcel& in) {
             ALOGE("Failed to readInplace ExportData data");
         }
     }
+    return OK;
 }
 
-void ExportResult::writeToParcel(Parcel* out) const {
+status_t ExportResult::writeToParcel(Parcel* out) const {
     out->writeInt32(resultCode);
     out->writeInt32(dataLength);
     if (exportData && dataLength) {
@@ -133,6 +138,7 @@ void ExportResult::writeToParcel(Parcel* out) const {
             ALOGE("Failed to writeInplace ExportResult data.");
         }
     }
+    return OK;
 }
 
 KeymasterArguments::KeymasterArguments() {
@@ -1126,9 +1132,8 @@ public:
             result->resultCode = KM_ERROR_UNKNOWN_ERROR;
             return;
         }
-        if (reply.readInt32() != 0) {
-            result->readFromParcel(reply);
-        }
+
+        reply.readParcelable(result);
     }
 
     virtual void begin(const sp<IBinder>& appToken, const String16& name,
@@ -1161,9 +1166,8 @@ public:
             result->resultCode = KM_ERROR_UNKNOWN_ERROR;
             return;
         }
-        if (reply.readInt32() != 0) {
-            result->readFromParcel(reply);
-        }
+
+        reply.readParcelable(result);
     }
 
     virtual void update(const sp<IBinder>& token, const KeymasterArguments& params,
@@ -1190,9 +1194,8 @@ public:
             result->resultCode = KM_ERROR_UNKNOWN_ERROR;
             return;
         }
-        if (reply.readInt32() != 0) {
-            result->readFromParcel(reply);
-        }
+
+        reply.readParcelable(result);
     }
 
     virtual void finish(const sp<IBinder>& token, const KeymasterArguments& params,
@@ -1222,9 +1225,8 @@ public:
             result->resultCode = KM_ERROR_UNKNOWN_ERROR;
             return;
         }
-        if (reply.readInt32() != 0) {
-            result->readFromParcel(reply);
-        }
+
+        reply.readParcelable(result);
     }
 
     virtual int32_t abort(const sp<IBinder>& token)
@@ -1732,8 +1734,7 @@ status_t BnKeystoreService::onTransact(
             ExportResult result;
             exportKey(name, format, clientId.get(), appData.get(), uid, &result);
             reply->writeNoException();
-            reply->writeInt32(1);
-            result.writeToParcel(reply);
+            reply->writeParcelable(result);
 
             return NO_ERROR;
         }
@@ -1754,8 +1755,7 @@ status_t BnKeystoreService::onTransact(
             OperationResult result;
             begin(token, name, purpose, pruneable, args, entropy, entropyLength, uid, &result);
             reply->writeNoException();
-            reply->writeInt32(1);
-            result.writeToParcel(reply);
+            reply->writeParcelable(result);
 
             return NO_ERROR;
         }
@@ -1772,8 +1772,7 @@ status_t BnKeystoreService::onTransact(
             OperationResult result;
             update(token, args, buf, bufLength, &result);
             reply->writeNoException();
-            reply->writeInt32(1);
-            result.writeToParcel(reply);
+            reply->writeParcelable(result);
 
             return NO_ERROR;
         }
@@ -1793,8 +1792,7 @@ status_t BnKeystoreService::onTransact(
             OperationResult result;
             finish(token, args, signature, signatureLength, entropy, entropyLength,  &result);
             reply->writeNoException();
-            reply->writeInt32(1);
-            result.writeToParcel(reply);
+            reply->writeParcelable(result);
 
             return NO_ERROR;
         }
