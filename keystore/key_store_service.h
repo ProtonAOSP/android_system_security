@@ -119,6 +119,8 @@ class KeyStoreService : public BnKeystoreService, public IBinder::DeathRecipient
     int32_t attestKey(const String16& name, const KeymasterArguments& params,
                       KeymasterCertificateChain* outChain) override;
 
+    int32_t onDeviceOffBody();
+
   private:
     static const int32_t UID_SELF = -1;
 
