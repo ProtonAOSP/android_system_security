@@ -70,6 +70,7 @@ typedef enum {
     TYPE_MASTER_KEY = 2,
     TYPE_KEY_PAIR = 3,
     TYPE_KEYMASTER_10 = 4,
+    TYPE_KEY_CHARACTERISTICS = 5,
 } BlobType;
 
 class Entropy;
