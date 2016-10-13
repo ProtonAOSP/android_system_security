@@ -20,16 +20,17 @@
 #include "base/command_line.h"
 #include "base/files/file_util.h"
 #include "base/strings/string_util.h"
-#include "keymaster/authorization_set.h"
-#include "keymaster/keymaster_tags.h"
+#include "keystore/authorization_set.h"
+#include "keystore/keymaster_tags.h"
 #include "keystore/keystore_client_impl.h"
 
 using base::CommandLine;
-using keymaster::AuthorizationSet;
-using keymaster::AuthorizationSetBuilder;
+using keystore::AuthorizationSet;
+//using keymaster::AuthorizationSetBuilder;
 using keystore::KeystoreClient;
 
 namespace {
+using namespace keystore;
 
 struct TestCase {
     std::string name;
@@ -55,17 +56,13 @@ void PrintUsageAndExit() {
 }
 
 std::unique_ptr<KeystoreClient> CreateKeystoreInstance() {
-    return std::unique_ptr<KeystoreClient>(new keystore::KeystoreClientImpl);
+    return std::unique_ptr<KeystoreClient>(
+            static_cast<KeystoreClient*>(new keystore::KeystoreClientImpl));
 }
 
-#ifndef KEYMASTER_NAME_TAGS
-#error KEYMASTER_NAME_TAGS must be defined
-#endif
-
 void PrintTags(const AuthorizationSet& parameters) {
-    const keymaster_key_param_t* iter = nullptr;
-    for (iter = parameters.begin(); iter != parameters.end(); ++iter) {
-        printf("  %s\n", keymaster::StringifyTag(iter->tag));
+    for (auto iter = parameters.begin(); iter != parameters.end(); ++iter) {
+        printf("  %s\n", stringifyTag(iter->tag));
     }
 }
 
@@ -81,16 +78,16 @@ bool TestKey(const std::string& name, bool required, const AuthorizationSet& par
     std::unique_ptr<KeystoreClient> keystore = CreateKeystoreInstance();
     AuthorizationSet hardware_enforced_characteristics;
     AuthorizationSet software_enforced_characteristics;
-    int32_t result = keystore->generateKey("tmp", parameters, &hardware_enforced_characteristics,
+    auto result = keystore->generateKey("tmp", parameters, &hardware_enforced_characteristics,
                                            &software_enforced_characteristics);
     const char kBoldRedAbort[] = "\033[1;31mABORT\033[0m";
-    if (result != KM_ERROR_OK) {
+    if (!result.isOk()) {
         LOG(ERROR) << "Failed to generate key: " << result;
         printf("[%s] %s\n", kBoldRedAbort, name.c_str());
         return false;
     }
     result = keystore->deleteKey("tmp");
-    if (result != KM_ERROR_OK) {
+    if (!result.isOk()) {
         LOG(ERROR) << "Failed to delete key: " << result;
         printf("[%s] %s\n", kBoldRedAbort, name.c_str());
         return false;
@@ -99,9 +96,9 @@ bool TestKey(const std::string& name, bool required, const AuthorizationSet& par
     printf("%s Key Characteristics:\n", name.c_str());
     PrintKeyCharacteristics(hardware_enforced_characteristics, software_enforced_characteristics);
     bool hardware_backed = (hardware_enforced_characteristics.size() > 0);
-    if (software_enforced_characteristics.GetTagCount(KM_TAG_ALGORITHM) > 0 ||
-        software_enforced_characteristics.GetTagCount(KM_TAG_KEY_SIZE) > 0 ||
-        software_enforced_characteristics.GetTagCount(KM_TAG_RSA_PUBLIC_EXPONENT) > 0) {
+    if (software_enforced_characteristics.GetTagCount(TAG_ALGORITHM) > 0 ||
+        software_enforced_characteristics.GetTagCount(TAG_KEY_SIZE) > 0 ||
+        software_enforced_characteristics.GetTagCount(TAG_RSA_PUBLIC_EXPONENT) > 0) {
         VLOG(1) << "Hardware-backed key but required characteristics enforced in software.";
         hardware_backed = false;
     }
@@ -118,62 +115,62 @@ bool TestKey(const std::string& name, bool required, const AuthorizationSet& par
 AuthorizationSet GetRSASignParameters(uint32_t key_size, bool sha256_only) {
     AuthorizationSetBuilder parameters;
     parameters.RsaSigningKey(key_size, 65537)
-        .Digest(KM_DIGEST_SHA_2_256)
-        .Padding(KM_PAD_RSA_PKCS1_1_5_SIGN)
-        .Padding(KM_PAD_RSA_PSS)
-        .Authorization(keymaster::TAG_NO_AUTH_REQUIRED);
+        .Digest(Digest::SHA_2_256)
+        .Padding(PaddingMode::RSA_PKCS1_1_5_SIGN)
+        .Padding(PaddingMode::RSA_PSS)
+        .Authorization(TAG_NO_AUTH_REQUIRED);
     if (!sha256_only) {
-        parameters.Digest(KM_DIGEST_SHA_2_224)
-            .Digest(KM_DIGEST_SHA_2_384)
-            .Digest(KM_DIGEST_SHA_2_512);
+        parameters.Digest(Digest::SHA_2_224)
+            .Digest(Digest::SHA_2_384)
+            .Digest(Digest::SHA_2_512);
     }
-    return parameters.build();
+    return parameters;
 }
 
 AuthorizationSet GetRSAEncryptParameters(uint32_t key_size) {
     AuthorizationSetBuilder parameters;
     parameters.RsaEncryptionKey(key_size, 65537)
-        .Padding(KM_PAD_RSA_PKCS1_1_5_ENCRYPT)
-        .Padding(KM_PAD_RSA_OAEP)
-        .Authorization(keymaster::TAG_NO_AUTH_REQUIRED);
-    return parameters.build();
+        .Padding(PaddingMode::RSA_PKCS1_1_5_ENCRYPT)
+        .Padding(PaddingMode::RSA_OAEP)
+        .Authorization(TAG_NO_AUTH_REQUIRED);
+    return parameters;
 }
 
 AuthorizationSet GetECDSAParameters(uint32_t key_size, bool sha256_only) {
     AuthorizationSetBuilder parameters;
     parameters.EcdsaSigningKey(key_size)
-        .Digest(KM_DIGEST_SHA_2_256)
-        .Authorization(keymaster::TAG_NO_AUTH_REQUIRED);
+        .Digest(Digest::SHA_2_256)
+        .Authorization(TAG_NO_AUTH_REQUIRED);
     if (!sha256_only) {
-        parameters.Digest(KM_DIGEST_SHA_2_224)
-            .Digest(KM_DIGEST_SHA_2_384)
-            .Digest(KM_DIGEST_SHA_2_512);
+        parameters.Digest(Digest::SHA_2_224)
+            .Digest(Digest::SHA_2_384)
+            .Digest(Digest::SHA_2_512);
     }
-    return parameters.build();
+    return parameters;
 }
 
 AuthorizationSet GetAESParameters(uint32_t key_size, bool with_gcm_mode) {
     AuthorizationSetBuilder parameters;
-    parameters.AesEncryptionKey(key_size).Authorization(keymaster::TAG_NO_AUTH_REQUIRED);
+    parameters.AesEncryptionKey(key_size).Authorization(TAG_NO_AUTH_REQUIRED);
     if (with_gcm_mode) {
-        parameters.Authorization(keymaster::TAG_BLOCK_MODE, KM_MODE_GCM)
-            .Authorization(keymaster::TAG_MIN_MAC_LENGTH, 128);
+        parameters.Authorization(TAG_BLOCK_MODE, BlockMode::GCM)
+            .Authorization(TAG_MIN_MAC_LENGTH, 128);
     } else {
-        parameters.Authorization(keymaster::TAG_BLOCK_MODE, KM_MODE_ECB);
-        parameters.Authorization(keymaster::TAG_BLOCK_MODE, KM_MODE_CBC);
-        parameters.Authorization(keymaster::TAG_BLOCK_MODE, KM_MODE_CTR);
-        parameters.Padding(KM_PAD_NONE);
+        parameters.Authorization(TAG_BLOCK_MODE, BlockMode::ECB);
+        parameters.Authorization(TAG_BLOCK_MODE, BlockMode::CBC);
+        parameters.Authorization(TAG_BLOCK_MODE, BlockMode::CTR);
+        parameters.Padding(PaddingMode::NONE);
     }
-    return parameters.build();
+    return parameters;
 }
 
-AuthorizationSet GetHMACParameters(uint32_t key_size, keymaster_digest_t digest) {
+AuthorizationSet GetHMACParameters(uint32_t key_size, Digest digest) {
     AuthorizationSetBuilder parameters;
     parameters.HmacKey(key_size)
         .Digest(digest)
-        .Authorization(keymaster::TAG_MIN_MAC_LENGTH, 224)
-        .Authorization(keymaster::TAG_NO_AUTH_REQUIRED);
-    return parameters.build();
+        .Authorization(TAG_MIN_MAC_LENGTH, 224)
+        .Authorization(TAG_NO_AUTH_REQUIRED);
+    return parameters;
 }
 
 std::vector<TestCase> GetTestCases() {
@@ -194,12 +191,12 @@ std::vector<TestCase> GetTestCases() {
         {"AES-256", true, GetAESParameters(256, false)},
         {"AES-128-GCM", false, GetAESParameters(128, true)},
         {"AES-256-GCM", false, GetAESParameters(256, true)},
-        {"HMAC-SHA256-16", true, GetHMACParameters(16, KM_DIGEST_SHA_2_256)},
-        {"HMAC-SHA256-32", true, GetHMACParameters(32, KM_DIGEST_SHA_2_256)},
-        {"HMAC-SHA256-64", false, GetHMACParameters(64, KM_DIGEST_SHA_2_256)},
-        {"HMAC-SHA224-32", false, GetHMACParameters(32, KM_DIGEST_SHA_2_224)},
-        {"HMAC-SHA384-32", false, GetHMACParameters(32, KM_DIGEST_SHA_2_384)},
-        {"HMAC-SHA512-32", false, GetHMACParameters(32, KM_DIGEST_SHA_2_512)},
+        {"HMAC-SHA256-16", true, GetHMACParameters(16, Digest::SHA_2_256)},
+        {"HMAC-SHA256-32", true, GetHMACParameters(32, Digest::SHA_2_256)},
+        {"HMAC-SHA256-64", false, GetHMACParameters(64, Digest::SHA_2_256)},
+        {"HMAC-SHA224-32", false, GetHMACParameters(32, Digest::SHA_2_224)},
+        {"HMAC-SHA384-32", false, GetHMACParameters(32, Digest::SHA_2_384)},
+        {"HMAC-SHA512-32", false, GetHMACParameters(32, Digest::SHA_2_512)},
     };
     return std::vector<TestCase>(&test_cases[0], &test_cases[arraysize(test_cases)]);
 }
@@ -273,19 +270,19 @@ int GenerateKey(const std::string& name) {
     std::unique_ptr<KeystoreClient> keystore = CreateKeystoreInstance();
     AuthorizationSetBuilder params;
     params.RsaSigningKey(2048, 65537)
-        .Digest(KM_DIGEST_SHA_2_224)
-        .Digest(KM_DIGEST_SHA_2_256)
-        .Digest(KM_DIGEST_SHA_2_384)
-        .Digest(KM_DIGEST_SHA_2_512)
-        .Padding(KM_PAD_RSA_PKCS1_1_5_SIGN)
-        .Padding(KM_PAD_RSA_PSS)
-        .Authorization(keymaster::TAG_NO_AUTH_REQUIRED);
+        .Digest(Digest::SHA_2_224)
+        .Digest(Digest::SHA_2_256)
+        .Digest(Digest::SHA_2_384)
+        .Digest(Digest::SHA_2_512)
+        .Padding(PaddingMode::RSA_PKCS1_1_5_SIGN)
+        .Padding(PaddingMode::RSA_PSS)
+        .Authorization(TAG_NO_AUTH_REQUIRED);
     AuthorizationSet hardware_enforced_characteristics;
     AuthorizationSet software_enforced_characteristics;
-    int32_t result = keystore->generateKey(name, params.build(), &hardware_enforced_characteristics,
+    auto result = keystore->generateKey(name, params, &hardware_enforced_characteristics,
                                            &software_enforced_characteristics);
-    printf("GenerateKey: %d\n", result);
-    if (result == KM_ERROR_OK) {
+    printf("GenerateKey: %d\n", int32_t(result));
+    if (result.isOk()) {
         PrintKeyCharacteristics(hardware_enforced_characteristics,
                                 software_enforced_characteristics);
     }
@@ -296,10 +293,10 @@ int GetCharacteristics(const std::string& name) {
     std::unique_ptr<KeystoreClient> keystore = CreateKeystoreInstance();
     AuthorizationSet hardware_enforced_characteristics;
     AuthorizationSet software_enforced_characteristics;
-    int32_t result = keystore->getKeyCharacteristics(name, &hardware_enforced_characteristics,
+    auto result = keystore->getKeyCharacteristics(name, &hardware_enforced_characteristics,
                                                      &software_enforced_characteristics);
-    printf("GetCharacteristics: %d\n", result);
-    if (result == KM_ERROR_OK) {
+    printf("GetCharacteristics: %d\n", int32_t(result));
+    if (result.isOk()) {
         PrintKeyCharacteristics(hardware_enforced_characteristics,
                                 software_enforced_characteristics);
     }
@@ -309,7 +306,7 @@ int GetCharacteristics(const std::string& name) {
 int ExportKey(const std::string& name) {
     std::unique_ptr<KeystoreClient> keystore = CreateKeystoreInstance();
     std::string data;
-    int32_t result = keystore->exportKey(KM_KEY_FORMAT_X509, name, &data);
+    int32_t result = keystore->exportKey(KeyFormat::X509, name, &data);
     printf("ExportKey: %d (%zu)\n", result, data.size());
     return result;
 }
@@ -351,14 +348,14 @@ int List(const std::string& prefix) {
 int SignAndVerify(const std::string& name) {
     std::unique_ptr<KeystoreClient> keystore = CreateKeystoreInstance();
     AuthorizationSetBuilder sign_params;
-    sign_params.Padding(KM_PAD_RSA_PKCS1_1_5_SIGN);
-    sign_params.Digest(KM_DIGEST_SHA_2_256);
+    sign_params.Padding(PaddingMode::RSA_PKCS1_1_5_SIGN);
+    sign_params.Digest(Digest::SHA_2_256);
     AuthorizationSet output_params;
-    keymaster_operation_handle_t handle;
-    int32_t result = keystore->beginOperation(KM_PURPOSE_SIGN, name, sign_params.build(),
+    uint64_t handle;
+    auto result = keystore->beginOperation(KeyPurpose::SIGN, name, sign_params,
                                               &output_params, &handle);
-    if (result != KM_ERROR_OK) {
-        printf("Sign: BeginOperation failed: %d\n", result);
+    if (!result.isOk()) {
+        printf("Sign: BeginOperation failed: %d\n", int32_t(result));
         return result;
     }
     AuthorizationSet empty_params;
@@ -366,40 +363,40 @@ int SignAndVerify(const std::string& name) {
     std::string output_data;
     result = keystore->updateOperation(handle, empty_params, "data_to_sign",
                                        &num_input_bytes_consumed, &output_params, &output_data);
-    if (result != KM_ERROR_OK) {
-        printf("Sign: UpdateOperation failed: %d\n", result);
+    if (!result.isOk()) {
+        printf("Sign: UpdateOperation failed: %d\n", int32_t(result));
         return result;
     }
     result = keystore->finishOperation(handle, empty_params, std::string() /*signature_to_verify*/,
                                        &output_params, &output_data);
-    if (result != KM_ERROR_OK) {
-        printf("Sign: FinishOperation failed: %d\n", result);
+    if (!result.isOk()) {
+        printf("Sign: FinishOperation failed: %d\n", int32_t(result));
         return result;
     }
     printf("Sign: %zu bytes.\n", output_data.size());
     // We have a signature, now verify it.
     std::string signature_to_verify = output_data;
     output_data.clear();
-    result = keystore->beginOperation(KM_PURPOSE_VERIFY, name, sign_params.build(), &output_params,
+    result = keystore->beginOperation(KeyPurpose::VERIFY, name, sign_params, &output_params,
                                       &handle);
-    if (result != KM_ERROR_OK) {
-        printf("Verify: BeginOperation failed: %d\n", result);
+    if (!result.isOk()) {
+        printf("Verify: BeginOperation failed: %d\n", int32_t(result));
         return result;
     }
     result = keystore->updateOperation(handle, empty_params, "data_to_sign",
                                        &num_input_bytes_consumed, &output_params, &output_data);
-    if (result != KM_ERROR_OK) {
-        printf("Verify: UpdateOperation failed: %d\n", result);
+    if (!result.isOk()) {
+        printf("Verify: UpdateOperation failed: %d\n", int32_t(result));
         return result;
     }
     result = keystore->finishOperation(handle, empty_params, signature_to_verify, &output_params,
                                        &output_data);
-    if (result == KM_ERROR_VERIFICATION_FAILED) {
+    if (result == ErrorCode::VERIFICATION_FAILED) {
         printf("Verify: Failed to verify signature.\n");
         return result;
     }
-    if (result != KM_ERROR_OK) {
-        printf("Verify: FinishOperation failed: %d\n", result);
+    if (!result.isOk()) {
+        printf("Verify: FinishOperation failed: %d\n", int32_t(result));
         return result;
     }
     printf("Verify: OK\n");

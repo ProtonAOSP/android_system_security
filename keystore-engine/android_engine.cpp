@@ -20,6 +20,8 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. */
 
+#define LOG_TAG "keystore-engine"
+
 #include <UniquePtr.h>
 
 #include <sys/socket.h>
@@ -39,10 +41,12 @@
 #include <binder/IServiceManager.h>
 #include <keystore/keystore.h>
 #include <keystore/IKeystoreService.h>
+#include <keystore/keystore_hidl_support.h>
 
 using namespace android;
 
 namespace {
+using namespace keystore;
 
 extern const RSA_METHOD keystore_rsa_method;
 extern const ECDSA_METHOD keystore_ecdsa_method;
@@ -153,40 +157,34 @@ int rsa_private_transform(RSA *rsa, uint8_t *out, const uint8_t *in, size_t len)
         ALOGE("could not contact keystore");
         return 0;
     }
+    auto inBlob = blob2hidlVec(in ,len);
+    hidl_vec<uint8_t> reply;
 
-    uint8_t* reply = NULL;
-    size_t reply_len;
-    int32_t ret = service->sign(String16(key_id), in, len, &reply, &reply_len);
-    if (ret < 0) {
-        ALOGW("There was an error during rsa_decrypt: could not connect");
+    auto ret = service->sign(String16(key_id), inBlob, &reply);
+    if (!ret.isOk()) {
+        ALOGW("Error during sign from keystore: %d", int32_t(ret));
         return 0;
-    } else if (ret != 0) {
-        ALOGW("Error during sign from keystore: %d", ret);
-        return 0;
-    } else if (reply_len == 0) {
+    } else if (reply.size() == 0) {
         ALOGW("No valid signature returned");
-        free(reply);
         return 0;
     }
 
-    if (reply_len > len) {
+    if (reply.size() > len) {
         /* The result of the RSA operation can never be larger than the size of
          * the modulus so we assume that the result has extra zeros on the
          * left. This provides attackers with an oracle, but there's nothing
          * that we can do about it here. */
-        memcpy(out, reply + reply_len - len, len);
-    } else if (reply_len < len) {
+        memcpy(out, &reply[reply.size() - len], len);
+    } else if (reply.size() < len) {
         /* If the Keystore implementation returns a short value we assume that
          * it's because it removed leading zeros from the left side. This is
          * bad because it provides attackers with an oracle but we cannot do
          * anything about a broken Keystore implementation here. */
         memset(out, 0, len);
-        memcpy(out + len - reply_len, reply, reply_len);
+        memcpy(out + len - reply.size(), &reply[0], reply.size());
     } else {
-        memcpy(out, reply, len);
+        memcpy(out, &reply[0], len);
     }
-
-    free(reply);
 
     ALOGV("rsa=%p keystore_rsa_priv_dec successful", rsa);
     return 1;
@@ -253,28 +251,24 @@ static int ecdsa_sign(const uint8_t* digest, size_t digest_len, uint8_t* sig,
 
     size_t ecdsa_size = ECDSA_size(ec_key);
 
-    uint8_t* reply = NULL;
-    size_t reply_len;
-    int32_t ret = service->sign(String16(reinterpret_cast<const char*>(key_id)),
-                                digest, digest_len, &reply, &reply_len);
-    if (ret < 0) {
-        ALOGW("There was an error during ecdsa_sign: could not connect");
+    auto hidlDigest = blob2hidlVec(digest, digest_len);
+    hidl_vec<uint8_t> reply;
+    auto ret = service->sign(String16(reinterpret_cast<const char*>(key_id)),
+                                hidlDigest, &reply);
+    if (!ret.isOk()) {
+        ALOGW("Error during sign from keystore: %d", int32_t(ret));
         return 0;
-    } else if (ret != 0) {
-        ALOGW("Error during sign from keystore: %d", ret);
-        return 0;
-    } else if (reply_len == 0) {
+    } else if (reply.size() == 0) {
         ALOGW("No valid signature returned");
-        free(reply);
         return 0;
-    } else if (reply_len > ecdsa_size) {
+    } else if (reply.size() > ecdsa_size) {
         ALOGW("Signature is too large");
-        free(reply);
         return 0;
     }
 
-    memcpy(sig, reply, reply_len);
-    *sig_len = reply_len;
+    // Reviewer: should't sig_len be checked here? Or is it just assumed that it is at least ecdsa_size?
+    memcpy(sig, &reply[0], reply.size());
+    *sig_len = reply.size();
 
     ALOGV("ecdsa_sign(%p, %u, %p) => success", digest, (unsigned)digest_len,
           ec_key);
@@ -410,20 +404,15 @@ EVP_PKEY* EVP_PKEY_from_keystore(const char* key_id) {
         return 0;
     }
 
-    uint8_t *pubkey = NULL;
-    size_t pubkey_len;
-    int32_t ret = service->get_pubkey(String16(key_id), &pubkey, &pubkey_len);
-    if (ret < 0) {
-        ALOGW("could not contact keystore");
-        return NULL;
-    } else if (ret != 0) {
-        ALOGW("keystore reports error: %d", ret);
+    hidl_vec<uint8_t> pubkey;
+    auto ret = service->get_pubkey(String16(key_id), &pubkey);
+    if (!ret.isOk()) {
+        ALOGW("keystore reports error: %d", int32_t(ret));
         return NULL;
     }
 
-    const uint8_t *inp = pubkey;
-    Unique_EVP_PKEY pkey(d2i_PUBKEY(NULL, &inp, pubkey_len));
-    free(pubkey);
+    const uint8_t *inp = &pubkey[0];
+    Unique_EVP_PKEY pkey(d2i_PUBKEY(NULL, &inp, pubkey.size()));
     if (pkey.get() == NULL) {
         ALOGW("Cannot convert pubkey");
         return NULL;

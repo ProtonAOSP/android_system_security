@@ -18,12 +18,14 @@
 #include <vector>
 
 #include <hardware/hw_auth_token.h>
-#include <keymaster/authorization_set.h>
+#include <keystore/authorization_set.h>
 
 #ifndef KEYSTORE_AUTH_TOKEN_TABLE_H_
 #define KEYSTORE_AUTH_TOKEN_TABLE_H_
 
-namespace keymaster {
+namespace keystore {
+
+using android::hardware::keymaster::V3_0::HardwareAuthToken;
 
 namespace test {
 class AuthTokenTableTest;
@@ -42,7 +44,8 @@ time_t clock_gettime_raw();
 class AuthTokenTable {
   public:
     explicit AuthTokenTable(size_t max_entries = 32, time_t (*clock_function)() = clock_gettime_raw)
-        : max_entries_(max_entries), last_off_body_(clock_function()), clock_function_(clock_function) {}
+        : max_entries_(max_entries), last_off_body_(clock_function()),
+          clock_function_(clock_function) {}
 
     enum Error {
         OK,
@@ -58,7 +61,7 @@ class AuthTokenTable {
     /**
      * Add an authorization token to the table.  The table takes ownership of the argument.
      */
-    void AddAuthenticationToken(const hw_auth_token_t* token);
+    void AddAuthenticationToken(const HardwareAuthToken* token);
 
     /**
      * Find an authorization token that authorizes the operation specified by \p operation_handle on
@@ -70,30 +73,14 @@ class AuthTokenTable {
      *
      * The table retains ownership of the returned object.
      */
-    Error FindAuthorization(const AuthorizationSet& key_info, keymaster_purpose_t purpose,
-                            keymaster_operation_handle_t op_handle, const hw_auth_token_t** found);
-
-    /**
-     * Find an authorization token that authorizes the operation specified by \p operation_handle on
-     * a key with the characteristics specified in \p key_info.
-     *
-     * This method is O(n * m), where n is the number of KM_TAG_USER_SECURE_ID entries in key_info
-     * and m is the number of entries in the table.  It could be made better, but n and m should
-     * always be small.
-     *
-     * The table retains ownership of the returned object.
-     */
-    Error FindAuthorization(const keymaster_key_param_t* params, size_t params_count,
-                            keymaster_purpose_t purpose, keymaster_operation_handle_t op_handle,
-                            const hw_auth_token_t** found) {
-        return FindAuthorization(AuthorizationSet(params, params_count), purpose, op_handle, found);
-    }
+    Error FindAuthorization(const AuthorizationSet& key_info, KeyPurpose purpose,
+                            uint64_t op_handle, const HardwareAuthToken** found);
 
     /**
      * Mark operation completed.  This allows tokens associated with the specified operation to be
      * superseded by new tokens.
      */
-    void MarkCompleted(const keymaster_operation_handle_t op_handle);
+    void MarkCompleted(const uint64_t op_handle);
 
     /**
      * Update the last_off_body_ timestamp so that tokens which remain authorized only so long as
@@ -110,7 +97,7 @@ class AuthTokenTable {
 
     class Entry {
       public:
-        Entry(const hw_auth_token_t* token, time_t current_time);
+        Entry(const HardwareAuthToken* token, time_t current_time);
         Entry(Entry&& entry) { *this = std::move(entry); }
 
         void operator=(Entry&& rhs) {
@@ -125,36 +112,34 @@ class AuthTokenTable {
         void UpdateLastUse(time_t time);
 
         bool Supersedes(const Entry& entry) const;
-        bool SatisfiesAuth(const std::vector<uint64_t>& sids, hw_authenticator_type_t auth_type);
+        bool SatisfiesAuth(const std::vector<uint64_t>& sids, HardwareAuthenticatorType auth_type);
 
         bool is_newer_than(const Entry* entry) {
-            if (!entry)
-                return true;
+            if (!entry) return true;
             return timestamp_host_order() > entry->timestamp_host_order();
         }
 
         void mark_completed() { operation_completed_ = true; }
 
-        const hw_auth_token_t* token() { return token_.get(); }
+        const HardwareAuthToken* token() { return token_.get(); }
         time_t time_received() const { return time_received_; }
         bool completed() const { return operation_completed_; }
         uint32_t timestamp_host_order() const;
-        hw_authenticator_type_t authenticator_type() const;
+        HardwareAuthenticatorType authenticator_type() const;
 
       private:
-        std::unique_ptr<const hw_auth_token_t> token_;
+        std::unique_ptr<const HardwareAuthToken> token_;
         time_t time_received_;
         time_t last_use_;
         bool operation_completed_;
     };
 
     Error FindAuthPerOpAuthorization(const std::vector<uint64_t>& sids,
-                                     hw_authenticator_type_t auth_type,
-                                     keymaster_operation_handle_t op_handle,
-                                     const hw_auth_token_t** found);
+                                     HardwareAuthenticatorType auth_type, uint64_t op_handle,
+                                     const HardwareAuthToken** found);
     Error FindTimedAuthorization(const std::vector<uint64_t>& sids,
-                                 hw_authenticator_type_t auth_type,
-                                 const AuthorizationSet& key_info, const hw_auth_token_t** found);
+                                 HardwareAuthenticatorType auth_type,
+                                 const AuthorizationSet& key_info, const HardwareAuthToken** found);
     void ExtractSids(const AuthorizationSet& key_info, std::vector<uint64_t>* sids);
     void RemoveEntriesSupersededBy(const Entry& entry);
     bool IsSupersededBySomeEntry(const Entry& entry);

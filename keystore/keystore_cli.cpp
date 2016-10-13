@@ -26,6 +26,7 @@
 #include <keystore/keystore.h>
 
 using namespace android;
+using namespace keystore;
 
 static const char* responses[] = {
     NULL,
@@ -124,14 +125,13 @@ static const char* responses[] = {
                 fprintf(stderr, "Usage: %s " #cmd " <name> <uid>\n", argv[0]); \
                 return 1; \
             } \
-            uint8_t* data; \
-            size_t dataSize; \
+            hidl_vec<uint8_t> data; \
             int uid = -1; \
             if (argc > 3) { \
                 uid = atoi(argv[3]); \
                 fprintf(stderr, "Running as uid %d\n", uid); \
             } \
-            int32_t ret = service->cmd(String16(argv[2]), uid, &data, &dataSize); \
+            int32_t ret = service->cmd(String16(argv[2]), uid, &data); \
             if (ret < 0) { \
                 fprintf(stderr, "%s: could not connect: %d\n", argv[0], ret); \
                 return 1; \
@@ -139,9 +139,8 @@ static const char* responses[] = {
                 fprintf(stderr, "%s: " #cmd ": %s (%d)\n", argv[0], responses[ret], ret); \
                 return 1; \
             } else { \
-                fwrite(data, dataSize, 1, stdout); \
+                fwrite(&data[0], data.size(), 1, stdout); \
                 fflush(stdout); \
-                free(data); \
                 return 0; \
             } \
         } \
@@ -175,9 +174,8 @@ static const char* responses[] = {
                 fprintf(stderr, "Usage: %s " #cmd " <name>\n", argv[0]); \
                 return 1; \
             } \
-            uint8_t* data; \
-            size_t dataSize; \
-            int32_t ret = service->cmd(String16(argv[2]), &data, &dataSize); \
+            hidl_vec<uint8_t> data; \
+            int32_t ret = service->cmd(String16(argv[2]), &data); \
             if (ret < 0) { \
                 fprintf(stderr, "%s: could not connect: %d\n", argv[0], ret); \
                 return 1; \
@@ -185,9 +183,8 @@ static const char* responses[] = {
                 fprintf(stderr, "%s: " #cmd ": %s (%d)\n", argv[0], responses[ret], ret); \
                 return 1; \
             } else { \
-                fwrite(data, dataSize, 1, stdout); \
+                fwrite(&data[0], data.size(), 1, stdout); \
                 fflush(stdout); \
-                free(data); \
                 return 0; \
             } \
         } \

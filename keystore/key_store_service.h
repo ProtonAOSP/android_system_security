@@ -19,7 +19,7 @@
 
 #include <keystore/IKeystoreService.h>
 
-#include <keymaster/authorization_set.h>
+#include <keystore/authorization_set.h>
 
 #include "auth_token_table.h"
 #include "keystore.h"
@@ -27,42 +27,48 @@
 #include "operation.h"
 #include "permissions.h"
 
-namespace android {
+namespace keystore {
 
-class KeyStoreService : public BnKeystoreService, public IBinder::DeathRecipient {
+class KeyStoreService : public android::BnKeystoreService, public android::IBinder::DeathRecipient {
+    typedef ::android::sp<::android::hardware::keymaster::V3_0::IKeymasterDevice> km_device_t;
+
   public:
     explicit KeyStoreService(KeyStore* keyStore) : mKeyStore(keyStore), mOperationMap(this) {}
 
-    void binderDied(const wp<IBinder>& who);
+    void binderDied(const android::wp<android::IBinder>& who);
 
-    int32_t getState(int32_t userId);
+    KeyStoreServiceReturnCode getState(int32_t userId) override;
 
-    int32_t get(const String16& name, int32_t uid, uint8_t** item, size_t* itemLength);
-    int32_t insert(const String16& name, const uint8_t* item, size_t itemLength, int targetUid,
-                   int32_t flags);
-    int32_t del(const String16& name, int targetUid);
-    int32_t exist(const String16& name, int targetUid);
-    int32_t list(const String16& prefix, int targetUid, Vector<String16>* matches);
+    KeyStoreServiceReturnCode get(const android::String16& name, int32_t uid,
+                                  hidl_vec<uint8_t>* item) override;
+    KeyStoreServiceReturnCode insert(const android::String16& name, const hidl_vec<uint8_t>& item,
+                                     int targetUid, int32_t flags) override;
+    KeyStoreServiceReturnCode del(const android::String16& name, int targetUid) override;
+    KeyStoreServiceReturnCode exist(const android::String16& name, int targetUid) override;
+    KeyStoreServiceReturnCode list(const android::String16& prefix, int targetUid,
+                                   android::Vector<android::String16>* matches) override;
 
-    int32_t reset();
+    KeyStoreServiceReturnCode reset() override;
 
-    int32_t onUserPasswordChanged(int32_t userId, const String16& password);
-    int32_t onUserAdded(int32_t userId, int32_t parentId);
-    int32_t onUserRemoved(int32_t userId);
+    KeyStoreServiceReturnCode onUserPasswordChanged(int32_t userId,
+                                                    const android::String16& password) override;
+    KeyStoreServiceReturnCode onUserAdded(int32_t userId, int32_t parentId) override;
+    KeyStoreServiceReturnCode onUserRemoved(int32_t userId) override;
 
-    int32_t lock(int32_t userId);
-    int32_t unlock(int32_t userId, const String16& pw);
+    KeyStoreServiceReturnCode lock(int32_t userId) override;
+    KeyStoreServiceReturnCode unlock(int32_t userId, const android::String16& pw) override;
 
-    bool isEmpty(int32_t userId);
+    bool isEmpty(int32_t userId) override;
 
-    int32_t generate(const String16& name, int32_t targetUid, int32_t keyType, int32_t keySize,
-                     int32_t flags, Vector<sp<KeystoreArg>>* args);
-    int32_t import(const String16& name, const uint8_t* data, size_t length, int targetUid,
-                   int32_t flags);
-    int32_t sign(const String16& name, const uint8_t* data, size_t length, uint8_t** out,
-                 size_t* outLength);
-    int32_t verify(const String16& name, const uint8_t* data, size_t dataLength,
-                   const uint8_t* signature, size_t signatureLength);
+    KeyStoreServiceReturnCode
+    generate(const android::String16& name, int32_t targetUid, int32_t keyType, int32_t keySize,
+             int32_t flags, android::Vector<android::sp<android::KeystoreArg>>* args) override;
+    KeyStoreServiceReturnCode import(const android::String16& name, const hidl_vec<uint8_t>& data,
+                                     int targetUid, int32_t flags) override;
+    KeyStoreServiceReturnCode sign(const android::String16& name, const hidl_vec<uint8_t>& data,
+                                   hidl_vec<uint8_t>* out) override;
+    KeyStoreServiceReturnCode verify(const android::String16& name, const hidl_vec<uint8_t>& data,
+                                     const hidl_vec<uint8_t>& signature) override;
 
     /*
      * TODO: The abstraction between things stored in hardware and regular blobs
@@ -75,51 +81,57 @@ class KeyStoreService : public BnKeystoreService, public IBinder::DeathRecipient
      * "del_key" since the Java code doesn't really communicate what it's
      * intentions are.
      */
-    int32_t get_pubkey(const String16& name, uint8_t** pubkey, size_t* pubkeyLength);
+    KeyStoreServiceReturnCode get_pubkey(const android::String16& name,
+                                         hidl_vec<uint8_t>* pubKey) override;
 
-    int32_t grant(const String16& name, int32_t granteeUid);
-    int32_t ungrant(const String16& name, int32_t granteeUid);
+    KeyStoreServiceReturnCode grant(const android::String16& name, int32_t granteeUid) override;
+    KeyStoreServiceReturnCode ungrant(const android::String16& name, int32_t granteeUid) override;
 
-    int64_t getmtime(const String16& name, int32_t uid);
+    int64_t getmtime(const android::String16& name, int32_t uid) override;
 
-    int32_t duplicate(const String16& srcKey, int32_t srcUid, const String16& destKey,
-                      int32_t destUid);
+    KeyStoreServiceReturnCode duplicate(const android::String16& srcKey, int32_t srcUid,
+                                        const android::String16& destKey, int32_t destUid) override;
 
-    int32_t is_hardware_backed(const String16& keyType);
+    int32_t is_hardware_backed(const android::String16& keyType) override;
 
-    int32_t clear_uid(int64_t targetUid64);
+    KeyStoreServiceReturnCode clear_uid(int64_t targetUid64) override;
 
-    int32_t addRngEntropy(const uint8_t* data, size_t dataLength);
-    int32_t generateKey(const String16& name, const KeymasterArguments& params,
-                        const uint8_t* entropy, size_t entropyLength, int uid, int flags,
-                        KeyCharacteristics* outCharacteristics);
-    int32_t getKeyCharacteristics(const String16& name, const keymaster_blob_t* clientId,
-                                  const keymaster_blob_t* appData, int32_t uid,
-                                  KeyCharacteristics* outCharacteristics);
-    int32_t importKey(const String16& name, const KeymasterArguments& params,
-                      keymaster_key_format_t format, const uint8_t* keyData, size_t keyLength,
-                      int uid, int flags, KeyCharacteristics* outCharacteristics);
-    void exportKey(const String16& name, keymaster_key_format_t format,
-                   const keymaster_blob_t* clientId, const keymaster_blob_t* appData, int32_t uid,
-                   ExportResult* result);
-    void begin(const sp<IBinder>& appToken, const String16& name, keymaster_purpose_t purpose,
-               bool pruneable, const KeymasterArguments& params, const uint8_t* entropy,
-               size_t entropyLength, int32_t uid, OperationResult* result);
-    void update(const sp<IBinder>& token, const KeymasterArguments& params, const uint8_t* data,
-                size_t dataLength, OperationResult* result);
-    void finish(const sp<IBinder>& token, const KeymasterArguments& params,
-                const uint8_t* signature, size_t signatureLength, const uint8_t* entropy,
-                size_t entropyLength, OperationResult* result);
-    int32_t abort(const sp<IBinder>& token);
+    KeyStoreServiceReturnCode addRngEntropy(const hidl_vec<uint8_t>& entropy) override;
+    KeyStoreServiceReturnCode generateKey(const android::String16& name,
+                                          const hidl_vec<KeyParameter>& params,
+                                          const hidl_vec<uint8_t>& entropy, int uid, int flags,
+                                          KeyCharacteristics* outCharacteristics) override;
+    KeyStoreServiceReturnCode
+    getKeyCharacteristics(const android::String16& name, const hidl_vec<uint8_t>& clientId,
+                          const hidl_vec<uint8_t>& appData, int32_t uid,
+                          KeyCharacteristics* outCharacteristics) override;
+    KeyStoreServiceReturnCode importKey(const android::String16& name,
+                                        const hidl_vec<KeyParameter>& params, KeyFormat format,
+                                        const hidl_vec<uint8_t>& keyData, int uid, int flags,
+                                        KeyCharacteristics* outCharacteristics) override;
+    void exportKey(const android::String16& name, KeyFormat format,
+                   const hidl_vec<uint8_t>& clientId, const hidl_vec<uint8_t>& appData, int32_t uid,
+                   android::ExportResult* result) override;
+    void begin(const sp<android::IBinder>& appToken, const android::String16& name,
+               KeyPurpose purpose, bool pruneable, const hidl_vec<KeyParameter>& params,
+               const hidl_vec<uint8_t>& entropy, int32_t uid,
+               android::OperationResult* result) override;
+    void update(const sp<android::IBinder>& token, const hidl_vec<KeyParameter>& params,
+                const hidl_vec<uint8_t>& data, android::OperationResult* result) override;
+    void finish(const sp<android::IBinder>& token, const hidl_vec<KeyParameter>& params,
+                const hidl_vec<uint8_t>& signature, const hidl_vec<uint8_t>& entropy,
+                android::OperationResult* result) override;
+    KeyStoreServiceReturnCode abort(const sp<android::IBinder>& token) override;
 
-    bool isOperationAuthorized(const sp<IBinder>& token);
+    bool isOperationAuthorized(const sp<android::IBinder>& token) override;
 
-    int32_t addAuthToken(const uint8_t* token, size_t length);
+    KeyStoreServiceReturnCode addAuthToken(const uint8_t* token, size_t length) override;
 
-    int32_t attestKey(const String16& name, const KeymasterArguments& params,
-                      KeymasterCertificateChain* outChain) override;
+    KeyStoreServiceReturnCode attestKey(const android::String16& name,
+                                        const hidl_vec<KeyParameter>& params,
+                                        hidl_vec<hidl_vec<uint8_t>>* outChain) override;
 
-    int32_t onDeviceOffBody();
+    KeyStoreServiceReturnCode onDeviceOffBody() override;
 
   private:
     static const int32_t UID_SELF = -1;
@@ -164,23 +176,20 @@ class KeyStoreService : public BnKeystoreService, public IBinder::DeathRecipient
      * otherwise the state of keystore when not unlocked and checkUnlocked is
      * true.
      */
-    int32_t checkBinderPermissionAndKeystoreState(perm_t permission, int32_t targetUid = -1,
-                                                  bool checkUnlocked = true);
+    KeyStoreServiceReturnCode checkBinderPermissionAndKeystoreState(perm_t permission,
+                                                                    int32_t targetUid = -1,
+                                                                    bool checkUnlocked = true);
 
     bool isKeystoreUnlocked(State state);
-
-    bool isKeyTypeSupported(const keymaster2_device_t* device, keymaster_keypair_t keyType);
 
     /**
      * Check that all keymaster_key_param_t's provided by the application are
      * allowed. Any parameter that keystore adds itself should be disallowed here.
      */
-    bool checkAllowedOperationParams(const std::vector<keymaster_key_param_t>& params);
+    bool checkAllowedOperationParams(const hidl_vec<KeyParameter>& params);
 
-    keymaster_error_t getOperationCharacteristics(const keymaster_key_blob_t& key,
-                                                  const keymaster2_device_t* dev,
-                                                  const std::vector<keymaster_key_param_t>& params,
-                                                  keymaster_key_characteristics_t* out);
+    ErrorCode getOperationCharacteristics(const hidl_vec<uint8_t>& key, km_device_t* dev,
+                                          const AuthorizationSet& params, KeyCharacteristics* out);
 
     /**
      * Get the auth token for this operation from the auth token table.
@@ -192,11 +201,10 @@ class KeyStoreService : public BnKeystoreService, public IBinder::DeathRecipient
      *         KM_ERROR_KEY_USER_NOT_AUTHENTICATED if there is no valid auth
      *         token for the operation
      */
-    int32_t getAuthToken(const keymaster_key_characteristics_t* characteristics,
-                         keymaster_operation_handle_t handle, keymaster_purpose_t purpose,
-                         const hw_auth_token_t** authToken, bool failOnTokenMissing = true);
-
-    void addAuthToParams(std::vector<keymaster_key_param_t>* params, const hw_auth_token_t* token);
+    KeyStoreServiceReturnCode getAuthToken(const KeyCharacteristics& characteristics,
+                                           uint64_t handle, KeyPurpose purpose,
+                                           const HardwareAuthToken** authToken,
+                                           bool failOnTokenMissing = true);
 
     /**
      * Add the auth token for the operation to the param list if the operation
@@ -209,22 +217,22 @@ class KeyStoreService : public BnKeystoreService, public IBinder::DeathRecipient
      *         KM_ERROR_INVALID_OPERATION_HANDLE if token is not a valid
      *         operation token.
      */
-    int32_t addOperationAuthTokenIfNeeded(const sp<IBinder>& token,
-                                          std::vector<keymaster_key_param_t>* params);
+    KeyStoreServiceReturnCode addOperationAuthTokenIfNeeded(const sp<android::IBinder>& token,
+                                                            AuthorizationSet* params);
 
     /**
      * Translate a result value to a legacy return value. All keystore errors are
      * preserved and keymaster errors become SYSTEM_ERRORs
      */
-    int32_t translateResultToLegacyResult(int32_t result);
+    KeyStoreServiceReturnCode translateResultToLegacyResult(int32_t result);
 
-    keymaster_key_param_t* getKeyAlgorithm(keymaster_key_characteristics_t* characteristics);
+    void addLegacyBeginParams(const android::String16& name, AuthorizationSet* params);
 
-    void addLegacyBeginParams(const String16& name, std::vector<keymaster_key_param_t>& params);
-
-    int32_t doLegacySignVerify(const String16& name, const uint8_t* data, size_t length,
-                               uint8_t** out, size_t* outLength, const uint8_t* signature,
-                               size_t signatureLength, keymaster_purpose_t purpose);
+    KeyStoreServiceReturnCode doLegacySignVerify(const android::String16& name,
+                                                 const hidl_vec<uint8_t>& data,
+                                                 hidl_vec<uint8_t>* out,
+                                                 const hidl_vec<uint8_t>& signature,
+                                                 KeyPurpose purpose);
 
     /**
      * Upgrade a key blob under alias "name", returning the new blob in "blob".  If "blob"
@@ -234,15 +242,15 @@ class KeyStoreService : public BnKeystoreService, public IBinder::DeathRecipient
      *         KM_ERROR_VERSION_MISMATCH if called on a key whose patch level is greater than or
      *         equal to the current system patch level.
      */
-    int32_t upgradeKeyBlob(const String16& name, uid_t targetUid,
-                           const keymaster::AuthorizationSet& params, Blob* blob);
+    KeyStoreServiceReturnCode upgradeKeyBlob(const android::String16& name, uid_t targetUid,
+                                             const AuthorizationSet& params, Blob* blob);
 
     ::KeyStore* mKeyStore;
     OperationMap mOperationMap;
-    keymaster::AuthTokenTable mAuthTokenTable;
+    keystore::AuthTokenTable mAuthTokenTable;
     KeystoreKeymasterEnforcement enforcement_policy;
 };
 
-};  // namespace android
+};  // namespace keystore
 
 #endif  // KEYSTORE_KEYSTORE_SERVICE_H_

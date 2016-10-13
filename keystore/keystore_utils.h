@@ -28,10 +28,14 @@
 
 #include <UniquePtr.h>
 
+#include <keystore/authorization_set.h>
+
+#include "blob.h"
+
 size_t readFully(int fd, uint8_t* data, size_t size);
 size_t writeFully(int fd, uint8_t* data, size_t size);
 
-void add_legacy_key_authorizations(int keyType, std::vector<keymaster_key_param_t>* params);
+void add_legacy_key_authorizations(int keyType, keystore::AuthorizationSet* params);
 
 /**
  * Returns the app ID (in the Android multi-user sense) for the current
@@ -54,5 +58,15 @@ struct PKCS8_PRIV_KEY_INFO_Delete {
     void operator()(PKCS8_PRIV_KEY_INFO* p) const { PKCS8_PRIV_KEY_INFO_free(p); }
 };
 typedef UniquePtr<PKCS8_PRIV_KEY_INFO, PKCS8_PRIV_KEY_INFO_Delete> Unique_PKCS8_PRIV_KEY_INFO;
+
+namespace keystore {
+
+inline static hidl_vec<uint8_t> blob2hidlVec(const Blob& blob) {
+    hidl_vec<uint8_t> result;
+    result.setToExternal(const_cast<uint8_t*>(blob.getValue()), blob.getLength());
+    return result;
+}
+
+} // namespace keystore
 
 #endif  // KEYSTORE_KEYSTORE_UTILS_H_

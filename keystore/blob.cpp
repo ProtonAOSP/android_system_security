@@ -93,12 +93,12 @@ ResponseCode Blob::writeBlob(const char* filename, AES_KEY* aes_key, State state
     if (isEncrypted()) {
         if (state != STATE_NO_ERROR) {
             ALOGD("couldn't insert encrypted blob while not unlocked");
-            return LOCKED;
+            return ResponseCode::LOCKED;
         }
 
         if (!entropy->generate_random_data(mBlob.vector, AES_BLOCK_SIZE)) {
             ALOGW("Could not read random data for: %s", filename);
-            return SYSTEM_ERROR;
+            return ResponseCode::SYSTEM_ERROR;
         }
     }
 
@@ -132,60 +132,60 @@ ResponseCode Blob::writeBlob(const char* filename, AES_KEY* aes_key, State state
         TEMP_FAILURE_RETRY(open(tmpFileName, O_WRONLY | O_TRUNC | O_CREAT, S_IRUSR | S_IWUSR));
     if (out < 0) {
         ALOGW("could not open file: %s: %s", tmpFileName, strerror(errno));
-        return SYSTEM_ERROR;
+        return ResponseCode::SYSTEM_ERROR;
     }
     size_t writtenBytes = writeFully(out, (uint8_t*)&mBlob, fileLength);
     if (close(out) != 0) {
-        return SYSTEM_ERROR;
+        return ResponseCode::SYSTEM_ERROR;
     }
     if (writtenBytes != fileLength) {
         ALOGW("blob not fully written %zu != %zu", writtenBytes, fileLength);
         unlink(tmpFileName);
-        return SYSTEM_ERROR;
+        return ResponseCode::SYSTEM_ERROR;
     }
     if (rename(tmpFileName, filename) == -1) {
         ALOGW("could not rename blob to %s: %s", filename, strerror(errno));
-        return SYSTEM_ERROR;
+        return ResponseCode::SYSTEM_ERROR;
     }
-    return NO_ERROR;
+    return ResponseCode::NO_ERROR;
 }
 
 ResponseCode Blob::readBlob(const char* filename, AES_KEY* aes_key, State state) {
     ALOGV("reading blob %s", filename);
     int in = TEMP_FAILURE_RETRY(open(filename, O_RDONLY));
     if (in < 0) {
-        return (errno == ENOENT) ? KEY_NOT_FOUND : SYSTEM_ERROR;
+        return (errno == ENOENT) ? ResponseCode::KEY_NOT_FOUND : ResponseCode::SYSTEM_ERROR;
     }
     // fileLength may be less than sizeof(mBlob) since the in
     // memory version has extra padding to tolerate rounding up to
     // the AES_BLOCK_SIZE
     size_t fileLength = readFully(in, (uint8_t*)&mBlob, sizeof(mBlob));
     if (close(in) != 0) {
-        return SYSTEM_ERROR;
+        return ResponseCode::SYSTEM_ERROR;
     }
 
     if (fileLength == 0) {
-        return VALUE_CORRUPTED;
+        return ResponseCode::VALUE_CORRUPTED;
     }
 
     if (isEncrypted() && (state != STATE_NO_ERROR)) {
-        return LOCKED;
+        return ResponseCode::LOCKED;
     }
 
     size_t headerLength = (mBlob.encrypted - (uint8_t*)&mBlob);
     if (fileLength < headerLength) {
-        return VALUE_CORRUPTED;
+        return ResponseCode::VALUE_CORRUPTED;
     }
 
     ssize_t encryptedLength = fileLength - (headerLength + mBlob.info);
     if (encryptedLength < 0) {
-        return VALUE_CORRUPTED;
+        return ResponseCode::VALUE_CORRUPTED;
     }
 
     ssize_t digestedLength;
     if (isEncrypted()) {
         if (encryptedLength % AES_BLOCK_SIZE != 0) {
-            return VALUE_CORRUPTED;
+            return ResponseCode::VALUE_CORRUPTED;
         }
 
         AES_cbc_encrypt(mBlob.encrypted, mBlob.encrypted, encryptedLength, aes_key, mBlob.vector,
@@ -194,7 +194,7 @@ ResponseCode Blob::readBlob(const char* filename, AES_KEY* aes_key, State state)
         uint8_t computedDigest[MD5_DIGEST_LENGTH];
         MD5(mBlob.digested, digestedLength, computedDigest);
         if (memcmp(mBlob.digest, computedDigest, MD5_DIGEST_LENGTH) != 0) {
-            return VALUE_CORRUPTED;
+            return ResponseCode::VALUE_CORRUPTED;
         }
     } else {
         digestedLength = encryptedLength;
@@ -203,11 +203,11 @@ ResponseCode Blob::readBlob(const char* filename, AES_KEY* aes_key, State state)
     ssize_t maxValueLength = digestedLength - sizeof(mBlob.length);
     mBlob.length = ntohl(mBlob.length);
     if (mBlob.length < 0 || mBlob.length > maxValueLength) {
-        return VALUE_CORRUPTED;
+        return ResponseCode::VALUE_CORRUPTED;
     }
     if (mBlob.info != 0) {
         // move info from after padding to after data
         memmove(&mBlob.value[mBlob.length], &mBlob.value[maxValueLength], mBlob.info);
     }
-    return ::NO_ERROR;
+    return ResponseCode::NO_ERROR;
 }

@@ -14,18 +14,19 @@
  * limitations under the License.
  */
 
-#ifndef KEYSTORE_KEYMASTER_ENFORCEMENT_H_
-#define KEYSTORE_KEYMASTER_ENFORCEMENT_H_
+#ifndef KEYSTORE_KEYSTORE_KEYMASTER_ENFORCEMENT_H_
+#define KEYSTORE_KEYSTORE_KEYMASTER_ENFORCEMENT_H_
 
 #include <time.h>
 
-#include <keymaster/keymaster_enforcement.h>
+#include "keymaster_enforcement.h"
 
+namespace keystore {
 /**
  * This is a specialization of the KeymasterEnforcement class to be used by Keystore to enforce
  * keymaster requirements on all key operation.
  */
-class KeystoreKeymasterEnforcement : public keymaster::KeymasterEnforcement {
+class KeystoreKeymasterEnforcement : public KeymasterEnforcement {
   public:
     KeystoreKeymasterEnforcement() : KeymasterEnforcement(64, 64) {}
 
@@ -85,4 +86,6 @@ class KeystoreKeymasterEnforcement : public keymaster::KeymasterEnforcement {
     }
 };
 
-#endif  // KEYSTORE_KEYMASTER_ENFORCEMENT_H_
+} // namespace keystore
+
+#endif  // KEYSTORE_KEYSTORE_KEYMASTER_ENFORCEMENT_H_

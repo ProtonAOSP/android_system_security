@@ -24,19 +24,19 @@
  */
 
 /* DSA */
-#define DSA_DEFAULT_KEY_SIZE 1024
-#define DSA_MIN_KEY_SIZE 512
-#define DSA_MAX_KEY_SIZE 8192
+constexpr int32_t DSA_DEFAULT_KEY_SIZE = 1024;
+constexpr int32_t DSA_MIN_KEY_SIZE = 512;
+constexpr int32_t DSA_MAX_KEY_SIZE = 8192;
 
 /* EC */
-#define EC_DEFAULT_KEY_SIZE 256
-#define EC_MIN_KEY_SIZE 192
-#define EC_MAX_KEY_SIZE 521
+constexpr int32_t EC_DEFAULT_KEY_SIZE = 256;
+constexpr int32_t EC_MIN_KEY_SIZE = 192;
+constexpr int32_t EC_MAX_KEY_SIZE = 521;
 
 /* RSA */
-#define RSA_DEFAULT_KEY_SIZE 2048
-#define RSA_DEFAULT_EXPONENT 0x10001
-#define RSA_MIN_KEY_SIZE 512
-#define RSA_MAX_KEY_SIZE 8192
+constexpr int32_t RSA_DEFAULT_KEY_SIZE = 2048;
+constexpr int32_t RSA_DEFAULT_EXPONENT = 0x10001;
+constexpr int32_t RSA_MIN_KEY_SIZE = 512;
+constexpr int32_t RSA_MAX_KEY_SIZE = 8192;
 
 #endif /* KEYSTORE_DEFAULTS_H_ */

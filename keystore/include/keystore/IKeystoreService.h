@@ -17,39 +17,31 @@
 #ifndef KEYSTORE_IKEYSTORESERVICE_H
 #define KEYSTORE_IKEYSTORESERVICE_H
 
-#include <hardware/keymaster_defs.h>
-#include <utils/RefBase.h>
+#include "keystore.h"
+#include "keystore_return_types.h"
 #include <binder/IInterface.h>
 #include <binder/Parcel.h>
+#include <keystore/keymaster_tags.h>
+#include <utils/RefBase.h>
 #include <vector>
 
 namespace android {
 
 class KeystoreArg : public RefBase {
-public:
-    KeystoreArg(const void *data, size_t len);
+  public:
+    KeystoreArg(const void* data, size_t len);
     ~KeystoreArg();
 
     const void* data() const;
     size_t size() const;
 
-private:
+  private:
     const void* mData;
     size_t mSize;
 };
 
 struct MallocDeleter {
     void operator()(uint8_t* p) { free(p); }
-};
-
-// struct for serializing/deserializing a list of keymaster_key_param_t's
-struct KeymasterArguments {
-    KeymasterArguments();
-    ~KeymasterArguments();
-    void readFromParcel(const Parcel& in);
-    void writeToParcel(Parcel* out) const;
-
-    std::vector<keymaster_key_param_t> params;
 };
 
 // struct for serializing the results of begin/update/finish
@@ -59,13 +51,12 @@ struct OperationResult : public ::android::Parcelable {
     status_t readFromParcel(const Parcel* in) override;
     status_t writeToParcel(Parcel* out) const override;
 
-    int resultCode;
+    ::keystore::KeyStoreServiceReturnCode resultCode;
     sp<IBinder> token;
-    keymaster_operation_handle_t handle;
+    uint64_t handle;
     int inputConsumed;
-    std::unique_ptr<uint8_t[], MallocDeleter> data;
-    size_t dataLength;
-    KeymasterArguments outParams;
+    ::keystore::hidl_vec<uint8_t> data;
+    ::keystore::hidl_vec<::keystore::KeyParameter> outParams;
 };
 
 // struct for serializing the results of export
@@ -75,41 +66,15 @@ struct ExportResult : public ::android::Parcelable {
     status_t readFromParcel(const Parcel* in) override;
     status_t writeToParcel(Parcel* out) const override;
 
-    int resultCode;
-    std::unique_ptr<uint8_t[], MallocDeleter> exportData;
-    size_t dataLength;
+    ::keystore::KeyStoreServiceReturnCode resultCode;
+    ::keystore::hidl_vec<uint8_t> exportData;
 };
-
-// struct for serializing keymaster_key_characteristics_t's
-struct KeyCharacteristics : public ::android::Parcelable {
-    KeyCharacteristics();
-    ~KeyCharacteristics();
-    status_t readFromParcel(const Parcel* in) override;
-    status_t writeToParcel(Parcel* out) const override;
-
-    keymaster_key_characteristics_t characteristics;
-};
-
-// struct for serializing keymaster_cert_chain_t's
-struct KeymasterCertificateChain {
-    KeymasterCertificateChain();
-    ~KeymasterCertificateChain();
-    void readFromParcel(const Parcel& in);
-    void writeToParcel(Parcel* out) const;
-
-    void FreeChain();
-
-    keymaster_cert_chain_t chain;
-};
-
-bool readKeymasterArgumentFromParcel(const Parcel& in, keymaster_key_param_t* out);
-void writeKeymasterArgumentToParcel(const keymaster_key_param_t& param, Parcel* out);
 
 /*
  * This must be kept manually in sync with frameworks/base's IKeystoreService.java
  */
-class IKeystoreService: public IInterface {
-public:
+class IKeystoreService : public IInterface {
+  public:
     enum {
         GET_STATE = IBinder::FIRST_CALL_TRANSACTION + 0,
         GET = IBinder::FIRST_CALL_TRANSACTION + 1,
@@ -152,114 +117,134 @@ public:
 
     DECLARE_META_INTERFACE(KeystoreService);
 
-    virtual int32_t getState(int32_t userId) = 0;
+    virtual ::keystore::KeyStoreServiceReturnCode getState(int32_t userId) = 0;
 
-    virtual int32_t get(const String16& name, int32_t uid, uint8_t** item, size_t* itemLength) = 0;
+    virtual ::keystore::KeyStoreServiceReturnCode get(const String16& name, int32_t uid,
+                                                      ::keystore::hidl_vec<uint8_t>* item) = 0;
 
-    virtual int32_t insert(const String16& name, const uint8_t* item, size_t itemLength, int uid,
-            int32_t flags) = 0;
+    virtual ::keystore::KeyStoreServiceReturnCode insert(const String16& name,
+                                                         const ::keystore::hidl_vec<uint8_t>& item,
+                                                         int uid, int32_t flags) = 0;
 
-    virtual int32_t del(const String16& name, int uid) = 0;
+    virtual ::keystore::KeyStoreServiceReturnCode del(const String16& name, int uid) = 0;
 
-    virtual int32_t exist(const String16& name, int uid) = 0;
+    virtual ::keystore::KeyStoreServiceReturnCode exist(const String16& name, int uid) = 0;
 
-    virtual int32_t list(const String16& prefix, int uid, Vector<String16>* matches) = 0;
+    virtual ::keystore::KeyStoreServiceReturnCode list(const String16& prefix, int uid,
+                                                       Vector<String16>* matches) = 0;
 
-    virtual int32_t reset() = 0;
+    virtual ::keystore::KeyStoreServiceReturnCode reset() = 0;
 
-    virtual int32_t onUserPasswordChanged(int32_t userId, const String16& newPassword) = 0;
+    virtual ::keystore::KeyStoreServiceReturnCode
+    onUserPasswordChanged(int32_t userId, const String16& newPassword) = 0;
 
-    virtual int32_t lock(int32_t userId) = 0;
+    virtual ::keystore::KeyStoreServiceReturnCode lock(int32_t userId) = 0;
 
-    virtual int32_t unlock(int32_t userId, const String16& password) = 0;
+    virtual ::keystore::KeyStoreServiceReturnCode unlock(int32_t userId,
+                                                         const String16& password) = 0;
 
     virtual bool isEmpty(int32_t userId) = 0;
 
-    virtual int32_t generate(const String16& name, int32_t uid, int32_t keyType, int32_t keySize,
-            int32_t flags, Vector<sp<KeystoreArg> >* args) = 0;
+    virtual ::keystore::KeyStoreServiceReturnCode generate(const String16& name, int32_t uid,
+                                                           int32_t keyType, int32_t keySize,
+                                                           int32_t flags,
+                                                           Vector<sp<KeystoreArg>>* args) = 0;
 
-    virtual int32_t import(const String16& name, const uint8_t* data, size_t length, int uid,
-            int32_t flags) = 0;
+    virtual ::keystore::KeyStoreServiceReturnCode import(const String16& name,
+                                                         const ::keystore::hidl_vec<uint8_t>& data,
+                                                         int uid, int32_t flags) = 0;
 
-    virtual int32_t sign(const String16& name, const uint8_t* data, size_t length, uint8_t** out,
-            size_t* outLength) = 0;
+    virtual ::keystore::KeyStoreServiceReturnCode sign(const String16& name,
+                                                       const ::keystore::hidl_vec<uint8_t>& data,
+                                                       ::keystore::hidl_vec<uint8_t>* out) = 0;
 
-    virtual int32_t verify(const String16& name, const uint8_t* data, size_t dataLength,
-            const uint8_t* signature, size_t signatureLength) = 0;
+    virtual ::keystore::KeyStoreServiceReturnCode
+    verify(const String16& name, const ::keystore::hidl_vec<uint8_t>& data,
+           const ::keystore::hidl_vec<uint8_t>& signature) = 0;
 
-    virtual int32_t get_pubkey(const String16& name, uint8_t** pubkey, size_t* pubkeyLength) = 0;
+    virtual ::keystore::KeyStoreServiceReturnCode
+    get_pubkey(const String16& name, ::keystore::hidl_vec<uint8_t>* pubKey) = 0;
 
-    virtual int32_t grant(const String16& name, int32_t granteeUid) = 0;
+    virtual ::keystore::KeyStoreServiceReturnCode grant(const String16& name,
+                                                        int32_t granteeUid) = 0;
 
-    virtual int32_t ungrant(const String16& name, int32_t granteeUid) = 0;
+    virtual ::keystore::KeyStoreServiceReturnCode ungrant(const String16& name,
+                                                          int32_t granteeUid) = 0;
 
     virtual int64_t getmtime(const String16& name, int32_t uid) = 0;
 
-    virtual int32_t duplicate(const String16& srcKey, int32_t srcUid, const String16& destKey,
-            int32_t destUid) = 0;
+    virtual ::keystore::KeyStoreServiceReturnCode
+    duplicate(const String16& srcKey, int32_t srcUid, const String16& destKey, int32_t destUid) = 0;
 
     virtual int32_t is_hardware_backed(const String16& keyType) = 0;
 
-    virtual int32_t clear_uid(int64_t uid) = 0;
+    virtual ::keystore::KeyStoreServiceReturnCode clear_uid(int64_t uid) = 0;
 
-    virtual int32_t addRngEntropy(const uint8_t* data, size_t dataLength) = 0;
+    virtual ::keystore::KeyStoreServiceReturnCode
+    addRngEntropy(const ::keystore::hidl_vec<uint8_t>& entropy) = 0;
 
-    virtual int32_t generateKey(const String16& name, const KeymasterArguments& params,
-                                const uint8_t* entropy, size_t entropyLength, int uid, int flags,
-                                KeyCharacteristics* outCharacteristics) = 0;
+    virtual ::keystore::KeyStoreServiceReturnCode
+    generateKey(const String16& name, const ::keystore::hidl_vec<::keystore::KeyParameter>& params,
+                const ::keystore::hidl_vec<uint8_t>& entropy, int uid, int flags,
+                ::keystore::KeyCharacteristics* outCharacteristics) = 0;
 
-    virtual int32_t getKeyCharacteristics(const String16& name,
-                                          const keymaster_blob_t* clientId,
-                                          const keymaster_blob_t* appData,
-                                          int32_t uid,
-                                          KeyCharacteristics* outCharacteristics) = 0;
+    virtual ::keystore::KeyStoreServiceReturnCode
+    getKeyCharacteristics(const String16& name, const ::keystore::hidl_vec<uint8_t>& clientId,
+                          const ::keystore::hidl_vec<uint8_t>& appData, int32_t uid,
+                          ::keystore::KeyCharacteristics* outCharacteristics) = 0;
 
-    virtual int32_t importKey(const String16& name, const KeymasterArguments&  params,
-                              keymaster_key_format_t format, const uint8_t *keyData,
-                              size_t keyLength, int uid, int flags,
-                              KeyCharacteristics* outCharacteristics) = 0;
+    virtual ::keystore::KeyStoreServiceReturnCode
+    importKey(const String16& name, const ::keystore::hidl_vec<::keystore::KeyParameter>& params,
+              ::keystore::KeyFormat format, const ::keystore::hidl_vec<uint8_t>& key, int uid,
+              int flags, ::keystore::KeyCharacteristics* outCharacteristics) = 0;
 
-    virtual void exportKey(const String16& name, keymaster_key_format_t format,
-                           const keymaster_blob_t* clientId,
-                           const keymaster_blob_t* appData, int32_t uid, ExportResult* result) = 0;
+    virtual void exportKey(const String16& name, ::keystore::KeyFormat format,
+                           const ::keystore::hidl_vec<uint8_t>& clientId,
+                           const ::keystore::hidl_vec<uint8_t>& appData, int uid,
+                           ExportResult* result) = 0;
 
     virtual void begin(const sp<IBinder>& apptoken, const String16& name,
-                       keymaster_purpose_t purpose, bool pruneable,
-                       const KeymasterArguments& params, const uint8_t* entropy,
-                       size_t entropyLength, int32_t uid, OperationResult* result) = 0;
+                       ::keystore::KeyPurpose purpose, bool pruneable,
+                       const ::keystore::hidl_vec<::keystore::KeyParameter>& params,
+                       const ::keystore::hidl_vec<uint8_t>& entropy, int32_t uid,
+                       OperationResult* opResult) = 0;
 
-    virtual void update(const sp<IBinder>& token, const KeymasterArguments& params,
-                        const uint8_t* data, size_t dataLength, OperationResult* result) = 0;
+    virtual void update(const sp<IBinder>& token,
+                        const ::keystore::hidl_vec<::keystore::KeyParameter>& params,
+                        const ::keystore::hidl_vec<uint8_t>& data, OperationResult* opResult) = 0;
 
-    virtual void finish(const sp<IBinder>& token, const KeymasterArguments& params,
-                        const uint8_t* signature, size_t signatureLength,
-                        const uint8_t* entropy, size_t entropyLength,
-                        OperationResult* result) = 0;
+    virtual void finish(const sp<IBinder>& token,
+                        const ::keystore::hidl_vec<::keystore::KeyParameter>& params,
+                        const ::keystore::hidl_vec<uint8_t>& signature,
+                        const ::keystore::hidl_vec<uint8_t>& entropy,
+                        OperationResult* opResult) = 0;
 
-    virtual int32_t abort(const sp<IBinder>& handle) = 0;
+    virtual ::keystore::KeyStoreServiceReturnCode abort(const sp<IBinder>& handle) = 0;
 
     virtual bool isOperationAuthorized(const sp<IBinder>& handle) = 0;
 
-    virtual int32_t addAuthToken(const uint8_t* token, size_t length) = 0;
+    virtual ::keystore::KeyStoreServiceReturnCode addAuthToken(const uint8_t* token,
+                                                               size_t length) = 0;
 
-    virtual int32_t onUserAdded(int32_t userId, int32_t parentId) = 0;
+    virtual ::keystore::KeyStoreServiceReturnCode onUserAdded(int32_t userId, int32_t parentId) = 0;
 
-    virtual int32_t onUserRemoved(int32_t userId) = 0;
+    virtual ::keystore::KeyStoreServiceReturnCode onUserRemoved(int32_t userId) = 0;
 
-    virtual int32_t attestKey(const String16& name, const KeymasterArguments& params,
-                              KeymasterCertificateChain* outChain) = 0;
+    virtual ::keystore::KeyStoreServiceReturnCode
+    attestKey(const String16& name, const ::keystore::hidl_vec<::keystore::KeyParameter>& params,
+              ::keystore::hidl_vec<::keystore::hidl_vec<uint8_t>>* outChain) = 0;
 
-    virtual int32_t onDeviceOffBody() = 0;
+    virtual ::keystore::KeyStoreServiceReturnCode onDeviceOffBody() = 0;
 };
 
 // ----------------------------------------------------------------------------
 
-class BnKeystoreService: public BnInterface<IKeystoreService> {
-public:
+class BnKeystoreService : public BnInterface<IKeystoreService> {
+  public:
     virtual status_t onTransact(uint32_t code, const Parcel& data, Parcel* reply,
-            uint32_t flags = 0);
+                                uint32_t flags = 0);
 };
 
-} // namespace android
+}  // namespace android
 
 #endif

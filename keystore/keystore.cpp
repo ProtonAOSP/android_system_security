@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#define LOG_TAG "keystore"
+
 #include "keystore.h"
 
 #include <dirent.h>
@@ -25,15 +27,20 @@
 
 #include <keystore/IKeystoreService.h>
 
+#include <android/hardware/keymaster/3.0/IKeymasterDevice.h>
+
 #include "keystore_utils.h"
 #include "permissions.h"
+#include <keystore/keystore_hidl_support.h>
 
 const char* KeyStore::sOldMasterKey = ".masterkey";
 const char* KeyStore::sMetaDataFile = ".metadata";
 
 const android::String16 KeyStore::sRSAKeyType("RSA");
 
-KeyStore::KeyStore(Entropy* entropy, keymaster2_device_t* device, keymaster2_device_t* fallback)
+using namespace keystore;
+
+KeyStore::KeyStore(Entropy* entropy, const km_device_t& device, const km_device_t& fallback)
     : mEntropy(entropy), mDevice(device), mFallbackDevice(fallback) {
     memset(&mMetaData, '\0', sizeof(mMetaData));
 }
@@ -57,7 +64,7 @@ ResponseCode KeyStore::initialize() {
         writeMetaData();
     }
 
-    return ::NO_ERROR;
+    return ResponseCode::NO_ERROR;
 }
 
 ResponseCode KeyStore::initializeUser(const android::String8& pw, uid_t userId) {
@@ -154,7 +161,7 @@ void KeyStore::resetUser(uid_t userId, bool keepUnenryptedEntries) {
     android::String8 prefix("");
     android::Vector<android::String16> aliases;
     UserState* userState = getUserState(userId);
-    if (list(prefix, &aliases, userId) != ::NO_ERROR) {
+    if (list(prefix, &aliases, userId) != ResponseCode::NO_ERROR) {
         return;
     }
     for (uint32_t i = 0; i < aliases.size(); i++) {
@@ -172,7 +179,7 @@ void KeyStore::resetUser(uid_t userId, bool keepUnenryptedEntries) {
              * other reasons err on the safe side and delete them since we
              * can't tell if they're encrypted.
              */
-            shouldDelete = !(rc == ::NO_ERROR && !blob.isEncrypted());
+            shouldDelete = !(rc == ResponseCode::NO_ERROR && !blob.isEncrypted());
         }
         if (shouldDelete) {
             del(filename, ::TYPE_ANY, userId);
@@ -236,7 +243,7 @@ ResponseCode KeyStore::get(const char* filename, Blob* keyBlob, const BlobType t
     UserState* userState = getUserState(userId);
     ResponseCode rc =
         keyBlob->readBlob(filename, userState->getDecryptionKey(), userState->getState());
-    if (rc != NO_ERROR) {
+    if (rc != ResponseCode::NO_ERROR) {
         return rc;
     }
 
@@ -247,28 +254,25 @@ ResponseCode KeyStore::get(const char* filename, Blob* keyBlob, const BlobType t
          * it's written.
          */
         if (upgradeBlob(filename, keyBlob, version, type, userId)) {
-            if ((rc = this->put(filename, keyBlob, userId)) != NO_ERROR ||
+            if ((rc = this->put(filename, keyBlob, userId)) != ResponseCode::NO_ERROR ||
                 (rc = keyBlob->readBlob(filename, userState->getDecryptionKey(),
-                                        userState->getState())) != NO_ERROR) {
+                                        userState->getState())) != ResponseCode::NO_ERROR) {
                 return rc;
             }
         }
     }
 
     /*
-     * This will upgrade software-backed keys to hardware-backed keys when
-     * the HAL for the device supports the newer key types.
+     * This will upgrade software-backed keys to hardware-backed keys.
      */
-    if (rc == NO_ERROR && type == TYPE_KEY_PAIR &&
-        mDevice->common.module->module_api_version >= KEYMASTER_MODULE_API_VERSION_0_2 &&
-        keyBlob->isFallback()) {
+    if (rc == ResponseCode::NO_ERROR && type == TYPE_KEY_PAIR && keyBlob->isFallback()) {
         ResponseCode imported =
             importKey(keyBlob->getValue(), keyBlob->getLength(), filename, userId,
                       keyBlob->isEncrypted() ? KEYSTORE_FLAG_ENCRYPTED : KEYSTORE_FLAG_NONE);
 
         // The HAL allowed the import, reget the key to have the "fresh"
         // version.
-        if (imported == NO_ERROR) {
+        if (imported == ResponseCode::NO_ERROR) {
             rc = get(filename, keyBlob, TYPE_KEY_PAIR, userId);
         }
     }
@@ -281,7 +285,7 @@ ResponseCode KeyStore::get(const char* filename, Blob* keyBlob, const BlobType t
 
     if (type != TYPE_ANY && keyBlob->getType() != type) {
         ALOGW("key found but type doesn't match: %d vs %d", keyBlob->getType(), type);
-        return KEY_NOT_FOUND;
+        return ResponseCode::KEY_NOT_FOUND;
     }
 
     return rc;
@@ -296,38 +300,25 @@ ResponseCode KeyStore::put(const char* filename, Blob* keyBlob, uid_t userId) {
 ResponseCode KeyStore::del(const char* filename, const BlobType type, uid_t userId) {
     Blob keyBlob;
     ResponseCode rc = get(filename, &keyBlob, type, userId);
-    if (rc == ::VALUE_CORRUPTED) {
+    if (rc == ResponseCode::VALUE_CORRUPTED) {
         // The file is corrupt, the best we can do is rm it.
-        return (unlink(filename) && errno != ENOENT) ? ::SYSTEM_ERROR : ::NO_ERROR;
+        return (unlink(filename) && errno != ENOENT) ?
+                ResponseCode::SYSTEM_ERROR : ResponseCode::NO_ERROR;
     }
-    if (rc != ::NO_ERROR) {
+    if (rc != ResponseCode::NO_ERROR) {
         return rc;
     }
 
-    if (keyBlob.getType() == ::TYPE_KEY_PAIR) {
+    if (keyBlob.getType() == ::TYPE_KEY_PAIR || keyBlob.getType() == ::TYPE_KEYMASTER_10) {
+        auto ret = KS_HANDLE_HIDL_ERROR(mDevice->deleteKey(blob2hidlVec(keyBlob)));
+
         // A device doesn't have to implement delete_key.
-        if (mDevice->delete_key != NULL && !keyBlob.isFallback()) {
-            keymaster_key_blob_t blob = {keyBlob.getValue(),
-                                         static_cast<size_t>(keyBlob.getLength())};
-            if (mDevice->delete_key(mDevice, &blob)) {
-                rc = ::SYSTEM_ERROR;
-            }
-        }
-    }
-    if (keyBlob.getType() == ::TYPE_KEYMASTER_10) {
-        auto* dev = getDeviceForBlob(keyBlob);
-        if (dev->delete_key) {
-            keymaster_key_blob_t blob;
-            blob.key_material = keyBlob.getValue();
-            blob.key_material_size = keyBlob.getLength();
-            dev->delete_key(dev, &blob);
-        }
-    }
-    if (rc != ::NO_ERROR) {
-        return rc;
+        if (ret != ErrorCode::OK && ret != ErrorCode::UNIMPLEMENTED)
+            return ResponseCode::SYSTEM_ERROR;
     }
 
-    return (unlink(filename) && errno != ENOENT) ? ::SYSTEM_ERROR : ::NO_ERROR;
+    return (unlink(filename) && errno != ENOENT) ?
+            ResponseCode::SYSTEM_ERROR : ResponseCode::NO_ERROR;
 }
 
 /*
@@ -376,7 +367,7 @@ ResponseCode KeyStore::list(const android::String8& prefix,
     DIR* dir = opendir(userState->getUserDirName());
     if (!dir) {
         ALOGW("can't open directory for user: %s", strerror(errno));
-        return ::SYSTEM_ERROR;
+        return ResponseCode::SYSTEM_ERROR;
     }
 
     struct dirent* file;
@@ -407,7 +398,7 @@ ResponseCode KeyStore::list(const android::String8& prefix,
         }
     }
     closedir(dir);
-    return ::NO_ERROR;
+    return ResponseCode::NO_ERROR;
 }
 
 void KeyStore::addGrant(const char* filename, uid_t granteeUid) {
@@ -436,74 +427,68 @@ ResponseCode KeyStore::importKey(const uint8_t* key, size_t keyLen, const char* 
                                  uid_t userId, int32_t flags) {
     Unique_PKCS8_PRIV_KEY_INFO pkcs8(d2i_PKCS8_PRIV_KEY_INFO(NULL, &key, keyLen));
     if (!pkcs8.get()) {
-        return ::SYSTEM_ERROR;
+        return ResponseCode::SYSTEM_ERROR;
     }
     Unique_EVP_PKEY pkey(EVP_PKCS82PKEY(pkcs8.get()));
     if (!pkey.get()) {
-        return ::SYSTEM_ERROR;
+        return ResponseCode::SYSTEM_ERROR;
     }
     int type = EVP_PKEY_type(pkey->type);
-    android::KeymasterArguments params;
-    add_legacy_key_authorizations(type, &params.params);
+    AuthorizationSet params;
+    add_legacy_key_authorizations(type, &params);
     switch (type) {
     case EVP_PKEY_RSA:
-        params.params.push_back(keymaster_param_enum(KM_TAG_ALGORITHM, KM_ALGORITHM_RSA));
+        params.push_back(TAG_ALGORITHM, Algorithm::RSA);
         break;
     case EVP_PKEY_EC:
-        params.params.push_back(keymaster_param_enum(KM_TAG_ALGORITHM, KM_ALGORITHM_EC));
+        params.push_back(TAG_ALGORITHM, Algorithm::EC);
         break;
     default:
         ALOGW("Unsupported key type %d", type);
-        return ::SYSTEM_ERROR;
+        return ResponseCode::SYSTEM_ERROR;
     }
 
-    std::vector<keymaster_key_param_t> opParams(params.params);
-    const keymaster_key_param_set_t inParams = {opParams.data(), opParams.size()};
-    keymaster_blob_t input = {key, keyLen};
-    keymaster_key_blob_t blob = {nullptr, 0};
-    bool isFallback = false;
-    keymaster_error_t error = mDevice->import_key(mDevice, &inParams, KM_KEY_FORMAT_PKCS8, &input,
-                                                  &blob, NULL /* characteristics */);
-    if (error != KM_ERROR_OK) {
-        ALOGE("Keymaster error %d importing key pair, falling back", error);
+    AuthorizationSet opParams(params);
+    hidl_vec<uint8_t> blob;
 
-        /*
-         * There should be no way to get here.  Fallback shouldn't ever really happen
-         * because the main device may be many (SW, KM0/SW hybrid, KM1/SW hybrid), but it must
-         * provide full support of the API.  In any case, we'll do the fallback just for
-         * consistency... and I suppose to cover for broken HW implementations.
-         */
-        error = mFallbackDevice->import_key(mFallbackDevice, &inParams, KM_KEY_FORMAT_PKCS8, &input,
-                                            &blob, NULL /* characteristics */);
-        isFallback = true;
+    ErrorCode error;
+    auto hidlCb = [&] (ErrorCode ret, const hidl_vec<uint8_t>& keyBlob,
+            const KeyCharacteristics& /* ignored */) {
+        error = ret;
+        if (error != ErrorCode::OK) return;
+        blob = keyBlob;
+    };
+    auto input = blob2hidlVec(key, keyLen);
 
-        if (error) {
-            ALOGE("Keymaster error while importing key pair with fallback: %d", error);
-            return SYSTEM_ERROR;
-        }
+    ErrorCode rc = KS_HANDLE_HIDL_ERROR(
+            mDevice->importKey(params.hidl_data(), KeyFormat::PKCS8, input, hidlCb));
+    if (rc != ErrorCode::OK) return ResponseCode::SYSTEM_ERROR;
+    if (error != ErrorCode::OK) {
+        ALOGE("Keymaster error %d importing key pair", error);
+        return ResponseCode::SYSTEM_ERROR;
     }
 
-    Blob keyBlob(blob.key_material, blob.key_material_size, NULL, 0, TYPE_KEYMASTER_10);
-    free(const_cast<uint8_t*>(blob.key_material));
+    Blob keyBlob(&blob[0], blob.size(), NULL, 0, TYPE_KEYMASTER_10);
 
     keyBlob.setEncrypted(flags & KEYSTORE_FLAG_ENCRYPTED);
-    keyBlob.setFallback(isFallback);
+    keyBlob.setFallback(false);
 
     return put(filename, &keyBlob, userId);
 }
 
-bool KeyStore::isHardwareBacked(const android::String16& keyType) const {
+bool KeyStore::isHardwareBacked(const android::String16& /*keyType*/) const {
     if (mDevice == NULL) {
         ALOGW("can't get keymaster device");
         return false;
     }
-
-    if (sRSAKeyType == keyType) {
-        return (mDevice->flags & KEYMASTER_SOFTWARE_ONLY) == 0;
-    } else {
-        return (mDevice->flags & KEYMASTER_SOFTWARE_ONLY) == 0 &&
-               (mDevice->common.module->module_api_version >= KEYMASTER_MODULE_API_VERSION_0_2);
-    }
+// TODO: This information seems not to be available here
+//    if (sRSAKeyType == keyType) {
+//        return (mDevice->flags & KEYMASTER_SOFTWARE_ONLY) == 0;
+//    } else {
+//        return (mDevice->flags & KEYMASTER_SOFTWARE_ONLY) == 0 &&
+//               (mDevice->common.module->module_api_version >= KEYMASTER_MODULE_API_VERSION_0_2);
+//    }
+    return true;
 }
 
 ResponseCode KeyStore::getKeyForName(Blob* keyBlob, const android::String8& keyName,
@@ -512,7 +497,7 @@ ResponseCode KeyStore::getKeyForName(Blob* keyBlob, const android::String8& keyN
     uid_t userId = get_user_id(uid);
 
     ResponseCode responseCode = get(filepath8.string(), keyBlob, type, userId);
-    if (responseCode == NO_ERROR) {
+    if (responseCode == ResponseCode::NO_ERROR) {
         return responseCode;
     }
 
@@ -521,7 +506,7 @@ ResponseCode KeyStore::getKeyForName(Blob* keyBlob, const android::String8& keyN
     if (euid != uid) {
         filepath8 = getKeyNameForUidWithDir(keyName, euid, type);
         responseCode = get(filepath8.string(), keyBlob, type, userId);
-        if (responseCode == NO_ERROR) {
+        if (responseCode == ResponseCode::NO_ERROR) {
             return responseCode;
         }
     }
@@ -531,7 +516,7 @@ ResponseCode KeyStore::getKeyForName(Blob* keyBlob, const android::String8& keyN
     char* end;
     strtoul(filename8.string(), &end, 10);
     if (end[0] != '_' || end[1] == 0) {
-        return KEY_NOT_FOUND;
+        return ResponseCode::KEY_NOT_FOUND;
     }
     filepath8 = android::String8::format("%s/%s", getUserState(userId)->getUserDirName(),
                                          filename8.string());
@@ -645,32 +630,32 @@ ResponseCode KeyStore::importBlobAsKey(Blob* blob, const char* filename, uid_t u
     Unique_BIO b(BIO_new_mem_buf(const_cast<uint8_t*>(blob->getValue()), blob->getLength()));
     if (b.get() == NULL) {
         ALOGE("Problem instantiating BIO");
-        return SYSTEM_ERROR;
+        return ResponseCode::SYSTEM_ERROR;
     }
 
     Unique_EVP_PKEY pkey(PEM_read_bio_PrivateKey(b.get(), NULL, NULL, NULL));
     if (pkey.get() == NULL) {
         ALOGE("Couldn't read old PEM file");
-        return SYSTEM_ERROR;
+        return ResponseCode::SYSTEM_ERROR;
     }
 
     Unique_PKCS8_PRIV_KEY_INFO pkcs8(EVP_PKEY2PKCS8(pkey.get()));
     int len = i2d_PKCS8_PRIV_KEY_INFO(pkcs8.get(), NULL);
     if (len < 0) {
         ALOGE("Couldn't measure PKCS#8 length");
-        return SYSTEM_ERROR;
+        return ResponseCode::SYSTEM_ERROR;
     }
 
     UniquePtr<unsigned char[]> pkcs8key(new unsigned char[len]);
     uint8_t* tmp = pkcs8key.get();
     if (i2d_PKCS8_PRIV_KEY_INFO(pkcs8.get(), &tmp) != len) {
         ALOGE("Couldn't convert to PKCS#8");
-        return SYSTEM_ERROR;
+        return ResponseCode::SYSTEM_ERROR;
     }
 
     ResponseCode rc = importKey(pkcs8key.get(), len, filename, get_user_id(uid),
                                 blob->isEncrypted() ? KEYSTORE_FLAG_ENCRYPTED : KEYSTORE_FLAG_NONE);
-    if (rc != NO_ERROR) {
+    if (rc != ResponseCode::NO_ERROR) {
         return rc;
     }
 

@@ -25,12 +25,13 @@ LOCAL_MODULE_TAGS := optional
 LOCAL_CFLAGS := -fvisibility=hidden -Wall -Werror
 
 LOCAL_SHARED_LIBRARIES += \
-	libcrypto \
-	liblog \
-	libcutils \
-	libutils \
 	libbinder \
-	libkeystore_binder
+	libcrypto \
+	libcutils \
+	libhidlbase \
+	libkeystore_binder \
+	liblog \
+	libutils
 
 LOCAL_ADDITIONAL_DEPENDENCIES := $(LOCAL_PATH)/Android.mk
 

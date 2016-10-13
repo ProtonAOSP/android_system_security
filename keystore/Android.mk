@@ -38,6 +38,8 @@ LOCAL_SRC_FILES := \
 	keystore.cpp \
 	keystore_main.cpp \
 	keystore_utils.cpp \
+	legacy_keymaster_device_wrapper.cpp \
+	keymaster_enforcement.cpp \
 	operation.cpp \
 	permissions.cpp \
 	user_state.cpp \
@@ -54,7 +56,11 @@ LOCAL_SHARED_LIBRARIES := \
 	libselinux \
 	libsoftkeymasterdevice \
 	libkeymaster_messages \
-	libkeymaster1
+	libkeymaster1 \
+	libhwbinder \
+	libhidlbase \
+	libhidltransport \
+	android.hardware.keymaster@3.0
 LOCAL_MODULE := keystore
 LOCAL_MODULE_TAGS := optional
 LOCAL_INIT_RC := keystore.rc
@@ -72,7 +78,10 @@ LOCAL_MULTILIB := 32
 endif
 LOCAL_CFLAGS := -Wall -Wextra -Werror
 LOCAL_SRC_FILES := keystore_cli.cpp
-LOCAL_SHARED_LIBRARIES := libcutils libcrypto libkeystore_binder libutils liblog libbinder
+LOCAL_SHARED_LIBRARIES := libcutils libcrypto libkeystore_binder libutils liblog libbinder \
+	libhwbinder \
+	libhidlbase \
+	android.hardware.keymaster@3.0
 LOCAL_MODULE := keystore_cli
 LOCAL_MODULE_TAGS := debug
 LOCAL_ADDITIONAL_DEPENDENCIES := $(LOCAL_PATH)/Android.mk
@@ -86,8 +95,11 @@ LOCAL_CFLAGS := -Wall -Wextra -Werror -Wno-unused-parameter -DKEYMASTER_NAME_TAG
 LOCAL_SRC_FILES := keystore_cli_v2.cpp
 LOCAL_SHARED_LIBRARIES := \
 	libchrome \
-	libkeymaster_messages \
-	libkeystore_binder
+	libkeystore_binder \
+	libhwbinder \
+	libhidlbase \
+	android.hardware.keymaster@3.0
+
 LOCAL_MODULE := keystore_cli_v2
 LOCAL_MODULE_TAGS := debug
 LOCAL_C_INCLUDES := $(LOCAL_PATH)/include external/gtest/include
@@ -108,20 +120,27 @@ LOCAL_SRC_FILES := \
 	keyblob_utils.cpp \
 	keystore_client.proto \
 	keystore_client_impl.cpp \
-	keystore_get.cpp
+	keystore_get.cpp \
+	authorization_set.cpp \
+	keystore_tags_utils.cpp \
+	keystore_aidl_hidl_marshalling_utils.cpp
 LOCAL_SHARED_LIBRARIES := \
 	libbinder \
-	libkeymaster_messages \
 	liblog \
 	libprotobuf-cpp-lite \
-	libsoftkeymasterdevice \
-	libutils
+	libutils \
+	libhwbinder \
+	libhidlbase \
+	android.hardware.keymaster@3.0
 LOCAL_MODULE_CLASS := SHARED_LIBRARIES
 LOCAL_MODULE := libkeystore_binder
 LOCAL_MODULE_TAGS := optional
 LOCAL_C_INCLUDES := $(LOCAL_PATH)/include $(call keystore_proto_include)
 LOCAL_EXPORT_C_INCLUDE_DIRS := $(LOCAL_PATH)/include
-LOCAL_EXPORT_SHARED_LIBRARY_HEADERS := libbinder
+LOCAL_EXPORT_SHARED_LIBRARY_HEADERS := libbinder \
+	libhwbinder \
+	libhidlbase \
+	android.hardware.keymaster@3.0
 LOCAL_CLANG := true
 LOCAL_SANITIZE := integer
 LOCAL_ADDITIONAL_DEPENDENCIES := $(LOCAL_PATH)/Android.mk
@@ -137,7 +156,12 @@ LOCAL_SRC_FILES := auth_token_table.cpp
 LOCAL_MODULE := libkeystore_test
 LOCAL_C_INCLUDES := $(LOCAL_PATH)/include
 LOCAL_STATIC_LIBRARIES := libgtest_main
-LOCAL_SHARED_LIBRARIES := libkeymaster_messages
+LOCAL_SHARED_LIBRARIES := libkeymaster_messages \
+	libutils \
+	libhwbinder \
+	libhidlbase \
+	android.hardware.keymaster@3.0
+
 LOCAL_EXPORT_C_INCLUDE_DIRS := $(LOCAL_PATH)/include
 LOCAL_ADDITIONAL_DEPENDENCIES := $(LOCAL_PATH)/Android.mk
 include $(BUILD_STATIC_LIBRARY)

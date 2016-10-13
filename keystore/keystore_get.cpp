@@ -20,6 +20,7 @@
 #include <keystore/keystore_get.h>
 
 using namespace android;
+using namespace keystore;
 
 ssize_t keystore_get(const char *key, size_t keyLength, uint8_t** value) {
     sp<IServiceManager> sm = defaultServiceManager();
@@ -30,13 +31,15 @@ ssize_t keystore_get(const char *key, size_t keyLength, uint8_t** value) {
         return -1;
     }
 
-    size_t valueLength;
-    int32_t ret = service->get(String16(key, keyLength), -1, value, &valueLength);
-    if (ret < 0) {
-        return -1;
-    } else if (ret != ::NO_ERROR) {
-        return -1;
-    } else {
-        return valueLength;
+    hidl_vec<uint8_t> result;
+    auto ret = service->get(String16(key, keyLength), -1, &result);
+    if (!ret.isOk()) return -1;
+
+    if (value) {
+        *value = reinterpret_cast<uint8_t*>(malloc(result.size()));
+        if (!*value) return -1;
+        memcpy(*value, &result[0], result.size());
     }
+    return result.size();
+
 }

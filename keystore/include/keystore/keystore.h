@@ -26,7 +26,7 @@ enum State {
     STATE_UNINITIALIZED = 3,
 };
 
-enum ResponseCode {
+enum class ResponseCode: int32_t {
     NO_ERROR          =  STATE_NO_ERROR, // 1
     LOCKED            =  STATE_LOCKED, // 2
     UNINITIALIZED     =  STATE_UNINITIALIZED, // 3

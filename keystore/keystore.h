@@ -19,7 +19,7 @@
 
 #include "user_state.h"
 
-#include <hardware/keymaster2.h>
+#include <android/hardware/keymaster/3.0/IKeymasterDevice.h>
 
 #include <utils/Vector.h>
 
@@ -31,15 +31,17 @@ typedef struct {
 } grant_t;
 
 class KeyStore {
+    typedef ::android::sp<::android::hardware::keymaster::V3_0::IKeymasterDevice> km_device_t;
+
   public:
-    KeyStore(Entropy* entropy, keymaster2_device_t* device, keymaster2_device_t* fallback);
+    KeyStore(Entropy* entropy, const km_device_t& device, const km_device_t& fallback);
     ~KeyStore();
 
-    keymaster2_device_t* getDevice() const { return mDevice; }
+    km_device_t& getDevice() { return mDevice; }
 
-    keymaster2_device_t* getFallbackDevice() const { return mFallbackDevice; }
+    km_device_t& getFallbackDevice() { return mFallbackDevice; }
 
-    keymaster2_device_t* getDeviceForBlob(const Blob& blob) const {
+    km_device_t& getDevice(const Blob& blob) {
         return blob.isFallback() ? mFallbackDevice : mDevice;
     }
 
@@ -115,8 +117,8 @@ class KeyStore {
     static const android::String16 sRSAKeyType;
     Entropy* mEntropy;
 
-    keymaster2_device_t* mDevice;
-    keymaster2_device_t* mFallbackDevice;
+    km_device_t mDevice;
+    km_device_t mFallbackDevice;
 
     android::Vector<UserState*> mMasterKeys;
 

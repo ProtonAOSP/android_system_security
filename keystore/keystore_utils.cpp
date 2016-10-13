@@ -26,6 +26,9 @@
 #include <private/android_filesystem_config.h>
 
 #include <keymaster/android_keymaster_utils.h>
+#include <keystore/authorization_set.h>
+#include <keystore/keystore_client.h>
+#include <keystore/IKeystoreService.h>
 
 size_t readFully(int fd, uint8_t* data, size_t size) {
     size_t remaining = size;
@@ -58,30 +61,31 @@ size_t writeFully(int fd, uint8_t* data, size_t size) {
     return size;
 }
 
-void add_legacy_key_authorizations(int keyType, std::vector<keymaster_key_param_t>* params) {
-    params->push_back(keymaster_param_enum(KM_TAG_PURPOSE, KM_PURPOSE_SIGN));
-    params->push_back(keymaster_param_enum(KM_TAG_PURPOSE, KM_PURPOSE_VERIFY));
-    params->push_back(keymaster_param_enum(KM_TAG_PURPOSE, KM_PURPOSE_ENCRYPT));
-    params->push_back(keymaster_param_enum(KM_TAG_PURPOSE, KM_PURPOSE_DECRYPT));
-    params->push_back(keymaster_param_enum(KM_TAG_PADDING, KM_PAD_NONE));
+void add_legacy_key_authorizations(int keyType, keystore::AuthorizationSet* params) {
+    using namespace keystore;
+    params->push_back(TAG_PURPOSE, KeyPurpose::SIGN);
+    params->push_back(TAG_PURPOSE, KeyPurpose::VERIFY);
+    params->push_back(TAG_PURPOSE, KeyPurpose::ENCRYPT);
+    params->push_back(TAG_PURPOSE, KeyPurpose::DECRYPT);
+    params->push_back(TAG_PADDING, PaddingMode::NONE);
     if (keyType == EVP_PKEY_RSA) {
-        params->push_back(keymaster_param_enum(KM_TAG_PADDING, KM_PAD_RSA_PKCS1_1_5_SIGN));
-        params->push_back(keymaster_param_enum(KM_TAG_PADDING, KM_PAD_RSA_PKCS1_1_5_ENCRYPT));
-        params->push_back(keymaster_param_enum(KM_TAG_PADDING, KM_PAD_RSA_PSS));
-        params->push_back(keymaster_param_enum(KM_TAG_PADDING, KM_PAD_RSA_OAEP));
+        params->push_back(TAG_PADDING, PaddingMode::RSA_PKCS1_1_5_SIGN);
+        params->push_back(TAG_PADDING, PaddingMode::RSA_PKCS1_1_5_ENCRYPT);
+        params->push_back(TAG_PADDING, PaddingMode::RSA_PSS);
+        params->push_back(TAG_PADDING, PaddingMode::RSA_OAEP);
     }
-    params->push_back(keymaster_param_enum(KM_TAG_DIGEST, KM_DIGEST_NONE));
-    params->push_back(keymaster_param_enum(KM_TAG_DIGEST, KM_DIGEST_MD5));
-    params->push_back(keymaster_param_enum(KM_TAG_DIGEST, KM_DIGEST_SHA1));
-    params->push_back(keymaster_param_enum(KM_TAG_DIGEST, KM_DIGEST_SHA_2_224));
-    params->push_back(keymaster_param_enum(KM_TAG_DIGEST, KM_DIGEST_SHA_2_256));
-    params->push_back(keymaster_param_enum(KM_TAG_DIGEST, KM_DIGEST_SHA_2_384));
-    params->push_back(keymaster_param_enum(KM_TAG_DIGEST, KM_DIGEST_SHA_2_512));
-    params->push_back(keymaster_param_bool(KM_TAG_ALL_USERS));
-    params->push_back(keymaster_param_bool(KM_TAG_NO_AUTH_REQUIRED));
-    params->push_back(keymaster_param_date(KM_TAG_ORIGINATION_EXPIRE_DATETIME, LLONG_MAX));
-    params->push_back(keymaster_param_date(KM_TAG_USAGE_EXPIRE_DATETIME, LLONG_MAX));
-    params->push_back(keymaster_param_date(KM_TAG_ACTIVE_DATETIME, 0));
+    params->push_back(TAG_DIGEST, Digest::NONE);
+    params->push_back(TAG_DIGEST, Digest::MD5);
+    params->push_back(TAG_DIGEST, Digest::SHA1);
+    params->push_back(TAG_DIGEST, Digest::SHA_2_224);
+    params->push_back(TAG_DIGEST, Digest::SHA_2_256);
+    params->push_back(TAG_DIGEST, Digest::SHA_2_384);
+    params->push_back(TAG_DIGEST, Digest::SHA_2_512);
+    params->push_back(TAG_ALL_USERS);
+    params->push_back(TAG_NO_AUTH_REQUIRED);
+    params->push_back(TAG_ORIGINATION_EXPIRE_DATETIME, LLONG_MAX);
+    params->push_back(TAG_USAGE_EXPIRE_DATETIME, LLONG_MAX);
+    params->push_back(TAG_ACTIVE_DATETIME, 0);
 }
 
 uid_t get_app_id(uid_t uid) {

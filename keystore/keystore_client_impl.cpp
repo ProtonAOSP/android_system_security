@@ -19,24 +19,25 @@
 #include <string>
 #include <vector>
 
-#include "binder/IBinder.h"
-#include "binder/IInterface.h"
-#include "binder/IServiceManager.h"
-#include "keystore/IKeystoreService.h"
-#include "keystore/keystore.h"
-#include "log/log.h"
-#include "utils/String16.h"
-#include "utils/String8.h"
+#include <binder/IBinder.h>
+#include <binder/IInterface.h>
+#include <binder/IServiceManager.h>
+#include <keystore/IKeystoreService.h>
+#include <keystore/keystore.h>
+#include <log/log.h>
+#include <utils/String16.h>
+#include <utils/String8.h>
 
 #include "keystore_client.pb.h"
+#include <keystore/authorization_set.h>
+#include <keystore/keystore_hidl_support.h>
 
 using android::ExportResult;
-using android::KeyCharacteristics;
-using android::KeymasterArguments;
+using keystore::KeyCharacteristics;
 using android::OperationResult;
 using android::String16;
-using keymaster::AuthorizationSet;
-using keymaster::AuthorizationSetBuilder;
+using keystore::AuthorizationSet;
+using keystore::AuthorizationSetBuilder;
 
 namespace {
 
@@ -44,24 +45,9 @@ namespace {
 const int kDefaultUID = -1;
 const char kEncryptSuffix[] = "_ENC";
 const char kAuthenticateSuffix[] = "_AUTH";
-const uint32_t kAESKeySize = 256;      // bits
-const uint32_t kHMACKeySize = 256;     // bits
-const uint32_t kHMACOutputSize = 256;  // bits
-
-const uint8_t* StringAsByteArray(const std::string& s) {
-    return reinterpret_cast<const uint8_t*>(s.data());
-}
-
-std::string ByteArrayAsString(const uint8_t* data, size_t data_size) {
-    return std::string(reinterpret_cast<const char*>(data), data_size);
-}
-
-void CopyParameters(const AuthorizationSet& in, std::vector<keymaster_key_param_t>* out) {
-  keymaster_key_param_set_t tmp;
-  in.CopyToParamSet(&tmp);
-  out->assign(&tmp.params[0], &tmp.params[tmp.length]);
-  free(tmp.params);
-}
+constexpr uint32_t kAESKeySize = 256;      // bits
+constexpr uint32_t kHMACKeySize = 256;     // bits
+constexpr uint32_t kHMACOutputSize = 256;  // bits
 
 }  // namespace
 
@@ -89,29 +75,28 @@ bool KeystoreClientImpl::encryptWithAuthentication(const std::string& key_name,
         return false;
     }
     AuthorizationSetBuilder encrypt_params;
-    encrypt_params.Padding(KM_PAD_PKCS7);
-    encrypt_params.Authorization(keymaster::TAG_BLOCK_MODE, KM_MODE_CBC);
+    encrypt_params.Padding(PaddingMode::PKCS7);
+    encrypt_params.Authorization(TAG_BLOCK_MODE, BlockMode::CBC);
     AuthorizationSet output_params;
     std::string raw_encrypted_data;
-    if (!oneShotOperation(KM_PURPOSE_ENCRYPT, encryption_key_name, encrypt_params.build(), data,
+    if (!oneShotOperation(KeyPurpose::ENCRYPT, encryption_key_name, encrypt_params, data,
                           std::string(), /* signature_to_verify */
                           &output_params, &raw_encrypted_data)) {
         ALOGE("Encrypt: AES operation failed.");
         return false;
     }
-    keymaster_blob_t init_vector_blob;
-    if (!output_params.GetTagValue(keymaster::TAG_NONCE, &init_vector_blob)) {
+    auto init_vector_blob = output_params.GetTagValue(TAG_NONCE);
+    if (!init_vector_blob.isOk()){
         ALOGE("Encrypt: Missing initialization vector.");
         return false;
     }
-    std::string init_vector =
-        ByteArrayAsString(init_vector_blob.data, init_vector_blob.data_length);
+    std::string init_vector = hidlVec2String(init_vector_blob.value());
 
     AuthorizationSetBuilder authenticate_params;
-    authenticate_params.Digest(KM_DIGEST_SHA_2_256);
-    authenticate_params.Authorization(keymaster::TAG_MAC_LENGTH, kHMACOutputSize);
+    authenticate_params.Digest(Digest::SHA_2_256);
+    authenticate_params.Authorization(TAG_MAC_LENGTH, kHMACOutputSize);
     std::string raw_authentication_data;
-    if (!oneShotOperation(KM_PURPOSE_SIGN, authentication_key_name, authenticate_params.build(),
+    if (!oneShotOperation(KeyPurpose::SIGN, authentication_key_name, authenticate_params,
                           init_vector + raw_encrypted_data, std::string(), /* signature_to_verify */
                           &output_params, &raw_authentication_data)) {
         ALOGE("Encrypt: HMAC operation failed.");
@@ -138,10 +123,10 @@ bool KeystoreClientImpl::decryptWithAuthentication(const std::string& key_name,
     // Verify authentication before attempting decryption.
     std::string authentication_key_name = key_name + kAuthenticateSuffix;
     AuthorizationSetBuilder authenticate_params;
-    authenticate_params.Digest(KM_DIGEST_SHA_2_256);
+    authenticate_params.Digest(Digest::SHA_2_256);
     AuthorizationSet output_params;
     std::string output_data;
-    if (!oneShotOperation(KM_PURPOSE_VERIFY, authentication_key_name, authenticate_params.build(),
+    if (!oneShotOperation(KeyPurpose::VERIFY, authentication_key_name, authenticate_params,
                           protobuf.init_vector() + protobuf.encrypted_data(),
                           protobuf.authentication_data(), &output_params, &output_data)) {
         ALOGE("Decrypt: HMAC operation failed.");
@@ -149,11 +134,11 @@ bool KeystoreClientImpl::decryptWithAuthentication(const std::string& key_name,
     }
     std::string encryption_key_name = key_name + kEncryptSuffix;
     AuthorizationSetBuilder encrypt_params;
-    encrypt_params.Padding(KM_PAD_PKCS7);
-    encrypt_params.Authorization(keymaster::TAG_BLOCK_MODE, KM_MODE_CBC);
-    encrypt_params.Authorization(keymaster::TAG_NONCE, protobuf.init_vector().data(),
+    encrypt_params.Padding(PaddingMode::PKCS7);
+    encrypt_params.Authorization(TAG_BLOCK_MODE, BlockMode::CBC);
+    encrypt_params.Authorization(TAG_NONCE, protobuf.init_vector().data(),
                                  protobuf.init_vector().size());
-    if (!oneShotOperation(KM_PURPOSE_DECRYPT, encryption_key_name, encrypt_params.build(),
+    if (!oneShotOperation(KeyPurpose::DECRYPT, encryption_key_name, encrypt_params,
                           protobuf.encrypted_data(), std::string(), /* signature_to_verify */
                           &output_params, data)) {
         ALOGE("Decrypt: AES operation failed.");
@@ -162,17 +147,17 @@ bool KeystoreClientImpl::decryptWithAuthentication(const std::string& key_name,
     return true;
 }
 
-bool KeystoreClientImpl::oneShotOperation(keymaster_purpose_t purpose, const std::string& key_name,
-                                          const keymaster::AuthorizationSet& input_parameters,
+bool KeystoreClientImpl::oneShotOperation(KeyPurpose purpose, const std::string& key_name,
+                                          const AuthorizationSet& input_parameters,
                                           const std::string& input_data,
                                           const std::string& signature_to_verify,
-                                          keymaster::AuthorizationSet* output_parameters,
+                                          AuthorizationSet* output_parameters,
                                           std::string* output_data) {
-    keymaster_operation_handle_t handle;
-    int32_t result =
+    uint64_t handle;
+    auto result =
         beginOperation(purpose, key_name, input_parameters, output_parameters, &handle);
-    if (result != KM_ERROR_OK) {
-        ALOGE("BeginOperation failed: %d", result);
+    if (!result.isOk()) {
+        ALOGE("BeginOperation failed: %d", int32_t(result));
         return false;
     }
     AuthorizationSet empty_params;
@@ -180,174 +165,172 @@ bool KeystoreClientImpl::oneShotOperation(keymaster_purpose_t purpose, const std
     AuthorizationSet ignored_params;
     result = updateOperation(handle, empty_params, input_data, &num_input_bytes_consumed,
                              &ignored_params, output_data);
-    if (result != KM_ERROR_OK) {
-        ALOGE("UpdateOperation failed: %d", result);
+    if (!result.isOk()) {
+        ALOGE("UpdateOperation failed: %d", int32_t(result));
         return false;
     }
     result =
         finishOperation(handle, empty_params, signature_to_verify, &ignored_params, output_data);
-    if (result != KM_ERROR_OK) {
-        ALOGE("FinishOperation failed: %d", result);
+    if (!result.isOk()) {
+        ALOGE("FinishOperation failed: %d", int32_t(result));
         return false;
     }
     return true;
 }
 
-int32_t KeystoreClientImpl::addRandomNumberGeneratorEntropy(const std::string& entropy) {
-    return mapKeystoreError(keystore_->addRngEntropy(StringAsByteArray(entropy), entropy.size()));
+KeyStoreNativeReturnCode KeystoreClientImpl::addRandomNumberGeneratorEntropy(const std::string& entropy) {
+    return keystore_->addRngEntropy(blob2hidlVec(entropy));
 }
 
-int32_t KeystoreClientImpl::generateKey(const std::string& key_name,
+KeyStoreNativeReturnCode KeystoreClientImpl::generateKey(const std::string& key_name,
                                         const AuthorizationSet& key_parameters,
                                         AuthorizationSet* hardware_enforced_characteristics,
                                         AuthorizationSet* software_enforced_characteristics) {
     String16 key_name16(key_name.data(), key_name.size());
-    KeymasterArguments key_arguments;
-    CopyParameters(key_parameters, &key_arguments.params);
     KeyCharacteristics characteristics;
-    int32_t result =
-        keystore_->generateKey(key_name16, key_arguments, NULL /*entropy*/, 0 /*entropyLength*/,
+    auto result =
+        keystore_->generateKey(key_name16, key_parameters.hidl_data(), hidl_vec<uint8_t>(),
                                kDefaultUID, KEYSTORE_FLAG_NONE, &characteristics);
-    hardware_enforced_characteristics->Reinitialize(characteristics.characteristics.hw_enforced);
-    software_enforced_characteristics->Reinitialize(characteristics.characteristics.sw_enforced);
-    return mapKeystoreError(result);
+
+    /* assignment (hidl_vec<KeyParameter> -> AuthorizationSet) makes a deep copy.
+     * There are no references to Parcel memory after that, and ownership of the newly acquired
+     * memory is with the AuthorizationSet objects. */
+    *hardware_enforced_characteristics = characteristics.teeEnforced;
+    *software_enforced_characteristics = characteristics.softwareEnforced;
+    return result;
 }
 
-int32_t
+KeyStoreNativeReturnCode
 KeystoreClientImpl::getKeyCharacteristics(const std::string& key_name,
                                           AuthorizationSet* hardware_enforced_characteristics,
                                           AuthorizationSet* software_enforced_characteristics) {
     String16 key_name16(key_name.data(), key_name.size());
-    keymaster_blob_t client_id_blob = {nullptr, 0};
-    keymaster_blob_t app_data_blob = {nullptr, 0};
     KeyCharacteristics characteristics;
-    int32_t result = keystore_->getKeyCharacteristics(key_name16, &client_id_blob, &app_data_blob,
+    auto result = keystore_->getKeyCharacteristics(key_name16, hidl_vec<uint8_t>(), hidl_vec<uint8_t>(),
                                                       kDefaultUID, &characteristics);
-    hardware_enforced_characteristics->Reinitialize(characteristics.characteristics.hw_enforced);
-    software_enforced_characteristics->Reinitialize(characteristics.characteristics.sw_enforced);
-    return mapKeystoreError(result);
+
+    /* assignment (hidl_vec<KeyParameter> -> AuthorizationSet) makes a deep copy.
+     * There are no references to Parcel memory after that, and ownership of the newly acquired
+     * memory is with the AuthorizationSet objects. */
+    *hardware_enforced_characteristics = characteristics.teeEnforced;
+    *software_enforced_characteristics = characteristics.softwareEnforced;
+    return result;
 }
 
-int32_t KeystoreClientImpl::importKey(const std::string& key_name,
+KeyStoreNativeReturnCode KeystoreClientImpl::importKey(const std::string& key_name,
                                       const AuthorizationSet& key_parameters,
-                                      keymaster_key_format_t key_format,
+                                      KeyFormat key_format,
                                       const std::string& key_data,
                                       AuthorizationSet* hardware_enforced_characteristics,
                                       AuthorizationSet* software_enforced_characteristics) {
     String16 key_name16(key_name.data(), key_name.size());
-    KeymasterArguments key_arguments;
-    CopyParameters(key_parameters, &key_arguments.params);
+    auto hidlKeyData = blob2hidlVec(key_data);
     KeyCharacteristics characteristics;
-    int32_t result =
-        keystore_->importKey(key_name16, key_arguments, key_format, StringAsByteArray(key_data),
-                             key_data.size(), kDefaultUID, KEYSTORE_FLAG_NONE, &characteristics);
-    hardware_enforced_characteristics->Reinitialize(characteristics.characteristics.hw_enforced);
-    software_enforced_characteristics->Reinitialize(characteristics.characteristics.sw_enforced);
-    return mapKeystoreError(result);
+    auto result = keystore_->importKey(key_name16, key_parameters.hidl_data(), key_format,
+            hidlKeyData, kDefaultUID, KEYSTORE_FLAG_NONE, &characteristics);
+
+    /* assignment (hidl_vec<KeyParameter> -> AuthorizationSet) makes a deep copy.
+     * There are no references to Parcel memory after that, and ownership of the newly acquired
+     * memory is with the AuthorizationSet objects. */
+    *hardware_enforced_characteristics = characteristics.teeEnforced;
+    *software_enforced_characteristics = characteristics.softwareEnforced;
+    return result;
 }
 
-int32_t KeystoreClientImpl::exportKey(keymaster_key_format_t export_format,
+KeyStoreNativeReturnCode KeystoreClientImpl::exportKey(KeyFormat export_format,
                                       const std::string& key_name, std::string* export_data) {
     String16 key_name16(key_name.data(), key_name.size());
-    keymaster_blob_t client_id_blob = {nullptr, 0};
-    keymaster_blob_t app_data_blob = {nullptr, 0};
     ExportResult export_result;
-    keystore_->exportKey(key_name16, export_format, &client_id_blob, &app_data_blob,
+    keystore_->exportKey(key_name16, export_format, hidl_vec<uint8_t>(), hidl_vec<uint8_t>(),
                          kDefaultUID, &export_result);
-    *export_data = ByteArrayAsString(export_result.exportData.get(), export_result.dataLength);
-    return mapKeystoreError(export_result.resultCode);
+    *export_data = hidlVec2String(export_result.exportData);
+    return export_result.resultCode;
 }
 
-int32_t KeystoreClientImpl::deleteKey(const std::string& key_name) {
+KeyStoreNativeReturnCode KeystoreClientImpl::deleteKey(const std::string& key_name) {
     String16 key_name16(key_name.data(), key_name.size());
-    return mapKeystoreError(keystore_->del(key_name16, kDefaultUID));
+    return keystore_->del(key_name16, kDefaultUID);
 }
 
-int32_t KeystoreClientImpl::deleteAllKeys() {
-    return mapKeystoreError(keystore_->clear_uid(kDefaultUID));
+KeyStoreNativeReturnCode KeystoreClientImpl::deleteAllKeys() {
+    return keystore_->clear_uid(kDefaultUID);
 }
 
-int32_t KeystoreClientImpl::beginOperation(keymaster_purpose_t purpose, const std::string& key_name,
+KeyStoreNativeReturnCode KeystoreClientImpl::beginOperation(KeyPurpose purpose, const std::string& key_name,
                                            const AuthorizationSet& input_parameters,
                                            AuthorizationSet* output_parameters,
-                                           keymaster_operation_handle_t* handle) {
+                                           uint64_t* handle) {
     android::sp<android::IBinder> token(new android::BBinder);
     String16 key_name16(key_name.data(), key_name.size());
-    KeymasterArguments input_arguments;
-    CopyParameters(input_parameters, &input_arguments.params);
     OperationResult result;
-    keystore_->begin(token, key_name16, purpose, true /*pruneable*/, input_arguments,
-                     NULL /*entropy*/, 0 /*entropyLength*/, kDefaultUID, &result);
-    int32_t error_code = mapKeystoreError(result.resultCode);
-    if (error_code == KM_ERROR_OK) {
+    keystore_->begin(token, key_name16, purpose, true /*pruneable*/, input_parameters.hidl_data(),
+                     hidl_vec<uint8_t>(), kDefaultUID, &result);
+    if (result.resultCode.isOk()) {
         *handle = getNextVirtualHandle();
         active_operations_[*handle] = result.token;
-        if (!result.outParams.params.empty()) {
-            output_parameters->Reinitialize(&*result.outParams.params.begin(),
-                                            result.outParams.params.size());
+        if (result.outParams.size()) {
+            *output_parameters = result.outParams;
         }
     }
-    return error_code;
+    return result.resultCode;
 }
 
-int32_t KeystoreClientImpl::updateOperation(keymaster_operation_handle_t handle,
+KeyStoreNativeReturnCode KeystoreClientImpl::updateOperation(uint64_t handle,
                                             const AuthorizationSet& input_parameters,
                                             const std::string& input_data,
                                             size_t* num_input_bytes_consumed,
                                             AuthorizationSet* output_parameters,
                                             std::string* output_data) {
     if (active_operations_.count(handle) == 0) {
-        return KM_ERROR_INVALID_OPERATION_HANDLE;
+        return ErrorCode::INVALID_OPERATION_HANDLE;
     }
-    KeymasterArguments input_arguments;
-    CopyParameters(input_parameters, &input_arguments.params);
     OperationResult result;
-    keystore_->update(active_operations_[handle], input_arguments, StringAsByteArray(input_data),
-                      input_data.size(), &result);
-    int32_t error_code = mapKeystoreError(result.resultCode);
-    if (error_code == KM_ERROR_OK) {
+    auto hidlInputData = blob2hidlVec(input_data);
+    keystore_->update(active_operations_[handle], input_parameters.hidl_data(), hidlInputData,
+            &result);
+
+    if (result.resultCode.isOk()) {
         *num_input_bytes_consumed = result.inputConsumed;
-        if (!result.outParams.params.empty()) {
-            output_parameters->Reinitialize(&*result.outParams.params.begin(),
-                                            result.outParams.params.size());
+        if (result.outParams.size()) {
+            *output_parameters = result.outParams;
         }
-        output_data->append(ByteArrayAsString(result.data.get(), result.dataLength));
+        // TODO verify that append should not be assign
+        output_data->append(hidlVec2String(result.data));
     }
-    return error_code;
+    return result.resultCode;
 }
 
-int32_t KeystoreClientImpl::finishOperation(keymaster_operation_handle_t handle,
+KeyStoreNativeReturnCode KeystoreClientImpl::finishOperation(uint64_t handle,
                                             const AuthorizationSet& input_parameters,
                                             const std::string& signature_to_verify,
                                             AuthorizationSet* output_parameters,
                                             std::string* output_data) {
     if (active_operations_.count(handle) == 0) {
-        return KM_ERROR_INVALID_OPERATION_HANDLE;
+        return ErrorCode::INVALID_OPERATION_HANDLE;
     }
-    KeymasterArguments input_arguments;
-    CopyParameters(input_parameters, &input_arguments.params);
     OperationResult result;
-    keystore_->finish(active_operations_[handle], input_arguments,
-                      StringAsByteArray(signature_to_verify), signature_to_verify.size(),
-                      NULL /*entropy*/, 0 /*entropyLength*/, &result);
-    int32_t error_code = mapKeystoreError(result.resultCode);
-    if (error_code == KM_ERROR_OK) {
-        if (!result.outParams.params.empty()) {
-            output_parameters->Reinitialize(&*result.outParams.params.begin(),
-                                            result.outParams.params.size());
+    auto hidlSignature = blob2hidlVec(signature_to_verify);
+    keystore_->finish(active_operations_[handle], input_parameters.hidl_data(),
+                      hidlSignature,
+                      hidl_vec<uint8_t>(), &result);
+
+    if (result.resultCode.isOk()) {
+        if (result.outParams.size()) {
+            *output_parameters = result.outParams;
         }
-        output_data->append(ByteArrayAsString(result.data.get(), result.dataLength));
+        // TODO verify that append should not be assign
+        output_data->append(hidlVec2String(result.data));
         active_operations_.erase(handle);
     }
-    return error_code;
+    return result.resultCode;
 }
 
-int32_t KeystoreClientImpl::abortOperation(keymaster_operation_handle_t handle) {
+KeyStoreNativeReturnCode KeystoreClientImpl::abortOperation(uint64_t handle) {
     if (active_operations_.count(handle) == 0) {
-        return KM_ERROR_INVALID_OPERATION_HANDLE;
+        return ErrorCode::INVALID_OPERATION_HANDLE;
     }
-    int32_t error_code = mapKeystoreError(keystore_->abort(active_operations_[handle]));
-    if (error_code == KM_ERROR_OK) {
+    auto error_code = keystore_->abort(active_operations_[handle]);
+    if (error_code.isOk()) {
         active_operations_.erase(handle);
     }
     return error_code;
@@ -355,16 +338,16 @@ int32_t KeystoreClientImpl::abortOperation(keymaster_operation_handle_t handle) 
 
 bool KeystoreClientImpl::doesKeyExist(const std::string& key_name) {
     String16 key_name16(key_name.data(), key_name.size());
-    int32_t error_code = mapKeystoreError(keystore_->exist(key_name16, kDefaultUID));
-    return (error_code == KM_ERROR_OK);
+    auto error_code = keystore_->exist(key_name16, kDefaultUID);
+    return error_code.isOk();
 }
 
 bool KeystoreClientImpl::listKeys(const std::string& prefix,
                                   std::vector<std::string>* key_name_list) {
     String16 prefix16(prefix.data(), prefix.size());
     android::Vector<String16> matches;
-    int32_t error_code = mapKeystoreError(keystore_->list(prefix16, kDefaultUID, &matches));
-    if (error_code == KM_ERROR_OK) {
+    auto error_code = keystore_->list(prefix16, kDefaultUID, &matches);
+    if (error_code.isOk()) {
         for (const auto& match : matches) {
             android::String8 key_name(match);
             key_name_list->push_back(prefix + std::string(key_name.string(), key_name.size()));
@@ -374,16 +357,8 @@ bool KeystoreClientImpl::listKeys(const std::string& prefix,
     return false;
 }
 
-keymaster_operation_handle_t KeystoreClientImpl::getNextVirtualHandle() {
+uint64_t KeystoreClientImpl::getNextVirtualHandle() {
     return next_virtual_handle_++;
-}
-
-int32_t KeystoreClientImpl::mapKeystoreError(int32_t keystore_error) {
-    // See notes in keystore_client.h for rationale.
-    if (keystore_error == ::NO_ERROR) {
-        return KM_ERROR_OK;
-    }
-    return keystore_error;
 }
 
 bool KeystoreClientImpl::createOrVerifyEncryptionKey(const std::string& key_name) {
@@ -394,9 +369,9 @@ bool KeystoreClientImpl::createOrVerifyEncryptionKey(const std::string& key_name
             return false;
         }
         if (!verified) {
-            int32_t result = deleteKey(key_name);
-            if (result != KM_ERROR_OK) {
-                ALOGE("Failed to delete invalid encryption key: %d", result);
+            auto result = deleteKey(key_name);
+            if (!result.isOk()) {
+                ALOGE("Failed to delete invalid encryption key: %d", int32_t(result));
                 return false;
             }
             key_exists = false;
@@ -405,16 +380,16 @@ bool KeystoreClientImpl::createOrVerifyEncryptionKey(const std::string& key_name
     if (!key_exists) {
         AuthorizationSetBuilder key_parameters;
         key_parameters.AesEncryptionKey(kAESKeySize)
-            .Padding(KM_PAD_PKCS7)
-            .Authorization(keymaster::TAG_BLOCK_MODE, KM_MODE_CBC)
-            .Authorization(keymaster::TAG_NO_AUTH_REQUIRED);
+            .Padding(PaddingMode::PKCS7)
+            .Authorization(TAG_BLOCK_MODE, BlockMode::CBC)
+            .Authorization(TAG_NO_AUTH_REQUIRED);
         AuthorizationSet hardware_enforced_characteristics;
         AuthorizationSet software_enforced_characteristics;
-        int32_t result =
-            generateKey(key_name, key_parameters.build(), &hardware_enforced_characteristics,
+        auto result =
+            generateKey(key_name, key_parameters, &hardware_enforced_characteristics,
                         &software_enforced_characteristics);
-        if (result != KM_ERROR_OK) {
-            ALOGE("Failed to generate encryption key: %d", result);
+        if (!result.isOk()) {
+            ALOGE("Failed to generate encryption key: %d", int32_t(result));
             return false;
         }
         if (hardware_enforced_characteristics.size() == 0) {
@@ -432,9 +407,9 @@ bool KeystoreClientImpl::createOrVerifyAuthenticationKey(const std::string& key_
             return false;
         }
         if (!verified) {
-            int32_t result = deleteKey(key_name);
-            if (result != KM_ERROR_OK) {
-                ALOGE("Failed to delete invalid authentication key: %d", result);
+            auto result = deleteKey(key_name);
+            if (!result.isOk()) {
+                ALOGE("Failed to delete invalid authentication key: %d", int32_t(result));
                 return false;
             }
             key_exists = false;
@@ -443,16 +418,16 @@ bool KeystoreClientImpl::createOrVerifyAuthenticationKey(const std::string& key_
     if (!key_exists) {
         AuthorizationSetBuilder key_parameters;
         key_parameters.HmacKey(kHMACKeySize)
-            .Digest(KM_DIGEST_SHA_2_256)
-            .Authorization(keymaster::TAG_MIN_MAC_LENGTH, kHMACOutputSize)
-            .Authorization(keymaster::TAG_NO_AUTH_REQUIRED);
+            .Digest(Digest::SHA_2_256)
+            .Authorization(TAG_MIN_MAC_LENGTH, kHMACOutputSize)
+            .Authorization(TAG_NO_AUTH_REQUIRED);
         AuthorizationSet hardware_enforced_characteristics;
         AuthorizationSet software_enforced_characteristics;
-        int32_t result =
-            generateKey(key_name, key_parameters.build(), &hardware_enforced_characteristics,
+        auto result =
+            generateKey(key_name, key_parameters, &hardware_enforced_characteristics,
                         &software_enforced_characteristics);
-        if (result != KM_ERROR_OK) {
-            ALOGE("Failed to generate authentication key: %d", result);
+        if (!result.isOk()) {
+            ALOGE("Failed to generate authentication key: %d", int32_t(result));
             return false;
         }
         if (hardware_enforced_characteristics.size() == 0) {
@@ -466,38 +441,34 @@ bool KeystoreClientImpl::verifyEncryptionKeyAttributes(const std::string& key_na
                                                        bool* verified) {
     AuthorizationSet hardware_enforced_characteristics;
     AuthorizationSet software_enforced_characteristics;
-    int32_t result = getKeyCharacteristics(key_name, &hardware_enforced_characteristics,
+    auto result = getKeyCharacteristics(key_name, &hardware_enforced_characteristics,
                                            &software_enforced_characteristics);
-    if (result != KM_ERROR_OK) {
-        ALOGE("Failed to query encryption key: %d", result);
+    if (!result.isOk()) {
+        ALOGE("Failed to query encryption key: %d", int32_t(result));
         return false;
     }
     *verified = true;
-    keymaster_algorithm_t algorithm = KM_ALGORITHM_RSA;
-    if ((!hardware_enforced_characteristics.GetTagValue(keymaster::TAG_ALGORITHM, &algorithm) &&
-         !software_enforced_characteristics.GetTagValue(keymaster::TAG_ALGORITHM, &algorithm)) ||
-        algorithm != KM_ALGORITHM_AES) {
+    auto algorithm = NullOrOr(hardware_enforced_characteristics.GetTagValue(TAG_ALGORITHM),
+            software_enforced_characteristics.GetTagValue(TAG_ALGORITHM));
+    if (!algorithm.isOk() || algorithm.value() != Algorithm::AES) {
         ALOGW("Found encryption key with invalid algorithm.");
         *verified = false;
     }
-    uint32_t key_size = 0;
-    if ((!hardware_enforced_characteristics.GetTagValue(keymaster::TAG_KEY_SIZE, &key_size) &&
-         !software_enforced_characteristics.GetTagValue(keymaster::TAG_KEY_SIZE, &key_size)) ||
-        key_size != kAESKeySize) {
+    auto key_size = NullOrOr(hardware_enforced_characteristics.GetTagValue(TAG_KEY_SIZE),
+            software_enforced_characteristics.GetTagValue(TAG_KEY_SIZE));
+    if (!key_size.isOk() || key_size.value() != kAESKeySize) {
         ALOGW("Found encryption key with invalid size.");
         *verified = false;
     }
-    keymaster_block_mode_t block_mode = KM_MODE_ECB;
-    if ((!hardware_enforced_characteristics.GetTagValue(keymaster::TAG_BLOCK_MODE, &block_mode) &&
-         !software_enforced_characteristics.GetTagValue(keymaster::TAG_BLOCK_MODE, &block_mode)) ||
-        block_mode != KM_MODE_CBC) {
+    auto block_mode = NullOrOr(hardware_enforced_characteristics.GetTagValue(TAG_BLOCK_MODE),
+            software_enforced_characteristics.GetTagValue(TAG_BLOCK_MODE));
+    if (!block_mode.isOk() || block_mode.value() != BlockMode::CBC) {
         ALOGW("Found encryption key with invalid block mode.");
         *verified = false;
     }
-    keymaster_padding_t padding_mode = KM_PAD_NONE;
-    if ((!hardware_enforced_characteristics.GetTagValue(keymaster::TAG_PADDING, &padding_mode) &&
-         !software_enforced_characteristics.GetTagValue(keymaster::TAG_PADDING, &padding_mode)) ||
-        padding_mode != KM_PAD_PKCS7) {
+    auto padding_mode = NullOrOr(hardware_enforced_characteristics.GetTagValue(TAG_PADDING),
+            software_enforced_characteristics.GetTagValue(TAG_PADDING));
+    if (!padding_mode.isOk() || padding_mode.value() != PaddingMode::PKCS7) {
         ALOGW("Found encryption key with invalid padding mode.");
         *verified = false;
     }
@@ -511,39 +482,34 @@ bool KeystoreClientImpl::verifyAuthenticationKeyAttributes(const std::string& ke
                                                            bool* verified) {
     AuthorizationSet hardware_enforced_characteristics;
     AuthorizationSet software_enforced_characteristics;
-    int32_t result = getKeyCharacteristics(key_name, &hardware_enforced_characteristics,
+    auto result = getKeyCharacteristics(key_name, &hardware_enforced_characteristics,
                                            &software_enforced_characteristics);
-    if (result != KM_ERROR_OK) {
-        ALOGE("Failed to query authentication key: %d", result);
+    if (!result.isOk()) {
+        ALOGE("Failed to query authentication key: %d", int32_t(result));
         return false;
     }
     *verified = true;
-    keymaster_algorithm_t algorithm = KM_ALGORITHM_RSA;
-    if ((!hardware_enforced_characteristics.GetTagValue(keymaster::TAG_ALGORITHM, &algorithm) &&
-         !software_enforced_characteristics.GetTagValue(keymaster::TAG_ALGORITHM, &algorithm)) ||
-        algorithm != KM_ALGORITHM_HMAC) {
+    auto algorithm = NullOrOr(hardware_enforced_characteristics.GetTagValue(TAG_ALGORITHM),
+            software_enforced_characteristics.GetTagValue(TAG_ALGORITHM));
+    if (!algorithm.isOk() || algorithm.value() != Algorithm::HMAC){
         ALOGW("Found authentication key with invalid algorithm.");
         *verified = false;
     }
-    uint32_t key_size = 0;
-    if ((!hardware_enforced_characteristics.GetTagValue(keymaster::TAG_KEY_SIZE, &key_size) &&
-         !software_enforced_characteristics.GetTagValue(keymaster::TAG_KEY_SIZE, &key_size)) ||
-        key_size != kHMACKeySize) {
+    auto key_size = NullOrOr(hardware_enforced_characteristics.GetTagValue(TAG_KEY_SIZE),
+            software_enforced_characteristics.GetTagValue(TAG_KEY_SIZE));
+    if (!key_size.isOk() || key_size.value() != kHMACKeySize) {
         ALOGW("Found authentication key with invalid size.");
         *verified = false;
     }
-    uint32_t mac_size = 0;
-    if ((!hardware_enforced_characteristics.GetTagValue(keymaster::TAG_MIN_MAC_LENGTH, &mac_size) &&
-         !software_enforced_characteristics.GetTagValue(keymaster::TAG_MIN_MAC_LENGTH,
-                                                        &mac_size)) ||
-        mac_size != kHMACOutputSize) {
+    auto mac_size = NullOrOr(hardware_enforced_characteristics.GetTagValue(TAG_MIN_MAC_LENGTH),
+            software_enforced_characteristics.GetTagValue(TAG_MIN_MAC_LENGTH));
+    if (!mac_size.isOk() || mac_size.value() != kHMACOutputSize) {
         ALOGW("Found authentication key with invalid minimum mac size.");
         *verified = false;
     }
-    keymaster_digest_t digest = KM_DIGEST_NONE;
-    if ((!hardware_enforced_characteristics.GetTagValue(keymaster::TAG_DIGEST, &digest) &&
-         !software_enforced_characteristics.GetTagValue(keymaster::TAG_DIGEST, &digest)) ||
-        digest != KM_DIGEST_SHA_2_256) {
+    auto digest = NullOrOr(hardware_enforced_characteristics.GetTagValue(TAG_DIGEST),
+            software_enforced_characteristics.GetTagValue(TAG_DIGEST));
+    if (!digest.isOk() || digest.value() != Digest::SHA_2_256) {
         ALOGW("Found authentication key with invalid digest list.");
         *verified = false;
     }

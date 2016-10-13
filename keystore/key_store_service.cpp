@@ -28,18 +28,16 @@
 
 #include <private/android_filesystem_config.h>
 
-#include <hardware/keymaster_defs.h>
+#include <android/hardware/keymaster/3.0/IHwKeymasterDevice.h>
 
 #include "defaults.h"
 #include "keystore_attestation_id.h"
+#include "keystore_keymaster_enforcement.h"
 #include "keystore_utils.h"
+#include <keystore/keystore_hidl_support.h>
 
-using keymaster::AuthorizationSet;
-using keymaster::AuthorizationSetBuilder;
-using keymaster::TAG_APPLICATION_DATA;
-using keymaster::TAG_APPLICATION_ID;
-
-namespace android {
+namespace keystore {
+using namespace android;
 
 const size_t MAX_OPERATIONS = 15;
 
@@ -48,10 +46,6 @@ struct BIGNUM_Delete {
 };
 typedef UniquePtr<BIGNUM, BIGNUM_Delete> Unique_BIGNUM;
 
-struct Malloc_Delete {
-    void operator()(uint8_t* p) const { free(p); }
-};
-
 void KeyStoreService::binderDied(const wp<IBinder>& who) {
     auto operations = mOperationMap.getOperationsForToken(who.unsafe_get());
     for (const auto& token : operations) {
@@ -59,116 +53,124 @@ void KeyStoreService::binderDied(const wp<IBinder>& who) {
     }
 }
 
-int32_t KeyStoreService::getState(int32_t userId) {
+KeyStoreServiceReturnCode KeyStoreService::getState(int32_t userId) {
     if (!checkBinderPermission(P_GET_STATE)) {
-        return ::PERMISSION_DENIED;
+        return ResponseCode::PERMISSION_DENIED;
     }
 
-    return mKeyStore->getState(userId);
+    return ResponseCode(mKeyStore->getState(userId));
 }
 
-int32_t KeyStoreService::get(const String16& name, int32_t uid, uint8_t** item,
-                             size_t* itemLength) {
+KeyStoreServiceReturnCode KeyStoreService::get(const String16& name, int32_t uid,
+                                               hidl_vec<uint8_t>* item) {
     uid_t targetUid = getEffectiveUid(uid);
     if (!checkBinderPermission(P_GET, targetUid)) {
-        return ::PERMISSION_DENIED;
+        return ResponseCode::PERMISSION_DENIED;
     }
 
     String8 name8(name);
     Blob keyBlob;
 
-    ResponseCode responseCode = mKeyStore->getKeyForName(&keyBlob, name8, targetUid, TYPE_GENERIC);
-    if (responseCode != ::NO_ERROR) {
-        *item = NULL;
-        *itemLength = 0;
-        return responseCode;
+    KeyStoreServiceReturnCode rc =
+        mKeyStore->getKeyForName(&keyBlob, name8, targetUid, TYPE_GENERIC);
+    if (!rc.isOk()) {
+        if (item) *item = hidl_vec<uint8_t>();
+        return rc;
     }
 
-    *item = (uint8_t*)malloc(keyBlob.getLength());
-    memcpy(*item, keyBlob.getValue(), keyBlob.getLength());
-    *itemLength = keyBlob.getLength();
+    // Do not replace this with "if (item) *item = blob2hidlVec(keyBlob)"!
+    // blob2hidlVec creates a hidl_vec<uint8_t> that references, but not owns, the data in keyBlob
+    // the subsequent assignment (*item = resultBlob) makes a deep copy, so that *item will own the
+    // corresponding resources.
+    auto resultBlob = blob2hidlVec(keyBlob);
+    if (item) {
+        *item = resultBlob;
+    }
 
-    return ::NO_ERROR;
+    return ResponseCode::NO_ERROR;
 }
 
-int32_t KeyStoreService::insert(const String16& name, const uint8_t* item, size_t itemLength,
-                                int targetUid, int32_t flags) {
+KeyStoreServiceReturnCode KeyStoreService::insert(const String16& name,
+                                                  const hidl_vec<uint8_t>& item, int targetUid,
+                                                  int32_t flags) {
     targetUid = getEffectiveUid(targetUid);
-    int32_t result =
+    auto result =
         checkBinderPermissionAndKeystoreState(P_INSERT, targetUid, flags & KEYSTORE_FLAG_ENCRYPTED);
-    if (result != ::NO_ERROR) {
+    if (!result.isOk()) {
         return result;
     }
 
     String8 name8(name);
     String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, targetUid, ::TYPE_GENERIC));
 
-    Blob keyBlob(item, itemLength, NULL, 0, ::TYPE_GENERIC);
+    Blob keyBlob(&item[0], item.size(), NULL, 0, ::TYPE_GENERIC);
     keyBlob.setEncrypted(flags & KEYSTORE_FLAG_ENCRYPTED);
 
     return mKeyStore->put(filename.string(), &keyBlob, get_user_id(targetUid));
 }
 
-int32_t KeyStoreService::del(const String16& name, int targetUid) {
+KeyStoreServiceReturnCode KeyStoreService::del(const String16& name, int targetUid) {
     targetUid = getEffectiveUid(targetUid);
     if (!checkBinderPermission(P_DELETE, targetUid)) {
-        return ::PERMISSION_DENIED;
+        return ResponseCode::PERMISSION_DENIED;
     }
     String8 name8(name);
     String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, targetUid, ::TYPE_ANY));
-    int32_t result = mKeyStore->del(filename.string(), ::TYPE_ANY, get_user_id(targetUid));
-    if (result != ::NO_ERROR) {
+    ResponseCode result = mKeyStore->del(filename.string(), ::TYPE_ANY, get_user_id(targetUid));
+    if (result != ResponseCode::NO_ERROR) {
         return result;
     }
 
     // Also delete any characteristics files
-    String8 chrFilename(mKeyStore->getKeyNameForUidWithDir(
-        name8, targetUid, ::TYPE_KEY_CHARACTERISTICS));
+    String8 chrFilename(
+        mKeyStore->getKeyNameForUidWithDir(name8, targetUid, ::TYPE_KEY_CHARACTERISTICS));
     return mKeyStore->del(chrFilename.string(), ::TYPE_KEY_CHARACTERISTICS, get_user_id(targetUid));
 }
 
-int32_t KeyStoreService::exist(const String16& name, int targetUid) {
+KeyStoreServiceReturnCode KeyStoreService::exist(const String16& name, int targetUid) {
     targetUid = getEffectiveUid(targetUid);
     if (!checkBinderPermission(P_EXIST, targetUid)) {
-        return ::PERMISSION_DENIED;
+        return ResponseCode::PERMISSION_DENIED;
     }
 
     String8 name8(name);
     String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, targetUid, ::TYPE_ANY));
 
     if (access(filename.string(), R_OK) == -1) {
-        return (errno != ENOENT) ? ::SYSTEM_ERROR : ::KEY_NOT_FOUND;
+        return (errno != ENOENT) ? ResponseCode::SYSTEM_ERROR : ResponseCode::KEY_NOT_FOUND;
     }
-    return ::NO_ERROR;
+    return ResponseCode::NO_ERROR;
 }
 
-int32_t KeyStoreService::list(const String16& prefix, int targetUid, Vector<String16>* matches) {
+KeyStoreServiceReturnCode KeyStoreService::list(const String16& prefix, int targetUid,
+                                                Vector<String16>* matches) {
     targetUid = getEffectiveUid(targetUid);
     if (!checkBinderPermission(P_LIST, targetUid)) {
-        return ::PERMISSION_DENIED;
+        return ResponseCode::PERMISSION_DENIED;
     }
     const String8 prefix8(prefix);
     String8 filename(mKeyStore->getKeyNameForUid(prefix8, targetUid, TYPE_ANY));
 
-    if (mKeyStore->list(filename, matches, get_user_id(targetUid)) != ::NO_ERROR) {
-        return ::SYSTEM_ERROR;
+    if (mKeyStore->list(filename, matches, get_user_id(targetUid)) != ResponseCode::NO_ERROR) {
+        return ResponseCode::SYSTEM_ERROR;
     }
-    return ::NO_ERROR;
+    return ResponseCode::NO_ERROR;
 }
 
-int32_t KeyStoreService::reset() {
+KeyStoreServiceReturnCode KeyStoreService::reset() {
     if (!checkBinderPermission(P_RESET)) {
-        return ::PERMISSION_DENIED;
+        return ResponseCode::PERMISSION_DENIED;
     }
 
     uid_t callingUid = IPCThreadState::self()->getCallingUid();
     mKeyStore->resetUser(get_user_id(callingUid), false);
-    return ::NO_ERROR;
+    return ResponseCode::NO_ERROR;
 }
 
-int32_t KeyStoreService::onUserPasswordChanged(int32_t userId, const String16& password) {
+KeyStoreServiceReturnCode KeyStoreService::onUserPasswordChanged(int32_t userId,
+                                                                 const String16& password) {
     if (!checkBinderPermission(P_PASSWORD)) {
-        return ::PERMISSION_DENIED;
+        return ResponseCode::PERMISSION_DENIED;
     }
 
     const String8 password8(password);
@@ -179,7 +181,7 @@ int32_t KeyStoreService::onUserPasswordChanged(int32_t userId, const String16& p
     if (password.size() == 0) {
         ALOGI("Secure lockscreen for user %d removed, deleting encrypted entries", userId);
         mKeyStore->resetUser(userId, true);
-        return ::NO_ERROR;
+        return ResponseCode::NO_ERROR;
     } else {
         switch (mKeyStore->getState(userId)) {
         case ::STATE_UNINITIALIZED: {
@@ -197,13 +199,13 @@ int32_t KeyStoreService::onUserPasswordChanged(int32_t userId, const String16& p
             return mKeyStore->initializeUser(password8, userId);
         }
         }
-        return ::SYSTEM_ERROR;
+        return ResponseCode::SYSTEM_ERROR;
     }
 }
 
-int32_t KeyStoreService::onUserAdded(int32_t userId, int32_t parentId) {
+KeyStoreServiceReturnCode KeyStoreService::onUserAdded(int32_t userId, int32_t parentId) {
     if (!checkBinderPermission(P_USER_CHANGED)) {
-        return ::PERMISSION_DENIED;
+        return ResponseCode::PERMISSION_DENIED;
     }
 
     // Sanity check that the new user has an empty keystore.
@@ -219,37 +221,37 @@ int32_t KeyStoreService::onUserAdded(int32_t userId, int32_t parentId) {
         // parent profile, forever.
         return mKeyStore->copyMasterKey(parentId, userId);
     } else {
-        return ::NO_ERROR;
+        return ResponseCode::NO_ERROR;
     }
 }
 
-int32_t KeyStoreService::onUserRemoved(int32_t userId) {
+KeyStoreServiceReturnCode KeyStoreService::onUserRemoved(int32_t userId) {
     if (!checkBinderPermission(P_USER_CHANGED)) {
-        return ::PERMISSION_DENIED;
+        return ResponseCode::PERMISSION_DENIED;
     }
 
     mKeyStore->resetUser(userId, false);
-    return ::NO_ERROR;
+    return ResponseCode::NO_ERROR;
 }
 
-int32_t KeyStoreService::lock(int32_t userId) {
+KeyStoreServiceReturnCode KeyStoreService::lock(int32_t userId) {
     if (!checkBinderPermission(P_LOCK)) {
-        return ::PERMISSION_DENIED;
+        return ResponseCode::PERMISSION_DENIED;
     }
 
     State state = mKeyStore->getState(userId);
     if (state != ::STATE_NO_ERROR) {
         ALOGD("calling lock in state: %d", state);
-        return state;
+        return ResponseCode(state);
     }
 
     mKeyStore->lock(userId);
-    return ::NO_ERROR;
+    return ResponseCode::NO_ERROR;
 }
 
-int32_t KeyStoreService::unlock(int32_t userId, const String16& pw) {
+KeyStoreServiceReturnCode KeyStoreService::unlock(int32_t userId, const String16& pw) {
     if (!checkBinderPermission(P_UNLOCK)) {
-        return ::PERMISSION_DENIED;
+        return ResponseCode::PERMISSION_DENIED;
     }
 
     State state = mKeyStore->getState(userId);
@@ -265,7 +267,7 @@ int32_t KeyStoreService::unlock(int32_t userId, const String16& pw) {
             ALOGE("unlock called on keystore in unknown state: %d", state);
             break;
         }
-        return state;
+        return ResponseCode(state);
     }
 
     const String8 password8(pw);
@@ -281,43 +283,44 @@ bool KeyStoreService::isEmpty(int32_t userId) {
     return mKeyStore->isEmpty(userId);
 }
 
-int32_t KeyStoreService::generate(const String16& name, int32_t targetUid, int32_t keyType,
-                                  int32_t keySize, int32_t flags, Vector<sp<KeystoreArg>>* args) {
+KeyStoreServiceReturnCode KeyStoreService::generate(const String16& name, int32_t targetUid,
+                                                    int32_t keyType, int32_t keySize, int32_t flags,
+                                                    Vector<sp<KeystoreArg>>* args) {
     targetUid = getEffectiveUid(targetUid);
-    int32_t result =
+    auto result =
         checkBinderPermissionAndKeystoreState(P_INSERT, targetUid, flags & KEYSTORE_FLAG_ENCRYPTED);
-    if (result != ::NO_ERROR) {
+    if (!result.isOk()) {
         return result;
     }
 
-    KeymasterArguments params;
-    add_legacy_key_authorizations(keyType, &params.params);
+    keystore::AuthorizationSet params;
+    add_legacy_key_authorizations(keyType, &params);
 
     switch (keyType) {
     case EVP_PKEY_EC: {
-        params.params.push_back(keymaster_param_enum(KM_TAG_ALGORITHM, KM_ALGORITHM_EC));
+        params.push_back(TAG_ALGORITHM, Algorithm::EC);
         if (keySize == -1) {
             keySize = EC_DEFAULT_KEY_SIZE;
         } else if (keySize < EC_MIN_KEY_SIZE || keySize > EC_MAX_KEY_SIZE) {
             ALOGI("invalid key size %d", keySize);
-            return ::SYSTEM_ERROR;
+            return ResponseCode::SYSTEM_ERROR;
         }
-        params.params.push_back(keymaster_param_int(KM_TAG_KEY_SIZE, keySize));
+        params.push_back(TAG_KEY_SIZE, keySize);
         break;
     }
     case EVP_PKEY_RSA: {
-        params.params.push_back(keymaster_param_enum(KM_TAG_ALGORITHM, KM_ALGORITHM_RSA));
+        params.push_back(TAG_ALGORITHM, Algorithm::RSA);
         if (keySize == -1) {
             keySize = RSA_DEFAULT_KEY_SIZE;
         } else if (keySize < RSA_MIN_KEY_SIZE || keySize > RSA_MAX_KEY_SIZE) {
             ALOGI("invalid key size %d", keySize);
-            return ::SYSTEM_ERROR;
+            return ResponseCode::SYSTEM_ERROR;
         }
-        params.params.push_back(keymaster_param_int(KM_TAG_KEY_SIZE, keySize));
+        params.push_back(TAG_KEY_SIZE, keySize);
         unsigned long exponent = RSA_DEFAULT_EXPONENT;
         if (args->size() > 1) {
             ALOGI("invalid number of arguments: %zu", args->size());
-            return ::SYSTEM_ERROR;
+            return ResponseCode::SYSTEM_ERROR;
         } else if (args->size() == 1) {
             const sp<KeystoreArg>& expArg = args->itemAt(0);
             if (expArg != NULL) {
@@ -325,84 +328,88 @@ int32_t KeyStoreService::generate(const String16& name, int32_t targetUid, int32
                     reinterpret_cast<const unsigned char*>(expArg->data()), expArg->size(), NULL));
                 if (pubExpBn.get() == NULL) {
                     ALOGI("Could not convert public exponent to BN");
-                    return ::SYSTEM_ERROR;
+                    return ResponseCode::SYSTEM_ERROR;
                 }
                 exponent = BN_get_word(pubExpBn.get());
                 if (exponent == 0xFFFFFFFFL) {
                     ALOGW("cannot represent public exponent as a long value");
-                    return ::SYSTEM_ERROR;
+                    return ResponseCode::SYSTEM_ERROR;
                 }
             } else {
                 ALOGW("public exponent not read");
-                return ::SYSTEM_ERROR;
+                return ResponseCode::SYSTEM_ERROR;
             }
         }
-        params.params.push_back(keymaster_param_long(KM_TAG_RSA_PUBLIC_EXPONENT, exponent));
+        params.push_back(TAG_RSA_PUBLIC_EXPONENT, exponent);
         break;
     }
     default: {
         ALOGW("Unsupported key type %d", keyType);
-        return ::SYSTEM_ERROR;
+        return ResponseCode::SYSTEM_ERROR;
     }
     }
 
-    int32_t rc = generateKey(name, params, NULL, 0, targetUid, flags,
-                             /*outCharacteristics*/ NULL);
-    if (rc != ::NO_ERROR) {
-        ALOGW("generate failed: %d", rc);
+    auto rc = generateKey(name, params.hidl_data(), hidl_vec<uint8_t>(), targetUid, flags,
+                          /*outCharacteristics*/ NULL);
+    if (!rc.isOk()) {
+        ALOGW("generate failed: %d", int32_t(rc));
     }
     return translateResultToLegacyResult(rc);
 }
 
-int32_t KeyStoreService::import(const String16& name, const uint8_t* data, size_t length,
-                                int targetUid, int32_t flags) {
-    const uint8_t* ptr = data;
+KeyStoreServiceReturnCode KeyStoreService::import(const String16& name,
+                                                  const hidl_vec<uint8_t>& data, int targetUid,
+                                                  int32_t flags) {
 
-    Unique_PKCS8_PRIV_KEY_INFO pkcs8(d2i_PKCS8_PRIV_KEY_INFO(NULL, &ptr, length));
+    const uint8_t* ptr = &data[0];
+
+    Unique_PKCS8_PRIV_KEY_INFO pkcs8(d2i_PKCS8_PRIV_KEY_INFO(NULL, &ptr, data.size()));
     if (!pkcs8.get()) {
-        return ::SYSTEM_ERROR;
+        return ResponseCode::SYSTEM_ERROR;
     }
     Unique_EVP_PKEY pkey(EVP_PKCS82PKEY(pkcs8.get()));
     if (!pkey.get()) {
-        return ::SYSTEM_ERROR;
+        return ResponseCode::SYSTEM_ERROR;
     }
     int type = EVP_PKEY_type(pkey->type);
-    KeymasterArguments params;
-    add_legacy_key_authorizations(type, &params.params);
+    AuthorizationSet params;
+    add_legacy_key_authorizations(type, &params);
     switch (type) {
     case EVP_PKEY_RSA:
-        params.params.push_back(keymaster_param_enum(KM_TAG_ALGORITHM, KM_ALGORITHM_RSA));
+        params.push_back(TAG_ALGORITHM, Algorithm::RSA);
         break;
     case EVP_PKEY_EC:
-        params.params.push_back(keymaster_param_enum(KM_TAG_ALGORITHM, KM_ALGORITHM_EC));
+        params.push_back(TAG_ALGORITHM, Algorithm::EC);
         break;
     default:
         ALOGW("Unsupported key type %d", type);
-        return ::SYSTEM_ERROR;
+        return ResponseCode::SYSTEM_ERROR;
     }
-    int32_t rc = importKey(name, params, KM_KEY_FORMAT_PKCS8, data, length, targetUid, flags,
-                           /*outCharacteristics*/ NULL);
-    if (rc != ::NO_ERROR) {
-        ALOGW("importKey failed: %d", rc);
+
+    auto rc = importKey(name, params.hidl_data(), KeyFormat::PKCS8, data, targetUid, flags,
+                        /*outCharacteristics*/ NULL);
+
+    if (!rc.isOk()) {
+        ALOGW("importKey failed: %d", int32_t(rc));
     }
     return translateResultToLegacyResult(rc);
 }
 
-int32_t KeyStoreService::sign(const String16& name, const uint8_t* data, size_t length,
-                              uint8_t** out, size_t* outLength) {
+KeyStoreServiceReturnCode KeyStoreService::sign(const String16& name, const hidl_vec<uint8_t>& data,
+                                                hidl_vec<uint8_t>* out) {
     if (!checkBinderPermission(P_SIGN)) {
-        return ::PERMISSION_DENIED;
+        return ResponseCode::PERMISSION_DENIED;
     }
-    return doLegacySignVerify(name, data, length, out, outLength, NULL, 0, KM_PURPOSE_SIGN);
+    return doLegacySignVerify(name, data, out, hidl_vec<uint8_t>(), KeyPurpose::SIGN);
 }
 
-int32_t KeyStoreService::verify(const String16& name, const uint8_t* data, size_t dataLength,
-                                const uint8_t* signature, size_t signatureLength) {
+KeyStoreServiceReturnCode KeyStoreService::verify(const String16& name,
+                                                  const hidl_vec<uint8_t>& data,
+                                                  const hidl_vec<uint8_t>& signature) {
     if (!checkBinderPermission(P_VERIFY)) {
-        return ::PERMISSION_DENIED;
+        return ResponseCode::PERMISSION_DENIED;
     }
-    return doLegacySignVerify(name, data, dataLength, NULL, NULL, signature, signatureLength,
-                              KM_PURPOSE_VERIFY);
+    return doLegacySignVerify(name, data, nullptr, signature, KeyPurpose::VERIFY);
 }
 
 /*
@@ -416,23 +423,23 @@ int32_t KeyStoreService::verify(const String16& name, const uint8_t* data, size_
  * "del_key" since the Java code doesn't really communicate what it's
  * intentions are.
  */
-int32_t KeyStoreService::get_pubkey(const String16& name, uint8_t** pubkey, size_t* pubkeyLength) {
+KeyStoreServiceReturnCode KeyStoreService::get_pubkey(const String16& name,
+                                                      hidl_vec<uint8_t>* pubKey) {
     ExportResult result;
-    exportKey(name, KM_KEY_FORMAT_X509, NULL, NULL, UID_SELF, &result);
-    if (result.resultCode != ::NO_ERROR) {
-        ALOGW("export failed: %d", result.resultCode);
+    exportKey(name, KeyFormat::X509, hidl_vec<uint8_t>(), hidl_vec<uint8_t>(), UID_SELF, &result);
+    if (!result.resultCode.isOk()) {
+        ALOGW("export failed: %d", int32_t(result.resultCode));
         return translateResultToLegacyResult(result.resultCode);
     }
 
-    *pubkey = result.exportData.release();
-    *pubkeyLength = result.dataLength;
-    return ::NO_ERROR;
+    if (pubKey) *pubKey = std::move(result.exportData);
+    return ResponseCode::NO_ERROR;
 }
 
-int32_t KeyStoreService::grant(const String16& name, int32_t granteeUid) {
+KeyStoreServiceReturnCode KeyStoreService::grant(const String16& name, int32_t granteeUid) {
     uid_t callingUid = IPCThreadState::self()->getCallingUid();
-    int32_t result = checkBinderPermissionAndKeystoreState(P_GRANT);
-    if (result != ::NO_ERROR) {
+    auto result = checkBinderPermissionAndKeystoreState(P_GRANT);
+    if (!result.isOk()) {
         return result;
     }
 
@@ -440,17 +447,17 @@ int32_t KeyStoreService::grant(const String16& name, int32_t granteeUid) {
     String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, callingUid, ::TYPE_ANY));
 
     if (access(filename.string(), R_OK) == -1) {
-        return (errno != ENOENT) ? ::SYSTEM_ERROR : ::KEY_NOT_FOUND;
+        return (errno != ENOENT) ? ResponseCode::SYSTEM_ERROR : ResponseCode::KEY_NOT_FOUND;
     }
 
     mKeyStore->addGrant(filename.string(), granteeUid);
-    return ::NO_ERROR;
+    return ResponseCode::NO_ERROR;
 }
 
-int32_t KeyStoreService::ungrant(const String16& name, int32_t granteeUid) {
+KeyStoreServiceReturnCode KeyStoreService::ungrant(const String16& name, int32_t granteeUid) {
     uid_t callingUid = IPCThreadState::self()->getCallingUid();
-    int32_t result = checkBinderPermissionAndKeystoreState(P_GRANT);
-    if (result != ::NO_ERROR) {
+    auto result = checkBinderPermissionAndKeystoreState(P_GRANT);
+    if (!result.isOk()) {
         return result;
     }
 
@@ -458,10 +465,11 @@ int32_t KeyStoreService::ungrant(const String16& name, int32_t granteeUid) {
     String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, callingUid, ::TYPE_ANY));
 
     if (access(filename.string(), R_OK) == -1) {
-        return (errno != ENOENT) ? ::SYSTEM_ERROR : ::KEY_NOT_FOUND;
+        return (errno != ENOENT) ? ResponseCode::SYSTEM_ERROR : ResponseCode::KEY_NOT_FOUND;
     }
 
-    return mKeyStore->removeGrant(filename.string(), granteeUid) ? ::NO_ERROR : ::KEY_NOT_FOUND;
+    return mKeyStore->removeGrant(filename.string(), granteeUid) ? ResponseCode::NO_ERROR
+                                                                 : ResponseCode::KEY_NOT_FOUND;
 }
 
 int64_t KeyStoreService::getmtime(const String16& name, int32_t uid) {
@@ -497,26 +505,26 @@ int64_t KeyStoreService::getmtime(const String16& name, int32_t uid) {
 }
 
 // TODO(tuckeris): This is dead code, remove it.  Don't bother copying over key characteristics here
-int32_t KeyStoreService::duplicate(const String16& srcKey, int32_t srcUid, const String16& destKey,
-                                   int32_t destUid) {
+KeyStoreServiceReturnCode KeyStoreService::duplicate(const String16& srcKey, int32_t srcUid,
+                                                     const String16& destKey, int32_t destUid) {
     uid_t callingUid = IPCThreadState::self()->getCallingUid();
     pid_t spid = IPCThreadState::self()->getCallingPid();
     if (!has_permission(callingUid, P_DUPLICATE, spid)) {
         ALOGW("permission denied for %d: duplicate", callingUid);
-        return -1L;
+        return ResponseCode::PERMISSION_DENIED;
     }
 
     State state = mKeyStore->getState(get_user_id(callingUid));
     if (!isKeystoreUnlocked(state)) {
         ALOGD("calling duplicate in state: %d", state);
-        return state;
+        return ResponseCode(state);
     }
 
     if (srcUid == -1 || static_cast<uid_t>(srcUid) == callingUid) {
         srcUid = callingUid;
     } else if (!is_granted_to(callingUid, srcUid)) {
         ALOGD("migrate not granted from source: %d -> %d", callingUid, srcUid);
-        return ::PERMISSION_DENIED;
+        return ResponseCode::PERMISSION_DENIED;
     }
 
     if (destUid == -1) {
@@ -528,12 +536,12 @@ int32_t KeyStoreService::duplicate(const String16& srcKey, int32_t srcUid, const
             ALOGD("can only duplicate from caller to other or to same uid: "
                   "calling=%d, srcUid=%d, destUid=%d",
                   callingUid, srcUid, destUid);
-            return ::PERMISSION_DENIED;
+            return ResponseCode::PERMISSION_DENIED;
         }
 
         if (!is_granted_to(callingUid, destUid)) {
             ALOGD("duplicate not granted to dest: %d -> %d", callingUid, destUid);
-            return ::PERMISSION_DENIED;
+            return ResponseCode::PERMISSION_DENIED;
         }
     }
 
@@ -545,13 +553,13 @@ int32_t KeyStoreService::duplicate(const String16& srcKey, int32_t srcUid, const
 
     if (access(targetFile.string(), W_OK) != -1 || errno != ENOENT) {
         ALOGD("destination already exists: %s", targetFile.string());
-        return ::SYSTEM_ERROR;
+        return ResponseCode::SYSTEM_ERROR;
     }
 
     Blob keyBlob;
     ResponseCode responseCode =
         mKeyStore->get(sourceFile.string(), &keyBlob, TYPE_ANY, get_user_id(srcUid));
-    if (responseCode != ::NO_ERROR) {
+    if (responseCode != ResponseCode::NO_ERROR) {
         return responseCode;
     }
 
@@ -562,16 +570,16 @@ int32_t KeyStoreService::is_hardware_backed(const String16& keyType) {
     return mKeyStore->isHardwareBacked(keyType) ? 1 : 0;
 }
 
-int32_t KeyStoreService::clear_uid(int64_t targetUid64) {
+KeyStoreServiceReturnCode KeyStoreService::clear_uid(int64_t targetUid64) {
     uid_t targetUid = getEffectiveUid(targetUid64);
     if (!checkBinderPermissionSelfOrSystem(P_CLEAR_UID, targetUid)) {
-        return ::PERMISSION_DENIED;
+        return ResponseCode::PERMISSION_DENIED;
     }
 
     String8 prefix = String8::format("%u_", targetUid);
     Vector<String16> aliases;
-    if (mKeyStore->list(prefix, &aliases, get_user_id(targetUid)) != ::NO_ERROR) {
-        return ::SYSTEM_ERROR;
+    if (mKeyStore->list(prefix, &aliases, get_user_id(targetUid)) != ResponseCode::NO_ERROR) {
+        return ResponseCode::SYSTEM_ERROR;
     }
 
     for (uint32_t i = 0; i < aliases.size(); i++) {
@@ -580,141 +588,101 @@ int32_t KeyStoreService::clear_uid(int64_t targetUid64) {
         mKeyStore->del(filename.string(), ::TYPE_ANY, get_user_id(targetUid));
 
         // del() will fail silently if no cached characteristics are present for this alias.
-        String8 chr_filename(mKeyStore->getKeyNameForUidWithDir(name8, targetUid,
-            ::TYPE_KEY_CHARACTERISTICS));
+        String8 chr_filename(
+            mKeyStore->getKeyNameForUidWithDir(name8, targetUid, ::TYPE_KEY_CHARACTERISTICS));
         mKeyStore->del(chr_filename.string(), ::TYPE_KEY_CHARACTERISTICS, get_user_id(targetUid));
     }
-    return ::NO_ERROR;
+    return ResponseCode::NO_ERROR;
 }
 
-int32_t KeyStoreService::addRngEntropy(const uint8_t* data, size_t dataLength) {
-    const auto* device = mKeyStore->getDevice();
-    const auto* fallback = mKeyStore->getFallbackDevice();
-    int32_t devResult = KM_ERROR_UNIMPLEMENTED;
-    int32_t fallbackResult = KM_ERROR_UNIMPLEMENTED;
-    if (device->common.module->module_api_version >= KEYMASTER_MODULE_API_VERSION_1_0 &&
-        device->add_rng_entropy != NULL) {
-        devResult = device->add_rng_entropy(device, data, dataLength);
-    }
-    if (fallback->add_rng_entropy) {
-        fallbackResult = fallback->add_rng_entropy(fallback, data, dataLength);
-    }
-    if (devResult) {
-        return devResult;
-    }
-    if (fallbackResult) {
-        return fallbackResult;
-    }
-    return ::NO_ERROR;
+KeyStoreServiceReturnCode KeyStoreService::addRngEntropy(const hidl_vec<uint8_t>& entropy) {
+    const auto& device = mKeyStore->getDevice();
+    return KS_HANDLE_HIDL_ERROR(device->addRngEntropy(entropy));
 }
 
-int32_t KeyStoreService::generateKey(const String16& name, const KeymasterArguments& params,
-                                     const uint8_t* entropy, size_t entropyLength, int uid,
-                                     int flags, KeyCharacteristics* outCharacteristics) {
+KeyStoreServiceReturnCode KeyStoreService::generateKey(const String16& name,
+                                                       const hidl_vec<KeyParameter>& params,
+                                                       const hidl_vec<uint8_t>& entropy, int uid,
+                                                       int flags,
+                                                       KeyCharacteristics* outCharacteristics) {
     uid = getEffectiveUid(uid);
-    int rc = checkBinderPermissionAndKeystoreState(P_INSERT, uid, flags & KEYSTORE_FLAG_ENCRYPTED);
-    if (rc != ::NO_ERROR) {
+    KeyStoreServiceReturnCode rc =
+        checkBinderPermissionAndKeystoreState(P_INSERT, uid, flags & KEYSTORE_FLAG_ENCRYPTED);
+    if (!rc.isOk()) {
         return rc;
     }
 
-    rc = KM_ERROR_UNIMPLEMENTED;
-    bool isFallback = false;
-    keymaster_key_blob_t blob;
-    keymaster_key_characteristics_t out = {{nullptr, 0}, {nullptr, 0}};
-
-    const auto* device = mKeyStore->getDevice();
-    const auto* fallback = mKeyStore->getFallbackDevice();
-    std::vector<keymaster_key_param_t> opParams(params.params);
-    const keymaster_key_param_set_t inParams = {opParams.data(), opParams.size()};
-    if (device == NULL) {
-        return ::SYSTEM_ERROR;
-    }
-
-    // Capture characteristics before they're potentially stripped by the device
-    AuthorizationSet keyCharacteristics(opParams.data(), opParams.size());
-    if (keyCharacteristics.is_valid() != AuthorizationSet::Error::OK) {
-        return KM_ERROR_MEMORY_ALLOCATION_FAILED;
-    }
-    UniquePtr<uint8_t[]> kc_buf;
-    kc_buf.reset(new (std::nothrow) uint8_t[keyCharacteristics.SerializedSize()]);
-    if (!kc_buf.get()) {
-        return KM_ERROR_MEMORY_ALLOCATION_FAILED;
-    }
-    keyCharacteristics.Serialize(kc_buf.get(), kc_buf.get() + keyCharacteristics.SerializedSize());
+    bool usingFallback = false;
+    auto& dev = mKeyStore->getDevice();
+    AuthorizationSet keyCharacteristics = params;
 
     // TODO: Seed from Linux RNG before this.
-    if (device->common.module->module_api_version >= KEYMASTER_MODULE_API_VERSION_1_0 &&
-        device->generate_key != NULL) {
-        if (!entropy) {
-            rc = KM_ERROR_OK;
-        } else if (device->add_rng_entropy) {
-            rc = device->add_rng_entropy(device, entropy, entropyLength);
-        } else {
-            rc = KM_ERROR_UNIMPLEMENTED;
-        }
-        if (rc == KM_ERROR_OK) {
-            rc =
-                device->generate_key(device, &inParams, &blob, outCharacteristics ? &out : nullptr);
-        }
-    }
-    // If the HW device didn't support generate_key or generate_key failed
-    // fall back to the software implementation.
-    if (rc && fallback->generate_key != NULL) {
-        ALOGW("Primary keymaster device failed to generate key, falling back to SW.");
-        isFallback = true;
-        if (!entropy) {
-            rc = KM_ERROR_OK;
-        } else if (fallback->add_rng_entropy) {
-            rc = fallback->add_rng_entropy(fallback, entropy, entropyLength);
-        } else {
-            rc = KM_ERROR_UNIMPLEMENTED;
-        }
-        if (rc == KM_ERROR_OK) {
-            rc = fallback->generate_key(fallback, &inParams, &blob,
-                                        outCharacteristics ? &out : nullptr);
-        }
-    }
-
-    if (outCharacteristics) {
-        outCharacteristics->characteristics = out;
-    }
-
-    if (rc) {
+    rc = addRngEntropy(entropy);
+    if (!rc.isOk()) {
         return rc;
     }
 
-    // Write the key:
-    String8 name8(name);
-    String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, uid, ::TYPE_KEYMASTER_10));
+    KeyStoreServiceReturnCode error;
+    auto hidl_cb = [&](ErrorCode ret, const hidl_vec<uint8_t>& hidlKeyBlob,
+                       const KeyCharacteristics& keyCharacteristics) {
+        error = ret;
+        if (!error.isOk()) {
+            return;
+        }
+        if (outCharacteristics) *outCharacteristics = keyCharacteristics;
 
-    Blob keyBlob(blob.key_material, blob.key_material_size, NULL, 0, ::TYPE_KEYMASTER_10);
-    keyBlob.setFallback(isFallback);
-    keyBlob.setEncrypted(flags & KEYSTORE_FLAG_ENCRYPTED);
+        // Write the key
+        String8 name8(name);
+        String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, uid, ::TYPE_KEYMASTER_10));
 
-    free(const_cast<uint8_t*>(blob.key_material));
-    rc = mKeyStore->put(filename.string(), &keyBlob, get_user_id(uid));
+        Blob keyBlob(&hidlKeyBlob[0], hidlKeyBlob.size(), NULL, 0, ::TYPE_KEYMASTER_10);
+        keyBlob.setFallback(usingFallback);
+        keyBlob.setEncrypted(flags & KEYSTORE_FLAG_ENCRYPTED);
 
-    if (rc != ::NO_ERROR) {
+        error = mKeyStore->put(filename.string(), &keyBlob, get_user_id(uid));
+    };
+
+    rc = KS_HANDLE_HIDL_ERROR(dev->generateKey(params, hidl_cb));
+    if (!rc.isOk()) {
         return rc;
+    }
+    if (!error.isOk()) {
+        ALOGE("Failed to generate key -> falling back to software keymaster");
+        usingFallback = true;
+        auto& fallback = mKeyStore->getFallbackDevice();
+        rc = KS_HANDLE_HIDL_ERROR(fallback->generateKey(params, hidl_cb));
+        if (!rc.isOk()) {
+            return rc;
+        }
+        if (!error.isOk()) {
+            return error;
+        }
     }
 
     // Write the characteristics:
+    String8 name8(name);
     String8 cFilename(mKeyStore->getKeyNameForUidWithDir(name8, uid, ::TYPE_KEY_CHARACTERISTICS));
 
-    Blob charBlob(kc_buf.get(), keyCharacteristics.SerializedSize(),
-        NULL, 0, ::TYPE_KEY_CHARACTERISTICS);
-    charBlob.setFallback(isFallback);
+    std::stringstream kc_stream;
+    keyCharacteristics.Serialize(&kc_stream);
+    if (kc_stream.bad()) {
+        return ResponseCode::SYSTEM_ERROR;
+    }
+    auto kc_buf = kc_stream.str();
+    Blob charBlob(reinterpret_cast<const uint8_t*>(kc_buf.data()), kc_buf.size(), NULL, 0,
+                  ::TYPE_KEY_CHARACTERISTICS);
+    charBlob.setFallback(usingFallback);
     charBlob.setEncrypted(flags & KEYSTORE_FLAG_ENCRYPTED);
 
     return mKeyStore->put(cFilename.string(), &charBlob, get_user_id(uid));
 }
 
-int32_t KeyStoreService::getKeyCharacteristics(const String16& name,
-                                               const keymaster_blob_t* clientId,
-                                               const keymaster_blob_t* appData, int32_t uid,
-                                               KeyCharacteristics* outCharacteristics) {
+KeyStoreServiceReturnCode
+KeyStoreService::getKeyCharacteristics(const String16& name, const hidl_vec<uint8_t>& clientId,
+                                       const hidl_vec<uint8_t>& appData, int32_t uid,
+                                       KeyCharacteristics* outCharacteristics) {
     if (!outCharacteristics) {
-        return KM_ERROR_UNEXPECTED_NULL_POINTER;
+        return ErrorCode::UNEXPECTED_NULL_POINTER;
     }
 
     uid_t targetUid = getEffectiveUid(uid);
@@ -722,299 +690,308 @@ int32_t KeyStoreService::getKeyCharacteristics(const String16& name,
     if (!is_granted_to(callingUid, targetUid)) {
         ALOGW("uid %d not permitted to act for uid %d in getKeyCharacteristics", callingUid,
               targetUid);
-        return ::PERMISSION_DENIED;
+        return ResponseCode::PERMISSION_DENIED;
     }
 
     Blob keyBlob;
     String8 name8(name);
-    int rc;
 
-    ResponseCode responseCode =
+    KeyStoreServiceReturnCode rc =
         mKeyStore->getKeyForName(&keyBlob, name8, targetUid, TYPE_KEYMASTER_10);
-    if (responseCode != ::NO_ERROR) {
-        return responseCode;
+    if (!rc.isOk()) {
+        return rc;
     }
-    keymaster_key_blob_t key = {keyBlob.getValue(), static_cast<size_t>(keyBlob.getLength())};
-    auto* dev = mKeyStore->getDeviceForBlob(keyBlob);
-    keymaster_key_characteristics_t out = {};
-    if (!dev->get_key_characteristics) {
-        ALOGE("device does not implement get_key_characteristics");
-        return KM_ERROR_UNIMPLEMENTED;
-    }
-    rc = dev->get_key_characteristics(dev, &key, clientId, appData, &out);
-    if (rc == KM_ERROR_KEY_REQUIRES_UPGRADE) {
-        AuthorizationSet upgradeParams;
-        if (clientId && clientId->data && clientId->data_length) {
-            upgradeParams.push_back(TAG_APPLICATION_ID, *clientId);
+
+    auto hidlKeyBlob = blob2hidlVec(keyBlob);
+    auto& dev = mKeyStore->getDevice(keyBlob);
+
+    KeyStoreServiceReturnCode error;
+
+    auto hidlCb = [&](ErrorCode ret, const KeyCharacteristics& keyCharacteristics) {
+        error = ret;
+        if (!error.isOk()) {
+            return;
         }
-        if (appData && appData->data && appData->data_length) {
-            upgradeParams.push_back(TAG_APPLICATION_DATA, *appData);
+        *outCharacteristics = keyCharacteristics;
+    };
+
+    rc = KS_HANDLE_HIDL_ERROR(dev->getKeyCharacteristics(hidlKeyBlob, clientId, appData, hidlCb));
+    if (!rc.isOk()) {
+        return rc;
+    }
+
+    if (error == ErrorCode::KEY_REQUIRES_UPGRADE) {
+        AuthorizationSet upgradeParams;
+        if (clientId.size()) {
+            upgradeParams.push_back(TAG_APPLICATION_ID, clientId);
+        }
+        if (appData.size()) {
+            upgradeParams.push_back(TAG_APPLICATION_DATA, appData);
         }
         rc = upgradeKeyBlob(name, targetUid, upgradeParams, &keyBlob);
-        if (rc != ::NO_ERROR) {
+        if (!rc.isOk()) {
             return rc;
         }
-        key = {keyBlob.getValue(), static_cast<size_t>(keyBlob.getLength())};
-        rc = dev->get_key_characteristics(dev, &key, clientId, appData, &out);
-    }
-    if (rc != KM_ERROR_OK) {
-        return rc;
-    }
 
-    outCharacteristics->characteristics = out;
-    return ::NO_ERROR;
+        auto upgradedHidlKeyBlob = blob2hidlVec(keyBlob);
+
+        rc = KS_HANDLE_HIDL_ERROR(
+            dev->getKeyCharacteristics(upgradedHidlKeyBlob, clientId, appData, hidlCb));
+        if (!rc.isOk()) {
+            return rc;
+        }
+        // Note that, on success, "error" will have been updated by the hidlCB callback.
+        // So it is fine to return "error" below.
+    }
+    return error;
 }
 
-int32_t KeyStoreService::importKey(const String16& name, const KeymasterArguments& params,
-                                   keymaster_key_format_t format, const uint8_t* keyData,
-                                   size_t keyLength, int uid, int flags,
-                                   KeyCharacteristics* outCharacteristics) {
+KeyStoreServiceReturnCode
+KeyStoreService::importKey(const String16& name, const hidl_vec<KeyParameter>& params,
+                           KeyFormat format, const hidl_vec<uint8_t>& keyData, int uid, int flags,
+                           KeyCharacteristics* outCharacteristics) {
     uid = getEffectiveUid(uid);
-    int rc = checkBinderPermissionAndKeystoreState(P_INSERT, uid, flags & KEYSTORE_FLAG_ENCRYPTED);
-    if (rc != ::NO_ERROR) {
+    KeyStoreServiceReturnCode rc =
+        checkBinderPermissionAndKeystoreState(P_INSERT, uid, flags & KEYSTORE_FLAG_ENCRYPTED);
+    if (!rc.isOk()) {
         return rc;
     }
 
-    rc = KM_ERROR_UNIMPLEMENTED;
-    bool isFallback = false;
-    keymaster_key_blob_t blob;
-    keymaster_key_characteristics_t out = {{nullptr, 0}, {nullptr, 0}};
+    bool usingFallback = false;
+    auto& dev = mKeyStore->getDevice();
 
-    const auto* device = mKeyStore->getDevice();
-    const auto* fallback = mKeyStore->getFallbackDevice();
-    std::vector<keymaster_key_param_t> opParams(params.params);
-    const keymaster_key_param_set_t inParams = {opParams.data(), opParams.size()};
-    const keymaster_blob_t input = {keyData, keyLength};
-    if (device == NULL) {
-        return ::SYSTEM_ERROR;
-    }
-
-    // Capture characteristics before they're potentially stripped
-    AuthorizationSet keyCharacteristics(opParams.data(), opParams.size());
-    if (keyCharacteristics.is_valid() != AuthorizationSet::Error::OK) {
-        return KM_ERROR_MEMORY_ALLOCATION_FAILED;
-    }
-    UniquePtr<uint8_t[]> kc_buf;
-    kc_buf.reset(new (std::nothrow) uint8_t[keyCharacteristics.SerializedSize()]);
-    if (!kc_buf.get()) {
-        return KM_ERROR_MEMORY_ALLOCATION_FAILED;
-    }
-    keyCharacteristics.Serialize(kc_buf.get(), kc_buf.get() + keyCharacteristics.SerializedSize());
-
-    if (device->common.module->module_api_version >= KEYMASTER_MODULE_API_VERSION_1_0 &&
-        device->import_key != NULL) {
-        rc = device->import_key(device, &inParams, format, &input, &blob,
-                                outCharacteristics ? &out : nullptr);
-    }
-    if (rc && fallback->import_key != NULL) {
-        ALOGW("Primary keymaster device failed to import key, falling back to SW.");
-        isFallback = true;
-        rc = fallback->import_key(fallback, &inParams, format, &input, &blob,
-                                  outCharacteristics ? &out : nullptr);
-    }
-    if (outCharacteristics) {
-        outCharacteristics->characteristics = out;
-    }
-
-    if (rc) {
-        return rc;
-    }
-
-    // Write the key:
     String8 name8(name);
-    String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, uid, ::TYPE_KEYMASTER_10));
 
-    Blob keyBlob(blob.key_material, blob.key_material_size, NULL, 0, ::TYPE_KEYMASTER_10);
-    keyBlob.setFallback(isFallback);
-    keyBlob.setEncrypted(flags & KEYSTORE_FLAG_ENCRYPTED);
+    KeyStoreServiceReturnCode error;
 
-    free(const_cast<uint8_t*>(blob.key_material));
-    rc = mKeyStore->put(filename.string(), &keyBlob, get_user_id(uid));
+    auto hidlCb = [&](ErrorCode ret, const hidl_vec<uint8_t>& keyBlob,
+                      const KeyCharacteristics& keyCharacteristics) {
+        error = ret;
+        if (!error.isOk()) {
+            return;
+        }
 
-    if (rc != ::NO_ERROR) {
+        if (outCharacteristics) *outCharacteristics = keyCharacteristics;
+
+        // Write the key:
+        String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, uid, ::TYPE_KEYMASTER_10));
+
+        Blob ksBlob(&keyBlob[0], keyBlob.size(), NULL, 0, ::TYPE_KEYMASTER_10);
+        ksBlob.setFallback(usingFallback);
+        ksBlob.setEncrypted(flags & KEYSTORE_FLAG_ENCRYPTED);
+
+        error = mKeyStore->put(filename.string(), &ksBlob, get_user_id(uid));
+    };
+
+    rc = KS_HANDLE_HIDL_ERROR(dev->importKey(params, format, keyData, hidlCb));
+    // possible hidl error
+    if (!rc.isOk()) {
         return rc;
+    }
+    // now check error from callback
+    if (!error.isOk()) {
+        ALOGE("Failed to import key -> falling back to software keymaster");
+        usingFallback = true;
+        auto& fallback = mKeyStore->getFallbackDevice();
+        rc = KS_HANDLE_HIDL_ERROR(fallback->importKey(params, format, keyData, hidlCb));
+        // possible hidl error
+        if (!rc.isOk()) {
+            return rc;
+        }
+        // now check error from callback
+        if (!error.isOk()) {
+            return error;
+        }
     }
 
     // Write the characteristics:
     String8 cFilename(mKeyStore->getKeyNameForUidWithDir(name8, uid, ::TYPE_KEY_CHARACTERISTICS));
 
-    Blob charBlob(kc_buf.get(), keyCharacteristics.SerializedSize(),
-        NULL, 0, ::TYPE_KEY_CHARACTERISTICS);
-    charBlob.setFallback(isFallback);
+    AuthorizationSet opParams = params;
+    std::stringstream kcStream;
+    opParams.Serialize(&kcStream);
+    if (kcStream.bad()) return ResponseCode::SYSTEM_ERROR;
+    auto kcBuf = kcStream.str();
+
+    Blob charBlob(reinterpret_cast<const uint8_t*>(kcBuf.data()), kcBuf.size(), NULL, 0,
+                  ::TYPE_KEY_CHARACTERISTICS);
+    charBlob.setFallback(usingFallback);
     charBlob.setEncrypted(flags & KEYSTORE_FLAG_ENCRYPTED);
 
     return mKeyStore->put(cFilename.string(), &charBlob, get_user_id(uid));
 }
 
-void KeyStoreService::exportKey(const String16& name, keymaster_key_format_t format,
-                                const keymaster_blob_t* clientId, const keymaster_blob_t* appData,
+void KeyStoreService::exportKey(const String16& name, KeyFormat format,
+                                const hidl_vec<uint8_t>& clientId, const hidl_vec<uint8_t>& appData,
                                 int32_t uid, ExportResult* result) {
 
     uid_t targetUid = getEffectiveUid(uid);
     uid_t callingUid = IPCThreadState::self()->getCallingUid();
     if (!is_granted_to(callingUid, targetUid)) {
         ALOGW("uid %d not permitted to act for uid %d in exportKey", callingUid, targetUid);
-        result->resultCode = ::PERMISSION_DENIED;
+        result->resultCode = ResponseCode::PERMISSION_DENIED;
         return;
     }
 
     Blob keyBlob;
     String8 name8(name);
-    int rc;
 
-    ResponseCode responseCode =
-        mKeyStore->getKeyForName(&keyBlob, name8, targetUid, TYPE_KEYMASTER_10);
-    if (responseCode != ::NO_ERROR) {
-        result->resultCode = responseCode;
+    result->resultCode = mKeyStore->getKeyForName(&keyBlob, name8, targetUid, TYPE_KEYMASTER_10);
+    if (!result->resultCode.isOk()) {
         return;
     }
-    keymaster_key_blob_t key;
-    key.key_material_size = keyBlob.getLength();
-    key.key_material = keyBlob.getValue();
-    auto* dev = mKeyStore->getDeviceForBlob(keyBlob);
-    if (!dev->export_key) {
-        result->resultCode = KM_ERROR_UNIMPLEMENTED;
-        return;
-    }
-    keymaster_blob_t output = {NULL, 0};
-    rc = dev->export_key(dev, format, &key, clientId, appData, &output);
-    if (rc == KM_ERROR_KEY_REQUIRES_UPGRADE) {
-        AuthorizationSet upgradeParams;
-        if (clientId && clientId->data && clientId->data_length) {
-            upgradeParams.push_back(TAG_APPLICATION_ID, *clientId);
-        }
-        if (appData && appData->data && appData->data_length) {
-            upgradeParams.push_back(TAG_APPLICATION_DATA, *appData);
-        }
-        rc = upgradeKeyBlob(name, targetUid, upgradeParams, &keyBlob);
-        if (rc != ::NO_ERROR) {
-            result->resultCode = rc;
+
+    auto key = blob2hidlVec(keyBlob);
+    auto& dev = mKeyStore->getDevice(keyBlob);
+
+    auto hidlCb = [&](ErrorCode ret, const ::android::hardware::hidl_vec<uint8_t>& keyMaterial) {
+        result->resultCode = ret;
+        if (!result->resultCode.isOk()) {
             return;
         }
-        key = {keyBlob.getValue(), static_cast<size_t>(keyBlob.getLength())};
-        rc = dev->export_key(dev, format, &key, clientId, appData, &output);
+        result->exportData = keyMaterial;
+    };
+    KeyStoreServiceReturnCode rc =
+        KS_HANDLE_HIDL_ERROR(dev->exportKey(format, key, clientId, appData, hidlCb));
+    // Overwrite result->resultCode only on HIDL error. Otherwise we want the result set in the
+    // callback hidlCb.
+    if (!rc.isOk()) {
+        result->resultCode = rc;
     }
 
-    result->exportData.reset(const_cast<uint8_t*>(output.data));
-    result->dataLength = output.data_length;
-    result->resultCode = rc ? rc : ::NO_ERROR;
+    if (result->resultCode == ErrorCode::KEY_REQUIRES_UPGRADE) {
+        AuthorizationSet upgradeParams;
+        if (clientId.size()) {
+            upgradeParams.push_back(TAG_APPLICATION_ID, clientId);
+        }
+        if (appData.size()) {
+            upgradeParams.push_back(TAG_APPLICATION_DATA, appData);
+        }
+        result->resultCode = upgradeKeyBlob(name, targetUid, upgradeParams, &keyBlob);
+        if (!result->resultCode.isOk()) {
+            return;
+        }
+
+        auto upgradedHidlKeyBlob = blob2hidlVec(keyBlob);
+
+        result->resultCode = KS_HANDLE_HIDL_ERROR(
+            dev->exportKey(format, upgradedHidlKeyBlob, clientId, appData, hidlCb));
+        if (!result->resultCode.isOk()) {
+            return;
+        }
+    }
 }
 
-void KeyStoreService::begin(const sp<IBinder>& appToken, const String16& name,
-                            keymaster_purpose_t purpose, bool pruneable,
-                            const KeymasterArguments& params, const uint8_t* entropy,
-                            size_t entropyLength, int32_t uid, OperationResult* result) {
+static inline void addAuthTokenToParams(AuthorizationSet* params, const HardwareAuthToken* token) {
+    if (token) {
+        params->push_back(TAG_AUTH_TOKEN, authToken2HidlVec(*token));
+    }
+}
+
+void KeyStoreService::begin(const sp<IBinder>& appToken, const String16& name, KeyPurpose purpose,
+                            bool pruneable, const hidl_vec<KeyParameter>& params,
+                            const hidl_vec<uint8_t>& entropy, int32_t uid,
+                            OperationResult* result) {
     uid_t callingUid = IPCThreadState::self()->getCallingUid();
     uid_t targetUid = getEffectiveUid(uid);
     if (!is_granted_to(callingUid, targetUid)) {
         ALOGW("uid %d not permitted to act for uid %d in begin", callingUid, targetUid);
-        result->resultCode = ::PERMISSION_DENIED;
+        result->resultCode = ResponseCode::PERMISSION_DENIED;
         return;
     }
     if (!pruneable && get_app_id(callingUid) != AID_SYSTEM) {
         ALOGE("Non-system uid %d trying to start non-pruneable operation", callingUid);
-        result->resultCode = ::PERMISSION_DENIED;
+        result->resultCode = ResponseCode::PERMISSION_DENIED;
         return;
     }
-    if (!checkAllowedOperationParams(params.params)) {
-        result->resultCode = KM_ERROR_INVALID_ARGUMENT;
+    if (!checkAllowedOperationParams(params)) {
+        result->resultCode = ErrorCode::INVALID_ARGUMENT;
         return;
     }
     Blob keyBlob;
     String8 name8(name);
-    ResponseCode responseCode =
-        mKeyStore->getKeyForName(&keyBlob, name8, targetUid, TYPE_KEYMASTER_10);
-    if (responseCode != ::NO_ERROR) {
-        result->resultCode = responseCode;
+    result->resultCode = mKeyStore->getKeyForName(&keyBlob, name8, targetUid, TYPE_KEYMASTER_10);
+    if (!result->resultCode.isOk()) {
         return;
     }
-    keymaster_key_blob_t key;
-    key.key_material_size = keyBlob.getLength();
-    key.key_material = keyBlob.getValue();
-    keymaster_operation_handle_t handle;
-    auto* dev = mKeyStore->getDeviceForBlob(keyBlob);
-    keymaster_error_t err = KM_ERROR_UNIMPLEMENTED;
-    std::vector<keymaster_key_param_t> opParams(params.params);
-    Unique_keymaster_key_characteristics characteristics;
-    characteristics.reset(new keymaster_key_characteristics_t);
-    err = getOperationCharacteristics(key, dev, opParams, characteristics.get());
-    if (err == KM_ERROR_KEY_REQUIRES_UPGRADE) {
-        int32_t rc = upgradeKeyBlob(name, targetUid,
-                                    AuthorizationSet(opParams.data(), opParams.size()), &keyBlob);
-        if (rc != ::NO_ERROR) {
-            result->resultCode = rc;
+
+    auto key = blob2hidlVec(keyBlob);
+    auto& dev = mKeyStore->getDevice(keyBlob);
+    AuthorizationSet opParams = params;
+    KeyCharacteristics characteristics;
+    result->resultCode = getOperationCharacteristics(key, &dev, opParams, &characteristics);
+
+    if (result->resultCode == ErrorCode::KEY_REQUIRES_UPGRADE) {
+        result->resultCode = upgradeKeyBlob(name, targetUid, opParams, &keyBlob);
+        if (!result->resultCode.isOk()) {
             return;
         }
-        key = {keyBlob.getValue(), static_cast<size_t>(keyBlob.getLength())};
-        err = getOperationCharacteristics(key, dev, opParams, characteristics.get());
+        key = blob2hidlVec(keyBlob);
+        result->resultCode = getOperationCharacteristics(key, &dev, opParams, &characteristics);
     }
-    if (err) {
-        result->resultCode = err;
+    if (!result->resultCode.isOk()) {
         return;
     }
-    const hw_auth_token_t* authToken = NULL;
+
+    const HardwareAuthToken* authToken = NULL;
 
     // Merge these characteristics with the ones cached when the key was generated or imported
     Blob charBlob;
     AuthorizationSet persistedCharacteristics;
-    responseCode = mKeyStore->getKeyForName(&charBlob, name8, targetUid, TYPE_KEY_CHARACTERISTICS);
-    if (responseCode == ::NO_ERROR) {
-        const uint8_t* serializedCharacteristics = charBlob.getValue();
-        persistedCharacteristics.Deserialize(&serializedCharacteristics,
-            serializedCharacteristics + charBlob.getLength());
+    result->resultCode =
+        mKeyStore->getKeyForName(&charBlob, name8, targetUid, TYPE_KEY_CHARACTERISTICS);
+    if (result->resultCode.isOk()) {
+        // TODO write one shot stream buffer to avoid copying (twice here)
+        std::string charBuffer(reinterpret_cast<const char*>(charBlob.getValue()),
+                               charBlob.getLength());
+        std::stringstream charStream(charBuffer);
+        persistedCharacteristics.Deserialize(&charStream);
     } else {
         ALOGD("Unable to read cached characteristics for key");
     }
 
     // Replace the sw_enforced set with those persisted to disk, minus hw_enforced
-    persistedCharacteristics.Union(characteristics.get()->sw_enforced);
-    persistedCharacteristics.Difference(characteristics.get()->hw_enforced);
-    persistedCharacteristics.CopyToParamSet(&characteristics.get()->sw_enforced);
+    AuthorizationSet softwareEnforced = characteristics.softwareEnforced;
+    AuthorizationSet teeEnforced = characteristics.teeEnforced;
+    persistedCharacteristics.Union(softwareEnforced);
+    persistedCharacteristics.Subtract(teeEnforced);
+    characteristics.softwareEnforced = persistedCharacteristics.hidl_data();
 
-    int32_t authResult = getAuthToken(characteristics.get(), 0, purpose, &authToken,
+    result->resultCode = getAuthToken(characteristics, 0, purpose, &authToken,
                                       /*failOnTokenMissing*/ false);
     // If per-operation auth is needed we need to begin the operation and
     // the client will need to authorize that operation before calling
     // update. Any other auth issues stop here.
-    if (authResult != ::NO_ERROR && authResult != ::OP_AUTH_NEEDED) {
-        result->resultCode = authResult;
-        return;
-    }
-    addAuthToParams(&opParams, authToken);
+    if (!result->resultCode.isOk() && result->resultCode != ResponseCode::OP_AUTH_NEEDED) return;
+
+    addAuthTokenToParams(&opParams, authToken);
+
     // Add entropy to the device first.
-    if (entropy) {
-        if (dev->add_rng_entropy) {
-            err = dev->add_rng_entropy(dev, entropy, entropyLength);
-        } else {
-            err = KM_ERROR_UNIMPLEMENTED;
-        }
-        if (err) {
-            result->resultCode = err;
+    if (entropy.size()) {
+        result->resultCode = addRngEntropy(entropy);
+        if (!result->resultCode.isOk()) {
             return;
         }
     }
-    keymaster_key_param_set_t inParams = {opParams.data(), opParams.size()};
 
     // Create a keyid for this key.
-    keymaster::km_id_t keyid;
+    km_id_t keyid;
     if (!enforcement_policy.CreateKeyId(key, &keyid)) {
         ALOGE("Failed to create a key ID for authorization checking.");
-        result->resultCode = KM_ERROR_UNKNOWN_ERROR;
+        result->resultCode = ErrorCode::UNKNOWN_ERROR;
         return;
     }
 
     // Check that all key authorization policy requirements are met.
-    keymaster::AuthorizationSet key_auths(characteristics->hw_enforced);
-    key_auths.push_back(characteristics->sw_enforced);
-    keymaster::AuthorizationSet operation_params(inParams);
-    err = enforcement_policy.AuthorizeOperation(purpose, keyid, key_auths, operation_params,
-                                                0 /* op_handle */, true /* is_begin_operation */);
-    if (err) {
-        result->resultCode = err;
+    AuthorizationSet key_auths = characteristics.teeEnforced;
+    key_auths.append(&characteristics.softwareEnforced[0],
+                     &characteristics.softwareEnforced[characteristics.softwareEnforced.size()]);
+
+    result->resultCode = enforcement_policy.AuthorizeOperation(
+        purpose, keyid, key_auths, opParams, 0 /* op_handle */, true /* is_begin_operation */);
+    if (!result->resultCode.isOk()) {
         return;
     }
-
-    keymaster_key_param_set_t outParams = {NULL, 0};
 
     // If there are more than MAX_OPERATIONS, abort the oldest operation that was started as
     // pruneable.
@@ -1025,27 +1002,42 @@ void KeyStoreService::begin(const sp<IBinder>& appToken, const String16& name,
         }
     }
 
-    err = dev->begin(dev, purpose, &key, &inParams, &outParams, &handle);
-    if (err != KM_ERROR_OK) {
-        ALOGE("Got error %d from begin()", err);
+    auto hidlCb = [&](ErrorCode ret, const hidl_vec<KeyParameter>& outParams,
+                      uint64_t operationHandle) {
+        result->resultCode = ret;
+        if (!result->resultCode.isOk()) {
+            return;
+        }
+        result->handle = operationHandle;
+        result->outParams = outParams;
+    };
+
+    ErrorCode rc = KS_HANDLE_HIDL_ERROR(dev->begin(purpose, key, opParams.hidl_data(), hidlCb));
+    if (rc != ErrorCode::OK) {
+        ALOGW("Got error %d from begin()", rc);
     }
 
     // If there are too many operations abort the oldest operation that was
     // started as pruneable and try again.
-    while (err == KM_ERROR_TOO_MANY_OPERATIONS && mOperationMap.hasPruneableOperation()) {
-        ALOGE("Ran out of operation handles");
+    while (rc == ErrorCode::TOO_MANY_OPERATIONS && mOperationMap.hasPruneableOperation()) {
+        ALOGW("Ran out of operation handles");
         if (!pruneOperation()) {
             break;
         }
-        err = dev->begin(dev, purpose, &key, &inParams, &outParams, &handle);
+        rc = KS_HANDLE_HIDL_ERROR(dev->begin(purpose, key, opParams.hidl_data(), hidlCb));
     }
-    if (err) {
-        result->resultCode = err;
+    if (rc != ErrorCode::OK) {
+        result->resultCode = rc;
         return;
     }
 
-    sp<IBinder> operationToken = mOperationMap.addOperation(handle, keyid, purpose, dev, appToken,
-                                                            characteristics.release(), pruneable);
+    // Note: The operation map takes possession of the contents of "characteristics".
+    // It is safe to use characteristics after the following line but it will be empty.
+    sp<IBinder> operationToken = mOperationMap.addOperation(
+        result->handle, keyid, purpose, dev, appToken, std::move(characteristics), pruneable);
+    assert(characteristics.teeEnforced.size() == 0);
+    assert(characteristics.softwareEnforced.size() == 0);
+
     if (authToken) {
         mOperationMap.setOperationAuthToken(operationToken, authToken);
     }
@@ -1054,241 +1046,251 @@ void KeyStoreService::begin(const sp<IBinder>& appToken, const String16& name,
     // application should get an auth token using the handle before the
     // first call to update, which will fail if keystore hasn't received the
     // auth token.
-    result->resultCode = authResult;
+    // All fields but "token" were set in the begin operation's callback.
     result->token = operationToken;
-    result->handle = handle;
-    if (outParams.params) {
-        result->outParams.params.assign(outParams.params, outParams.params + outParams.length);
-        free(outParams.params);
-    }
 }
 
-void KeyStoreService::update(const sp<IBinder>& token, const KeymasterArguments& params,
-                             const uint8_t* data, size_t dataLength, OperationResult* result) {
-    if (!checkAllowedOperationParams(params.params)) {
-        result->resultCode = KM_ERROR_INVALID_ARGUMENT;
+void KeyStoreService::update(const sp<IBinder>& token, const hidl_vec<KeyParameter>& params,
+                             const hidl_vec<uint8_t>& data, OperationResult* result) {
+    if (!checkAllowedOperationParams(params)) {
+        result->resultCode = ErrorCode::INVALID_ARGUMENT;
         return;
     }
-    const keymaster2_device_t* dev;
-    keymaster_operation_handle_t handle;
-    keymaster_purpose_t purpose;
-    keymaster::km_id_t keyid;
-    const keymaster_key_characteristics_t* characteristics;
+    km_device_t dev;
+    uint64_t handle;
+    KeyPurpose purpose;
+    km_id_t keyid;
+    const KeyCharacteristics* characteristics;
     if (!mOperationMap.getOperation(token, &handle, &keyid, &purpose, &dev, &characteristics)) {
-        result->resultCode = KM_ERROR_INVALID_OPERATION_HANDLE;
+        result->resultCode = ErrorCode::INVALID_OPERATION_HANDLE;
         return;
     }
-    std::vector<keymaster_key_param_t> opParams(params.params);
-    int32_t authResult = addOperationAuthTokenIfNeeded(token, &opParams);
-    if (authResult != ::NO_ERROR) {
-        result->resultCode = authResult;
+    AuthorizationSet opParams = params;
+    result->resultCode = addOperationAuthTokenIfNeeded(token, &opParams);
+    if (!result->resultCode.isOk()) {
         return;
     }
-    keymaster_key_param_set_t inParams = {opParams.data(), opParams.size()};
-    keymaster_blob_t input = {data, dataLength};
-    size_t consumed = 0;
-    keymaster_blob_t output = {NULL, 0};
-    keymaster_key_param_set_t outParams = {NULL, 0};
 
     // Check that all key authorization policy requirements are met.
-    keymaster::AuthorizationSet key_auths(characteristics->hw_enforced);
-    key_auths.push_back(characteristics->sw_enforced);
-    keymaster::AuthorizationSet operation_params(inParams);
+    AuthorizationSet key_auths(characteristics->teeEnforced);
+    key_auths.append(&characteristics->softwareEnforced[0],
+                     &characteristics->softwareEnforced[characteristics->softwareEnforced.size()]);
     result->resultCode = enforcement_policy.AuthorizeOperation(
-        purpose, keyid, key_auths, operation_params, handle, false /* is_begin_operation */);
-    if (result->resultCode) {
+        purpose, keyid, key_auths, opParams, handle, false /* is_begin_operation */);
+    if (!result->resultCode.isOk()) {
         return;
     }
 
-    keymaster_error_t err =
-        dev->update(dev, handle, &inParams, &input, &consumed, &outParams, &output);
-    result->data.reset(const_cast<uint8_t*>(output.data));
-    result->dataLength = output.data_length;
-    result->inputConsumed = consumed;
-    result->resultCode = err ? (int32_t)err : ::NO_ERROR;
-    if (outParams.params) {
-        result->outParams.params.assign(outParams.params, outParams.params + outParams.length);
-        free(outParams.params);
+    auto hidlCb = [&](ErrorCode ret, uint32_t inputConsumed,
+                      const hidl_vec<KeyParameter>& outParams, const hidl_vec<uint8_t>& output) {
+        result->resultCode = ret;
+        if (!result->resultCode.isOk()) {
+            return;
+        }
+        result->inputConsumed = inputConsumed;
+        result->outParams = outParams;
+        result->data = output;
+    };
+
+    KeyStoreServiceReturnCode rc = KS_HANDLE_HIDL_ERROR(dev->update(handle, params, data, hidlCb));
+    // just a reminder: on success result->resultCode was set in the callback. So we only overwrite
+    // it if there was a communication error indicated by the ErrorCode.
+    if (!rc.isOk()) {
+        result->resultCode = rc;
     }
 }
 
-void KeyStoreService::finish(const sp<IBinder>& token, const KeymasterArguments& params,
-                             const uint8_t* signature, size_t signatureLength,
-                             const uint8_t* entropy, size_t entropyLength,
+void KeyStoreService::finish(const sp<IBinder>& token, const hidl_vec<KeyParameter>& params,
+                             const hidl_vec<uint8_t>& signature, const hidl_vec<uint8_t>& entropy,
                              OperationResult* result) {
-    if (!checkAllowedOperationParams(params.params)) {
-        result->resultCode = KM_ERROR_INVALID_ARGUMENT;
+    if (!checkAllowedOperationParams(params)) {
+        result->resultCode = ErrorCode::INVALID_ARGUMENT;
         return;
     }
-    const keymaster2_device_t* dev;
-    keymaster_operation_handle_t handle;
-    keymaster_purpose_t purpose;
-    keymaster::km_id_t keyid;
-    const keymaster_key_characteristics_t* characteristics;
+    km_device_t dev;
+    uint64_t handle;
+    KeyPurpose purpose;
+    km_id_t keyid;
+    const KeyCharacteristics* characteristics;
     if (!mOperationMap.getOperation(token, &handle, &keyid, &purpose, &dev, &characteristics)) {
-        result->resultCode = KM_ERROR_INVALID_OPERATION_HANDLE;
+        result->resultCode = ErrorCode::INVALID_OPERATION_HANDLE;
         return;
     }
-    std::vector<keymaster_key_param_t> opParams(params.params);
-    int32_t authResult = addOperationAuthTokenIfNeeded(token, &opParams);
-    if (authResult != ::NO_ERROR) {
-        result->resultCode = authResult;
+    AuthorizationSet opParams = params;
+    result->resultCode = addOperationAuthTokenIfNeeded(token, &opParams);
+    if (!result->resultCode.isOk()) {
         return;
     }
-    keymaster_error_t err;
-    if (entropy) {
-        if (dev->add_rng_entropy) {
-            err = dev->add_rng_entropy(dev, entropy, entropyLength);
-        } else {
-            err = KM_ERROR_UNIMPLEMENTED;
-        }
-        if (err) {
-            result->resultCode = err;
+
+    if (entropy.size()) {
+        result->resultCode = addRngEntropy(entropy);
+        if (!result->resultCode.isOk()) {
             return;
         }
     }
 
-    keymaster_key_param_set_t inParams = {opParams.data(), opParams.size()};
-    keymaster_blob_t input = {nullptr, 0};
-    keymaster_blob_t sig = {signature, signatureLength};
-    keymaster_blob_t output = {nullptr, 0};
-    keymaster_key_param_set_t outParams = {nullptr, 0};
-
     // Check that all key authorization policy requirements are met.
-    keymaster::AuthorizationSet key_auths(characteristics->hw_enforced);
-    key_auths.push_back(characteristics->sw_enforced);
-    keymaster::AuthorizationSet operation_params(inParams);
-    err = enforcement_policy.AuthorizeOperation(purpose, keyid, key_auths, operation_params, handle,
-                                                false /* is_begin_operation */);
-    if (err) {
-        result->resultCode = err;
-        return;
-    }
+    AuthorizationSet key_auths(characteristics->teeEnforced);
+    key_auths.append(&characteristics->softwareEnforced[0],
+                     &characteristics->softwareEnforced[characteristics->softwareEnforced.size()]);
+    result->resultCode = enforcement_policy.AuthorizeOperation(
+        purpose, keyid, key_auths, opParams, handle, false /* is_begin_operation */);
+    if (!result->resultCode.isOk()) return;
 
-    err =
-        dev->finish(dev, handle, &inParams, &input /* TODO(swillden): wire up input to finish() */,
-                    &sig, &outParams, &output);
+    auto hidlCb = [&](ErrorCode ret, const hidl_vec<KeyParameter>& outParams,
+                      const hidl_vec<uint8_t>& output) {
+        result->resultCode = ret;
+        if (!result->resultCode.isOk()) {
+            return;
+        }
+        result->outParams = outParams;
+        result->data = output;
+    };
+
+    KeyStoreServiceReturnCode rc = KS_HANDLE_HIDL_ERROR(dev->finish(
+        handle, opParams.hidl_data(),
+        hidl_vec<uint8_t>() /* TODO(swillden): wire up input to finish() */, signature, hidlCb));
     // Remove the operation regardless of the result
     mOperationMap.removeOperation(token);
     mAuthTokenTable.MarkCompleted(handle);
 
-    result->data.reset(const_cast<uint8_t*>(output.data));
-    result->dataLength = output.data_length;
-    result->resultCode = err ? (int32_t)err : ::NO_ERROR;
-    if (outParams.params) {
-        result->outParams.params.assign(outParams.params, outParams.params + outParams.length);
-        free(outParams.params);
+    // just a reminder: on success result->resultCode was set in the callback. So we only overwrite
+    // it if there was a communication error indicated by the ErrorCode.
+    if (!rc.isOk()) {
+        result->resultCode = rc;
     }
 }
 
-int32_t KeyStoreService::abort(const sp<IBinder>& token) {
-    const keymaster2_device_t* dev;
-    keymaster_operation_handle_t handle;
-    keymaster_purpose_t purpose;
-    keymaster::km_id_t keyid;
+KeyStoreServiceReturnCode KeyStoreService::abort(const sp<IBinder>& token) {
+    km_device_t dev;
+    uint64_t handle;
+    KeyPurpose purpose;
+    km_id_t keyid;
     if (!mOperationMap.getOperation(token, &handle, &keyid, &purpose, &dev, NULL)) {
-        return KM_ERROR_INVALID_OPERATION_HANDLE;
+        return ErrorCode::INVALID_OPERATION_HANDLE;
     }
     mOperationMap.removeOperation(token);
-    int32_t rc;
-    if (!dev->abort) {
-        rc = KM_ERROR_UNIMPLEMENTED;
-    } else {
-        rc = dev->abort(dev, handle);
-    }
+
+    ErrorCode rc = KS_HANDLE_HIDL_ERROR(dev->abort(handle));
     mAuthTokenTable.MarkCompleted(handle);
-    if (rc) {
-        return rc;
-    }
-    return ::NO_ERROR;
+    return rc;
 }
 
 bool KeyStoreService::isOperationAuthorized(const sp<IBinder>& token) {
-    const keymaster2_device_t* dev;
-    keymaster_operation_handle_t handle;
-    const keymaster_key_characteristics_t* characteristics;
-    keymaster_purpose_t purpose;
-    keymaster::km_id_t keyid;
+    km_device_t dev;
+    uint64_t handle;
+    const KeyCharacteristics* characteristics;
+    KeyPurpose purpose;
+    km_id_t keyid;
     if (!mOperationMap.getOperation(token, &handle, &keyid, &purpose, &dev, &characteristics)) {
         return false;
     }
-    const hw_auth_token_t* authToken = NULL;
+    const HardwareAuthToken* authToken = NULL;
     mOperationMap.getOperationAuthToken(token, &authToken);
-    std::vector<keymaster_key_param_t> ignored;
-    int32_t authResult = addOperationAuthTokenIfNeeded(token, &ignored);
-    return authResult == ::NO_ERROR;
+    AuthorizationSet ignored;
+    auto authResult = addOperationAuthTokenIfNeeded(token, &ignored);
+    return authResult.isOk();
 }
 
-int32_t KeyStoreService::addAuthToken(const uint8_t* token, size_t length) {
+KeyStoreServiceReturnCode KeyStoreService::addAuthToken(const uint8_t* token, size_t length) {
+    // TODO(swillden): When gatekeeper and fingerprint are ready, this should be updated to
+    // receive a HardwareAuthToken, rather than an opaque byte array.
+
     if (!checkBinderPermission(P_ADD_AUTH)) {
         ALOGW("addAuthToken: permission denied for %d", IPCThreadState::self()->getCallingUid());
-        return ::PERMISSION_DENIED;
+        return ResponseCode::PERMISSION_DENIED;
     }
     if (length != sizeof(hw_auth_token_t)) {
-        return KM_ERROR_INVALID_ARGUMENT;
+        return ErrorCode::INVALID_ARGUMENT;
     }
-    hw_auth_token_t* authToken = new hw_auth_token_t;
-    memcpy(reinterpret_cast<void*>(authToken), token, sizeof(hw_auth_token_t));
+
+    hw_auth_token_t authToken;
+    memcpy(reinterpret_cast<void*>(&authToken), token, sizeof(hw_auth_token_t));
+    if (authToken.version != 0) {
+        return ErrorCode::INVALID_ARGUMENT;
+    }
+
+    std::unique_ptr<HardwareAuthToken> hidlAuthToken(new HardwareAuthToken);
+    hidlAuthToken->challenge = authToken.challenge;
+    hidlAuthToken->userId = authToken.user_id;
+    hidlAuthToken->authenticatorId = authToken.authenticator_id;
+    hidlAuthToken->authenticatorType = authToken.authenticator_type;
+    hidlAuthToken->timestamp = authToken.timestamp;
+    static_assert(
+        std::is_same<decltype(hidlAuthToken->hmac),
+                     ::android::hardware::hidl_array<uint8_t, sizeof(authToken.hmac)>>::value,
+        "This function assumes token HMAC is 32 bytes, but it might not be.");
+    std::copy(authToken.hmac, authToken.hmac + sizeof(authToken.hmac), hidlAuthToken->hmac.data());
+
     // The table takes ownership of authToken.
-    mAuthTokenTable.AddAuthenticationToken(authToken);
-    return ::NO_ERROR;
+    mAuthTokenTable.AddAuthenticationToken(hidlAuthToken.release());
+    return ResponseCode::NO_ERROR;
 }
 
 constexpr size_t KEY_ATTESTATION_APPLICATION_ID_MAX_SIZE = 1024;
 
-int32_t KeyStoreService::attestKey(const String16& name, const KeymasterArguments& params,
-                                   KeymasterCertificateChain* outChain) {
-    if (!outChain) return KM_ERROR_OUTPUT_PARAMETER_NULL;
+KeyStoreServiceReturnCode KeyStoreService::attestKey(const String16& name,
+                                                     const hidl_vec<KeyParameter>& params,
+                                                     hidl_vec<hidl_vec<uint8_t>>* outChain) {
+    if (!outChain) {
+        return ErrorCode::OUTPUT_PARAMETER_NULL;
+    }
 
-    if (!checkAllowedOperationParams(params.params)) {
-        return KM_ERROR_INVALID_ARGUMENT;
+    if (!checkAllowedOperationParams(params)) {
+        return ErrorCode::INVALID_ARGUMENT;
     }
 
     uid_t callingUid = IPCThreadState::self()->getCallingUid();
 
     Blob keyBlob;
     String8 name8(name);
-    ResponseCode responseCode =
+    KeyStoreServiceReturnCode responseCode =
         mKeyStore->getKeyForName(&keyBlob, name8, callingUid, TYPE_KEYMASTER_10);
-    if (responseCode != ::NO_ERROR) {
+    if (!responseCode.isOk()) {
         return responseCode;
     }
-
-    keymaster_key_blob_t key = {keyBlob.getValue(),
-                                static_cast<size_t>(std::max(0, keyBlob.getLength()))};
-    auto* dev = mKeyStore->getDeviceForBlob(keyBlob);
-    if (!dev->attest_key) return KM_ERROR_UNIMPLEMENTED;
 
     auto asn1_attestation_id_result = security::gather_attestation_application_id(callingUid);
     if (!asn1_attestation_id_result.isOk()) {
         ALOGE("failed to gather attestation_id");
-        return KM_ERROR_ATTESTATION_APPLICATION_ID_MISSING;
+        return ErrorCode::ATTESTATION_APPLICATION_ID_MISSING;
     }
-    const std::vector<uint8_t>& asn1_attestation_id = asn1_attestation_id_result;
+    std::vector<uint8_t>& asn1_attestation_id = asn1_attestation_id_result;
 
     /*
-     * Make a mutable copy of the params vector which to append the attestation id to.
-     * The copy is shallow, and the lifetime of the inner objects is the calling scope.
+     * The attestation application ID cannot be longer than
+     * KEY_ATTESTATION_APPLICATION_ID_MAX_SIZE, so we truncate if too long.
      */
-    auto mutable_params = params.params;
+    if (asn1_attestation_id.size() > KEY_ATTESTATION_APPLICATION_ID_MAX_SIZE)
+        asn1_attestation_id.resize(KEY_ATTESTATION_APPLICATION_ID_MAX_SIZE);
 
-    mutable_params.push_back(
-        {.tag = KM_TAG_ATTESTATION_APPLICATION_ID,
-         .blob = {asn1_attestation_id.data(),
-                  std::min(asn1_attestation_id.size(), KEY_ATTESTATION_APPLICATION_ID_MAX_SIZE)}});
+    AuthorizationSet mutableParams = params;
 
-    const keymaster_key_param_set_t in_params = {
-        const_cast<keymaster_key_param_t*>(mutable_params.data()), mutable_params.size()};
-    outChain->chain = {nullptr, 0};
-    int32_t rc = dev->attest_key(dev, &key, &in_params, &outChain->chain);
-    if (rc) return rc;
-    return ::NO_ERROR;
+    mutableParams.push_back(TAG_ATTESTATION_APPLICATION_ID, blob2hidlVec(asn1_attestation_id));
+
+    KeyStoreServiceReturnCode error;
+    auto hidlCb = [&](ErrorCode ret, const hidl_vec<hidl_vec<uint8_t>>& certChain) {
+        error = ret;
+        if (!error.isOk()) {
+            return;
+        }
+        if (outChain) *outChain = certChain;
+    };
+
+    auto hidlKey = blob2hidlVec(keyBlob);
+    auto& dev = mKeyStore->getDevice(keyBlob);
+    KeyStoreServiceReturnCode rc =
+        KS_HANDLE_HIDL_ERROR(dev->attestKey(hidlKey, mutableParams.hidl_data(), hidlCb));
+    if (!rc.isOk()) {
+        return rc;
+    }
+    return error;
 }
 
-int32_t KeyStoreService::onDeviceOffBody() {
+KeyStoreServiceReturnCode KeyStoreService::onDeviceOffBody() {
     // TODO(tuckeris): add permission check.  This should be callable from ClockworkHome only.
     mAuthTokenTable.onDeviceOffBody();
-    return ::NO_ERROR;
+    return ResponseCode::NO_ERROR;
 }
 
 /**
@@ -1375,17 +1377,19 @@ bool KeyStoreService::checkBinderPermissionOrSelfTarget(perm_t permission, int32
  * otherwise the state of keystore when not unlocked and checkUnlocked is
  * true.
  */
-int32_t KeyStoreService::checkBinderPermissionAndKeystoreState(perm_t permission, int32_t targetUid,
-                                                               bool checkUnlocked) {
+KeyStoreServiceReturnCode
+KeyStoreService::checkBinderPermissionAndKeystoreState(perm_t permission, int32_t targetUid,
+                                                       bool checkUnlocked) {
     if (!checkBinderPermission(permission, targetUid)) {
-        return ::PERMISSION_DENIED;
+        return ResponseCode::PERMISSION_DENIED;
     }
     State state = mKeyStore->getState(get_user_id(getEffectiveUid(targetUid)));
     if (checkUnlocked && !isKeystoreUnlocked(state)) {
-        return state;
+        // All State values coincide with ResponseCodes
+        return static_cast<ResponseCode>(state);
     }
 
-    return ::NO_ERROR;
+    return ResponseCode::NO_ERROR;
 }
 
 bool KeyStoreService::isKeystoreUnlocked(State state) {
@@ -1399,45 +1403,16 @@ bool KeyStoreService::isKeystoreUnlocked(State state) {
     return false;
 }
 
-bool KeyStoreService::isKeyTypeSupported(const keymaster2_device_t* device,
-                                         keymaster_keypair_t keyType) {
-    const int32_t device_api = device->common.module->module_api_version;
-    if (device_api == KEYMASTER_MODULE_API_VERSION_0_2) {
-        switch (keyType) {
-        case TYPE_RSA:
-        case TYPE_DSA:
-        case TYPE_EC:
-            return true;
-        default:
-            return false;
-        }
-    } else if (device_api >= KEYMASTER_MODULE_API_VERSION_0_3) {
-        switch (keyType) {
-        case TYPE_RSA:
-            return true;
-        case TYPE_DSA:
-            return device->flags & KEYMASTER_SUPPORTS_DSA;
-        case TYPE_EC:
-            return device->flags & KEYMASTER_SUPPORTS_EC;
-        default:
-            return false;
-        }
-    } else {
-        return keyType == TYPE_RSA;
-    }
-}
-
 /**
- * Check that all keymaster_key_param_t's provided by the application are
+ * Check that all KeyParameter's provided by the application are
  * allowed. Any parameter that keystore adds itself should be disallowed here.
  */
-bool KeyStoreService::checkAllowedOperationParams(
-    const std::vector<keymaster_key_param_t>& params) {
-    for (auto param : params) {
-        switch (param.tag) {
-        case KM_TAG_AUTH_TOKEN:
+bool KeyStoreService::checkAllowedOperationParams(const hidl_vec<KeyParameter>& params) {
+    for (size_t i = 0; i < params.size(); ++i) {
+        switch (params[i].tag) {
+        case Tag::AUTH_TOKEN:
         // fall through intended
-        case KM_TAG_ATTESTATION_APPLICATION_ID:
+        case Tag::ATTESTATION_APPLICATION_ID:
             return false;
         default:
             break;
@@ -1446,30 +1421,32 @@ bool KeyStoreService::checkAllowedOperationParams(
     return true;
 }
 
-keymaster_error_t KeyStoreService::getOperationCharacteristics(
-    const keymaster_key_blob_t& key, const keymaster2_device_t* dev,
-    const std::vector<keymaster_key_param_t>& params, keymaster_key_characteristics_t* out) {
-    UniquePtr<keymaster_blob_t> appId;
-    UniquePtr<keymaster_blob_t> appData;
+ErrorCode KeyStoreService::getOperationCharacteristics(const hidl_vec<uint8_t>& key,
+                                                       km_device_t* dev,
+                                                       const AuthorizationSet& params,
+                                                       KeyCharacteristics* out) {
+    hidl_vec<uint8_t> appId;
+    hidl_vec<uint8_t> appData;
     for (auto param : params) {
-        if (param.tag == KM_TAG_APPLICATION_ID) {
-            appId.reset(new keymaster_blob_t);
-            appId->data = param.blob.data;
-            appId->data_length = param.blob.data_length;
-        } else if (param.tag == KM_TAG_APPLICATION_DATA) {
-            appData.reset(new keymaster_blob_t);
-            appData->data = param.blob.data;
-            appData->data_length = param.blob.data_length;
+        if (param.tag == Tag::APPLICATION_ID) {
+            appId = authorizationValue(TAG_APPLICATION_ID, param).value();
+        } else if (param.tag == Tag::APPLICATION_DATA) {
+            appData = authorizationValue(TAG_APPLICATION_DATA, param).value();
         }
     }
-    keymaster_key_characteristics_t result = {{nullptr, 0}, {nullptr, 0}};
-    if (!dev->get_key_characteristics) {
-        return KM_ERROR_UNIMPLEMENTED;
-    }
-    keymaster_error_t error =
-        dev->get_key_characteristics(dev, &key, appId.get(), appData.get(), &result);
-    if (error == KM_ERROR_OK) {
-        *out = result;
+    ErrorCode error = ErrorCode::OK;
+
+    auto hidlCb = [&](ErrorCode ret, const KeyCharacteristics& keyCharacteristics) {
+        error = ret;
+        if (error != ErrorCode::OK) {
+            return;
+        }
+        if (out) *out = keyCharacteristics;
+    };
+
+    ErrorCode rc = KS_HANDLE_HIDL_ERROR((*dev)->getKeyCharacteristics(key, appId, appData, hidlCb));
+    if (rc != ErrorCode::OK) {
+        return rc;
     }
     return error;
 }
@@ -1477,49 +1454,41 @@ keymaster_error_t KeyStoreService::getOperationCharacteristics(
 /**
  * Get the auth token for this operation from the auth token table.
  *
- * Returns ::NO_ERROR if the auth token was set or none was required.
+ * Returns ResponseCode::NO_ERROR if the auth token was set or none was required.
  *         ::OP_AUTH_NEEDED if it is a per op authorization, no
  *         authorization token exists for that operation and
  *         failOnTokenMissing is false.
  *         KM_ERROR_KEY_USER_NOT_AUTHENTICATED if there is no valid auth
  *         token for the operation
  */
-int32_t KeyStoreService::getAuthToken(const keymaster_key_characteristics_t* characteristics,
-                                      keymaster_operation_handle_t handle,
-                                      keymaster_purpose_t purpose,
-                                      const hw_auth_token_t** authToken, bool failOnTokenMissing) {
+KeyStoreServiceReturnCode KeyStoreService::getAuthToken(const KeyCharacteristics& characteristics,
+                                                        uint64_t handle, KeyPurpose purpose,
+                                                        const HardwareAuthToken** authToken,
+                                                        bool failOnTokenMissing) {
 
-    std::vector<keymaster_key_param_t> allCharacteristics;
-    for (size_t i = 0; i < characteristics->sw_enforced.length; i++) {
-        allCharacteristics.push_back(characteristics->sw_enforced.params[i]);
+    AuthorizationSet allCharacteristics;
+    for (size_t i = 0; i < characteristics.softwareEnforced.size(); i++) {
+        allCharacteristics.push_back(characteristics.softwareEnforced[i]);
     }
-    for (size_t i = 0; i < characteristics->hw_enforced.length; i++) {
-        allCharacteristics.push_back(characteristics->hw_enforced.params[i]);
+    for (size_t i = 0; i < characteristics.teeEnforced.size(); i++) {
+        allCharacteristics.push_back(characteristics.teeEnforced[i]);
     }
-    keymaster::AuthTokenTable::Error err = mAuthTokenTable.FindAuthorization(
-        allCharacteristics.data(), allCharacteristics.size(), purpose, handle, authToken);
+    AuthTokenTable::Error err =
+        mAuthTokenTable.FindAuthorization(allCharacteristics, purpose, handle, authToken);
     switch (err) {
-    case keymaster::AuthTokenTable::OK:
-    case keymaster::AuthTokenTable::AUTH_NOT_REQUIRED:
-        return ::NO_ERROR;
-    case keymaster::AuthTokenTable::AUTH_TOKEN_NOT_FOUND:
-    case keymaster::AuthTokenTable::AUTH_TOKEN_EXPIRED:
-    case keymaster::AuthTokenTable::AUTH_TOKEN_WRONG_SID:
-        return KM_ERROR_KEY_USER_NOT_AUTHENTICATED;
-    case keymaster::AuthTokenTable::OP_HANDLE_REQUIRED:
-        return failOnTokenMissing ? (int32_t)KM_ERROR_KEY_USER_NOT_AUTHENTICATED
-                                  : (int32_t)::OP_AUTH_NEEDED;
+    case AuthTokenTable::OK:
+    case AuthTokenTable::AUTH_NOT_REQUIRED:
+        return ResponseCode::NO_ERROR;
+    case AuthTokenTable::AUTH_TOKEN_NOT_FOUND:
+    case AuthTokenTable::AUTH_TOKEN_EXPIRED:
+    case AuthTokenTable::AUTH_TOKEN_WRONG_SID:
+        return ErrorCode::KEY_USER_NOT_AUTHENTICATED;
+    case AuthTokenTable::OP_HANDLE_REQUIRED:
+        return failOnTokenMissing ? KeyStoreServiceReturnCode(ErrorCode::KEY_USER_NOT_AUTHENTICATED)
+                                  : KeyStoreServiceReturnCode(ResponseCode::OP_AUTH_NEEDED);
     default:
         ALOGE("Unexpected FindAuthorization return value %d", err);
-        return KM_ERROR_INVALID_ARGUMENT;
-    }
-}
-
-inline void KeyStoreService::addAuthToParams(std::vector<keymaster_key_param_t>* params,
-                                             const hw_auth_token_t* token) {
-    if (token) {
-        params->push_back(keymaster_param_blob(
-            KM_TAG_AUTH_TOKEN, reinterpret_cast<const uint8_t*>(token), sizeof(hw_auth_token_t)));
+        return ErrorCode::INVALID_ARGUMENT;
     }
 }
 
@@ -1528,185 +1497,194 @@ inline void KeyStoreService::addAuthToParams(std::vector<keymaster_key_param_t>*
  * requires authorization. Uses the cached result in the OperationMap if available
  * otherwise gets the token from the AuthTokenTable and caches the result.
  *
- * Returns ::NO_ERROR if the auth token was added or not needed.
+ * Returns ResponseCode::NO_ERROR if the auth token was added or not needed.
  *         KM_ERROR_KEY_USER_NOT_AUTHENTICATED if the operation is not
  *         authenticated.
  *         KM_ERROR_INVALID_OPERATION_HANDLE if token is not a valid
  *         operation token.
  */
-int32_t KeyStoreService::addOperationAuthTokenIfNeeded(const sp<IBinder>& token,
-                                                       std::vector<keymaster_key_param_t>* params) {
-    const hw_auth_token_t* authToken = NULL;
+KeyStoreServiceReturnCode KeyStoreService::addOperationAuthTokenIfNeeded(const sp<IBinder>& token,
+                                                                         AuthorizationSet* params) {
+    const HardwareAuthToken* authToken = nullptr;
     mOperationMap.getOperationAuthToken(token, &authToken);
     if (!authToken) {
-        const keymaster2_device_t* dev;
-        keymaster_operation_handle_t handle;
-        const keymaster_key_characteristics_t* characteristics = NULL;
-        keymaster_purpose_t purpose;
-        keymaster::km_id_t keyid;
+        km_device_t dev;
+        uint64_t handle;
+        const KeyCharacteristics* characteristics = nullptr;
+        KeyPurpose purpose;
+        km_id_t keyid;
         if (!mOperationMap.getOperation(token, &handle, &keyid, &purpose, &dev, &characteristics)) {
-            return KM_ERROR_INVALID_OPERATION_HANDLE;
+            return ErrorCode::INVALID_OPERATION_HANDLE;
         }
-        int32_t result = getAuthToken(characteristics, handle, purpose, &authToken);
-        if (result != ::NO_ERROR) {
+        auto result = getAuthToken(*characteristics, handle, purpose, &authToken);
+        if (!result.isOk()) {
             return result;
         }
         if (authToken) {
             mOperationMap.setOperationAuthToken(token, authToken);
         }
     }
-    addAuthToParams(params, authToken);
-    return ::NO_ERROR;
+    addAuthTokenToParams(params, authToken);
+    return ResponseCode::NO_ERROR;
 }
 
 /**
  * Translate a result value to a legacy return value. All keystore errors are
  * preserved and keymaster errors become SYSTEM_ERRORs
  */
-int32_t KeyStoreService::translateResultToLegacyResult(int32_t result) {
+KeyStoreServiceReturnCode KeyStoreService::translateResultToLegacyResult(int32_t result) {
     if (result > 0) {
-        return result;
+        return static_cast<ResponseCode>(result);
     }
-    return ::SYSTEM_ERROR;
+    return ResponseCode::SYSTEM_ERROR;
 }
 
-keymaster_key_param_t*
-KeyStoreService::getKeyAlgorithm(keymaster_key_characteristics_t* characteristics) {
-    for (size_t i = 0; i < characteristics->hw_enforced.length; i++) {
-        if (characteristics->hw_enforced.params[i].tag == KM_TAG_ALGORITHM) {
-            return &characteristics->hw_enforced.params[i];
-        }
+static NullOr<const Algorithm&>
+getKeyAlgoritmFromKeyCharacteristics(const KeyCharacteristics& characteristics) {
+    for (size_t i = 0; i < characteristics.teeEnforced.size(); ++i) {
+        auto algo = authorizationValue(TAG_ALGORITHM, characteristics.teeEnforced[i]);
+        if (algo.isOk()) return algo.value();
     }
-    for (size_t i = 0; i < characteristics->sw_enforced.length; i++) {
-        if (characteristics->sw_enforced.params[i].tag == KM_TAG_ALGORITHM) {
-            return &characteristics->sw_enforced.params[i];
-        }
+    for (size_t i = 0; i < characteristics.softwareEnforced.size(); ++i) {
+        auto algo = authorizationValue(TAG_ALGORITHM, characteristics.softwareEnforced[i]);
+        if (algo.isOk()) return algo.value();
     }
-    return NULL;
+    return {};
 }
 
-void KeyStoreService::addLegacyBeginParams(const String16& name,
-                                           std::vector<keymaster_key_param_t>& params) {
+void KeyStoreService::addLegacyBeginParams(const String16& name, AuthorizationSet* params) {
     // All legacy keys are DIGEST_NONE/PAD_NONE.
-    params.push_back(keymaster_param_enum(KM_TAG_DIGEST, KM_DIGEST_NONE));
-    params.push_back(keymaster_param_enum(KM_TAG_PADDING, KM_PAD_NONE));
+    params->push_back(TAG_DIGEST, Digest::NONE);
+    params->push_back(TAG_PADDING, PaddingMode::NONE);
 
     // Look up the algorithm of the key.
     KeyCharacteristics characteristics;
-    int32_t rc = getKeyCharacteristics(name, NULL, NULL, UID_SELF, &characteristics);
-    if (rc != ::NO_ERROR) {
+    auto rc = getKeyCharacteristics(name, hidl_vec<uint8_t>(), hidl_vec<uint8_t>(), UID_SELF,
+                                    &characteristics);
+    if (!rc.isOk()) {
         ALOGE("Failed to get key characteristics");
         return;
     }
-    keymaster_key_param_t* algorithm = getKeyAlgorithm(&characteristics.characteristics);
-    if (!algorithm) {
+    auto algorithm = getKeyAlgoritmFromKeyCharacteristics(characteristics);
+    if (!algorithm.isOk()) {
         ALOGE("getKeyCharacteristics did not include KM_TAG_ALGORITHM");
         return;
     }
-    params.push_back(*algorithm);
+    params->push_back(TAG_ALGORITHM, algorithm.value());
 }
 
-int32_t KeyStoreService::doLegacySignVerify(const String16& name, const uint8_t* data,
-                                            size_t length, uint8_t** out, size_t* outLength,
-                                            const uint8_t* signature, size_t signatureLength,
-                                            keymaster_purpose_t purpose) {
+KeyStoreServiceReturnCode KeyStoreService::doLegacySignVerify(const String16& name,
+                                                              const hidl_vec<uint8_t>& data,
+                                                              hidl_vec<uint8_t>* out,
+                                                              const hidl_vec<uint8_t>& signature,
+                                                              KeyPurpose purpose) {
 
     std::basic_stringstream<uint8_t> outBuffer;
     OperationResult result;
-    KeymasterArguments inArgs;
-    addLegacyBeginParams(name, inArgs.params);
+    AuthorizationSet inArgs;
+    addLegacyBeginParams(name, &inArgs);
     sp<IBinder> appToken(new BBinder);
     sp<IBinder> token;
 
-    begin(appToken, name, purpose, true, inArgs, NULL, 0, UID_SELF, &result);
-    if (result.resultCode != ResponseCode::NO_ERROR) {
-        if (result.resultCode == ::KEY_NOT_FOUND) {
+    begin(appToken, name, purpose, true, inArgs.hidl_data(), hidl_vec<uint8_t>(), UID_SELF,
+          &result);
+    if (!result.resultCode.isOk()) {
+        if (result.resultCode == ResponseCode::KEY_NOT_FOUND) {
             ALOGW("Key not found");
         } else {
-            ALOGW("Error in begin: %d", result.resultCode);
+            ALOGW("Error in begin: %d", int32_t(result.resultCode));
         }
         return translateResultToLegacyResult(result.resultCode);
     }
-    inArgs.params.clear();
+    inArgs.Clear();
     token = result.token;
     size_t consumed = 0;
     size_t lastConsumed = 0;
+    hidl_vec<uint8_t> data_view;
     do {
-        update(token, inArgs, data + consumed, length - consumed, &result);
+        data_view.setToExternal(const_cast<uint8_t*>(&data[consumed]), data.size() - consumed);
+        update(token, inArgs.hidl_data(), data_view, &result);
         if (result.resultCode != ResponseCode::NO_ERROR) {
-            ALOGW("Error in update: %d", result.resultCode);
+            ALOGW("Error in update: %d", int32_t(result.resultCode));
             return translateResultToLegacyResult(result.resultCode);
         }
         if (out) {
-            outBuffer.write(result.data.get(), result.dataLength);
+            outBuffer.write(&result.data[0], result.data.size());
         }
         lastConsumed = result.inputConsumed;
         consumed += lastConsumed;
-    } while (consumed < length && lastConsumed > 0);
+    } while (consumed < data.size() && lastConsumed > 0);
 
-    if (consumed != length) {
-        ALOGW("Not all data consumed. Consumed %zu of %zu", consumed, length);
-        return ::SYSTEM_ERROR;
+    if (consumed != data.size()) {
+        ALOGW("Not all data consumed. Consumed %zu of %zu", consumed, data.size());
+        return ResponseCode::SYSTEM_ERROR;
     }
 
-    finish(token, inArgs, signature, signatureLength, NULL, 0, &result);
+    finish(token, inArgs.hidl_data(), signature, hidl_vec<uint8_t>(), &result);
     if (result.resultCode != ResponseCode::NO_ERROR) {
-        ALOGW("Error in finish: %d", result.resultCode);
+        ALOGW("Error in finish: %d", int32_t(result.resultCode));
         return translateResultToLegacyResult(result.resultCode);
     }
     if (out) {
-        outBuffer.write(result.data.get(), result.dataLength);
+        outBuffer.write(&result.data[0], result.data.size());
     }
 
     if (out) {
         auto buf = outBuffer.str();
-        *out = new uint8_t[buf.size()];
-        memcpy(*out, buf.c_str(), buf.size());
-        *outLength = buf.size();
+        out->resize(buf.size());
+        memcpy(&(*out)[0], buf.data(), out->size());
     }
 
-    return ::NO_ERROR;
+    return ResponseCode::NO_ERROR;
 }
 
-int32_t KeyStoreService::upgradeKeyBlob(const String16& name, uid_t uid,
-                                        const AuthorizationSet& params, Blob* blob) {
+KeyStoreServiceReturnCode KeyStoreService::upgradeKeyBlob(const String16& name, uid_t uid,
+                                                          const AuthorizationSet& params,
+                                                          Blob* blob) {
     // Read the blob rather than assuming the caller provided the right name/uid/blob triplet.
     String8 name8(name);
     ResponseCode responseCode = mKeyStore->getKeyForName(blob, name8, uid, TYPE_KEYMASTER_10);
-    if (responseCode != ::NO_ERROR) {
+    if (responseCode != ResponseCode::NO_ERROR) {
         return responseCode;
     }
 
-    keymaster_key_blob_t key = {blob->getValue(), static_cast<size_t>(blob->getLength())};
-    auto* dev = mKeyStore->getDeviceForBlob(*blob);
-    keymaster_key_blob_t upgraded_key;
-    int32_t rc = dev->upgrade_key(dev, &key, &params, &upgraded_key);
-    if (rc != KM_ERROR_OK) {
+    auto hidlKey = blob2hidlVec(*blob);
+    auto& dev = mKeyStore->getDevice(*blob);
+
+    KeyStoreServiceReturnCode error;
+    auto hidlCb = [&](ErrorCode ret, const hidl_vec<uint8_t>& upgradedKeyBlob) {
+        error = ret;
+        if (!error.isOk()) {
+            return;
+        }
+
+        String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, uid, ::TYPE_KEYMASTER_10));
+        error = mKeyStore->del(filename.string(), ::TYPE_ANY, get_user_id(uid));
+        if (!error.isOk()) {
+            return;
+        }
+
+        Blob newBlob(&upgradedKeyBlob[0], upgradedKeyBlob.size(), nullptr /* info */,
+                     0 /* infoLength */, ::TYPE_KEYMASTER_10);
+        newBlob.setFallback(blob->isFallback());
+        newBlob.setEncrypted(blob->isEncrypted());
+
+        error = mKeyStore->put(filename.string(), &newBlob, get_user_id(uid));
+        if (!error.isOk()) {
+            return;
+        }
+
+        // Re-read blob for caller.  We can't use newBlob because writing it modified it.
+        error = mKeyStore->getKeyForName(blob, name8, uid, TYPE_KEYMASTER_10);
+    };
+
+    KeyStoreServiceReturnCode rc =
+        KS_HANDLE_HIDL_ERROR(dev->upgradeKey(hidlKey, params.hidl_data(), hidlCb));
+    if (!rc.isOk()) {
         return rc;
     }
-    UniquePtr<uint8_t, Malloc_Delete> upgraded_key_deleter(
-        const_cast<uint8_t*>(upgraded_key.key_material));
 
-    String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, uid, ::TYPE_KEYMASTER_10));
-    rc = mKeyStore->del(filename.string(), ::TYPE_ANY, get_user_id(uid));
-    if (rc != ::NO_ERROR) {
-        return rc;
-    }
-
-    Blob newBlob(upgraded_key.key_material, upgraded_key.key_material_size, nullptr /* info */,
-                 0 /* infoLength */, ::TYPE_KEYMASTER_10);
-    newBlob.setFallback(blob->isFallback());
-    newBlob.setEncrypted(blob->isEncrypted());
-
-    rc = mKeyStore->put(filename.string(), &newBlob, get_user_id(uid));
-
-    // Re-read blob for caller.  We can't use newBlob because writing it modified it.
-    responseCode = mKeyStore->getKeyForName(blob, name8, uid, TYPE_KEYMASTER_10);
-    if (responseCode != ::NO_ERROR) {
-        return responseCode;
-    }
-
-    return rc;
+    return error;
 }
 
 }  // namespace android
