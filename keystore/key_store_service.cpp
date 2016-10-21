@@ -874,6 +874,23 @@ void KeyStoreService::exportKey(const String16& name, keymaster_key_format_t for
     }
     keymaster_blob_t output = {NULL, 0};
     rc = dev->export_key(dev, format, &key, clientId, appData, &output);
+    if (rc == KM_ERROR_KEY_REQUIRES_UPGRADE) {
+        AuthorizationSet upgradeParams;
+        if (clientId && clientId->data && clientId->data_length) {
+            upgradeParams.push_back(TAG_APPLICATION_ID, *clientId);
+        }
+        if (appData && appData->data && appData->data_length) {
+            upgradeParams.push_back(TAG_APPLICATION_DATA, *appData);
+        }
+        rc = upgradeKeyBlob(name, targetUid, upgradeParams, &keyBlob);
+        if (rc != ::NO_ERROR) {
+            result->resultCode = rc;
+            return;
+        }
+        key = {keyBlob.getValue(), static_cast<size_t>(keyBlob.getLength())};
+        rc = dev->export_key(dev, format, &key, clientId, appData, &output);
+    }
+
     result->exportData.reset(const_cast<uint8_t*>(output.data));
     result->dataLength = output.data_length;
     result->resultCode = rc ? rc : ::NO_ERROR;
