@@ -61,7 +61,7 @@ void AuthTokenTable::AddAuthenticationToken(const hw_auth_token_t* auth_token) {
 }
 
 inline bool is_secret_key_operation(keymaster_algorithm_t algorithm, keymaster_purpose_t purpose) {
-    if ((algorithm != KM_ALGORITHM_RSA || algorithm != KM_ALGORITHM_EC))
+    if ((algorithm != KM_ALGORITHM_RSA && algorithm != KM_ALGORITHM_EC))
         return true;
     if (purpose == KM_PURPOSE_SIGN || purpose == KM_PURPOSE_DECRYPT)
         return true;
