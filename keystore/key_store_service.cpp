@@ -1687,12 +1687,12 @@ int32_t KeyStoreService::upgradeKeyBlob(const String16& name, uid_t uid,
     UniquePtr<uint8_t, Malloc_Delete> upgraded_key_deleter(
         const_cast<uint8_t*>(upgraded_key.key_material));
 
-    rc = del(name, uid);
+    String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, uid, ::TYPE_KEYMASTER_10));
+    rc = mKeyStore->del(filename.string(), ::TYPE_ANY, get_user_id(uid));
     if (rc != ::NO_ERROR) {
         return rc;
     }
 
-    String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, uid, ::TYPE_KEYMASTER_10));
     Blob newBlob(upgraded_key.key_material, upgraded_key.key_material_size, nullptr /* info */,
                  0 /* infoLength */, ::TYPE_KEYMASTER_10);
     newBlob.setFallback(blob->isFallback());
