@@ -84,32 +84,22 @@ static int audit_callback(void* data, security_class_t /* cls */, char* buf, siz
 }
 
 static char* tctx;
-static int ks_is_selinux_enabled;
 
 int configure_selinux() {
-    ks_is_selinux_enabled = is_selinux_enabled();
-    if (ks_is_selinux_enabled) {
-        union selinux_callback cb;
-        cb.func_audit = audit_callback;
-        selinux_set_callback(SELINUX_CB_AUDIT, cb);
-        cb.func_log = selinux_log_callback;
-        selinux_set_callback(SELINUX_CB_LOG, cb);
-        if (getcon(&tctx) != 0) {
-            ALOGE("SELinux: Could not acquire target context. Aborting keystore.\n");
-            return -1;
-        }
-    } else {
-        ALOGI("SELinux: Keystore SELinux is disabled.\n");
+    union selinux_callback cb;
+    cb.func_audit = audit_callback;
+    selinux_set_callback(SELINUX_CB_AUDIT, cb);
+    cb.func_log = selinux_log_callback;
+    selinux_set_callback(SELINUX_CB_LOG, cb);
+    if (getcon(&tctx) != 0) {
+        ALOGE("SELinux: Could not acquire target context. Aborting keystore.\n");
+        return -1;
     }
 
     return 0;
 }
 
 static bool keystore_selinux_check_access(uid_t uid, perm_t perm, pid_t spid) {
-    if (!ks_is_selinux_enabled) {
-        return true;
-    }
-
     audit_data ad;
     char* sctx = NULL;
     const char* selinux_class = "keystore_key";
