@@ -22,6 +22,7 @@ define keystore_proto_include
 $(call local-generated-sources-dir)/proto/$(LOCAL_PATH)
 endef
 
+ifneq ($(TARGET_BUILD_PDK),true)
 include $(CLEAR_VARS)
 ifeq ($(USE_32_BIT_KEYSTORE), true)
 LOCAL_MULTILIB := 32
@@ -63,6 +64,7 @@ LOCAL_SANITIZE := integer
 LOCAL_ADDITIONAL_DEPENDENCIES := $(LOCAL_PATH)/Android.mk
 LOCAL_AIDL_INCLUDES := frameworks/base/core/java/
 include $(BUILD_EXECUTABLE)
+endif
 
 include $(CLEAR_VARS)
 ifeq ($(USE_32_BIT_KEYSTORE), true)
