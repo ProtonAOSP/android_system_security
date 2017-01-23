@@ -24,7 +24,10 @@
 #include <algorithm>
 #include <sstream>
 
+#include <binder/IInterface.h>
 #include <binder/IPCThreadState.h>
+#include <binder/IPermissionController.h>
+#include <binder/IServiceManager.h>
 
 #include <private/android_filesystem_config.h>
 
@@ -1229,6 +1232,23 @@ KeyStoreServiceReturnCode KeyStoreService::addAuthToken(const uint8_t* token, si
 
 constexpr size_t KEY_ATTESTATION_APPLICATION_ID_MAX_SIZE = 1024;
 
+bool isDeviceIdAttestationRequested(const hidl_vec<KeyParameter>& params) {
+    for (size_t i = 0; i < params.size(); ++i) {
+        switch (params[i].tag) {
+            case Tag::ATTESTATION_ID_BRAND:
+            case Tag::ATTESTATION_ID_DEVICE:
+            case Tag::ATTESTATION_ID_PRODUCT:
+            case Tag::ATTESTATION_ID_SERIAL:
+            case Tag::ATTESTATION_ID_IMEI:
+            case Tag::ATTESTATION_ID_MEID:
+                return true;
+            default:
+                break;
+        }
+    }
+    return false;
+}
+
 KeyStoreServiceReturnCode KeyStoreService::attestKey(const String16& name,
                                                      const hidl_vec<KeyParameter>& params,
                                                      hidl_vec<hidl_vec<uint8_t>>* outChain) {
@@ -1241,6 +1261,19 @@ KeyStoreServiceReturnCode KeyStoreService::attestKey(const String16& name,
     }
 
     uid_t callingUid = IPCThreadState::self()->getCallingUid();
+
+    bool attestingDeviceIds = isDeviceIdAttestationRequested(params);
+    if (attestingDeviceIds) {
+        sp<IBinder> binder = defaultServiceManager()->getService(String16("permission"));
+        if (binder == 0) {
+            return ErrorCode::CANNOT_ATTEST_IDS;
+        }
+        if (!interface_cast<IPermissionController>(binder)->checkPermission(
+                String16("android.permission.READ_PRIVILEGED_PHONE_STATE"),
+                IPCThreadState::self()->getCallingPid(), callingUid)) {
+                    return ErrorCode::CANNOT_ATTEST_IDS;
+        }
+    }
 
     Blob keyBlob;
     String8 name8(name);
@@ -1279,12 +1312,23 @@ KeyStoreServiceReturnCode KeyStoreService::attestKey(const String16& name,
 
     auto hidlKey = blob2hidlVec(keyBlob);
     auto& dev = mKeyStore->getDevice(keyBlob);
-    KeyStoreServiceReturnCode rc =
+    KeyStoreServiceReturnCode attestationRc =
         KS_HANDLE_HIDL_ERROR(dev->attestKey(hidlKey, mutableParams.hidl_data(), hidlCb));
-    if (!rc.isOk()) {
-        return rc;
+
+    KeyStoreServiceReturnCode deletionRc;
+    if (attestingDeviceIds) {
+        // When performing device id attestation, treat the key as ephemeral and delete it straight
+        // away.
+        deletionRc = KS_HANDLE_HIDL_ERROR(dev->deleteKey(hidlKey));
     }
-    return error;
+
+    if (!attestationRc.isOk()) {
+        return attestationRc;
+    }
+    if (!error.isOk()) {
+        return error;
+    }
+    return deletionRc;
 }
 
 KeyStoreServiceReturnCode KeyStoreService::onDeviceOffBody() {

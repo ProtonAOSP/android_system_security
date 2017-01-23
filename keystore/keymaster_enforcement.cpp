@@ -289,6 +289,12 @@ ErrorCode KeymasterEnforcement::AuthorizeBegin(const KeyPurpose purpose, const k
         case Tag::APPLICATION_DATA:
         case Tag::ATTESTATION_CHALLENGE:
         case Tag::ATTESTATION_APPLICATION_ID:
+        case Tag::ATTESTATION_ID_BRAND:
+        case Tag::ATTESTATION_ID_DEVICE:
+        case Tag::ATTESTATION_ID_PRODUCT:
+        case Tag::ATTESTATION_ID_SERIAL:
+        case Tag::ATTESTATION_ID_IMEI:
+        case Tag::ATTESTATION_ID_MEID:
             return ErrorCode::INVALID_KEY_BLOB;
 
         /* Tags used for cryptographic parameters in keygen.  Nothing to enforce. */

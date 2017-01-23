@@ -68,6 +68,7 @@ class LegacyKeymasterDeviceWrapper : public IKeymasterDevice {
                             upgradeKey_cb _hidl_cb) override;
     Return<ErrorCode> deleteKey(const hidl_vec<uint8_t>& keyBlob) override;
     Return<ErrorCode> deleteAllKeys() override;
+    Return<ErrorCode> destroyAttestationIds() override;
     Return<void> begin(KeyPurpose purpose, const hidl_vec<uint8_t>& key,
                        const hidl_vec<KeyParameter>& inParams, begin_cb _hidl_cb) override;
     Return<void> update(uint64_t operationHandle, const hidl_vec<KeyParameter>& inParams,

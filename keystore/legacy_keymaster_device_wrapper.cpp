@@ -348,6 +348,24 @@ Return<void> LegacyKeymasterDeviceWrapper::attestKey(const hidl_vec<uint8_t>& ke
 
     hidl_vec<hidl_vec<uint8_t>> resultCertChain;
 
+    for (size_t i = 0; i < attestParams.size(); ++i) {
+        switch (attestParams[i].tag) {
+            case Tag::ATTESTATION_ID_BRAND:
+            case Tag::ATTESTATION_ID_DEVICE:
+            case Tag::ATTESTATION_ID_PRODUCT:
+            case Tag::ATTESTATION_ID_SERIAL:
+            case Tag::ATTESTATION_ID_IMEI:
+            case Tag::ATTESTATION_ID_MEID:
+                // Device id attestation may only be supported if the device is able to permanently
+                // destroy its knowledge of the ids. This device is unable to do this, so it must
+                // never perform any device id attestation.
+                _hidl_cb(ErrorCode::CANNOT_ATTEST_IDS, resultCertChain);
+                return Void();
+            default:
+                break;
+        }
+    }
+
     keymaster_cert_chain_t cert_chain = {};
 
     auto kmKeyToAttest = hidlVec2KmKeyBlob(keyToAttest);
@@ -402,6 +420,10 @@ Return<ErrorCode> LegacyKeymasterDeviceWrapper::deleteKey(const hidl_vec<uint8_t
 
 Return<ErrorCode> LegacyKeymasterDeviceWrapper::deleteAllKeys() {
     return legacy_enum_conversion(keymaster_device_->delete_all_keys(keymaster_device_));
+}
+
+Return<ErrorCode> LegacyKeymasterDeviceWrapper::destroyAttestationIds() {
+    return ErrorCode::UNIMPLEMENTED;
 }
 
 Return<void> LegacyKeymasterDeviceWrapper::begin(KeyPurpose purpose, const hidl_vec<uint8_t>& key,
