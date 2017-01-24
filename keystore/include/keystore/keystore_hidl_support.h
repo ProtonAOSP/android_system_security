@@ -111,7 +111,7 @@ inline static hidl_vec<uint8_t> authToken2HidlVec(const HardwareAuthToken& token
     result.resize(sizeof(hw_auth_token_t));
     auto pos = result.begin();
     *pos++ = 0;  // Version byte
-    pos = copy_bytes_to_iterator(token.challenge, result.begin());
+    pos = copy_bytes_to_iterator(token.challenge, pos);
     pos = copy_bytes_to_iterator(token.userId, pos);
     pos = copy_bytes_to_iterator(token.authenticatorId, pos);
     pos = copy_bytes_to_iterator(token.authenticatorType, pos);
