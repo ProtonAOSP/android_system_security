@@ -57,7 +57,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    auto dev = android::hardware::keymaster::V3_0::IKeymasterDevice::getService("keymaster");
+    auto dev = android::hardware::keymaster::V3_0::IKeymasterDevice::getService();
     if (dev.get() == nullptr) {
         return -1;
     }
