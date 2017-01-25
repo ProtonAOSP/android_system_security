@@ -1095,7 +1095,8 @@ void KeyStoreService::update(const sp<IBinder>& token, const hidl_vec<KeyParamet
         result->data = output;
     };
 
-    KeyStoreServiceReturnCode rc = KS_HANDLE_HIDL_ERROR(dev->update(handle, params, data, hidlCb));
+    KeyStoreServiceReturnCode rc = KS_HANDLE_HIDL_ERROR(dev->update(handle, opParams.hidl_data(),
+                                                        data, hidlCb));
     // just a reminder: on success result->resultCode was set in the callback. So we only overwrite
     // it if there was a communication error indicated by the ErrorCode.
     if (!rc.isOk()) {
