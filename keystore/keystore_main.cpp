@@ -29,6 +29,8 @@
 #include "keystore.h"
 #include "permissions.h"
 #include "legacy_keymaster_device_wrapper.h"
+#include "include/keystore/keystore_hidl_support.h"
+#include "include/keystore/keystore_return_types.h"
 
 /* KeyStore is a secured storage for key-value pairs. In this implementation,
  * each file stores one key-value pair. Keys are encoded in file names, and
@@ -68,7 +70,22 @@ int main(int argc, char* argv[]) {
         return -1;
     }
 
-    KeyStore keyStore(&entropy, dev, fallback);
+    bool allowNewFallbackDevice = false;
+
+    keystore::KeyStoreServiceReturnCode rc;
+    rc = KS_HANDLE_HIDL_ERROR(dev->getHardwareFeatures(
+            [&] (bool, bool, bool, bool supportsAttestation) {
+                // Attestation support indicates the hardware is keymaster 2.0 or higher.
+                // For these devices we will not allow the fallback device for import or generation
+                // of keys. The fallback device is only used for legacy keys present on the device.
+                allowNewFallbackDevice = !supportsAttestation;
+            }));
+
+    if (!rc.isOk()) {
+        return -1;
+    }
+
+    KeyStore keyStore(&entropy, dev, fallback, allowNewFallbackDevice);
     keyStore.initialize();
     android::sp<android::IServiceManager> sm = android::defaultServiceManager();
     android::sp<keystore::KeyStoreService> service = new keystore::KeyStoreService(&keyStore);

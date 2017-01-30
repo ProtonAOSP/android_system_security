@@ -652,8 +652,11 @@ KeyStoreServiceReturnCode KeyStoreService::generateKey(const String16& name,
     if (!error.isOk()) {
         ALOGE("Failed to generate key -> falling back to software keymaster");
         usingFallback = true;
-        auto& fallback = mKeyStore->getFallbackDevice();
-        rc = KS_HANDLE_HIDL_ERROR(fallback->generateKey(params, hidl_cb));
+        auto fallback = mKeyStore->getFallbackDevice();
+        if (!fallback.isOk()) {
+            return error;
+        }
+        rc = KS_HANDLE_HIDL_ERROR(fallback.value()->generateKey(params, hidl_cb));
         if (!rc.isOk()) {
             return rc;
         }
@@ -795,8 +798,11 @@ KeyStoreService::importKey(const String16& name, const hidl_vec<KeyParameter>& p
     if (!error.isOk()) {
         ALOGE("Failed to import key -> falling back to software keymaster");
         usingFallback = true;
-        auto& fallback = mKeyStore->getFallbackDevice();
-        rc = KS_HANDLE_HIDL_ERROR(fallback->importKey(params, format, keyData, hidlCb));
+        auto fallback = mKeyStore->getFallbackDevice();
+        if (!fallback.isOk()) {
+            return error;
+        }
+        rc = KS_HANDLE_HIDL_ERROR(fallback.value()->importKey(params, format, keyData, hidlCb));
         // possible hidl error
         if (!rc.isOk()) {
             return rc;

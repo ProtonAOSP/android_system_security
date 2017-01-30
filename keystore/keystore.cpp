@@ -40,8 +40,10 @@ const android::String16 KeyStore::sRSAKeyType("RSA");
 
 using namespace keystore;
 
-KeyStore::KeyStore(Entropy* entropy, const km_device_t& device, const km_device_t& fallback)
-    : mEntropy(entropy), mDevice(device), mFallbackDevice(fallback) {
+KeyStore::KeyStore(Entropy* entropy, const km_device_t& device, const km_device_t& fallback,
+                   bool allowNewFallback)
+    : mEntropy(entropy), mDevice(device), mFallbackDevice(fallback),
+      mAllowNewFallback(allowNewFallback) {
     memset(&mMetaData, '\0', sizeof(mMetaData));
 }
 
