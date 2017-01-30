@@ -309,8 +309,10 @@ ResponseCode KeyStore::del(const char* filename, const BlobType type, uid_t user
         return rc;
     }
 
+    auto& dev = getDevice(keyBlob);
+
     if (keyBlob.getType() == ::TYPE_KEY_PAIR || keyBlob.getType() == ::TYPE_KEYMASTER_10) {
-        auto ret = KS_HANDLE_HIDL_ERROR(mDevice->deleteKey(blob2hidlVec(keyBlob)));
+        auto ret = KS_HANDLE_HIDL_ERROR(dev->deleteKey(blob2hidlVec(keyBlob)));
 
         // A device doesn't have to implement delete_key.
         if (ret != ErrorCode::OK && ret != ErrorCode::UNIMPLEMENTED)
