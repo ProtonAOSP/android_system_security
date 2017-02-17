@@ -55,9 +55,9 @@ class OperationMap {
     size_t getOperationCount() const { return mMap.size(); }
     size_t getPruneableOperationCount() const;
     bool getOperationAuthToken(const android::sp<android::IBinder>& token,
-                               const HardwareAuthToken** outToken);
+                               const hidl_vec<uint8_t>** outToken);
     bool setOperationAuthToken(const android::sp<android::IBinder>& token,
-                               const HardwareAuthToken* authToken);
+                               hidl_vec<uint8_t> authToken);
     android::sp<android::IBinder> getOldestPruneableOperation();
     std::vector<android::sp<android::IBinder>>
     getOperationsForToken(const android::sp<android::IBinder>& appToken);
@@ -76,7 +76,7 @@ class OperationMap {
         km_device_t device;
         KeyCharacteristics characteristics;
         android::sp<android::IBinder> appToken;
-        std::unique_ptr<HardwareAuthToken> authToken;
+        hidl_vec<uint8_t> authToken;
     };
     std::map<android::sp<android::IBinder>, Operation> mMap;
     std::vector<android::sp<android::IBinder>> mLru;

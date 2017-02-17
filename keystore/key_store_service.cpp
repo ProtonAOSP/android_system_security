@@ -893,9 +893,9 @@ void KeyStoreService::exportKey(const String16& name, KeyFormat format,
     }
 }
 
-static inline void addAuthTokenToParams(AuthorizationSet* params, const HardwareAuthToken* token) {
+static inline void addAuthTokenToParams(AuthorizationSet* params, const hidl_vec<uint8_t>* token) {
     if (token) {
-        params->push_back(TAG_AUTH_TOKEN, authToken2HidlVec(*token));
+        params->push_back(TAG_AUTH_TOKEN, *token);
     }
 }
 
@@ -944,7 +944,7 @@ void KeyStoreService::begin(const sp<IBinder>& appToken, const String16& name, K
         return;
     }
 
-    const HardwareAuthToken* authToken = NULL;
+    const hidl_vec<uint8_t>* authToken = NULL;
 
     // Merge these characteristics with the ones cached when the key was generated or imported
     Blob charBlob;
@@ -1050,7 +1050,7 @@ void KeyStoreService::begin(const sp<IBinder>& appToken, const String16& name, K
     assert(characteristics.softwareEnforced.size() == 0);
 
     if (authToken) {
-        mOperationMap.setOperationAuthToken(operationToken, authToken);
+        mOperationMap.setOperationAuthToken(operationToken, *authToken);
     }
     // Return the authentication lookup result. If this is a per operation
     // auth'd key then the resultCode will be ::OP_AUTH_NEEDED and the
@@ -1197,7 +1197,7 @@ bool KeyStoreService::isOperationAuthorized(const sp<IBinder>& token) {
     if (!mOperationMap.getOperation(token, &handle, &keyid, &purpose, &dev, &characteristics)) {
         return false;
     }
-    const HardwareAuthToken* authToken = NULL;
+    const hidl_vec<uint8_t>* authToken = NULL;
     mOperationMap.getOperationAuthToken(token, &authToken);
     AuthorizationSet ignored;
     auto authResult = addOperationAuthTokenIfNeeded(token, &ignored);
@@ -1205,38 +1205,25 @@ bool KeyStoreService::isOperationAuthorized(const sp<IBinder>& token) {
 }
 
 KeyStoreServiceReturnCode KeyStoreService::addAuthToken(const uint8_t* token, size_t length) {
-    // TODO(swillden): When gatekeeper and fingerprint are ready, this should be updated to
-    // receive a HardwareAuthToken, rather than an opaque byte array.
-
     if (!checkBinderPermission(P_ADD_AUTH)) {
         ALOGW("addAuthToken: permission denied for %d", IPCThreadState::self()->getCallingUid());
         return ResponseCode::PERMISSION_DENIED;
     }
-    if (length != sizeof(hw_auth_token_t)) {
-        return ErrorCode::INVALID_ARGUMENT;
-    }
 
-    hw_auth_token_t authToken;
-    memcpy(reinterpret_cast<void*>(&authToken), token, sizeof(hw_auth_token_t));
-    if (authToken.version != 0) {
-        return ErrorCode::INVALID_ARGUMENT;
-    }
+    hidl_vec<uint8_t> hidl_token;
+    hidl_token.setToExternal(const_cast<uint8_t*>(token), length);
 
-    std::unique_ptr<HardwareAuthToken> hidlAuthToken(new HardwareAuthToken);
-    hidlAuthToken->challenge = authToken.challenge;
-    hidlAuthToken->userId = authToken.user_id;
-    hidlAuthToken->authenticatorId = authToken.authenticator_id;
-    hidlAuthToken->authenticatorType = authToken.authenticator_type;
-    hidlAuthToken->timestamp = authToken.timestamp;
-    static_assert(
-        std::is_same<decltype(hidlAuthToken->hmac),
-                     ::android::hardware::hidl_array<uint8_t, sizeof(authToken.hmac)>>::value,
-        "This function assumes token HMAC is 32 bytes, but it might not be.");
-    std::copy(authToken.hmac, authToken.hmac + sizeof(authToken.hmac), hidlAuthToken->hmac.data());
-
-    // The table takes ownership of authToken.
-    mAuthTokenTable.AddAuthenticationToken(hidlAuthToken.release());
-    return ResponseCode::NO_ERROR;
+    ErrorCode error;
+    KeyStoreServiceReturnCode rc =
+        KS_HANDLE_HIDL_ERROR(mKeyStore->getDevice()->parseHardwareAuthToken(
+            hidl_token, [&](ErrorCode hidlError, const HardwareAuthTokenInfo& tokenInfo) {
+                error = hidlError;
+                if (error == ErrorCode::OK) {
+                    mAuthTokenTable.AddAuthenticationToken(hidl_token, tokenInfo);
+                }
+            }));
+    if (rc.isOk()) rc = error;
+    return rc;
 }
 
 constexpr size_t KEY_ATTESTATION_APPLICATION_ID_MAX_SIZE = 1024;
@@ -1507,18 +1494,20 @@ ErrorCode KeyStoreService::getOperationCharacteristics(const hidl_vec<uint8_t>& 
 }
 
 /**
- * Get the auth token for this operation from the auth token table.
+ * Get the auth token for this operation from the auth token table.  The caller does not acquire
+ * ownership of the auth token.
  *
- * Returns ResponseCode::NO_ERROR if the auth token was set or none was required.
- *         ::OP_AUTH_NEEDED if it is a per op authorization, no
- *         authorization token exists for that operation and
- *         failOnTokenMissing is false.
- *         KM_ERROR_KEY_USER_NOT_AUTHENTICATED if there is no valid auth
- *         token for the operation
+ * Returns:
+ *         ResponseCode::NO_ERROR if the auth token was set or none was required.
+ *
+ *         ::OP_AUTH_NEEDED if it is a per op authorization, no authorization token exists for that
+ *         operation and failOnTokenMissing is false.
+ *
+ *         KM_ERROR_KEY_USER_NOT_AUTHENTICATED if there is no valid auth token for the operation
  */
 KeyStoreServiceReturnCode KeyStoreService::getAuthToken(const KeyCharacteristics& characteristics,
                                                         uint64_t handle, KeyPurpose purpose,
-                                                        const HardwareAuthToken** authToken,
+                                                        const hidl_vec<uint8_t>** authToken,
                                                         bool failOnTokenMissing) {
 
     AuthorizationSet allCharacteristics;
@@ -1560,7 +1549,7 @@ KeyStoreServiceReturnCode KeyStoreService::getAuthToken(const KeyCharacteristics
  */
 KeyStoreServiceReturnCode KeyStoreService::addOperationAuthTokenIfNeeded(const sp<IBinder>& token,
                                                                          AuthorizationSet* params) {
-    const HardwareAuthToken* authToken = nullptr;
+    const hidl_vec<uint8_t>* authToken = nullptr;
     mOperationMap.getOperationAuthToken(token, &authToken);
     if (!authToken) {
         km_device_t dev;
@@ -1576,7 +1565,7 @@ KeyStoreServiceReturnCode KeyStoreService::addOperationAuthTokenIfNeeded(const s
             return result;
         }
         if (authToken) {
-            mOperationMap.setOperationAuthToken(token, authToken);
+            mOperationMap.setOperationAuthToken(token, *authToken);
         }
     }
     addAuthTokenToParams(params, authToken);

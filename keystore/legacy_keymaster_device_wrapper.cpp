@@ -204,6 +204,13 @@ Return<void> LegacyKeymasterDeviceWrapper::getHardwareFeatures(getHardwareFeatur
     return Void();
 }
 
+Return<void>
+LegacyKeymasterDeviceWrapper::parseHardwareAuthToken(const hidl_vec<uint8_t>& /* token */,
+                                                     parseHardwareAuthToken_cb _hidl_cb) {
+    // parseHardwareAuthToken is only called on a real HAL, never on the fallback device.
+    _hidl_cb(ErrorCode::UNIMPLEMENTED, HardwareAuthTokenInfo());
+    return Void();
+}
 Return<ErrorCode> LegacyKeymasterDeviceWrapper::addRngEntropy(const hidl_vec<uint8_t>& data) {
     return legacy_enum_conversion(
         keymaster_device_->add_rng_entropy(keymaster_device_, &data[0], data.size()));

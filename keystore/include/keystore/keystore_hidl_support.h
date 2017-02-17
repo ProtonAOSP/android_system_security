@@ -97,30 +97,6 @@ inline static OutIter copy_bytes_to_iterator(const T& value, OutIter dest) {
     return std::copy(value_ptr, value_ptr + sizeof(value), dest);
 }
 
-inline static hidl_vec<uint8_t> authToken2HidlVec(const HardwareAuthToken& token) {
-    static_assert(
-        std::is_same<decltype(token.hmac), ::android::hardware::hidl_array<uint8_t, 32>>::value,
-        "This function assumes token HMAC is 32 bytes, but it might not be.");
-    static_assert(1 /* version size */ + sizeof(token.challenge) + sizeof(token.userId) +
-                          sizeof(token.authenticatorId) + sizeof(token.authenticatorType) +
-                          sizeof(token.timestamp) + 32 /* HMAC size */
-                      == sizeof(hw_auth_token_t),
-                  "HardwareAuthToken content size does not match hw_auth_token_t size");
-
-    hidl_vec<uint8_t> result;
-    result.resize(sizeof(hw_auth_token_t));
-    auto pos = result.begin();
-    *pos++ = 0;  // Version byte
-    pos = copy_bytes_to_iterator(token.challenge, pos);
-    pos = copy_bytes_to_iterator(token.userId, pos);
-    pos = copy_bytes_to_iterator(token.authenticatorId, pos);
-    pos = copy_bytes_to_iterator(token.authenticatorType, pos);
-    pos = copy_bytes_to_iterator(token.timestamp, pos);
-    pos = std::copy(token.hmac.data(), token.hmac.data() + token.hmac.size(), pos);
-
-    return result;
-}
-
 inline std::string hidlVec2String(const hidl_vec<uint8_t>& value) {
     return std::string(reinterpret_cast<const std::string::value_type*>(&value[0]), value.size());
 }

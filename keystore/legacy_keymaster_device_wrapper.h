@@ -19,8 +19,8 @@
 #define LEGACY_KEYMASTER_DEVICE_WRAPPER_H_
 
 #include <android/hardware/keymaster/3.0/IKeymasterDevice.h>
-#include <hidl/Status.h>
 #include <hidl/MQDescriptor.h>
+#include <hidl/Status.h>
 
 struct keymaster2_device;
 typedef struct keymaster2_device keymaster2_device_t;
@@ -29,6 +29,7 @@ namespace android {
 namespace keystore {
 
 using ::android::hardware::keymaster::V3_0::ErrorCode;
+using ::android::hardware::keymaster::V3_0::HardwareAuthTokenInfo;
 using ::android::hardware::keymaster::V3_0::IKeymasterDevice;
 using ::android::hardware::keymaster::V3_0::KeyCharacteristics;
 using ::android::hardware::keymaster::V3_0::KeyFormat;
@@ -48,6 +49,8 @@ class LegacyKeymasterDeviceWrapper : public IKeymasterDevice {
 
     // Methods from ::android::hardware::keymaster::V3_0::IKeymasterDevice follow.
     Return<void> getHardwareFeatures(getHardwareFeatures_cb _hidl_cb);
+    Return<void> parseHardwareAuthToken(const hidl_vec<uint8_t>& token,
+                                        parseHardwareAuthToken_cb _hidl_cb);
     Return<ErrorCode> addRngEntropy(const hidl_vec<uint8_t>& data) override;
     Return<void> generateKey(const hidl_vec<KeyParameter>& keyParams,
                              generateKey_cb _hidl_cb) override;

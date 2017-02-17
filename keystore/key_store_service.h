@@ -203,7 +203,7 @@ class KeyStoreService : public android::BnKeystoreService, public android::IBind
      */
     KeyStoreServiceReturnCode getAuthToken(const KeyCharacteristics& characteristics,
                                            uint64_t handle, KeyPurpose purpose,
-                                           const HardwareAuthToken** authToken,
+                                           const hidl_vec<uint8_t>** authToken,
                                            bool failOnTokenMissing = true);
 
     /**

@@ -25,33 +25,6 @@
 
 namespace keystore {
 
-template <typename IntType, uint32_t byteOrder> struct choose_hton;
-
-template <typename IntType> struct choose_hton<IntType, __ORDER_LITTLE_ENDIAN__> {
-    inline static IntType hton(const IntType& value) {
-        IntType result = 0;
-        const unsigned char* inbytes = reinterpret_cast<const unsigned char*>(&value);
-        unsigned char* outbytes = reinterpret_cast<unsigned char*>(&result);
-        for (int i = sizeof(IntType) - 1; i >= 0; --i) {
-            *(outbytes++) = inbytes[i];
-        }
-        return result;
-    }
-};
-
-template <typename IntType> struct choose_hton<IntType, __ORDER_BIG_ENDIAN__> {
-    inline static IntType hton(const IntType& value) { return value; }
-};
-
-template <typename IntType> inline IntType hton(const IntType& value) {
-    return choose_hton<IntType, __BYTE_ORDER__>::hton(value);
-}
-
-template <typename IntType> inline IntType ntoh(const IntType& value) {
-    // same operation and hton
-    return choose_hton<IntType, __BYTE_ORDER__>::hton(value);
-}
-
 //
 // Some trivial template wrappers around std algorithms, so they take containers not ranges.
 //
@@ -75,8 +48,8 @@ time_t clock_gettime_raw() {
     return time.tv_sec;
 }
 
-void AuthTokenTable::AddAuthenticationToken(const HardwareAuthToken* auth_token) {
-    Entry new_entry(auth_token, clock_function_());
+void AuthTokenTable::AddAuthenticationToken(hidl_vec<uint8_t> token, HardwareAuthTokenInfo info) {
+    Entry new_entry(std::move(token), std::move(info), clock_function_());
     RemoveEntriesSupersededBy(new_entry);
     if (entries_.size() >= max_entries_) {
         ALOGW("Auth token table filled up; replacing oldest entry");
@@ -107,7 +80,7 @@ inline bool KeyRequiresAuthPerOperation(const AuthorizationSet& key_info, KeyPur
 
 AuthTokenTable::Error AuthTokenTable::FindAuthorization(const AuthorizationSet& key_info,
                                                         KeyPurpose purpose, uint64_t op_handle,
-                                                        const HardwareAuthToken** found) {
+                                                        const hidl_vec<uint8_t>** found) {
     if (!KeyRequiresAuthentication(key_info, purpose)) return AUTH_NOT_REQUIRED;
 
     auto auth_type =
@@ -125,24 +98,24 @@ AuthTokenTable::Error AuthTokenTable::FindAuthorization(const AuthorizationSet& 
 AuthTokenTable::Error
 AuthTokenTable::FindAuthPerOpAuthorization(const std::vector<uint64_t>& sids,
                                            HardwareAuthenticatorType auth_type, uint64_t op_handle,
-                                           const HardwareAuthToken** found) {
+                                           const hidl_vec<uint8_t>** found) {
     if (op_handle == 0) return OP_HANDLE_REQUIRED;
 
     auto matching_op = find_if(
-        entries_, [&](Entry& e) { return e.token()->challenge == op_handle && !e.completed(); });
+        entries_, [&](Entry& e) { return e.tokenInfo().challenge == op_handle && !e.completed(); });
 
     if (matching_op == entries_.end()) return AUTH_TOKEN_NOT_FOUND;
 
     if (!matching_op->SatisfiesAuth(sids, auth_type)) return AUTH_TOKEN_WRONG_SID;
 
-    *found = matching_op->token();
+    *found = &matching_op->token();
     return OK;
 }
 
 AuthTokenTable::Error AuthTokenTable::FindTimedAuthorization(const std::vector<uint64_t>& sids,
                                                              HardwareAuthenticatorType auth_type,
                                                              const AuthorizationSet& key_info,
-                                                             const HardwareAuthToken** found) {
+                                                             const hidl_vec<uint8_t>** found) {
     Entry* newest_match = NULL;
     for (auto& entry : entries_)
         if (entry.SatisfiesAuth(sids, auth_type) && entry.is_newer_than(newest_match))
@@ -164,7 +137,7 @@ AuthTokenTable::Error AuthTokenTable::FindTimedAuthorization(const std::vector<u
     }
 
     newest_match->UpdateLastUse(now);
-    *found = newest_match->token();
+    *found = &newest_match->token();
     return OK;
 }
 
@@ -194,7 +167,7 @@ bool AuthTokenTable::IsSupersededBySomeEntry(const Entry& entry) {
 }
 
 void AuthTokenTable::MarkCompleted(const uint64_t op_handle) {
-    auto found = find_if(entries_, [&](Entry& e) { return e.token()->challenge == op_handle; });
+    auto found = find_if(entries_, [&](Entry& e) { return e.tokenInfo().challenge == op_handle; });
     if (found == entries_.end()) return;
 
     assert(!IsSupersededBySomeEntry(*found));
@@ -203,25 +176,16 @@ void AuthTokenTable::MarkCompleted(const uint64_t op_handle) {
     if (IsSupersededBySomeEntry(*found)) entries_.erase(found);
 }
 
-AuthTokenTable::Entry::Entry(const HardwareAuthToken* token, time_t current_time)
-    : token_(token), time_received_(current_time), last_use_(current_time),
-      operation_completed_(token_->challenge == 0) {}
-
-uint32_t AuthTokenTable::Entry::timestamp_host_order() const {
-    return ntoh(token_->timestamp);
-}
-
-HardwareAuthenticatorType AuthTokenTable::Entry::authenticator_type() const {
-    HardwareAuthenticatorType result = static_cast<HardwareAuthenticatorType>(
-        ntoh(static_cast<uint32_t>(token_->authenticatorType)));
-    return result;
-}
+AuthTokenTable::Entry::Entry(hidl_vec<uint8_t>&& token, HardwareAuthTokenInfo&& tokenInfo,
+                             time_t current_time)
+    : token_(std::move(token)), tokenInfo_(std::move(tokenInfo)), time_received_(current_time),
+      last_use_(current_time), operation_completed_(tokenInfo_.challenge == 0) {}
 
 bool AuthTokenTable::Entry::SatisfiesAuth(const std::vector<uint64_t>& sids,
                                           HardwareAuthenticatorType auth_type) {
     for (auto sid : sids)
-        if ((sid == token_->authenticatorId) ||
-            (sid == token_->userId && (auth_type & authenticator_type()) != 0))
+        if ((sid == tokenInfo_.authenticatorId) ||
+            (sid == tokenInfo_.userId && (auth_type & tokenInfo_.authenticatorType) != 0))
             return true;
     return false;
 }
@@ -233,10 +197,9 @@ void AuthTokenTable::Entry::UpdateLastUse(time_t time) {
 bool AuthTokenTable::Entry::Supersedes(const Entry& entry) const {
     if (!entry.completed()) return false;
 
-    return (token_->userId == entry.token_->userId &&
-            token_->authenticatorType == entry.token_->authenticatorType &&
-            token_->authenticatorType == entry.token_->authenticatorType &&
-            timestamp_host_order() > entry.timestamp_host_order());
+    return (tokenInfo_.userId == entry.tokenInfo_.userId &&
+            tokenInfo_.authenticatorType == entry.tokenInfo_.authenticatorType &&
+            tokenInfo_.timestamp > entry.tokenInfo_.timestamp);
 }
 
 }  // namespace keymaster
