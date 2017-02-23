@@ -481,13 +481,15 @@ ResponseCode KeyStore::importKey(const uint8_t* key, size_t keyLen, const char* 
 }
 
 bool KeyStore::isHardwareBacked(const android::String16& /*keyType*/) const {
+    using ::android::hardware::hidl_string;
     if (mDevice == NULL) {
         ALOGW("can't get keymaster device");
         return false;
     }
 
     bool isSecure = false;
-    auto hidlcb = [&] (bool _isSecure, bool, bool, bool) {
+    auto hidlcb = [&] (bool _isSecure, bool, bool, bool, bool, const hidl_string&,
+                       const hidl_string&) {
         isSecure = _isSecure;
     };
     auto rc = mDevice->getHardwareFeatures(hidlcb);

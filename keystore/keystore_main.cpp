@@ -43,6 +43,7 @@
  */
 
 int main(int argc, char* argv[]) {
+    using android::hardware::hidl_string;
     if (argc < 2) {
         ALOGE("A directory must be specified!");
         return 1;
@@ -74,7 +75,8 @@ int main(int argc, char* argv[]) {
 
     keystore::KeyStoreServiceReturnCode rc;
     rc = KS_HANDLE_HIDL_ERROR(dev->getHardwareFeatures(
-            [&] (bool, bool, bool, bool supportsAttestation) {
+            [&] (bool, bool, bool, bool supportsAttestation, bool, const hidl_string&,
+                 const hidl_string&) {
                 // Attestation support indicates the hardware is keymaster 2.0 or higher.
                 // For these devices we will not allow the fallback device for import or generation
                 // of keys. The fallback device is only used for legacy keys present on the device.
