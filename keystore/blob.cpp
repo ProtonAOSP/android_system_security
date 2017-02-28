@@ -71,12 +71,20 @@ bool Blob::isEncrypted() const {
     return mBlob.flags & KEYSTORE_FLAG_ENCRYPTED;
 }
 
+bool Blob::isSuperEncrypted() const {
+    return mBlob.flags & KEYSTORE_FLAG_SUPER_ENCRYPTED;
+}
+
+inline uint8_t setFlag(uint8_t flags, bool set, KeyStoreFlag flag) {
+    return set ? (flags | flag) : (flags & ~flag);
+}
+
 void Blob::setEncrypted(bool encrypted) {
-    if (encrypted) {
-        mBlob.flags |= KEYSTORE_FLAG_ENCRYPTED;
-    } else {
-        mBlob.flags &= ~KEYSTORE_FLAG_ENCRYPTED;
-    }
+    mBlob.flags = setFlag(mBlob.flags, encrypted, KEYSTORE_FLAG_ENCRYPTED);
+}
+
+void Blob::setSuperEncrypted(bool superEncrypted) {
+    mBlob.flags = setFlag(mBlob.flags, superEncrypted, KEYSTORE_FLAG_SUPER_ENCRYPTED);
 }
 
 void Blob::setFallback(bool fallback) {
@@ -90,7 +98,7 @@ void Blob::setFallback(bool fallback) {
 ResponseCode Blob::writeBlob(const char* filename, AES_KEY* aes_key, State state,
                              Entropy* entropy) {
     ALOGV("writing blob %s", filename);
-    if (isEncrypted()) {
+    if (isEncrypted() || isSuperEncrypted()) {
         if (state != STATE_NO_ERROR) {
             ALOGD("couldn't insert encrypted blob while not unlocked");
             return ResponseCode::LOCKED;
@@ -115,7 +123,7 @@ ResponseCode Blob::writeBlob(const char* filename, AES_KEY* aes_key, State state
 
     mBlob.length = htonl(mBlob.length);
 
-    if (isEncrypted()) {
+    if (isEncrypted() || isSuperEncrypted()) {
         MD5(mBlob.digested, digestedLength, mBlob.digest);
 
         uint8_t vector[AES_BLOCK_SIZE];
@@ -168,7 +176,7 @@ ResponseCode Blob::readBlob(const char* filename, AES_KEY* aes_key, State state)
         return ResponseCode::VALUE_CORRUPTED;
     }
 
-    if (isEncrypted() && (state != STATE_NO_ERROR)) {
+    if ((isEncrypted() || isSuperEncrypted()) && (state != STATE_NO_ERROR)) {
         return ResponseCode::LOCKED;
     }
 
