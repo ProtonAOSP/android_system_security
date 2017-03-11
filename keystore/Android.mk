@@ -146,6 +146,28 @@ LOCAL_SANITIZE := integer
 LOCAL_ADDITIONAL_DEPENDENCIES := $(LOCAL_PATH)/Android.mk
 include $(BUILD_SHARED_LIBRARY)
 
+# Library for keystore clients using the WiFi HIDL interface
+include $(CLEAR_VARS)
+LOCAL_CFLAGS := -Wall -Wextra -Werror
+LOCAL_SRC_FILES := \
+	keystore_get_wifi_hidl.cpp
+LOCAL_SHARED_LIBRARIES := \
+	android.system.wifi.keystore@1.0 \
+	libbase \
+	libhidlbase \
+	libhidltransport \
+	liblog \
+	libutils
+LOCAL_MODULE_CLASS := SHARED_LIBRARIES
+LOCAL_MODULE := libkeystore-wifi-hidl
+LOCAL_MODULE_TAGS := optional
+LOCAL_C_INCLUDES := $(LOCAL_PATH)/include
+LOCAL_EXPORT_C_INCLUDE_DIRS := $(LOCAL_PATH)/include
+LOCAL_CLANG := true
+LOCAL_SANITIZE := integer
+LOCAL_ADDITIONAL_DEPENDENCIES := $(LOCAL_PATH)/Android.mk
+include $(BUILD_SHARED_LIBRARY)
+
 # Library for unit tests
 include $(CLEAR_VARS)
 ifeq ($(USE_32_BIT_KEYSTORE), true)

@@ -20,19 +20,21 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. */
 
-#include "keystore_backend_hidl.h"
-
+#include <android-base/logging.h>
 #include <android/system/wifi/keystore/1.0/IKeystore.h>
 
+#include <keystore/keystore_get.h>
+
+using namespace android;
+
+using android::hardware::hidl_string;
 using android::hardware::hidl_vec;
 using android::hardware::Return;
 using android::sp;
 using android::system::wifi::keystore::V1_0::IKeystore;
 
-int32_t KeystoreBackendHidl::sign(
-        const char *key_id, const uint8_t* in, size_t len, uint8_t** reply,
-        size_t* reply_len) {
-    if (key_id == NULL || in == NULL || reply == NULL || reply_len == NULL) {
+ssize_t keystore_get(const char *key, size_t keyLength, uint8_t** value) {
+    if (key == NULL || keyLength == 0 || value == NULL) {
         ALOGE("Null pointer argument passed");
         return -1;
     }
@@ -43,42 +45,16 @@ int32_t KeystoreBackendHidl::sign(
         return -1;
     }
 
+    ssize_t return_size;
     bool success = false;
-    auto cb = [&](IKeystore::KeystoreStatusCode status,
-                  hidl_vec<uint8_t> signedData) {
-      if (status == IKeystore::KeystoreStatusCode::SUCCESS) {
-          *reply_len = signedData.size();
-          *reply = signedData.releaseData();
-          success = true;
-      }
+    auto cb = [&](IKeystore::KeystoreStatusCode status, hidl_vec<uint8_t> returnedValue) {
+        if (status == IKeystore::KeystoreStatusCode::SUCCESS) {
+            return_size = returnedValue.size();
+            *value = returnedValue.releaseData();
+            success = true;
+        }
     };
-    Return<void> ret = service->sign(
-        key_id, std::vector<uint8_t>(in, in + len), cb);
-    return ret.isOk() && success;
-}
 
-int32_t KeystoreBackendHidl::get_pubkey(
-        const char *key_id, uint8_t** pubkey, size_t* pubkey_len) {
-    if (key_id == NULL || pubkey == NULL || pubkey_len == NULL) {
-        ALOGE("Null pointer argument passed");
-        return -1;
-    }
-
-    sp<IKeystore> service = IKeystore::getService();
-    if (service == NULL) {
-        ALOGE("could not contact keystore HAL");
-        return -1;
-    }
-
-    bool success = false;
-    auto cb = [&](IKeystore::KeystoreStatusCode status,
-                  hidl_vec<uint8_t> publicKey) {
-      if (status == IKeystore::KeystoreStatusCode::SUCCESS) {
-          *pubkey_len = publicKey.size();
-          *pubkey = publicKey.releaseData();
-          success = true;
-      }
-    };
-    Return<void> ret = service->getPublicKey(key_id, cb);
-    return ret.isOk() && success;
+    Return<void> ret = service->getBlob(hidl_string(key, keyLength), cb);
+    return ret.isOk() && success ? return_size : -1;
 }
