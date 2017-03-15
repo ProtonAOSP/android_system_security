@@ -118,6 +118,7 @@ KeyStoreServiceReturnCode KeyStoreService::del(const String16& name, int targetU
         return ResponseCode::PERMISSION_DENIED;
     }
     String8 name8(name);
+    ALOGI("del %s %d", name8.string(), targetUid);
     String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, targetUid, ::TYPE_ANY));
     ResponseCode result = mKeyStore->del(filename.string(), ::TYPE_ANY, get_user_id(targetUid));
     if (result != ResponseCode::NO_ERROR) {
@@ -578,6 +579,7 @@ KeyStoreServiceReturnCode KeyStoreService::clear_uid(int64_t targetUid64) {
     if (!checkBinderPermissionSelfOrSystem(P_CLEAR_UID, targetUid)) {
         return ResponseCode::PERMISSION_DENIED;
     }
+    ALOGI("clear_uid %" PRId64, targetUid64);
 
     String8 prefix = String8::format("%u_", targetUid);
     Vector<String16> aliases;
@@ -1698,6 +1700,7 @@ KeyStoreServiceReturnCode KeyStoreService::upgradeKeyBlob(const String16& name, 
     if (responseCode != ResponseCode::NO_ERROR) {
         return responseCode;
     }
+    ALOGI("upgradeKeyBlob %s %d", name8.string(), uid);
 
     auto hidlKey = blob2hidlVec(*blob);
     auto& dev = mKeyStore->getDevice(*blob);
@@ -1712,6 +1715,7 @@ KeyStoreServiceReturnCode KeyStoreService::upgradeKeyBlob(const String16& name, 
         String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, uid, ::TYPE_KEYMASTER_10));
         error = mKeyStore->del(filename.string(), ::TYPE_ANY, get_user_id(uid));
         if (!error.isOk()) {
+            ALOGI("upgradeKeyBlob keystore->del failed %d", (int)error);
             return;
         }
 
@@ -1722,6 +1726,7 @@ KeyStoreServiceReturnCode KeyStoreService::upgradeKeyBlob(const String16& name, 
 
         error = mKeyStore->put(filename.string(), &newBlob, get_user_id(uid));
         if (!error.isOk()) {
+            ALOGI("upgradeKeyBlob keystore->put failed %d", (int)error);
             return;
         }
 
