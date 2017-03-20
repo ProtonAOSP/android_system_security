@@ -86,7 +86,6 @@ using ::android::hardware::keymaster::V3_0::TagType;
 
 using ::android::hardware::hidl_vec;
 using ::android::hardware::Return;
-using ::android::hardware::Status;
 
 // The following create the numeric values that KM_TAG_PADDING and KM_TAG_DIGEST used to have.  We
 // need these old values to be able to support old keys that use them.
