@@ -356,6 +356,8 @@ Return<void> LegacyKeymasterDeviceWrapper::attestKey(const hidl_vec<uint8_t>& ke
             case Tag::ATTESTATION_ID_SERIAL:
             case Tag::ATTESTATION_ID_IMEI:
             case Tag::ATTESTATION_ID_MEID:
+            case Tag::ATTESTATION_ID_MANUFACTURER:
+            case Tag::ATTESTATION_ID_MODEL:
                 // Device id attestation may only be supported if the device is able to permanently
                 // destroy its knowledge of the ids. This device is unable to do this, so it must
                 // never perform any device id attestation.

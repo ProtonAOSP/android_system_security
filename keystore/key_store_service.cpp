@@ -1250,6 +1250,8 @@ bool isDeviceIdAttestationRequested(const hidl_vec<KeyParameter>& params) {
             case Tag::ATTESTATION_ID_SERIAL:
             case Tag::ATTESTATION_ID_IMEI:
             case Tag::ATTESTATION_ID_MEID:
+            case Tag::ATTESTATION_ID_MANUFACTURER:
+            case Tag::ATTESTATION_ID_MODEL:
                 return true;
             default:
                 break;
