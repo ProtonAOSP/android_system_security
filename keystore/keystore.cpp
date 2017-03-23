@@ -485,14 +485,18 @@ bool KeyStore::isHardwareBacked(const android::String16& /*keyType*/) const {
         ALOGW("can't get keymaster device");
         return false;
     }
-// TODO: This information seems not to be available here
-//    if (sRSAKeyType == keyType) {
-//        return (mDevice->flags & KEYMASTER_SOFTWARE_ONLY) == 0;
-//    } else {
-//        return (mDevice->flags & KEYMASTER_SOFTWARE_ONLY) == 0 &&
-//               (mDevice->common.module->module_api_version >= KEYMASTER_MODULE_API_VERSION_0_2);
-//    }
-    return true;
+
+    bool isSecure = false;
+    auto hidlcb = [&] (bool _isSecure, bool, bool, bool) {
+        isSecure = _isSecure;
+    };
+    auto rc = mDevice->getHardwareFeatures(hidlcb);
+    if (!rc.isOk()) {
+        ALOGE("Communication with keymaster HAL failed while retrieving hardware features (%s)",
+                rc.description().c_str());
+        return false;
+    }
+    return isSecure;
 }
 
 ResponseCode KeyStore::getKeyForName(Blob* keyBlob, const android::String8& keyName,
