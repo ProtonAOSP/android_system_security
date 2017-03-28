@@ -70,7 +70,7 @@ using ::android::hardware::keymaster::V3_0::BlockMode;
 using ::android::hardware::keymaster::V3_0::Digest;
 using ::android::hardware::keymaster::V3_0::EcCurve;
 using ::android::hardware::keymaster::V3_0::ErrorCode;
-using ::android::hardware::keymaster::V3_0::HardwareAuthTokenInfo;
+using ::android::hardware::keymaster::V3_0::HardwareAuthToken;
 using ::android::hardware::keymaster::V3_0::HardwareAuthenticatorType;
 using ::android::hardware::keymaster::V3_0::IKeymasterDevice;
 using ::android::hardware::keymaster::V3_0::KeyBlobUsageRequirements;

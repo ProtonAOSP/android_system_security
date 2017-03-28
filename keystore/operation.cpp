@@ -117,22 +117,23 @@ sp<IBinder> OperationMap::getOldestPruneableOperation() {
 }
 
 bool OperationMap::getOperationAuthToken(const sp<IBinder>& token,
-                                         const hidl_vec<uint8_t>** outToken) {
+                                         const HardwareAuthToken** outToken) {
     auto entry = mMap.find(token);
     if (entry == mMap.end()) {
         return false;
     }
-    *outToken = &entry->second.authToken;
+    *outToken = entry->second.authToken.get();
     return true;
 }
 
 bool OperationMap::setOperationAuthToken(const sp<IBinder>& token,
-                                         hidl_vec<uint8_t> authToken) {
+                                         const HardwareAuthToken* authToken) {
     auto entry = mMap.find(token);
     if (entry == mMap.end()) {
         return false;
     }
-    entry->second.authToken = std::move(authToken);
+    entry->second.authToken.reset(new HardwareAuthToken);
+    *entry->second.authToken = *authToken;
     return true;
 }
 
