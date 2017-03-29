@@ -39,7 +39,7 @@ ssize_t keystore_get(const char *key, size_t keyLength, uint8_t** value) {
         return -1;
     }
 
-    sp<IKeystore> service = IKeystore::getService();
+    sp<IKeystore> service = IKeystore::tryGetService();
     if (service == NULL) {
         ALOGE("could not contact keystore HAL");
         return -1;

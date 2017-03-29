@@ -49,6 +49,7 @@ LOCAL_SHARED_LIBRARIES := \
 	libcutils \
 	libcrypto \
 	libhardware \
+	libwifikeystorehal \
 	libkeystore_binder \
 	liblog \
 	libsoftkeymaster \
@@ -60,7 +61,8 @@ LOCAL_SHARED_LIBRARIES := \
 	libhwbinder \
 	libhidlbase \
 	libhidltransport \
-	android.hardware.keymaster@3.0
+	android.hardware.keymaster@3.0 \
+	android.system.wifi.keystore@1.0
 LOCAL_MODULE := keystore
 LOCAL_MODULE_TAGS := optional
 LOCAL_INIT_RC := keystore.rc
