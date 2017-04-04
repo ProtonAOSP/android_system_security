@@ -19,7 +19,8 @@ include $(CLEAR_VARS)
 LOCAL_MODULE := libkeystore-engine
 
 LOCAL_SRC_FILES := \
-	android_engine.cpp
+	android_engine.cpp \
+	keystore_backend_binder.cpp
 
 LOCAL_MODULE_TAGS := optional
 LOCAL_CFLAGS := -fvisibility=hidden -Wall -Werror
