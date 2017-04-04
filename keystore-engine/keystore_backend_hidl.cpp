@@ -37,7 +37,7 @@ int32_t KeystoreBackendHidl::sign(
         return -1;
     }
 
-    sp<IKeystore> service = IKeystore::getService();
+    sp<IKeystore> service = IKeystore::tryGetService();
     if (service == NULL) {
         ALOGE("could not contact keystore HAL");
         return -1;
@@ -64,7 +64,7 @@ int32_t KeystoreBackendHidl::get_pubkey(
         return -1;
     }
 
-    sp<IKeystore> service = IKeystore::getService();
+    sp<IKeystore> service = IKeystore::tryGetService();
     if (service == NULL) {
         ALOGE("could not contact keystore HAL");
         return -1;
