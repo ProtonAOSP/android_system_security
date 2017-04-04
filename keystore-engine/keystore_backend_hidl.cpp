@@ -54,7 +54,10 @@ int32_t KeystoreBackendHidl::sign(
     };
     Return<void> ret = service->sign(
         key_id, std::vector<uint8_t>(in, in + len), cb);
-    return ret.isOk() && success;
+    if (!ret.isOk() || !success) {
+        return 1;
+    }
+    return 0;
 }
 
 int32_t KeystoreBackendHidl::get_pubkey(
@@ -80,5 +83,8 @@ int32_t KeystoreBackendHidl::get_pubkey(
       }
     };
     Return<void> ret = service->getPublicKey(key_id, cb);
-    return ret.isOk() && success;
+    if (!ret.isOk() || !success) {
+        return 1;
+    }
+    return 0;
 }
