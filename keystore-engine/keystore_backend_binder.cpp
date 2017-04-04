@@ -54,7 +54,7 @@ int32_t KeystoreBackendBinder::sign(
         return -1;
     }
 
-    *reply = reply_vec.data();
+    *reply = reply_vec.releaseData();
     *reply_len = reply_vec.size();
     return 0;
 }
@@ -76,7 +76,7 @@ int32_t KeystoreBackendBinder::get_pubkey(
         return -1;
     }
 
-    *pubkey = pubkey_vec.data();
+    *pubkey = pubkey_vec.releaseData();
     *pubkey_len = pubkey_vec.size();
     return 0;
 }

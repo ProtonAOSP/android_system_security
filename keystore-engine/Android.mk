@@ -42,7 +42,7 @@ include $(CLEAR_VARS)
 
 # This builds a variant of libkeystore-engine that uses a HIDL HAL
 # owned by the WiFi user to perform signing operations.
-LOCAL_MODULE := libkeystore-engine-wifi
+LOCAL_MODULE := libkeystore-engine-wifi-hidl
 
 LOCAL_SRC_FILES := \
 	android_engine.cpp \
