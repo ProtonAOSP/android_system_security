@@ -20,19 +20,19 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. */
 
-#ifndef ANDROID_KEYSTORE_BACKEND_BINDER_H
-#define ANDROID_KEYSTORE_BACKEND_BINDER_H
+#ifndef ANDROID_KEYSTORE_BACKEND_HIDL_H
+#define ANDROID_KEYSTORE_BACKEND_HIDL_H
 
 #include "keystore_backend.h"
 
-class KeystoreBackendBinder : public KeystoreBackend {
+class KeystoreBackendHidl : public KeystoreBackend {
   public:
-    KeystoreBackendBinder() {}
-    virtual ~KeystoreBackendBinder() {}
+    KeystoreBackendHidl() {}
+    virtual ~KeystoreBackendHidl() {}
     int32_t sign(const char *key_id, const uint8_t* in, size_t len,
                  uint8_t** reply, size_t* reply_len) override;
     int32_t get_pubkey(const char *key_id, uint8_t** pubkey,
                      size_t* reply_len) override;
 };
 
-#endif  // ANDROID_KEYSTORE_BACKEND_BINDER_H
+#endif  // ANDROID_KEYSTORE_BACKEND_HIDL_H

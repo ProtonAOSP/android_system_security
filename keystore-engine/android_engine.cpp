@@ -21,8 +21,6 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. */
 
 #define LOG_TAG "keystore-engine"
-#include "keystore_backend_binder.h"
-
 #include <UniquePtr.h>
 
 #include <pthread.h>
@@ -41,6 +39,12 @@
 #include <openssl/evp.h>
 #include <openssl/rsa.h>
 #include <openssl/x509.h>
+
+#ifndef BACKEND_WIFI_HIDL
+#include "keystore_backend_binder.h"
+#else
+#include "keystore_backend_hidl.h"
+#endif
 
 namespace {
 extern const RSA_METHOD keystore_rsa_method;
@@ -112,7 +116,11 @@ KeystoreBackend *g_keystore_backend;
  * should only be called by |pthread_once|. */
 void init_keystore_engine() {
     g_keystore_engine = new KeystoreEngine;
+#ifndef BACKEND_WIFI_HIDL
     g_keystore_backend = new KeystoreBackendBinder;
+#else
+    g_keystore_backend = new KeystoreBackendHidl;
+#endif
 }
 
 /* ensure_keystore_engine ensures that |g_keystore_engine| is pointing to a

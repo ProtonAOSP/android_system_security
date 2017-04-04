@@ -20,6 +20,9 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. */
 
+#ifndef ANDROID_KEYSTORE_BACKEND_H
+#define ANDROID_KEYSTORE_BACKEND_H
+
 #include <stdint.h>
 
 class KeystoreBackend {
@@ -31,3 +34,4 @@ class KeystoreBackend {
                                size_t* reply_len) = 0;
 };
 
+#endif  // ANDROID_KEYSTORE_BACKEND_H
