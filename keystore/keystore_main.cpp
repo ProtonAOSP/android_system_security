@@ -21,6 +21,8 @@
 #include <binder/IServiceManager.h>
 
 #include <android/hardware/keymaster/3.0/IHwKeymasterDevice.h>
+#include <android/system/wifi/keystore/1.0/IKeystore.h>
+#include <wifikeystorehal/keystore.h>
 
 #include <cutils/log.h>
 
@@ -37,6 +39,10 @@
  * values are encrypted with checksums. The encryption key is protected by a
  * user-defined password. To keep things simple, buffers are always larger than
  * the maximum space we needed, so boundary checks on buffers are omitted. */
+
+using ::android::system::wifi::keystore::V1_0::IKeystore;
+using ::android::system::wifi::keystore::V1_0::implementation::Keystore;
+using ::android::hardware::configureRpcThreadpool;
 
 /**
  * TODO implement keystore daemon using binderized keymaster HAL.
@@ -97,9 +103,20 @@ int main(int argc, char* argv[]) {
         return -1;
     }
 
+    /**
+     * Register the wifi keystore HAL service to run in passthrough mode.
+     * This will spawn off a new thread which will service the HIDL
+     * transactions.
+     */
+    configureRpcThreadpool(1, false /* callerWillJoin */);
+    android::sp<IKeystore> wifiKeystoreHalService = new Keystore();
+    android::status_t err = wifiKeystoreHalService->registerAsService();
+    if (ret != android::OK) {
+        ALOGE("Cannot register wifi keystore HAL service: %d", err);
+    }
+
     /*
-     * We're the only thread in existence, so we're just going to process
-     * Binder transaction as a single-threaded program.
+     * This thread is just going to process Binder transactions.
      */
     android::IPCThreadState::self()->joinThreadPool();
     return 1;
