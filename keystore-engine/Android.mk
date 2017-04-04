@@ -37,3 +37,29 @@ LOCAL_SHARED_LIBRARIES += \
 LOCAL_ADDITIONAL_DEPENDENCIES := $(LOCAL_PATH)/Android.mk
 
 include $(BUILD_SHARED_LIBRARY)
+
+include $(CLEAR_VARS)
+
+# This builds a variant of libkeystore-engine that uses a HIDL HAL
+# owned by the WiFi user to perform signing operations.
+LOCAL_MODULE := libkeystore-engine-wifi
+
+LOCAL_SRC_FILES := \
+	android_engine.cpp \
+	keystore_backend_hidl.cpp
+
+LOCAL_MODULE_TAGS := optional
+LOCAL_CFLAGS := -fvisibility=hidden -Wall -Werror -DBACKEND_WIFI_HIDL
+
+LOCAL_SHARED_LIBRARIES += \
+	android.system.wifi.keystore@1.0 \
+	libcrypto \
+	liblog \
+	libhidlbase \
+	libhidltransport \
+	libcutils \
+	libutils
+
+LOCAL_ADDITIONAL_DEPENDENCIES := $(LOCAL_PATH)/Android.mk
+
+include $(BUILD_SHARED_LIBRARY)
