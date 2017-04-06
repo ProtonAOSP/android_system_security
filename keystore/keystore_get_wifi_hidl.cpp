@@ -20,8 +20,8 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. */
 
-#include <android-base/logging.h>
 #include <android/system/wifi/keystore/1.0/IKeystore.h>
+#include <log/log.h>
 
 #include <keystore/keystore_get.h>
 

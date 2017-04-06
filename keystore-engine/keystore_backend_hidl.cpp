@@ -23,6 +23,7 @@
 #include "keystore_backend_hidl.h"
 
 #include <android/system/wifi/keystore/1.0/IKeystore.h>
+#include <log/log.h>
 
 using android::hardware::hidl_vec;
 using android::hardware::Return;
