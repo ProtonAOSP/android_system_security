@@ -42,12 +42,49 @@
 namespace keystore {
 using namespace android;
 
-const size_t MAX_OPERATIONS = 15;
+namespace {
+
+constexpr size_t kMaxOperations = 15;
+constexpr double kIdRotationPeriod = 30 * 24 * 60 * 60; /* Thirty days, in seconds */
+const char* kTimestampFilePath = "timestamp";
 
 struct BIGNUM_Delete {
     void operator()(BIGNUM* p) const { BN_free(p); }
 };
 typedef UniquePtr<BIGNUM, BIGNUM_Delete> Unique_BIGNUM;
+
+bool containsTag(const hidl_vec<KeyParameter>& params, Tag tag) {
+    return params.end() != std::find_if(params.begin(), params.end(),
+                                        [&](auto& param) { return param.tag == tag; });
+}
+
+std::pair<KeyStoreServiceReturnCode, bool> hadFactoryResetSinceIdRotation() {
+    struct stat sbuf;
+    if (stat(kTimestampFilePath, &sbuf) == 0) {
+        double diff_secs = difftime(time(NULL), sbuf.st_ctime);
+        return {ResponseCode::NO_ERROR, diff_secs < kIdRotationPeriod};
+    }
+
+    if (errno != ENOENT) {
+        ALOGE("Failed to stat \"timestamp\" file, with error %d", errno);
+        return {ResponseCode::SYSTEM_ERROR, false /* don't care */};
+    }
+
+    int fd = creat(kTimestampFilePath, 0600);
+    if (fd < 0) {
+        ALOGE("Couldn't create \"timestamp\" file, with error %d", errno);
+        return {ResponseCode::SYSTEM_ERROR, false /* don't care */};
+    }
+
+    if (close(fd)) {
+        ALOGE("Couldn't close \"timestamp\" file, with error %d", errno);
+        return {ResponseCode::SYSTEM_ERROR, false /* don't care */};
+    }
+
+    return {ResponseCode::NO_ERROR, true};
+}
+
+}  // anonymous namespace
 
 void KeyStoreService::binderDied(const wp<IBinder>& who) {
     auto operations = mOperationMap.getOperationsForToken(who.unsafe_get());
@@ -617,6 +654,10 @@ KeyStoreServiceReturnCode KeyStoreService::generateKey(const String16& name,
         return rc;
     }
 
+    if (containsTag(params, Tag::INCLUDE_UNIQUE_ID)) {
+        if (!checkBinderPermission(P_GEN_UNIQUE_ID)) return ResponseCode::PERMISSION_DENIED;
+    }
+
     bool usingFallback = false;
     auto& dev = mKeyStore->getDevice();
     AuthorizationSet keyCharacteristics = params;
@@ -1004,9 +1045,9 @@ void KeyStoreService::begin(const sp<IBinder>& appToken, const String16& name, K
         return;
     }
 
-    // If there are more than MAX_OPERATIONS, abort the oldest operation that was started as
+    // If there are more than kMaxOperations, abort the oldest operation that was started as
     // pruneable.
-    while (mOperationMap.getOperationCount() >= MAX_OPERATIONS) {
+    while (mOperationMap.getOperationCount() >= kMaxOperations) {
         ALOGD("Reached or exceeded concurrent operations limit");
         if (!pruneOperation()) {
             break;
@@ -1244,17 +1285,17 @@ constexpr size_t KEY_ATTESTATION_APPLICATION_ID_MAX_SIZE = 1024;
 bool isDeviceIdAttestationRequested(const hidl_vec<KeyParameter>& params) {
     for (size_t i = 0; i < params.size(); ++i) {
         switch (params[i].tag) {
-            case Tag::ATTESTATION_ID_BRAND:
-            case Tag::ATTESTATION_ID_DEVICE:
-            case Tag::ATTESTATION_ID_PRODUCT:
-            case Tag::ATTESTATION_ID_SERIAL:
-            case Tag::ATTESTATION_ID_IMEI:
-            case Tag::ATTESTATION_ID_MEID:
-            case Tag::ATTESTATION_ID_MANUFACTURER:
-            case Tag::ATTESTATION_ID_MODEL:
-                return true;
-            default:
-                break;
+        case Tag::ATTESTATION_ID_BRAND:
+        case Tag::ATTESTATION_ID_DEVICE:
+        case Tag::ATTESTATION_ID_IMEI:
+        case Tag::ATTESTATION_ID_MANUFACTURER:
+        case Tag::ATTESTATION_ID_MEID:
+        case Tag::ATTESTATION_ID_MODEL:
+        case Tag::ATTESTATION_ID_PRODUCT:
+        case Tag::ATTESTATION_ID_SERIAL:
+            return true;
+        default:
+            break;
         }
     }
     return false;
@@ -1282,14 +1323,22 @@ KeyStoreServiceReturnCode KeyStoreService::attestKey(const String16& name,
         if (!interface_cast<IPermissionController>(binder)->checkPermission(
                 String16("android.permission.READ_PRIVILEGED_PHONE_STATE"),
                 IPCThreadState::self()->getCallingPid(), callingUid)) {
-                    return ErrorCode::CANNOT_ATTEST_IDS;
+            return ErrorCode::CANNOT_ATTEST_IDS;
         }
     }
 
+    AuthorizationSet mutableParams = params;
+
+    KeyStoreServiceReturnCode responseCode;
+    bool factoryResetSinceIdRotation;
+    std::tie(responseCode, factoryResetSinceIdRotation) = hadFactoryResetSinceIdRotation();
+
+    if (!responseCode.isOk()) return responseCode;
+    if (factoryResetSinceIdRotation) mutableParams.push_back(TAG_RESET_SINCE_ID_ROTATION);
+
     Blob keyBlob;
     String8 name8(name);
-    KeyStoreServiceReturnCode responseCode =
-        mKeyStore->getKeyForName(&keyBlob, name8, callingUid, TYPE_KEYMASTER_10);
+    responseCode = mKeyStore->getKeyForName(&keyBlob, name8, callingUid, TYPE_KEYMASTER_10);
     if (!responseCode.isOk()) {
         return responseCode;
     }
@@ -1305,10 +1354,9 @@ KeyStoreServiceReturnCode KeyStoreService::attestKey(const String16& name,
      * The attestation application ID cannot be longer than
      * KEY_ATTESTATION_APPLICATION_ID_MAX_SIZE, so we truncate if too long.
      */
-    if (asn1_attestation_id.size() > KEY_ATTESTATION_APPLICATION_ID_MAX_SIZE)
+    if (asn1_attestation_id.size() > KEY_ATTESTATION_APPLICATION_ID_MAX_SIZE) {
         asn1_attestation_id.resize(KEY_ATTESTATION_APPLICATION_ID_MAX_SIZE);
-
-    AuthorizationSet mutableParams = params;
+    }
 
     mutableParams.push_back(TAG_ATTESTATION_APPLICATION_ID, blob2hidlVec(asn1_attestation_id));
 
@@ -1465,9 +1513,9 @@ bool KeyStoreService::isKeystoreUnlocked(State state) {
 bool KeyStoreService::checkAllowedOperationParams(const hidl_vec<KeyParameter>& params) {
     for (size_t i = 0; i < params.size(); ++i) {
         switch (params[i].tag) {
-        case Tag::AUTH_TOKEN:
-        // fall through intended
         case Tag::ATTESTATION_APPLICATION_ID:
+        case Tag::AUTH_TOKEN:
+        case Tag::RESET_SINCE_ID_ROTATION:
             return false;
         default:
             break;
@@ -1745,4 +1793,4 @@ KeyStoreServiceReturnCode KeyStoreService::upgradeKeyBlob(const String16& name, 
     return error;
 }
 
-}  // namespace android
+}  // namespace keystore
