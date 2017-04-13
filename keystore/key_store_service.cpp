@@ -40,14 +40,28 @@
 #include <keystore/keystore_hidl_support.h>
 
 namespace keystore {
+
 using namespace android;
 
-const size_t MAX_OPERATIONS = 15;
+namespace {
+
+constexpr size_t MAX_OPERATIONS = 15;
 
 struct BIGNUM_Delete {
     void operator()(BIGNUM* p) const { BN_free(p); }
 };
 typedef UniquePtr<BIGNUM, BIGNUM_Delete> Unique_BIGNUM;
+
+bool containsTag(const hidl_vec<KeyParameter>& params, Tag tag) {
+    return params.end() != std::find_if(params.begin(), params.end(),
+                                        [&](auto& param) { return param.tag == tag; });
+}
+
+bool isAuthenticationBound(const hidl_vec<KeyParameter>& params) {
+    return !containsTag(params, Tag::NO_AUTH_REQUIRED);
+}
+
+}  // anonymous namespace
 
 void KeyStoreService::binderDied(const wp<IBinder>& who) {
     auto operations = mOperationMap.getOperationsForToken(who.unsafe_get());
@@ -642,6 +656,9 @@ KeyStoreServiceReturnCode KeyStoreService::generateKey(const String16& name,
 
         Blob keyBlob(&hidlKeyBlob[0], hidlKeyBlob.size(), NULL, 0, ::TYPE_KEYMASTER_10);
         keyBlob.setFallback(usingFallback);
+        if (isAuthenticationBound(params)) {
+            keyBlob.setSuperEncrypted(true);
+        }
         keyBlob.setEncrypted(flags & KEYSTORE_FLAG_ENCRYPTED);
 
         error = mKeyStore->put(filename.string(), &keyBlob, get_user_id(uid));
@@ -786,6 +803,9 @@ KeyStoreService::importKey(const String16& name, const hidl_vec<KeyParameter>& p
 
         Blob ksBlob(&keyBlob[0], keyBlob.size(), NULL, 0, ::TYPE_KEYMASTER_10);
         ksBlob.setFallback(usingFallback);
+        if (isAuthenticationBound(params)) {
+            ksBlob.setSuperEncrypted(true);
+        }
         ksBlob.setEncrypted(flags & KEYSTORE_FLAG_ENCRYPTED);
 
         error = mKeyStore->put(filename.string(), &ksBlob, get_user_id(uid));
@@ -922,6 +942,9 @@ void KeyStoreService::begin(const sp<IBinder>& appToken, const String16& name, K
     Blob keyBlob;
     String8 name8(name);
     result->resultCode = mKeyStore->getKeyForName(&keyBlob, name8, targetUid, TYPE_KEYMASTER_10);
+    if (result->resultCode == ResponseCode::LOCKED && keyBlob.isSuperEncrypted()) {
+        result->resultCode = ErrorCode::KEY_USER_NOT_AUTHENTICATED;
+    }
     if (!result->resultCode.isOk()) {
         return;
     }
