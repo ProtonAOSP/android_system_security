@@ -39,6 +39,7 @@ enum perm_t {
     P_CLEAR_UID = 1 << 15,
     P_ADD_AUTH = 1 << 16,
     P_USER_CHANGED = 1 << 17,
+    P_GEN_UNIQUE_ID = 1 << 18,
 };
 
 const char* get_perm_label(perm_t perm);
