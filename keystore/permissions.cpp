@@ -28,9 +28,25 @@
 
 /* perm_labels associcated with keystore_key SELinux class verbs. */
 const char* perm_labels[] = {
-    "get_state", "get",      "insert",    "delete",    "exist",    "list",
-    "reset",     "password", "lock",      "unlock",    "is_empty", "sign",
-    "verify",    "grant",    "duplicate", "clear_uid", "add_auth", "user_changed",
+    "get_state",
+    "get",
+    "insert",
+    "delete",
+    "exist",
+    "list",
+    "reset",
+    "password",
+    "lock",
+    "unlock",
+    "is_empty",
+    "sign",
+    "verify",
+    "grant",
+    "duplicate",
+    "clear_uid",
+    "add_auth",
+    "user_changed",
+    "gen_unique_id",
 };
 
 struct user_euid {
@@ -55,8 +71,9 @@ static user_perm user_perms[] = {
     {AID_ROOT, static_cast<perm_t>(P_GET)},
 };
 
-static const perm_t DEFAULT_PERMS = static_cast<perm_t>(P_GET_STATE | P_GET | P_INSERT | P_DELETE |
-                                                        P_EXIST | P_LIST | P_SIGN | P_VERIFY);
+static const perm_t DEFAULT_PERMS = static_cast<perm_t>(
+    P_GET_STATE | P_GET | P_INSERT | P_DELETE | P_EXIST | P_LIST | P_SIGN | P_VERIFY |
+    P_GEN_UNIQUE_ID /* Only privileged apps can do this, but enforcement is done by SELinux */);
 
 struct audit_data {
     pid_t pid;
