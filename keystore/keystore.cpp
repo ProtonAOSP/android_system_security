@@ -175,13 +175,28 @@ void KeyStore::resetUser(uid_t userId, bool keepUnenryptedEntries) {
             Blob blob;
             ResponseCode rc = get(filename, &blob, ::TYPE_ANY, userId);
 
-            /* get can fail if the blob is encrypted and the state is
-             * not unlocked, only skip deleting blobs that were loaded and
-             * who are not encrypted. If there are blobs we fail to read for
-             * other reasons err on the safe side and delete them since we
-             * can't tell if they're encrypted.
-             */
-            shouldDelete = !(rc == ResponseCode::NO_ERROR && !blob.isEncrypted());
+            switch (rc) {
+            case ResponseCode::SYSTEM_ERROR:
+            case ResponseCode::VALUE_CORRUPTED:
+                // If we can't read blobs, delete them.
+                shouldDelete = true;
+                break;
+
+            case ResponseCode::NO_ERROR:
+            case ResponseCode::LOCKED:
+                // Delete encrypted blobs but keep unencrypted blobs and super-encrypted blobs.  We
+                // need to keep super-encrypted blobs so we can report that the user is
+                // unauthenticated if a caller tries to use them, rather than reporting that they
+                // don't exist.
+                shouldDelete = blob.isEncrypted();
+                break;
+
+            default:
+                ALOGE("Got unexpected return code %d from KeyStore::get()", rc);
+                // This shouldn't happen.  To be on the safe side, delete it.
+                shouldDelete = true;
+                break;
+            }
         }
         if (shouldDelete) {
             del(filename, ::TYPE_ANY, userId);
@@ -272,8 +287,7 @@ ResponseCode KeyStore::get(const char* filename, Blob* keyBlob, const BlobType t
             importKey(keyBlob->getValue(), keyBlob->getLength(), filename, userId,
                       keyBlob->isEncrypted() ? KEYSTORE_FLAG_ENCRYPTED : KEYSTORE_FLAG_NONE);
 
-        // The HAL allowed the import, reget the key to have the "fresh"
-        // version.
+        // The HAL allowed the import, reget the key to have the "fresh" version.
         if (imported == ResponseCode::NO_ERROR) {
             rc = get(filename, keyBlob, TYPE_KEY_PAIR, userId);
         }
