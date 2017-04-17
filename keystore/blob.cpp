@@ -191,7 +191,7 @@ ResponseCode Blob::readBlob(const char* filename, AES_KEY* aes_key, State state)
     }
 
     ssize_t digestedLength;
-    if (isEncrypted()) {
+    if (isEncrypted() || isSuperEncrypted()) {
         if (encryptedLength % AES_BLOCK_SIZE != 0) {
             return ResponseCode::VALUE_CORRUPTED;
         }
