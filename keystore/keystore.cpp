@@ -259,7 +259,7 @@ void KeyStore::lock(uid_t userId) {
 ResponseCode KeyStore::get(const char* filename, Blob* keyBlob, const BlobType type, uid_t userId) {
     UserState* userState = getUserState(userId);
     ResponseCode rc =
-        keyBlob->readBlob(filename, userState->getDecryptionKey(), userState->getState());
+        keyBlob->readBlob(filename, userState->getEncryptionKey(), userState->getState());
     if (rc != ResponseCode::NO_ERROR) {
         return rc;
     }
@@ -272,7 +272,7 @@ ResponseCode KeyStore::get(const char* filename, Blob* keyBlob, const BlobType t
          */
         if (upgradeBlob(filename, keyBlob, version, type, userId)) {
             if ((rc = this->put(filename, keyBlob, userId)) != ResponseCode::NO_ERROR ||
-                (rc = keyBlob->readBlob(filename, userState->getDecryptionKey(),
+                (rc = keyBlob->readBlob(filename, userState->getEncryptionKey(),
                                         userState->getState())) != ResponseCode::NO_ERROR) {
                 return rc;
             }
