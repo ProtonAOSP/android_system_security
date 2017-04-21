@@ -658,6 +658,10 @@ KeyStoreServiceReturnCode KeyStoreService::generateKey(const String16& name,
     if (!rc.isOk()) {
         return rc;
     }
+    if ((flags & KEYSTORE_FLAG_CRITICAL_TO_DEVICE_ENCRYPTION) && get_app_id(uid) != AID_SYSTEM) {
+        ALOGE("Non-system uid %d cannot set FLAG_CRITICAL_TO_DEVICE_ENCRYPTION", uid);
+        return ResponseCode::PERMISSION_DENIED;
+    }
 
     if (containsTag(params, Tag::INCLUDE_UNIQUE_ID)) {
         if (!checkBinderPermission(P_GEN_UNIQUE_ID)) return ResponseCode::PERMISSION_DENIED;
@@ -688,7 +692,8 @@ KeyStoreServiceReturnCode KeyStoreService::generateKey(const String16& name,
 
         Blob keyBlob(&hidlKeyBlob[0], hidlKeyBlob.size(), NULL, 0, ::TYPE_KEYMASTER_10);
         keyBlob.setFallback(usingFallback);
-        if (isAuthenticationBound(params)) {
+        keyBlob.setCriticalToDeviceEncryption(flags & KEYSTORE_FLAG_CRITICAL_TO_DEVICE_ENCRYPTION);
+        if (isAuthenticationBound(params) && !keyBlob.isCriticalToDeviceEncryption()) {
             keyBlob.setSuperEncrypted(true);
         }
         keyBlob.setEncrypted(flags & KEYSTORE_FLAG_ENCRYPTED);
@@ -813,6 +818,10 @@ KeyStoreService::importKey(const String16& name, const hidl_vec<KeyParameter>& p
     if (!rc.isOk()) {
         return rc;
     }
+    if ((flags & KEYSTORE_FLAG_CRITICAL_TO_DEVICE_ENCRYPTION) && get_app_id(uid) != AID_SYSTEM) {
+        ALOGE("Non-system uid %d cannot set FLAG_CRITICAL_TO_DEVICE_ENCRYPTION", uid);
+        return ResponseCode::PERMISSION_DENIED;
+    }
 
     bool usingFallback = false;
     auto& dev = mKeyStore->getDevice();
@@ -835,7 +844,8 @@ KeyStoreService::importKey(const String16& name, const hidl_vec<KeyParameter>& p
 
         Blob ksBlob(&keyBlob[0], keyBlob.size(), NULL, 0, ::TYPE_KEYMASTER_10);
         ksBlob.setFallback(usingFallback);
-        if (isAuthenticationBound(params)) {
+        ksBlob.setCriticalToDeviceEncryption(flags & KEYSTORE_FLAG_CRITICAL_TO_DEVICE_ENCRYPTION);
+        if (isAuthenticationBound(params) && !ksBlob.isCriticalToDeviceEncryption()) {
             ksBlob.setSuperEncrypted(true);
         }
         ksBlob.setEncrypted(flags & KEYSTORE_FLAG_ENCRYPTED);
@@ -1787,6 +1797,8 @@ KeyStoreServiceReturnCode KeyStoreService::upgradeKeyBlob(const String16& name, 
                      0 /* infoLength */, ::TYPE_KEYMASTER_10);
         newBlob.setFallback(blob->isFallback());
         newBlob.setEncrypted(blob->isEncrypted());
+        newBlob.setSuperEncrypted(blob->isSuperEncrypted());
+        newBlob.setCriticalToDeviceEncryption(blob->isCriticalToDeviceEncryption());
 
         error = mKeyStore->put(filename.string(), &newBlob, get_user_id(uid));
         if (!error.isOk()) {
