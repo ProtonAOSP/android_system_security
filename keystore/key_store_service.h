@@ -131,6 +131,9 @@ class KeyStoreService : public android::BnKeystoreService, public android::IBind
                                         const hidl_vec<KeyParameter>& params,
                                         hidl_vec<hidl_vec<uint8_t>>* outChain) override;
 
+    KeyStoreServiceReturnCode attestDeviceIds(const hidl_vec<KeyParameter>& params,
+                                              hidl_vec<hidl_vec<uint8_t>>* outChain) override;
+
     KeyStoreServiceReturnCode onDeviceOffBody() override;
 
   private:

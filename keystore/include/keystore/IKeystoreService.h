@@ -112,7 +112,8 @@ class IKeystoreService : public IInterface {
         ON_USER_ADDED = IBinder::FIRST_CALL_TRANSACTION + 33,
         ON_USER_REMOVED = IBinder::FIRST_CALL_TRANSACTION + 34,
         ATTEST_KEY = IBinder::FIRST_CALL_TRANSACTION + 35,
-        ON_DEVICE_OFF_BODY = IBinder::FIRST_CALL_TRANSACTION + 36,
+        ATTEST_DEVICE_IDS = IBinder::FIRST_CALL_TRANSACTION + 36,
+        ON_DEVICE_OFF_BODY = IBinder::FIRST_CALL_TRANSACTION + 37,
     };
 
     DECLARE_META_INTERFACE(KeystoreService);
@@ -233,6 +234,10 @@ class IKeystoreService : public IInterface {
     virtual ::keystore::KeyStoreServiceReturnCode
     attestKey(const String16& name, const ::keystore::hidl_vec<::keystore::KeyParameter>& params,
               ::keystore::hidl_vec<::keystore::hidl_vec<uint8_t>>* outChain) = 0;
+
+    virtual ::keystore::KeyStoreServiceReturnCode attestDeviceIds(
+            const ::keystore::hidl_vec<::keystore::KeyParameter>& params,
+            ::keystore::hidl_vec<::keystore::hidl_vec<uint8_t>>* outChain) = 0;
 
     virtual ::keystore::KeyStoreServiceReturnCode onDeviceOffBody() = 0;
 };
