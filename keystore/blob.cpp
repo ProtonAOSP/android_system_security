@@ -75,6 +75,10 @@ bool Blob::isSuperEncrypted() const {
     return mBlob.flags & KEYSTORE_FLAG_SUPER_ENCRYPTED;
 }
 
+bool Blob::isCriticalToDeviceEncryption() const {
+    return mBlob.flags & KEYSTORE_FLAG_CRITICAL_TO_DEVICE_ENCRYPTION;
+}
+
 inline uint8_t setFlag(uint8_t flags, bool set, KeyStoreFlag flag) {
     return set ? (flags | flag) : (flags & ~flag);
 }
@@ -83,11 +87,12 @@ void Blob::setEncrypted(bool encrypted) {
     mBlob.flags = setFlag(mBlob.flags, encrypted, KEYSTORE_FLAG_ENCRYPTED);
 }
 
-void Blob::setSuperEncrypted(__attribute__((unused)) bool superEncrypted) {
-    // Do not enable super encryption yet, as it's clashing with synthetic password flow
-    // TODO: re-enables this once keystore knows about synthetic password keys
+void Blob::setSuperEncrypted(bool superEncrypted) {
+    mBlob.flags = setFlag(mBlob.flags, superEncrypted, KEYSTORE_FLAG_SUPER_ENCRYPTED);
+}
 
-    //mBlob.flags = setFlag(mBlob.flags, superEncrypted, KEYSTORE_FLAG_SUPER_ENCRYPTED);
+void Blob::setCriticalToDeviceEncryption(bool critical) {
+    mBlob.flags = setFlag(mBlob.flags, critical, KEYSTORE_FLAG_CRITICAL_TO_DEVICE_ENCRYPTION);
 }
 
 void Blob::setFallback(bool fallback) {
