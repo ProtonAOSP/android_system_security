@@ -1392,7 +1392,7 @@ KeyStoreServiceReturnCode KeyStoreService::attestKey(const String16& name,
     if (attestingDeviceIds) {
         // When performing device id attestation, treat the key as ephemeral and delete it straight
         // away.
-        deletionRc = del(name, callingUid);
+        deletionRc = KS_HANDLE_HIDL_ERROR(dev->deleteKey(hidlKey));
     }
 
     if (!attestationRc.isOk()) {
