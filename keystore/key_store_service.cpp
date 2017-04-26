@@ -632,6 +632,17 @@ KeyStoreServiceReturnCode KeyStoreService::clear_uid(int64_t targetUid64) {
     for (uint32_t i = 0; i < aliases.size(); i++) {
         String8 name8(aliases[i]);
         String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, targetUid, ::TYPE_ANY));
+
+        if (get_app_id(targetUid) == AID_SYSTEM) {
+            Blob keyBlob;
+            ResponseCode responseCode =
+                mKeyStore->get(filename.string(), &keyBlob, ::TYPE_ANY, get_user_id(targetUid));
+            if (responseCode == ResponseCode::NO_ERROR && keyBlob.isCriticalToDeviceEncryption()) {
+                // Do not clear keys critical to device encryption under system uid.
+                continue;
+            }
+        }
+
         mKeyStore->del(filename.string(), ::TYPE_ANY, get_user_id(targetUid));
 
         // del() will fail silently if no cached characteristics are present for this alias.
