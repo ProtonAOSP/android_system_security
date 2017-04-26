@@ -57,7 +57,8 @@ LOCAL_SHARED_LIBRARIES := \
 	libselinux \
 	libsoftkeymasterdevice \
 	libkeymaster_messages \
-	libkeymaster1 \
+	libkeymaster_portable \
+	libkeymaster \
 	libhwbinder \
 	libhidlbase \
 	libhidltransport \
