@@ -89,6 +89,36 @@ std::pair<KeyStoreServiceReturnCode, bool> hadFactoryResetSinceIdRotation() {
     return {ResponseCode::NO_ERROR, true};
 }
 
+constexpr size_t KEY_ATTESTATION_APPLICATION_ID_MAX_SIZE = 1024;
+
+KeyStoreServiceReturnCode updateParamsForAttestation(uid_t callingUid, AuthorizationSet* params) {
+    KeyStoreServiceReturnCode responseCode;
+    bool factoryResetSinceIdRotation;
+    std::tie(responseCode, factoryResetSinceIdRotation) = hadFactoryResetSinceIdRotation();
+
+    if (!responseCode.isOk()) return responseCode;
+    if (factoryResetSinceIdRotation) params->push_back(TAG_RESET_SINCE_ID_ROTATION);
+
+    auto asn1_attestation_id_result = security::gather_attestation_application_id(callingUid);
+    if (!asn1_attestation_id_result.isOk()) {
+        ALOGE("failed to gather attestation_id");
+        return ErrorCode::ATTESTATION_APPLICATION_ID_MISSING;
+    }
+    std::vector<uint8_t>& asn1_attestation_id = asn1_attestation_id_result;
+
+    /*
+     * The attestation application ID cannot be longer than
+     * KEY_ATTESTATION_APPLICATION_ID_MAX_SIZE, so we truncate if too long.
+     */
+    if (asn1_attestation_id.size() > KEY_ATTESTATION_APPLICATION_ID_MAX_SIZE) {
+        asn1_attestation_id.resize(KEY_ATTESTATION_APPLICATION_ID_MAX_SIZE);
+    }
+
+    params->push_back(TAG_ATTESTATION_APPLICATION_ID, asn1_attestation_id);
+
+    return ResponseCode::NO_ERROR;
+}
+
 }  // anonymous namespace
 
 void KeyStoreService::binderDied(const wp<IBinder>& who) {
@@ -1304,8 +1334,6 @@ KeyStoreServiceReturnCode KeyStoreService::addAuthToken(const uint8_t* token, si
     return ResponseCode::NO_ERROR;
 }
 
-constexpr size_t KEY_ATTESTATION_APPLICATION_ID_MAX_SIZE = 1024;
-
 bool isDeviceIdAttestationRequested(const hidl_vec<KeyParameter>& params) {
     for (size_t i = 0; i < params.size(); ++i) {
         switch (params[i].tag) {
@@ -1336,53 +1364,25 @@ KeyStoreServiceReturnCode KeyStoreService::attestKey(const String16& name,
         return ErrorCode::INVALID_ARGUMENT;
     }
 
-    uid_t callingUid = IPCThreadState::self()->getCallingUid();
-
-    bool attestingDeviceIds = isDeviceIdAttestationRequested(params);
-    if (attestingDeviceIds) {
-        sp<IBinder> binder = defaultServiceManager()->getService(String16("permission"));
-        if (binder == 0) {
-            return ErrorCode::CANNOT_ATTEST_IDS;
-        }
-        if (!interface_cast<IPermissionController>(binder)->checkPermission(
-                String16("android.permission.READ_PRIVILEGED_PHONE_STATE"),
-                IPCThreadState::self()->getCallingPid(), callingUid)) {
-            return ErrorCode::CANNOT_ATTEST_IDS;
-        }
+    if (isDeviceIdAttestationRequested(params)) {
+        // There is a dedicated attestDeviceIds() method for device ID attestation.
+        return ErrorCode::INVALID_ARGUMENT;
     }
 
+    uid_t callingUid = IPCThreadState::self()->getCallingUid();
+
     AuthorizationSet mutableParams = params;
-
-    KeyStoreServiceReturnCode responseCode;
-    bool factoryResetSinceIdRotation;
-    std::tie(responseCode, factoryResetSinceIdRotation) = hadFactoryResetSinceIdRotation();
-
-    if (!responseCode.isOk()) return responseCode;
-    if (factoryResetSinceIdRotation) mutableParams.push_back(TAG_RESET_SINCE_ID_ROTATION);
+    KeyStoreServiceReturnCode rc = updateParamsForAttestation(callingUid, &mutableParams);
+    if (!rc.isOk()) {
+        return rc;
+    }
 
     Blob keyBlob;
     String8 name8(name);
-    responseCode = mKeyStore->getKeyForName(&keyBlob, name8, callingUid, TYPE_KEYMASTER_10);
-    if (!responseCode.isOk()) {
-        return responseCode;
+    rc = mKeyStore->getKeyForName(&keyBlob, name8, callingUid, TYPE_KEYMASTER_10);
+    if (!rc.isOk()) {
+        return rc;
     }
-
-    auto asn1_attestation_id_result = security::gather_attestation_application_id(callingUid);
-    if (!asn1_attestation_id_result.isOk()) {
-        ALOGE("failed to gather attestation_id");
-        return ErrorCode::ATTESTATION_APPLICATION_ID_MISSING;
-    }
-    std::vector<uint8_t>& asn1_attestation_id = asn1_attestation_id_result;
-
-    /*
-     * The attestation application ID cannot be longer than
-     * KEY_ATTESTATION_APPLICATION_ID_MAX_SIZE, so we truncate if too long.
-     */
-    if (asn1_attestation_id.size() > KEY_ATTESTATION_APPLICATION_ID_MAX_SIZE) {
-        asn1_attestation_id.resize(KEY_ATTESTATION_APPLICATION_ID_MAX_SIZE);
-    }
-
-    mutableParams.push_back(TAG_ATTESTATION_APPLICATION_ID, blob2hidlVec(asn1_attestation_id));
 
     KeyStoreServiceReturnCode error;
     auto hidlCb = [&](ErrorCode ret, const hidl_vec<hidl_vec<uint8_t>>& certChain) {
@@ -1395,15 +1395,86 @@ KeyStoreServiceReturnCode KeyStoreService::attestKey(const String16& name,
 
     auto hidlKey = blob2hidlVec(keyBlob);
     auto& dev = mKeyStore->getDevice(keyBlob);
-    KeyStoreServiceReturnCode attestationRc =
-        KS_HANDLE_HIDL_ERROR(dev->attestKey(hidlKey, mutableParams.hidl_data(), hidlCb));
-
-    KeyStoreServiceReturnCode deletionRc;
-    if (attestingDeviceIds) {
-        // When performing device id attestation, treat the key as ephemeral and delete it straight
-        // away.
-        deletionRc = del(name, callingUid);
+    rc = KS_HANDLE_HIDL_ERROR(dev->attestKey(hidlKey, mutableParams.hidl_data(), hidlCb));
+    if (!rc.isOk()) {
+        return rc;
     }
+    return error;
+}
+
+KeyStoreServiceReturnCode KeyStoreService::attestDeviceIds(const hidl_vec<KeyParameter>& params,
+                                                           hidl_vec<hidl_vec<uint8_t>>* outChain) {
+    if (!outChain) {
+        return ErrorCode::OUTPUT_PARAMETER_NULL;
+    }
+
+    if (!checkAllowedOperationParams(params)) {
+        return ErrorCode::INVALID_ARGUMENT;
+    }
+
+    if (!isDeviceIdAttestationRequested(params)) {
+        // There is an attestKey() method for attesting keys without device ID attestation.
+        return ErrorCode::INVALID_ARGUMENT;
+    }
+
+    uid_t callingUid = IPCThreadState::self()->getCallingUid();
+    sp<IBinder> binder = defaultServiceManager()->getService(String16("permission"));
+    if (binder == 0) {
+        return ErrorCode::CANNOT_ATTEST_IDS;
+    }
+    if (!interface_cast<IPermissionController>(binder)->checkPermission(
+            String16("android.permission.READ_PRIVILEGED_PHONE_STATE"),
+            IPCThreadState::self()->getCallingPid(), callingUid)) {
+        return ErrorCode::CANNOT_ATTEST_IDS;
+    }
+
+    AuthorizationSet mutableParams = params;
+    KeyStoreServiceReturnCode rc = updateParamsForAttestation(callingUid, &mutableParams);
+    if (!rc.isOk()) {
+        return rc;
+    }
+
+    // Generate temporary key.
+    auto& dev = mKeyStore->getDevice();
+    KeyStoreServiceReturnCode error;
+    hidl_vec<uint8_t> hidlKey;
+
+    AuthorizationSet keyCharacteristics;
+    keyCharacteristics.push_back(TAG_PURPOSE, KeyPurpose::VERIFY);
+    keyCharacteristics.push_back(TAG_ALGORITHM, Algorithm::EC);
+    keyCharacteristics.push_back(TAG_DIGEST, Digest::SHA_2_256);
+    keyCharacteristics.push_back(TAG_NO_AUTH_REQUIRED);
+    keyCharacteristics.push_back(TAG_EC_CURVE, EcCurve::P_256);
+    auto generateHidlCb = [&](ErrorCode ret, const hidl_vec<uint8_t>& hidlKeyBlob,
+                              const KeyCharacteristics&) {
+        error = ret;
+        if (!error.isOk()) {
+            return;
+        }
+        hidlKey = hidlKeyBlob;
+    };
+
+    rc = KS_HANDLE_HIDL_ERROR(dev->generateKey(keyCharacteristics.hidl_data(), generateHidlCb));
+    if (!rc.isOk()) {
+        return rc;
+    }
+    if (!error.isOk()) {
+        return error;
+    }
+
+    // Attest key and device IDs.
+    auto attestHidlCb = [&](ErrorCode ret, const hidl_vec<hidl_vec<uint8_t>>& certChain) {
+        error = ret;
+        if (!error.isOk()) {
+            return;
+        }
+        *outChain = certChain;
+    };
+    KeyStoreServiceReturnCode attestationRc =
+            KS_HANDLE_HIDL_ERROR(dev->attestKey(hidlKey, mutableParams.hidl_data(), attestHidlCb));
+
+    // Delete temporary key.
+    KeyStoreServiceReturnCode deletionRc = KS_HANDLE_HIDL_ERROR(dev->deleteKey(hidlKey));
 
     if (!attestationRc.isOk()) {
         return attestationRc;
