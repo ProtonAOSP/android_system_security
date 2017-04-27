@@ -878,6 +878,31 @@ class BpKeystoreService : public BpInterface<IKeystoreService> {
         return ret;
     }
 
+    KeyStoreServiceReturnCode attestDeviceIds(const hidl_vec<KeyParameter>& params,
+                                              hidl_vec<hidl_vec<uint8_t>>* outChain) override {
+        if (!outChain) return ErrorCode::OUTPUT_PARAMETER_NULL;
+
+        Parcel data, reply;
+        data.writeInterfaceToken(IKeystoreService::getInterfaceDescriptor());
+        nullable(writeParamSetToParcel, params, &data);
+
+        status_t status = remote()->transact(BnKeystoreService::ATTEST_DEVICE_IDS, data, &reply);
+        if (status != NO_ERROR) {
+            ALOGD("attestDeviceIds() count not contact remote: %d\n", status);
+            return ResponseCode::SYSTEM_ERROR;
+        }
+        int32_t err = reply.readExceptionCode();
+        ResponseCode ret = ResponseCode(reply.readInt32());
+        if (err < 0) {
+            ALOGD("attestDeviceIds() caught exception %d\n", err);
+            return ResponseCode::SYSTEM_ERROR;
+        }
+        if (reply.readInt32() != 0) {
+            *outChain = readCertificateChainFromParcel(reply);
+        }
+        return ret;
+    }
+
     KeyStoreServiceReturnCode onDeviceOffBody() override {
         Parcel data, reply;
         data.writeInterfaceToken(IKeystoreService::getInterfaceDescriptor());
@@ -1305,6 +1330,19 @@ status_t BnKeystoreService::onTransact(uint32_t code, const Parcel& data, Parcel
 
         return NO_ERROR;
     }
+
+    case ATTEST_DEVICE_IDS: {
+        CHECK_INTERFACE(IKeystoreService, data, reply);
+        auto params = nullable(readParamSetFromParcel, data);
+        hidl_vec<hidl_vec<uint8_t>> chain;
+        int ret = attestDeviceIds(params.value(), &chain);
+        reply->writeNoException();
+        reply->writeInt32(ret);
+        nullable(writeCertificateChainToParcel, chain, reply);
+
+        return NO_ERROR;
+    }
+
     case ON_DEVICE_OFF_BODY: {
         CHECK_INTERFACE(IKeystoreService, data, reply);
         int32_t ret = onDeviceOffBody();
