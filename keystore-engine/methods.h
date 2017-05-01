@@ -34,21 +34,21 @@ struct DSA_Delete {
         DSA_free(p);
     }
 };
-typedef UniquePtr<DSA, struct DSA_Delete> Unique_DSA;
+typedef std::unique_ptr<DSA, struct DSA_Delete> Unique_DSA;
 
 struct EC_KEY_Delete {
     void operator()(EC_KEY* p) const {
         EC_KEY_free(p);
     }
 };
-typedef UniquePtr<EC_KEY, EC_KEY_Delete> Unique_EC_KEY;
+typedef std::unique_ptr<EC_KEY, EC_KEY_Delete> Unique_EC_KEY;
 
 struct RSA_Delete {
     void operator()(RSA* p) const {
         RSA_free(p);
     }
 };
-typedef UniquePtr<RSA, struct RSA_Delete> Unique_RSA;
+typedef std::unique_ptr<RSA, struct RSA_Delete> Unique_RSA;
 
 
 /* Keyhandles for ENGINE metadata */

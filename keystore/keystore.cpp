@@ -647,7 +647,7 @@ bool KeyStore::upgradeBlob(const char* filename, Blob* blob, const uint8_t oldVe
 struct BIO_Delete {
     void operator()(BIO* p) const { BIO_free(p); }
 };
-typedef UniquePtr<BIO, BIO_Delete> Unique_BIO;
+typedef std::unique_ptr<BIO, BIO_Delete> Unique_BIO;
 
 ResponseCode KeyStore::importBlobAsKey(Blob* blob, const char* filename, uid_t uid) {
     // We won't even write to the blob directly with this BIO, so const_cast is okay.
@@ -670,7 +670,7 @@ ResponseCode KeyStore::importBlobAsKey(Blob* blob, const char* filename, uid_t u
         return ResponseCode::SYSTEM_ERROR;
     }
 
-    UniquePtr<unsigned char[]> pkcs8key(new unsigned char[len]);
+    std::unique_ptr<unsigned char[]> pkcs8key(new unsigned char[len]);
     uint8_t* tmp = pkcs8key.get();
     if (i2d_PKCS8_PRIV_KEY_INFO(pkcs8.get(), &tmp) != len) {
         ALOGE("Couldn't convert to PKCS#8");
