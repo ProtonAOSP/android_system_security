@@ -52,7 +52,7 @@ const char* kTimestampFilePath = "timestamp";
 struct BIGNUM_Delete {
     void operator()(BIGNUM* p) const { BN_free(p); }
 };
-typedef UniquePtr<BIGNUM, BIGNUM_Delete> Unique_BIGNUM;
+typedef std::unique_ptr<BIGNUM, BIGNUM_Delete> Unique_BIGNUM;
 
 bool containsTag(const hidl_vec<KeyParameter>& params, Tag tag) {
     return params.end() != std::find_if(params.begin(), params.end(),
