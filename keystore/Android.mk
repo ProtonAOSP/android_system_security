@@ -63,6 +63,7 @@ LOCAL_SHARED_LIBRARIES := \
 	libhidltransport \
 	android.hardware.keymaster@3.0 \
 	android.system.wifi.keystore@1.0
+LOCAL_HEADER_LIBRARIES := libbase_headers
 LOCAL_MODULE := keystore
 LOCAL_MODULE_TAGS := optional
 LOCAL_INIT_RC := keystore.rc
