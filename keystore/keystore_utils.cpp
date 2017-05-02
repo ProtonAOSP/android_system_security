@@ -25,7 +25,6 @@
 #include <cutils/log.h>
 #include <private/android_filesystem_config.h>
 
-#include <keymaster/android_keymaster_utils.h>
 #include <keystore/authorization_set.h>
 #include <keystore/keystore_client.h>
 #include <keystore/IKeystoreService.h>
