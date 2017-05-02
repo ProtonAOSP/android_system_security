@@ -29,7 +29,7 @@
 #include <openssl/err.h>
 #include <openssl/x509.h>
 
-#include <UniquePtr.h>
+#include <memory>
 
 // For debugging
 // #define LOG_NDEBUG 0
@@ -40,43 +40,43 @@
 struct BIGNUM_Delete {
     void operator()(BIGNUM* p) const { BN_free(p); }
 };
-typedef UniquePtr<BIGNUM, BIGNUM_Delete> Unique_BIGNUM;
+typedef std::unique_ptr<BIGNUM, BIGNUM_Delete> Unique_BIGNUM;
 
 struct EVP_PKEY_Delete {
     void operator()(EVP_PKEY* p) const { EVP_PKEY_free(p); }
 };
-typedef UniquePtr<EVP_PKEY, EVP_PKEY_Delete> Unique_EVP_PKEY;
+typedef std::unique_ptr<EVP_PKEY, EVP_PKEY_Delete> Unique_EVP_PKEY;
 
 struct PKCS8_PRIV_KEY_INFO_Delete {
     void operator()(PKCS8_PRIV_KEY_INFO* p) const { PKCS8_PRIV_KEY_INFO_free(p); }
 };
-typedef UniquePtr<PKCS8_PRIV_KEY_INFO, PKCS8_PRIV_KEY_INFO_Delete> Unique_PKCS8_PRIV_KEY_INFO;
+typedef std::unique_ptr<PKCS8_PRIV_KEY_INFO, PKCS8_PRIV_KEY_INFO_Delete> Unique_PKCS8_PRIV_KEY_INFO;
 
 struct DSA_Delete {
     void operator()(DSA* p) const { DSA_free(p); }
 };
-typedef UniquePtr<DSA, DSA_Delete> Unique_DSA;
+typedef std::unique_ptr<DSA, DSA_Delete> Unique_DSA;
 
 struct EC_KEY_Delete {
     void operator()(EC_KEY* p) const { EC_KEY_free(p); }
 };
-typedef UniquePtr<EC_KEY, EC_KEY_Delete> Unique_EC_KEY;
+typedef std::unique_ptr<EC_KEY, EC_KEY_Delete> Unique_EC_KEY;
 
 struct EC_GROUP_Delete {
     void operator()(EC_GROUP* p) const { EC_GROUP_free(p); }
 };
-typedef UniquePtr<EC_GROUP, EC_GROUP_Delete> Unique_EC_GROUP;
+typedef std::unique_ptr<EC_GROUP, EC_GROUP_Delete> Unique_EC_GROUP;
 
 struct RSA_Delete {
     void operator()(RSA* p) const { RSA_free(p); }
 };
-typedef UniquePtr<RSA, RSA_Delete> Unique_RSA;
+typedef std::unique_ptr<RSA, RSA_Delete> Unique_RSA;
 
 struct Malloc_Free {
     void operator()(void* p) const { free(p); }
 };
 
-typedef UniquePtr<keymaster0_device_t> Unique_keymaster_device_t;
+typedef std::unique_ptr<keymaster0_device_t> Unique_keymaster_device_t;
 
 /**
  * Many OpenSSL APIs take ownership of an argument on success but
@@ -85,7 +85,7 @@ typedef UniquePtr<keymaster0_device_t> Unique_keymaster_device_t;
  * triggering a warning by not using the result of release().
  */
 template <typename T, typename Delete_T>
-inline void release_because_ownership_transferred(UniquePtr<T, Delete_T>& p) {
+inline void release_because_ownership_transferred(std::unique_ptr<T, Delete_T>& p) {
     T* val __attribute__((unused)) = p.release();
 }
 
@@ -124,7 +124,7 @@ static int wrap_key(EVP_PKEY* pkey, int type, uint8_t** keyBlob, size_t* keyBlob
                      sizeof(privateLen) + publicLen;
 
     // derData will be returned to the caller, so allocate it with malloc.
-    UniquePtr<unsigned char, Malloc_Free> derData(
+    std::unique_ptr<unsigned char, Malloc_Free> derData(
         static_cast<unsigned char*>(malloc(*keyBlobLength)));
     if (derData.get() == NULL) {
         ALOGE("could not allocate memory for key blob");
@@ -446,7 +446,7 @@ __attribute__((visibility("default"))) int openssl_get_keypair_public(const keym
         return -1;
     }
 
-    UniquePtr<uint8_t, Malloc_Free> key(static_cast<uint8_t*>(malloc(len)));
+    std::unique_ptr<uint8_t, Malloc_Free> key(static_cast<uint8_t*>(malloc(len)));
     if (key.get() == NULL) {
         ALOGE("Could not allocate memory for public key data");
         return -1;
@@ -479,7 +479,7 @@ static int sign_dsa(EVP_PKEY* pkey, keymaster_dsa_sign_params_t* sign_params, co
     }
 
     unsigned int dsaSize = DSA_size(dsa.get());
-    UniquePtr<uint8_t, Malloc_Free> signedDataPtr(reinterpret_cast<uint8_t*>(malloc(dsaSize)));
+    std::unique_ptr<uint8_t, Malloc_Free> signedDataPtr(reinterpret_cast<uint8_t*>(malloc(dsaSize)));
     if (signedDataPtr.get() == NULL) {
         logOpenSSLError("openssl_sign_dsa");
         return -1;
@@ -511,7 +511,7 @@ static int sign_ec(EVP_PKEY* pkey, keymaster_ec_sign_params_t* sign_params, cons
     }
 
     unsigned int ecdsaSize = ECDSA_size(eckey.get());
-    UniquePtr<uint8_t, Malloc_Free> signedDataPtr(reinterpret_cast<uint8_t*>(malloc(ecdsaSize)));
+    std::unique_ptr<uint8_t, Malloc_Free> signedDataPtr(reinterpret_cast<uint8_t*>(malloc(ecdsaSize)));
     if (signedDataPtr.get() == NULL) {
         logOpenSSLError("openssl_sign_ec");
         return -1;
@@ -545,7 +545,7 @@ static int sign_rsa(EVP_PKEY* pkey, keymaster_rsa_sign_params_t* sign_params, co
         return -1;
     }
 
-    UniquePtr<uint8_t, Malloc_Free> signedDataPtr(reinterpret_cast<uint8_t*>(malloc(dataLength)));
+    std::unique_ptr<uint8_t, Malloc_Free> signedDataPtr(reinterpret_cast<uint8_t*>(malloc(dataLength)));
     if (signedDataPtr.get() == NULL) {
         logOpenSSLError("openssl_sign_rsa");
         return -1;
@@ -667,7 +667,7 @@ static int verify_rsa(EVP_PKEY* pkey, keymaster_rsa_sign_params_t* sign_params,
         return -1;
     }
 
-    UniquePtr<uint8_t[]> dataPtr(new uint8_t[signedDataLength]);
+    std::unique_ptr<uint8_t[]> dataPtr(new uint8_t[signedDataLength]);
     if (dataPtr.get() == NULL) {
         logOpenSSLError("openssl_verify_data");
         return -1;
