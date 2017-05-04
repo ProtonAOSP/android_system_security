@@ -58,7 +58,7 @@ LOCAL_SHARED_LIBRARIES := \
 	libsoftkeymasterdevice \
 	libkeymaster_messages \
 	libkeymaster_portable \
-	libkeymaster \
+	libkeymaster_staging \
 	libhwbinder \
 	libhidlbase \
 	libhidltransport \
