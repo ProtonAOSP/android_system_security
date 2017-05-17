@@ -26,7 +26,7 @@
 
 #include <hardware/keymaster_defs.h>
 
-#include <UniquePtr.h>
+#include <memory>
 
 #include <keystore/authorization_set.h>
 
@@ -52,12 +52,12 @@ uid_t get_user_id(uid_t uid);
 struct EVP_PKEY_Delete {
     void operator()(EVP_PKEY* p) const { EVP_PKEY_free(p); }
 };
-typedef UniquePtr<EVP_PKEY, EVP_PKEY_Delete> Unique_EVP_PKEY;
+typedef std::unique_ptr<EVP_PKEY, EVP_PKEY_Delete> Unique_EVP_PKEY;
 
 struct PKCS8_PRIV_KEY_INFO_Delete {
     void operator()(PKCS8_PRIV_KEY_INFO* p) const { PKCS8_PRIV_KEY_INFO_free(p); }
 };
-typedef UniquePtr<PKCS8_PRIV_KEY_INFO, PKCS8_PRIV_KEY_INFO_Delete> Unique_PKCS8_PRIV_KEY_INFO;
+typedef std::unique_ptr<PKCS8_PRIV_KEY_INFO, PKCS8_PRIV_KEY_INFO_Delete> Unique_PKCS8_PRIV_KEY_INFO;
 
 namespace keystore {
 

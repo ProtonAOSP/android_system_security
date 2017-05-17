@@ -19,6 +19,8 @@
 #include <string>
 #include <vector>
 
+#include <android-base/macros.h>
+
 #include "authorization_set.h"
 #include "keystore.h"
 #include "keystore_return_types.h"
