@@ -42,11 +42,13 @@ template <typename T, void (*FreeFunc)(T*)> struct OpenSslObjectDeleter {
 
 DEFINE_OPENSSL_OBJECT_POINTER(EVP_CIPHER_CTX);
 
-#ifdef __clang__
+#if defined(__clang__)
 #define OPTNONE __attribute__((optnone))
-#else  // not __clang__
+#elif defined(__GNUC__)
 #define OPTNONE __attribute__((optimize("O0")))
-#endif  // not __clang__
+#else
+#error Need a definition for OPTNONE
+#endif
 
 class ArrayEraser {
   public:
@@ -54,7 +56,7 @@ class ArrayEraser {
     OPTNONE ~ArrayEraser() { std::fill(mArr, mArr + mSize, 0); }
 
   private:
-    uint8_t* mArr;
+    volatile uint8_t* mArr;
     size_t mSize;
 };
 
