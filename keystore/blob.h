@@ -24,32 +24,32 @@
 
 #include <keystore/keystore.h>
 
-#define VALUE_SIZE 32768
+constexpr size_t kValueSize = 32768;
+constexpr size_t kAesKeySize = 128 / 8;
+constexpr size_t kGcmTagLength = 128 / 8;
+constexpr size_t kGcmIvLength = 96 / 8;
 
 /* Here is the file format. There are two parts in blob.value, the secret and
  * the description. The secret is stored in ciphertext, and its original size
  * can be found in blob.length. The description is stored after the secret in
  * plaintext, and its size is specified in blob.info. The total size of the two
- * parts must be no more than VALUE_SIZE bytes. The first field is the version,
+ * parts must be no more than kValueSize bytes. The first field is the version,
  * the second is the blob's type, and the third byte is flags. Fields other
  * than blob.info, blob.length, and blob.value are modified by encryptBlob()
  * and decryptBlob(). Thus they should not be accessed from outside. */
 
-/* ** Note to future implementors of encryption: **
- * Currently this is the construction:
- *   metadata || Enc(MD5(data) || data)
- *
- * This should be the construction used for encrypting if re-implementing:
- *
- *   Derive independent keys for encryption and MAC:
- *     Kenc = AES_encrypt(masterKey, "Encrypt")
- *     Kmac = AES_encrypt(masterKey, "MAC")
- *
- *   Store this:
- *     metadata || AES_CTR_encrypt(Kenc, rand_IV, data) ||
- *             HMAC(Kmac, metadata || Enc(data))
- */
-struct __attribute__((packed)) blob {
+struct __attribute__((packed)) blobv3 {
+    uint8_t version;
+    uint8_t type;
+    uint8_t flags;
+    uint8_t info;
+    uint8_t initialization_vector[AES_BLOCK_SIZE];  // Only 96 bits is used, rest is zeroed.
+    uint8_t aead_tag[kGcmTagLength];
+    int32_t length;  // in network byte order, only for backward compatibility
+    uint8_t value[kValueSize + AES_BLOCK_SIZE];
+};
+
+struct __attribute__((packed)) blobv2 {
     uint8_t version;
     uint8_t type;
     uint8_t flags;
@@ -58,11 +58,19 @@ struct __attribute__((packed)) blob {
     uint8_t encrypted[0];  // Marks offset to encrypted data.
     uint8_t digest[MD5_DIGEST_LENGTH];
     uint8_t digested[0];  // Marks offset to digested data.
-    int32_t length;       // in network byte order when encrypted
-    uint8_t value[VALUE_SIZE + AES_BLOCK_SIZE];
+    int32_t length;       // in network byte order
+    uint8_t value[kValueSize + AES_BLOCK_SIZE];
 };
 
-static const uint8_t CURRENT_BLOB_VERSION = 2;
+static_assert(sizeof(blobv3) == sizeof(blobv2) &&
+                  offsetof(blobv3, initialization_vector) == offsetof(blobv2, vector) &&
+                  offsetof(blobv3, aead_tag) == offsetof(blobv2, digest) &&
+                  offsetof(blobv3, aead_tag) == offsetof(blobv2, encrypted) &&
+                  offsetof(blobv3, length) == offsetof(blobv2, length) &&
+                  offsetof(blobv3, value) == offsetof(blobv2, value),
+              "Oops.  Blob layout changed.");
+
+static const uint8_t CURRENT_BLOB_VERSION = 3;
 
 typedef enum {
     TYPE_ANY = 0,  // meta type that matches anything
@@ -79,9 +87,10 @@ class Blob {
   public:
     Blob(const uint8_t* value, size_t valueLength, const uint8_t* info, uint8_t infoLength,
          BlobType type);
-    explicit Blob(blob b);
-
+    explicit Blob(blobv3 b);
     Blob();
+
+    ~Blob() { mBlob = {}; }
 
     const uint8_t* getValue() const { return mBlob.value; }
 
@@ -108,11 +117,12 @@ class Blob {
     BlobType getType() const { return BlobType(mBlob.type); }
     void setType(BlobType type) { mBlob.type = uint8_t(type); }
 
-    ResponseCode writeBlob(const char* filename, AES_KEY* aes_key, State state, Entropy* entropy);
-    ResponseCode readBlob(const char* filename, AES_KEY* aes_key, State state);
+    ResponseCode writeBlob(const std::string& filename, const uint8_t* aes_key, State state,
+                           Entropy* entropy);
+    ResponseCode readBlob(const std::string& filename, const uint8_t* aes_key, State state);
 
   private:
-    struct blob mBlob;
+    blobv3 mBlob;
 };
 
 #endif  // KEYSTORE_BLOB_H_

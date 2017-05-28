@@ -54,8 +54,7 @@ class UserState {
     ResponseCode writeMasterKey(const android::String8& pw, Entropy* entropy);
     ResponseCode readMasterKey(const android::String8& pw, Entropy* entropy);
 
-    AES_KEY* getEncryptionKey() { return &mMasterKeyEncryption; }
-    AES_KEY* getDecryptionKey() { return &mMasterKeyDecryption; }
+    auto& getEncryptionKey() const { return mMasterKey; }
 
     bool reset();
 
@@ -82,9 +81,6 @@ class UserState {
 
     uint8_t mMasterKey[MASTER_KEY_SIZE_BYTES];
     uint8_t mSalt[SALT_SIZE];
-
-    AES_KEY mMasterKeyEncryption;
-    AES_KEY mMasterKeyDecryption;
 };
 
 #endif  // KEYSTORE_USER_STATE_H_

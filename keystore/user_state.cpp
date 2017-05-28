@@ -68,8 +68,6 @@ void UserState::setState(State state) {
 void UserState::zeroizeMasterKeysInMemory() {
     memset(mMasterKey, 0, sizeof(mMasterKey));
     memset(mSalt, 0, sizeof(mSalt));
-    memset(&mMasterKeyEncryption, 0, sizeof(mMasterKeyEncryption));
-    memset(&mMasterKeyDecryption, 0, sizeof(mMasterKeyDecryption));
 }
 
 bool UserState::deleteMasterKey() {
@@ -110,7 +108,7 @@ ResponseCode UserState::copyMasterKeyFile(UserState* src) {
     if (in < 0) {
         return ResponseCode::SYSTEM_ERROR;
     }
-    blob rawBlob;
+    blobv3 rawBlob;
     size_t length = readFully(in, (uint8_t*)&rawBlob, sizeof(rawBlob));
     if (close(in) != 0) {
         return ResponseCode::SYSTEM_ERROR;
@@ -135,10 +133,8 @@ ResponseCode UserState::copyMasterKeyFile(UserState* src) {
 ResponseCode UserState::writeMasterKey(const android::String8& pw, Entropy* entropy) {
     uint8_t passwordKey[MASTER_KEY_SIZE_BYTES];
     generateKeyFromPassword(passwordKey, MASTER_KEY_SIZE_BYTES, pw, mSalt);
-    AES_KEY passwordAesKey;
-    AES_set_encrypt_key(passwordKey, MASTER_KEY_SIZE_BITS, &passwordAesKey);
     Blob masterKeyBlob(mMasterKey, sizeof(mMasterKey), mSalt, sizeof(mSalt), TYPE_MASTER_KEY);
-    return masterKeyBlob.writeBlob(mMasterKeyFile, &passwordAesKey, STATE_NO_ERROR, entropy);
+    return masterKeyBlob.writeBlob(mMasterKeyFile, passwordKey, STATE_NO_ERROR, entropy);
 }
 
 ResponseCode UserState::readMasterKey(const android::String8& pw, Entropy* entropy) {
@@ -149,7 +145,7 @@ ResponseCode UserState::readMasterKey(const android::String8& pw, Entropy* entro
 
     // We read the raw blob to just to get the salt to generate the AES key, then we create the Blob
     // to use with decryptBlob
-    blob rawBlob;
+    blobv3 rawBlob;
     size_t length = readFully(in, (uint8_t*)&rawBlob, sizeof(rawBlob));
     if (close(in) != 0) {
         return ResponseCode::SYSTEM_ERROR;
@@ -163,10 +159,8 @@ ResponseCode UserState::readMasterKey(const android::String8& pw, Entropy* entro
     }
     uint8_t passwordKey[MASTER_KEY_SIZE_BYTES];
     generateKeyFromPassword(passwordKey, MASTER_KEY_SIZE_BYTES, pw, salt);
-    AES_KEY passwordAesKey;
-    AES_set_decrypt_key(passwordKey, MASTER_KEY_SIZE_BITS, &passwordAesKey);
     Blob masterKeyBlob(rawBlob);
-    ResponseCode response = masterKeyBlob.readBlob(mMasterKeyFile, &passwordAesKey, STATE_NO_ERROR);
+    ResponseCode response = masterKeyBlob.readBlob(mMasterKeyFile, passwordKey, STATE_NO_ERROR);
     if (response == ResponseCode::SYSTEM_ERROR) {
         return response;
     }
@@ -258,7 +252,5 @@ bool UserState::generateMasterKey(Entropy* entropy) {
 }
 
 void UserState::setupMasterKeys() {
-    AES_set_encrypt_key(mMasterKey, MASTER_KEY_SIZE_BITS, &mMasterKeyEncryption);
-    AES_set_decrypt_key(mMasterKey, MASTER_KEY_SIZE_BITS, &mMasterKeyDecryption);
     setState(STATE_NO_ERROR);
 }

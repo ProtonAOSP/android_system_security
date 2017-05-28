@@ -28,15 +28,117 @@
 
 #include "keystore_utils.h"
 
+namespace {
+
+constexpr size_t kGcmIvSizeBytes = 96 / 8;
+
+template <typename T, void (*FreeFunc)(T*)> struct OpenSslObjectDeleter {
+    void operator()(T* p) { FreeFunc(p); }
+};
+
+#define DEFINE_OPENSSL_OBJECT_POINTER(name)                                                        \
+    typedef OpenSslObjectDeleter<name, name##_free> name##_Delete;                                 \
+    typedef std::unique_ptr<name, name##_Delete> name##_Ptr;
+
+DEFINE_OPENSSL_OBJECT_POINTER(EVP_CIPHER_CTX);
+
+#if defined(__clang__)
+#define OPTNONE __attribute__((optnone))
+#elif defined(__GNUC__)
+#define OPTNONE __attribute__((optimize("O0")))
+#else
+#error Need a definition for OPTNONE
+#endif
+
+class ArrayEraser {
+  public:
+    ArrayEraser(uint8_t* arr, size_t size) : mArr(arr), mSize(size) {}
+    OPTNONE ~ArrayEraser() { std::fill(mArr, mArr + mSize, 0); }
+
+  private:
+    volatile uint8_t* mArr;
+    size_t mSize;
+};
+
+/*
+ * Encrypt 'len' data at 'in' with AES-GCM, using 128-bit key at 'key', 96-bit IV at 'iv' and write
+ * output to 'out' (which may be the same location as 'in') and 128-bit tag to 'tag'.
+ */
+ResponseCode AES_gcm_encrypt(const uint8_t* in, uint8_t* out, size_t len, const uint8_t* key,
+                             const uint8_t* iv, uint8_t* tag) {
+    const EVP_CIPHER* cipher = EVP_aes_128_gcm();
+    EVP_CIPHER_CTX_Ptr ctx(EVP_CIPHER_CTX_new());
+
+    EVP_EncryptInit_ex(ctx.get(), cipher, nullptr /* engine */, key, iv);
+    EVP_CIPHER_CTX_set_padding(ctx.get(), 0 /* no padding needed with GCM */);
+
+    std::unique_ptr<uint8_t[]> out_tmp(new uint8_t[len]);
+    uint8_t* out_pos = out_tmp.get();
+    int out_len;
+
+    EVP_EncryptUpdate(ctx.get(), out_pos, &out_len, in, len);
+    out_pos += out_len;
+    EVP_EncryptFinal_ex(ctx.get(), out_pos, &out_len);
+    out_pos += out_len;
+    if (out_pos - out_tmp.get() != static_cast<ssize_t>(len)) {
+        ALOGD("Encrypted ciphertext is the wrong size, expected %zu, got %zd", len,
+              out_pos - out_tmp.get());
+        return ResponseCode::SYSTEM_ERROR;
+    }
+
+    std::copy(out_tmp.get(), out_pos, out);
+    EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_GCM_GET_TAG, kGcmTagLength, tag);
+
+    return ResponseCode::NO_ERROR;
+}
+
+/*
+ * Decrypt 'len' data at 'in' with AES-GCM, using 128-bit key at 'key', 96-bit IV at 'iv', checking
+ * 128-bit tag at 'tag' and writing plaintext to 'out' (which may be the same location as 'in').
+ */
+ResponseCode AES_gcm_decrypt(const uint8_t* in, uint8_t* out, size_t len, const uint8_t* key,
+                             const uint8_t* iv, const uint8_t* tag) {
+    const EVP_CIPHER* cipher = EVP_aes_128_gcm();
+    EVP_CIPHER_CTX_Ptr ctx(EVP_CIPHER_CTX_new());
+
+    EVP_DecryptInit_ex(ctx.get(), cipher, nullptr /* engine */, key, iv);
+    EVP_CIPHER_CTX_set_padding(ctx.get(), 0 /* no padding needed with GCM */);
+    EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_GCM_SET_TAG, kGcmTagLength, const_cast<uint8_t*>(tag));
+
+    std::unique_ptr<uint8_t[]> out_tmp(new uint8_t[len]);
+    ArrayEraser out_eraser(out_tmp.get(), len);
+    uint8_t* out_pos = out_tmp.get();
+    int out_len;
+
+    EVP_DecryptUpdate(ctx.get(), out_pos, &out_len, in, len);
+    out_pos += out_len;
+    if (!EVP_DecryptFinal_ex(ctx.get(), out_pos, &out_len)) {
+        ALOGD("Failed to decrypt blob; ciphertext or tag is likely corrupted");
+        return ResponseCode::SYSTEM_ERROR;
+    }
+    out_pos += out_len;
+    if (out_pos - out_tmp.get() != static_cast<ssize_t>(len)) {
+        ALOGD("Encrypted plaintext is the wrong size, expected %zu, got %zd", len,
+              out_pos - out_tmp.get());
+        return ResponseCode::SYSTEM_ERROR;
+    }
+
+    std::copy(out_tmp.get(), out_pos, out);
+
+    return ResponseCode::NO_ERROR;
+}
+
+}  // namespace
+
 Blob::Blob(const uint8_t* value, size_t valueLength, const uint8_t* info, uint8_t infoLength,
            BlobType type) {
     memset(&mBlob, 0, sizeof(mBlob));
-    if (valueLength > VALUE_SIZE) {
-        valueLength = VALUE_SIZE;
+    if (valueLength > kValueSize) {
+        valueLength = kValueSize;
         ALOGW("Provided blob length too large");
     }
-    if (infoLength + valueLength > VALUE_SIZE) {
-        infoLength = VALUE_SIZE - valueLength;
+    if (infoLength + valueLength > kValueSize) {
+        infoLength = kValueSize - valueLength;
         ALOGW("Provided info length too large");
     }
     mBlob.length = valueLength;
@@ -55,7 +157,7 @@ Blob::Blob(const uint8_t* value, size_t valueLength, const uint8_t* info, uint8_
     }
 }
 
-Blob::Blob(blob b) {
+Blob::Blob(blobv3 b) {
     mBlob = b;
 }
 
@@ -103,45 +205,31 @@ void Blob::setFallback(bool fallback) {
     }
 }
 
-ResponseCode Blob::writeBlob(const char* filename, AES_KEY* aes_key, State state,
+ResponseCode Blob::writeBlob(const std::string& filename, const uint8_t* aes_key, State state,
                              Entropy* entropy) {
-    ALOGV("writing blob %s", filename);
+    ALOGV("writing blob %s", filename.c_str());
+
+    const size_t dataLength = mBlob.length;
+    mBlob.length = htonl(mBlob.length);
+
     if (isEncrypted() || isSuperEncrypted()) {
         if (state != STATE_NO_ERROR) {
             ALOGD("couldn't insert encrypted blob while not unlocked");
             return ResponseCode::LOCKED;
         }
 
-        if (!entropy->generate_random_data(mBlob.vector, AES_BLOCK_SIZE)) {
-            ALOGW("Could not read random data for: %s", filename);
+        memset(mBlob.initialization_vector, 0, AES_BLOCK_SIZE);
+        if (!entropy->generate_random_data(mBlob.initialization_vector, kGcmIvSizeBytes)) {
+            ALOGW("Could not read random data for: %s", filename.c_str());
             return ResponseCode::SYSTEM_ERROR;
         }
+
+        auto rc = AES_gcm_encrypt(mBlob.value /* in */, mBlob.value /* out */, dataLength, aes_key,
+                                  mBlob.initialization_vector, mBlob.aead_tag);
+        if (rc != ResponseCode::NO_ERROR) return rc;
     }
 
-    // data includes the value and the value's length
-    size_t dataLength = mBlob.length + sizeof(mBlob.length);
-    // pad data to the AES_BLOCK_SIZE
-    size_t digestedLength = ((dataLength + AES_BLOCK_SIZE - 1) / AES_BLOCK_SIZE * AES_BLOCK_SIZE);
-    // encrypted data includes the digest value
-    size_t encryptedLength = digestedLength + MD5_DIGEST_LENGTH;
-    // move info after space for padding
-    memmove(&mBlob.encrypted[encryptedLength], &mBlob.value[mBlob.length], mBlob.info);
-    // zero padding area
-    memset(mBlob.value + mBlob.length, 0, digestedLength - dataLength);
-
-    mBlob.length = htonl(mBlob.length);
-
-    if (isEncrypted() || isSuperEncrypted()) {
-        MD5(mBlob.digested, digestedLength, mBlob.digest);
-
-        uint8_t vector[AES_BLOCK_SIZE];
-        memcpy(vector, mBlob.vector, AES_BLOCK_SIZE);
-        AES_cbc_encrypt(mBlob.encrypted, mBlob.encrypted, encryptedLength, aes_key, vector,
-                        AES_ENCRYPT);
-    }
-
-    size_t headerLength = (mBlob.encrypted - (uint8_t*)&mBlob);
-    size_t fileLength = encryptedLength + headerLength + mBlob.info;
+    size_t fileLength = offsetof(blobv3, value) + dataLength + mBlob.info;
 
     const char* tmpFileName = ".tmp";
     int out =
@@ -150,7 +238,8 @@ ResponseCode Blob::writeBlob(const char* filename, AES_KEY* aes_key, State state
         ALOGW("could not open file: %s: %s", tmpFileName, strerror(errno));
         return ResponseCode::SYSTEM_ERROR;
     }
-    size_t writtenBytes = writeFully(out, (uint8_t*)&mBlob, fileLength);
+
+    const size_t writtenBytes = writeFully(out, (uint8_t*)&mBlob, fileLength);
     if (close(out) != 0) {
         return ResponseCode::SYSTEM_ERROR;
     }
@@ -159,23 +248,22 @@ ResponseCode Blob::writeBlob(const char* filename, AES_KEY* aes_key, State state
         unlink(tmpFileName);
         return ResponseCode::SYSTEM_ERROR;
     }
-    if (rename(tmpFileName, filename) == -1) {
-        ALOGW("could not rename blob to %s: %s", filename, strerror(errno));
+    if (rename(tmpFileName, filename.c_str()) == -1) {
+        ALOGW("could not rename blob to %s: %s", filename.c_str(), strerror(errno));
         return ResponseCode::SYSTEM_ERROR;
     }
     return ResponseCode::NO_ERROR;
 }
 
-ResponseCode Blob::readBlob(const char* filename, AES_KEY* aes_key, State state) {
-    ALOGV("reading blob %s", filename);
-    int in = TEMP_FAILURE_RETRY(open(filename, O_RDONLY));
+ResponseCode Blob::readBlob(const std::string& filename, const uint8_t* aes_key, State state) {
+    ALOGV("reading blob %s", filename.c_str());
+    const int in = TEMP_FAILURE_RETRY(open(filename.c_str(), O_RDONLY));
     if (in < 0) {
         return (errno == ENOENT) ? ResponseCode::KEY_NOT_FOUND : ResponseCode::SYSTEM_ERROR;
     }
-    // fileLength may be less than sizeof(mBlob) since the in
-    // memory version has extra padding to tolerate rounding up to
-    // the AES_BLOCK_SIZE
-    size_t fileLength = readFully(in, (uint8_t*)&mBlob, sizeof(mBlob));
+
+    // fileLength may be less than sizeof(mBlob)
+    const size_t fileLength = readFully(in, (uint8_t*)&mBlob, sizeof(mBlob));
     if (close(in) != 0) {
         return ResponseCode::SYSTEM_ERROR;
     }
@@ -188,42 +276,53 @@ ResponseCode Blob::readBlob(const char* filename, AES_KEY* aes_key, State state)
         return ResponseCode::LOCKED;
     }
 
-    size_t headerLength = (mBlob.encrypted - (uint8_t*)&mBlob);
-    if (fileLength < headerLength) {
-        return ResponseCode::VALUE_CORRUPTED;
-    }
+    if (fileLength < offsetof(blobv3, value)) return ResponseCode::VALUE_CORRUPTED;
 
-    ssize_t encryptedLength = fileLength - (headerLength + mBlob.info);
-    if (encryptedLength < 0) {
-        return ResponseCode::VALUE_CORRUPTED;
-    }
+    if (mBlob.version == 3) {
+        const ssize_t encryptedLength = ntohl(mBlob.length);
 
-    ssize_t digestedLength;
-    if (isEncrypted() || isSuperEncrypted()) {
-        if (encryptedLength % AES_BLOCK_SIZE != 0) {
-            return ResponseCode::VALUE_CORRUPTED;
+        if (isEncrypted() || isSuperEncrypted()) {
+            auto rc = AES_gcm_decrypt(mBlob.value /* in */, mBlob.value /* out */, encryptedLength,
+                                      aes_key, mBlob.initialization_vector, mBlob.aead_tag);
+            if (rc != ResponseCode::NO_ERROR) return rc;
         }
+    } else if (mBlob.version < 3) {
+        blobv2& blob = reinterpret_cast<blobv2&>(mBlob);
+        const size_t headerLength = offsetof(blobv2, encrypted);
+        const ssize_t encryptedLength = fileLength - headerLength - blob.info;
+        if (encryptedLength < 0) return ResponseCode::VALUE_CORRUPTED;
 
-        AES_cbc_encrypt(mBlob.encrypted, mBlob.encrypted, encryptedLength, aes_key, mBlob.vector,
-                        AES_DECRYPT);
-        digestedLength = encryptedLength - MD5_DIGEST_LENGTH;
-        uint8_t computedDigest[MD5_DIGEST_LENGTH];
-        MD5(mBlob.digested, digestedLength, computedDigest);
-        if (memcmp(mBlob.digest, computedDigest, MD5_DIGEST_LENGTH) != 0) {
-            return ResponseCode::VALUE_CORRUPTED;
+        if (isEncrypted() || isSuperEncrypted()) {
+            if (encryptedLength % AES_BLOCK_SIZE != 0) {
+                return ResponseCode::VALUE_CORRUPTED;
+            }
+
+            AES_KEY key;
+            AES_set_decrypt_key(aes_key, kAesKeySize * 8, &key);
+            AES_cbc_encrypt(blob.encrypted, blob.encrypted, encryptedLength, &key, blob.vector,
+                            AES_DECRYPT);
+            key = {};  // clear key
+
+            uint8_t computedDigest[MD5_DIGEST_LENGTH];
+            ssize_t digestedLength = encryptedLength - MD5_DIGEST_LENGTH;
+            MD5(blob.digested, digestedLength, computedDigest);
+            if (memcmp(blob.digest, computedDigest, MD5_DIGEST_LENGTH) != 0) {
+                return ResponseCode::VALUE_CORRUPTED;
+            }
         }
-    } else {
-        digestedLength = encryptedLength;
     }
 
-    ssize_t maxValueLength = digestedLength - sizeof(mBlob.length);
+    const ssize_t maxValueLength = fileLength - offsetof(blobv3, value) - mBlob.info;
     mBlob.length = ntohl(mBlob.length);
-    if (mBlob.length < 0 || mBlob.length > maxValueLength) {
+    if (mBlob.length < 0 || mBlob.length > maxValueLength ||
+        mBlob.length + mBlob.info + AES_BLOCK_SIZE > static_cast<ssize_t>(sizeof(mBlob.value))) {
         return ResponseCode::VALUE_CORRUPTED;
     }
-    if (mBlob.info != 0) {
+
+    if (mBlob.info != 0 && mBlob.version < 3) {
         // move info from after padding to after data
-        memmove(&mBlob.value[mBlob.length], &mBlob.value[maxValueLength], mBlob.info);
+        memmove(mBlob.value + mBlob.length, mBlob.value + maxValueLength, mBlob.info);
     }
+
     return ResponseCode::NO_ERROR;
 }
