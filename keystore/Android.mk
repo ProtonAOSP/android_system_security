@@ -43,6 +43,7 @@ LOCAL_SRC_FILES := \
 	operation.cpp \
 	permissions.cpp \
 	user_state.cpp \
+	grant_store.cpp \
 	../../../frameworks/base/core/java/android/security/keymaster/IKeyAttestationApplicationIdProvider.aidl
 LOCAL_SHARED_LIBRARIES := \
 	libbinder \
