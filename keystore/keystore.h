@@ -25,11 +25,7 @@
 
 #include "blob.h"
 #include "include/keystore/keymaster_tags.h"
-
-typedef struct {
-    uint32_t uid;
-    const uint8_t* filename;
-} grant_t;
+#include "grant_store.h"
 
 using ::keystore::NullOr;
 
@@ -91,11 +87,8 @@ class KeyStore {
     ResponseCode list(const android::String8& prefix, android::Vector<android::String16>* matches,
                       uid_t userId);
 
-    void addGrant(const char* filename, uid_t granteeUid);
+    std::string addGrant(const char* filename, const char* alias, uid_t granteeUid);
     bool removeGrant(const char* filename, uid_t granteeUid);
-    bool hasGrant(const char* filename, const uid_t uid) const {
-        return getGrant(filename, uid) != NULL;
-    }
 
     ResponseCode importKey(const uint8_t* key, size_t keyLen, const char* filename, uid_t userId,
                            int32_t flags);
@@ -137,13 +130,11 @@ class KeyStore {
 
     android::Vector<UserState*> mMasterKeys;
 
-    android::Vector<grant_t*> mGrants;
+    ::keystore::GrantStore mGrants;
 
     typedef struct { uint32_t version; } keystore_metadata_t;
 
     keystore_metadata_t mMetaData;
-
-    const grant_t* getGrant(const char* filename, uid_t uid) const;
 
     /**
      * Upgrade the key from the current version to whatever is newest.

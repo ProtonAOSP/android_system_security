@@ -166,8 +166,7 @@ class IKeystoreService : public IInterface {
     virtual ::keystore::KeyStoreServiceReturnCode
     get_pubkey(const String16& name, ::keystore::hidl_vec<uint8_t>* pubKey) = 0;
 
-    virtual ::keystore::KeyStoreServiceReturnCode grant(const String16& name,
-                                                        int32_t granteeUid) = 0;
+    virtual String16 grant(const String16& name, int32_t granteeUid) = 0;
 
     virtual ::keystore::KeyStoreServiceReturnCode ungrant(const String16& name,
                                                           int32_t granteeUid) = 0;
