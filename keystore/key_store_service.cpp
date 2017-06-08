@@ -512,22 +512,21 @@ KeyStoreServiceReturnCode KeyStoreService::get_pubkey(const String16& name,
     return ResponseCode::NO_ERROR;
 }
 
-KeyStoreServiceReturnCode KeyStoreService::grant(const String16& name, int32_t granteeUid) {
+String16 KeyStoreService::grant(const String16& name, int32_t granteeUid) {
     uid_t callingUid = IPCThreadState::self()->getCallingUid();
     auto result = checkBinderPermissionAndKeystoreState(P_GRANT);
     if (!result.isOk()) {
-        return result;
+        return String16();
     }
 
     String8 name8(name);
     String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, callingUid, ::TYPE_ANY));
 
     if (access(filename.string(), R_OK) == -1) {
-        return (errno != ENOENT) ? ResponseCode::SYSTEM_ERROR : ResponseCode::KEY_NOT_FOUND;
+        return String16();
     }
 
-    mKeyStore->addGrant(filename.string(), granteeUid);
-    return ResponseCode::NO_ERROR;
+    return String16(mKeyStore->addGrant(filename.string(), String8(name).string(), granteeUid).c_str());
 }
 
 KeyStoreServiceReturnCode KeyStoreService::ungrant(const String16& name, int32_t granteeUid) {

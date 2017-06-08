@@ -84,7 +84,7 @@ class KeyStoreService : public android::BnKeystoreService, public android::IBind
     KeyStoreServiceReturnCode get_pubkey(const android::String16& name,
                                          hidl_vec<uint8_t>* pubKey) override;
 
-    KeyStoreServiceReturnCode grant(const android::String16& name, int32_t granteeUid) override;
+    android::String16 grant(const android::String16& name, int32_t granteeUid) override;
     KeyStoreServiceReturnCode ungrant(const android::String16& name, int32_t granteeUid) override;
 
     int64_t getmtime(const android::String16& name, int32_t uid) override;

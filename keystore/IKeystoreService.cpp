@@ -442,7 +442,7 @@ class BpKeystoreService : public BpInterface<IKeystoreService> {
         return ResponseCode(reply.readInt32());
     }
 
-    KeyStoreServiceReturnCode grant(const String16& name, int32_t granteeUid) override {
+    String16 grant(const String16& name, int32_t granteeUid) override {
         Parcel data, reply;
         data.writeInterfaceToken(IKeystoreService::getInterfaceDescriptor());
         data.writeString16(name);
@@ -450,14 +450,14 @@ class BpKeystoreService : public BpInterface<IKeystoreService> {
         status_t status = remote()->transact(BnKeystoreService::GRANT, data, &reply);
         if (status != NO_ERROR) {
             ALOGD("grant() could not contact remote: %d\n", status);
-            return ResponseCode::SYSTEM_ERROR;
+            return String16();
         }
         int32_t err = reply.readExceptionCode();
         if (err < 0) {
             ALOGD("grant() caught exception %d\n", err);
-            return ResponseCode::SYSTEM_ERROR;
+            return String16();
         }
-        return ResponseCode(reply.readInt32());
+        return reply.readString16();
     }
 
     KeyStoreServiceReturnCode ungrant(const String16& name, int32_t granteeUid) override {
@@ -1112,9 +1112,9 @@ status_t BnKeystoreService::onTransact(uint32_t code, const Parcel& data, Parcel
         CHECK_INTERFACE(IKeystoreService, data, reply);
         String16 name = data.readString16();
         int32_t granteeUid = data.readInt32();
-        int32_t ret = grant(name, granteeUid);
+        String16 ret = grant(name, granteeUid);
         reply->writeNoException();
-        reply->writeInt32(ret);
+        reply->writeString16(ret);
         return NO_ERROR;
     } break;
     case UNGRANT: {
