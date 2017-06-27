@@ -206,23 +206,14 @@ const struct rsa_meth_st keystore_rsa_method = {
   NULL /* size */,
 
   NULL /* sign */,
-  NULL /* verify */,
 
   NULL /* encrypt */,
   NULL /* sign_raw */,
   NULL /* decrypt */,
-  NULL /* verify_raw */,
 
   rsa_private_transform,
 
-  NULL /* mod_exp */,
-  NULL /* bn_mod_exp */,
-
   RSA_FLAG_CACHE_PUBLIC | RSA_FLAG_OPAQUE,
-
-  NULL /* keygen */,
-  NULL /* multi_prime_keygen */,
-  NULL /* supports_digest */,
 };
 
 const char* ecdsa_get_key_id(const EC_KEY* ec_key) {
@@ -282,7 +273,6 @@ const ECDSA_METHOD keystore_ecdsa_method = {
     NULL /* finish */,
     NULL /* group_order_size */,
     ecdsa_sign,
-    NULL /* verify */,
     ECDSA_FLAG_OPAQUE,
 };
 
