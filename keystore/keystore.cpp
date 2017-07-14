@@ -48,11 +48,6 @@ KeyStore::KeyStore(Entropy* entropy, const km_device_t& device, const km_device_
 }
 
 KeyStore::~KeyStore() {
-    for (android::Vector<grant_t*>::iterator it(mGrants.begin()); it != mGrants.end(); it++) {
-        delete *it;
-    }
-    mGrants.clear();
-
     for (android::Vector<UserState*>::iterator it(mMasterKeys.begin()); it != mMasterKeys.end();
          it++) {
         delete *it;
@@ -419,26 +414,12 @@ ResponseCode KeyStore::list(const android::String8& prefix,
     return ResponseCode::NO_ERROR;
 }
 
-void KeyStore::addGrant(const char* filename, uid_t granteeUid) {
-    const grant_t* existing = getGrant(filename, granteeUid);
-    if (existing == NULL) {
-        grant_t* grant = new grant_t;
-        grant->uid = granteeUid;
-        grant->filename = reinterpret_cast<const uint8_t*>(strdup(filename));
-        mGrants.add(grant);
-    }
+std::string KeyStore::addGrant(const char* filename, const char* alias, uid_t granteeUid) {
+    return mGrants.put(granteeUid, alias, filename);
 }
 
 bool KeyStore::removeGrant(const char* filename, uid_t granteeUid) {
-    for (android::Vector<grant_t*>::iterator it(mGrants.begin()); it != mGrants.end(); it++) {
-        grant_t* grant = *it;
-        if (grant->uid == granteeUid &&
-            !strcmp(reinterpret_cast<const char*>(grant->filename), filename)) {
-            mGrants.erase(it);
-            return true;
-        }
-    }
-    return false;
+    return mGrants.removeByFileName(granteeUid, filename);
 }
 
 ResponseCode KeyStore::importKey(const uint8_t* key, size_t keyLen, const char* filename,
@@ -536,17 +517,9 @@ ResponseCode KeyStore::getKeyForName(Blob* keyBlob, const android::String8& keyN
     }
 
     // They might be using a granted key.
-    android::String8 filename8 = getKeyName(keyName, type);
-    char* end;
-    strtoul(filename8.string(), &end, 10);
-    if (end[0] != '_' || end[1] == 0) {
-        return ResponseCode::KEY_NOT_FOUND;
-    }
-    filepath8 = android::String8::format("%s/%s", getUserState(userId)->getUserDirName(),
-                                         filename8.string());
-    if (!hasGrant(filepath8.string(), uid)) {
-        return responseCode;
-    }
+    auto grant = mGrants.get(uid, keyName.string());
+    if (!grant) return ResponseCode::KEY_NOT_FOUND;
+    filepath8 = grant->key_file_.c_str();
 
     // It is a granted key. Try to load it.
     return get(filepath8.string(), keyBlob, type, userId);
@@ -593,17 +566,6 @@ const UserState* KeyStore::getUserState(uid_t userId) const {
 const UserState* KeyStore::getUserStateByUid(uid_t uid) const {
     uid_t userId = get_user_id(uid);
     return getUserState(userId);
-}
-
-const grant_t* KeyStore::getGrant(const char* filename, uid_t uid) const {
-    for (android::Vector<grant_t*>::const_iterator it(mGrants.begin()); it != mGrants.end(); it++) {
-        grant_t* grant = *it;
-        if (grant->uid == uid &&
-            !strcmp(reinterpret_cast<const char*>(grant->filename), filename)) {
-            return grant;
-        }
-    }
-    return NULL;
 }
 
 bool KeyStore::upgradeBlob(const char* filename, Blob* blob, const uint8_t oldVersion,
