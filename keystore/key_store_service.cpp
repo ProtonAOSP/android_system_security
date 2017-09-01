@@ -526,7 +526,7 @@ String16 KeyStoreService::grant(const String16& name, int32_t granteeUid) {
         return String16();
     }
 
-    return String16(mKeyStore->addGrant(filename.string(), String8(name).string(), granteeUid).c_str());
+    return String16(mKeyStore->addGrant(String8(name).string(), granteeUid, callingUid).c_str());
 }
 
 KeyStoreServiceReturnCode KeyStoreService::ungrant(const String16& name, int32_t granteeUid) {
@@ -543,8 +543,8 @@ KeyStoreServiceReturnCode KeyStoreService::ungrant(const String16& name, int32_t
         return (errno != ENOENT) ? ResponseCode::SYSTEM_ERROR : ResponseCode::KEY_NOT_FOUND;
     }
 
-    return mKeyStore->removeGrant(filename.string(), granteeUid) ? ResponseCode::NO_ERROR
-                                                                 : ResponseCode::KEY_NOT_FOUND;
+    return mKeyStore->removeGrant(name8, granteeUid) ? ResponseCode::NO_ERROR
+                                                     : ResponseCode::KEY_NOT_FOUND;
 }
 
 int64_t KeyStoreService::getmtime(const String16& name, int32_t uid) {
