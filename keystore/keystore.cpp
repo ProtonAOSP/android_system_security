@@ -502,7 +502,7 @@ ResponseCode KeyStore::getKeyForName(Blob* keyBlob, const android::String8& keyN
     uid_t userId = get_user_id(uid);
 
     ResponseCode responseCode = get(filepath8.string(), keyBlob, type, userId);
-    if (responseCode == ResponseCode::NO_ERROR) {
+    if (responseCode != ResponseCode::KEY_NOT_FOUND) {
         return responseCode;
     }
 
