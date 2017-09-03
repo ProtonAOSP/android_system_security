@@ -1073,12 +1073,12 @@ void KeyStoreService::begin(const sp<IBinder>& appToken, const String16& name, K
     persistedCharacteristics.Subtract(teeEnforced);
     characteristics.softwareEnforced = persistedCharacteristics.hidl_data();
 
-    result->resultCode = getAuthToken(characteristics, 0, purpose, &authToken,
-                                      /*failOnTokenMissing*/ false);
+    auto authResult = getAuthToken(characteristics, 0, purpose, &authToken,
+                                   /*failOnTokenMissing*/ false);
     // If per-operation auth is needed we need to begin the operation and
     // the client will need to authorize that operation before calling
     // update. Any other auth issues stop here.
-    if (!result->resultCode.isOk() && result->resultCode != ResponseCode::OP_AUTH_NEEDED) return;
+    if (!authResult.isOk() && authResult != ResponseCode::OP_AUTH_NEEDED) return;
 
     addAuthTokenToParams(&opParams, authToken);
 
@@ -1153,6 +1153,7 @@ void KeyStoreService::begin(const sp<IBinder>& appToken, const String16& name, K
         result->handle, keyid, purpose, dev, appToken, std::move(characteristics), pruneable);
     assert(characteristics.teeEnforced.size() == 0);
     assert(characteristics.softwareEnforced.size() == 0);
+    result->token = operationToken;
 
     if (authToken) {
         mOperationMap.setOperationAuthToken(operationToken, authToken);
@@ -1162,8 +1163,9 @@ void KeyStoreService::begin(const sp<IBinder>& appToken, const String16& name, K
     // application should get an auth token using the handle before the
     // first call to update, which will fail if keystore hasn't received the
     // auth token.
-    // All fields but "token" were set in the begin operation's callback.
-    result->token = operationToken;
+    result->resultCode = authResult;
+
+    // Other result fields were set in the begin operation's callback.
 }
 
 void KeyStoreService::update(const sp<IBinder>& token, const hidl_vec<KeyParameter>& params,
