@@ -1163,7 +1163,9 @@ void KeyStoreService::begin(const sp<IBinder>& appToken, const String16& name, K
     // application should get an auth token using the handle before the
     // first call to update, which will fail if keystore hasn't received the
     // auth token.
-    result->resultCode = authResult;
+    if (result->resultCode == ErrorCode::OK) {
+        result->resultCode = authResult;
+    }
 
     // Other result fields were set in the begin operation's callback.
 }
