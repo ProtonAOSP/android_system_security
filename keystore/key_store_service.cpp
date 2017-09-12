@@ -1078,7 +1078,10 @@ void KeyStoreService::begin(const sp<IBinder>& appToken, const String16& name, K
     // If per-operation auth is needed we need to begin the operation and
     // the client will need to authorize that operation before calling
     // update. Any other auth issues stop here.
-    if (!authResult.isOk() && authResult != ResponseCode::OP_AUTH_NEEDED) return;
+    if (!authResult.isOk() && authResult != ResponseCode::OP_AUTH_NEEDED) {
+        result->resultCode = authResult;
+        return;
+    }
 
     addAuthTokenToParams(&opParams, authToken);
 
