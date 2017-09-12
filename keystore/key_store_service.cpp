@@ -800,7 +800,26 @@ KeyStoreService::getKeyCharacteristics(const String16& name, const hidl_vec<uint
 
     KeyStoreServiceReturnCode rc =
         mKeyStore->getKeyForName(&keyBlob, name8, targetUid, TYPE_KEYMASTER_10);
-    if (!rc.isOk()) {
+    if (rc == ResponseCode::UNINITIALIZED) {
+        /*
+         * If we fail reading the blob because the master key is missing we try to retrieve the
+         * key characteristics from the characteristics file. This happens when auth-bound
+         * keys are used after a screen lock has been removed by the user.
+         */
+        rc = mKeyStore->getKeyForName(&keyBlob, name8, targetUid, TYPE_KEY_CHARACTERISTICS);
+        if (!rc.isOk()) {
+            return rc;
+        }
+        AuthorizationSet keyCharacteristics;
+        // TODO write one shot stream buffer to avoid copying (twice here)
+        std::string charBuffer(reinterpret_cast<const char*>(keyBlob.getValue()),
+                               keyBlob.getLength());
+        std::stringstream charStream(charBuffer);
+        keyCharacteristics.Deserialize(&charStream);
+
+        outCharacteristics->softwareEnforced = keyCharacteristics.hidl_data();
+        return rc;
+    } else if (!rc.isOk()) {
         return rc;
     }
 
