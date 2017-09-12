@@ -87,8 +87,8 @@ class KeyStore {
     ResponseCode list(const android::String8& prefix, android::Vector<android::String16>* matches,
                       uid_t userId);
 
-    std::string addGrant(const char* filename, const char* alias, uid_t granteeUid);
-    bool removeGrant(const char* filename, uid_t granteeUid);
+    std::string addGrant(const char* alias, uid_t granterUid, uid_t granteeUid);
+    bool removeGrant(const char* alias, uid_t granteeUid);
 
     ResponseCode importKey(const uint8_t* key, size_t keyLen, const char* filename, uid_t userId,
                            int32_t flags);
