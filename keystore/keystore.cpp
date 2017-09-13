@@ -24,6 +24,7 @@
 #include <openssl/bio.h>
 
 #include <utils/String16.h>
+#include <utils/String8.h>
 
 #include <keystore/IKeystoreService.h>
 
@@ -39,6 +40,7 @@ const char* KeyStore::sMetaDataFile = ".metadata";
 const android::String16 KeyStore::sRSAKeyType("RSA");
 
 using namespace keystore;
+using android::String8;
 
 KeyStore::KeyStore(Entropy* entropy, const km_device_t& device, const km_device_t& fallback,
                    bool allowNewFallback)
@@ -414,12 +416,13 @@ ResponseCode KeyStore::list(const android::String8& prefix,
     return ResponseCode::NO_ERROR;
 }
 
-std::string KeyStore::addGrant(const char* filename, const char* alias, uid_t granteeUid) {
-    return mGrants.put(granteeUid, alias, filename);
+std::string KeyStore::addGrant(const char* alias, uid_t granterUid, uid_t granteeUid) {
+    return mGrants.put(granteeUid, alias, getUserStateByUid(granterUid)->getUserDirName(),
+                       granterUid);
 }
 
-bool KeyStore::removeGrant(const char* filename, uid_t granteeUid) {
-    return mGrants.removeByFileName(granteeUid, filename);
+bool KeyStore::removeGrant(const char* alias, uid_t granteeUid) {
+    return mGrants.removeByFileAlias(granteeUid, alias);
 }
 
 ResponseCode KeyStore::importKey(const uint8_t* key, size_t keyLen, const char* filename,
@@ -502,7 +505,7 @@ ResponseCode KeyStore::getKeyForName(Blob* keyBlob, const android::String8& keyN
     uid_t userId = get_user_id(uid);
 
     ResponseCode responseCode = get(filepath8.string(), keyBlob, type, userId);
-    if (responseCode == ResponseCode::NO_ERROR) {
+    if (responseCode != ResponseCode::KEY_NOT_FOUND) {
         return responseCode;
     }
 
@@ -519,7 +522,8 @@ ResponseCode KeyStore::getKeyForName(Blob* keyBlob, const android::String8& keyN
     // They might be using a granted key.
     auto grant = mGrants.get(uid, keyName.string());
     if (!grant) return ResponseCode::KEY_NOT_FOUND;
-    filepath8 = grant->key_file_.c_str();
+    filepath8.format("%s/%s", grant->owner_dir_name_.c_str(),
+            getKeyNameForUid(String8(grant->alias_.c_str()), grant->owner_uid_, type).c_str());
 
     // It is a granted key. Try to load it.
     return get(filepath8.string(), keyBlob, type, userId);

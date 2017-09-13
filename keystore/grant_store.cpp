@@ -25,8 +25,10 @@ static constexpr uint64_t kInvalidGrantNo = std::numeric_limits<uint64_t>::max()
 static const char* kKeystoreGrantInfix = "_KEYSTOREGRANT_";
 static constexpr size_t kKeystoreGrantInfixLength = 15;
 
-Grant::Grant(const std::string& alias, const std::string& key_file, const uint64_t grant_no)
-        : alias_(alias), key_file_(key_file), grant_no_(grant_no) {}
+Grant::Grant(const std::string& alias, const std::string& owner_dir_name, const uid_t owner_uid,
+             const uint64_t grant_no)
+        : alias_(alias), owner_dir_name_(owner_dir_name), owner_uid_(owner_uid),
+          grant_no_(grant_no) {}
 
 static std::pair<uint64_t, std::string> parseGrantAlias(const std::string& grantAlias) {
     auto pos = grantAlias.rfind(kKeystoreGrantInfix);
@@ -39,7 +41,8 @@ static std::pair<uint64_t, std::string> parseGrantAlias(const std::string& grant
     return {grant_no, wrapped_alias};
 }
 
-std::string GrantStore::put(const uid_t uid, const std::string& alias, const std::string& key_file) {
+std::string GrantStore::put(const uid_t uid, const std::string& alias,
+                            const std::string& owner_dir_name, const uid_t owner_uid) {
     std::stringstream s;
     s << alias << kKeystoreGrantInfix;
     auto& uid_grant_list = grants_[uid];
@@ -47,10 +50,12 @@ std::string GrantStore::put(const uid_t uid, const std::string& alias, const std
     bool success = false;
     auto iterator = std::find_if(uid_grant_list.begin(), uid_grant_list.end(),
             [&](auto& entry) {
-                return success = entry.alias_ == alias && entry.key_file_ == key_file;
+                return success = entry.alias_ == alias && entry.owner_dir_name_ == owner_dir_name
+                        && entry.owner_uid_ == owner_uid;
             });
     while (!success) {
-        std::tie(iterator, success) = uid_grant_list.emplace(alias, key_file, std::rand());
+        std::tie(iterator, success) = uid_grant_list.emplace(alias, owner_dir_name, owner_uid,
+                                                             std::rand());
     }
     s << iterator->grant_no_;
     return s.str();
@@ -70,10 +75,10 @@ const Grant* GrantStore::get(const uid_t uid, const std::string& alias) const {
     return &(*grant);
 }
 
-bool GrantStore::removeByFileName(const uid_t uid, const std::string& fileName) {
-    auto& uid_grant_list = grants_.operator[](uid);
+bool GrantStore::removeByFileAlias(const uid_t uid, const std::string& alias) {
+    auto& uid_grant_list = grants_[uid];
     for (auto i = uid_grant_list.begin(); i != uid_grant_list.end(); ++i) {
-        if (i->key_file_ == fileName) {
+        if (i->alias_ == alias) {
             uid_grant_list.erase(i);
             return true;
         }

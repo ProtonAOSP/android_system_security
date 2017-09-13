@@ -32,9 +32,11 @@ namespace keystore {
  */
 class Grant {
 public:
-    Grant(const std::string& alias, const std::string& key_file, const uint64_t grant_no);
+    Grant(const std::string& alias, const std::string& owner_dir_name, const uid_t owner_uid,
+          const uint64_t grant_no);
     std::string alias_;
-    std::string key_file_;
+    std::string owner_dir_name_;
+    uid_t owner_uid_;
     uint64_t grant_no_;
 
     operator const uint64_t&() const { return grant_no_; }
@@ -52,9 +54,10 @@ public:
 class GrantStore {
 public:
     GrantStore() : grants_() {}
-    std::string put(const uid_t uid, const std::string& alias, const std::string& key_file);
+    std::string put(const uid_t uid, const std::string& alias, const std::string& owner_dir_name,
+                    const uid_t owner_uid);
     const Grant* get(const uid_t uid, const std::string& alias) const;
-    bool removeByFileName(const uid_t uid, const std::string& filename);
+    bool removeByFileAlias(const uid_t uid, const std::string& alias);
 
     // GrantStore is neither copyable nor movable.
     GrantStore(const GrantStore&) = delete;
