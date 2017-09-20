@@ -47,8 +47,8 @@
 #endif
 
 namespace {
-extern const RSA_METHOD keystore_rsa_method;
-extern const ECDSA_METHOD keystore_ecdsa_method;
+KeystoreBackend *g_keystore_backend;
+void ensure_keystore_engine();
 
 /* key_id_dup is called when one of the RSA or EC_KEY objects is duplicated. */
 int key_id_dup(CRYPTO_EX_DATA* /* to */,
@@ -75,60 +75,6 @@ void key_id_free(void* /* parent */,
     free(key_id);
 }
 
-/* KeystoreEngine is a BoringSSL ENGINE that implements RSA and ECDSA by
- * forwarding the requested operations to Keystore. */
-class KeystoreEngine {
- public:
-  KeystoreEngine()
-      : rsa_index_(RSA_get_ex_new_index(0 /* argl */,
-                                        NULL /* argp */,
-                                        NULL /* new_func */,
-                                        key_id_dup,
-                                        key_id_free)),
-        ec_key_index_(EC_KEY_get_ex_new_index(0 /* argl */,
-                                              NULL /* argp */,
-                                              NULL /* new_func */,
-                                              key_id_dup,
-                                              key_id_free)),
-        engine_(ENGINE_new()) {
-    ENGINE_set_RSA_method(
-        engine_, &keystore_rsa_method, sizeof(keystore_rsa_method));
-    ENGINE_set_ECDSA_method(
-        engine_, &keystore_ecdsa_method, sizeof(keystore_ecdsa_method));
-  }
-
-  int rsa_ex_index() const { return rsa_index_; }
-  int ec_key_ex_index() const { return ec_key_index_; }
-
-  const ENGINE* engine() const { return engine_; }
-
- private:
-  const int rsa_index_;
-  const int ec_key_index_;
-  ENGINE* const engine_;
-};
-
-pthread_once_t g_keystore_engine_once = PTHREAD_ONCE_INIT;
-KeystoreEngine *g_keystore_engine;
-KeystoreBackend *g_keystore_backend;
-
-/* init_keystore_engine is called to initialize |g_keystore_engine|. This
- * should only be called by |pthread_once|. */
-void init_keystore_engine() {
-    g_keystore_engine = new KeystoreEngine;
-#ifndef BACKEND_WIFI_HIDL
-    g_keystore_backend = new KeystoreBackendBinder;
-#else
-    g_keystore_backend = new KeystoreBackendHidl;
-#endif
-}
-
-/* ensure_keystore_engine ensures that |g_keystore_engine| is pointing to a
- * valid |KeystoreEngine| object and creates one if not. */
-void ensure_keystore_engine() {
-    pthread_once(&g_keystore_engine_once, init_keystore_engine);
-}
-
 /* Many OpenSSL APIs take ownership of an argument on success but don't free
  * the argument on failure. This means we need to tell our scoped pointers when
  * we've transferred ownership, without triggering a warning by not using the
@@ -136,10 +82,7 @@ void ensure_keystore_engine() {
 #define OWNERSHIP_TRANSFERRED(obj) \
     typeof ((obj).release()) _dummy __attribute__((unused)) = (obj).release()
 
-const char* rsa_get_key_id(const RSA* rsa) {
-  return reinterpret_cast<char*>(
-      RSA_get_ex_data(rsa, g_keystore_engine->rsa_ex_index()));
-}
+const char* rsa_get_key_id(const RSA* rsa);
 
 /* rsa_private_transform takes a big-endian integer from |in|, calculates the
  * d'th power of it, modulo the RSA modulus, and writes the result as a
@@ -193,33 +136,7 @@ int rsa_private_transform(RSA *rsa, uint8_t *out, const uint8_t *in, size_t len)
     return 1;
 }
 
-const struct rsa_meth_st keystore_rsa_method = {
-  {
-    0 /* references */,
-    1 /* is_static */,
-  },
-  NULL /* app_data */,
-
-  NULL /* init */,
-  NULL /* finish */,
-
-  NULL /* size */,
-
-  NULL /* sign */,
-
-  NULL /* encrypt */,
-  NULL /* sign_raw */,
-  NULL /* decrypt */,
-
-  rsa_private_transform,
-
-  RSA_FLAG_CACHE_PUBLIC | RSA_FLAG_OPAQUE,
-};
-
-const char* ecdsa_get_key_id(const EC_KEY* ec_key) {
-    return reinterpret_cast<char*>(
-        EC_KEY_get_ex_data(ec_key, g_keystore_engine->ec_key_ex_index()));
-}
+const char* ecdsa_get_key_id(const EC_KEY* ec_key);
 
 /* ecdsa_sign signs |digest_len| bytes from |digest| with |ec_key| and writes
  * the resulting signature (an ASN.1 encoded blob) to |sig|. It returns one on
@@ -262,19 +179,77 @@ static int ecdsa_sign(const uint8_t* digest, size_t digest_len, uint8_t* sig,
     return 1;
 }
 
-const ECDSA_METHOD keystore_ecdsa_method = {
-    {
-     0 /* references */,
-     1 /* is_static */
-    } /* common */,
-    NULL /* app_data */,
+/* KeystoreEngine is a BoringSSL ENGINE that implements RSA and ECDSA by
+ * forwarding the requested operations to Keystore. */
+class KeystoreEngine {
+ public:
+  KeystoreEngine()
+      : rsa_index_(RSA_get_ex_new_index(0 /* argl */,
+                                        NULL /* argp */,
+                                        NULL /* new_func */,
+                                        key_id_dup,
+                                        key_id_free)),
+        ec_key_index_(EC_KEY_get_ex_new_index(0 /* argl */,
+                                              NULL /* argp */,
+                                              NULL /* new_func */,
+                                              key_id_dup,
+                                              key_id_free)),
+        engine_(ENGINE_new()) {
+    memset(&rsa_method_, 0, sizeof(rsa_method_));
+    rsa_method_.common.is_static = 1;
+    rsa_method_.private_transform = rsa_private_transform;
+    rsa_method_.flags = RSA_FLAG_CACHE_PUBLIC | RSA_FLAG_OPAQUE;
+    ENGINE_set_RSA_method(engine_, &rsa_method_, sizeof(rsa_method_));
 
-    NULL /* init */,
-    NULL /* finish */,
-    NULL /* group_order_size */,
-    ecdsa_sign,
-    ECDSA_FLAG_OPAQUE,
+    memset(&ecdsa_method_, 0, sizeof(ecdsa_method_));
+    ecdsa_method_.common.is_static = 1;
+    ecdsa_method_.sign = ecdsa_sign;
+    ecdsa_method_.flags = ECDSA_FLAG_OPAQUE;
+    ENGINE_set_ECDSA_method(engine_, &ecdsa_method_, sizeof(ecdsa_method_));
+  }
+
+  int rsa_ex_index() const { return rsa_index_; }
+  int ec_key_ex_index() const { return ec_key_index_; }
+
+  const ENGINE* engine() const { return engine_; }
+
+ private:
+  const int rsa_index_;
+  const int ec_key_index_;
+  RSA_METHOD rsa_method_;
+  ECDSA_METHOD ecdsa_method_;
+  ENGINE* const engine_;
 };
+
+pthread_once_t g_keystore_engine_once = PTHREAD_ONCE_INIT;
+KeystoreEngine *g_keystore_engine;
+
+/* init_keystore_engine is called to initialize |g_keystore_engine|. This
+ * should only be called by |pthread_once|. */
+void init_keystore_engine() {
+  g_keystore_engine = new KeystoreEngine;
+#ifndef BACKEND_WIFI_HIDL
+  g_keystore_backend = new KeystoreBackendBinder;
+#else
+  g_keystore_backend = new KeystoreBackendHidl;
+#endif
+}
+
+/* ensure_keystore_engine ensures that |g_keystore_engine| is pointing to a
+ * valid |KeystoreEngine| object and creates one if not. */
+void ensure_keystore_engine() {
+  pthread_once(&g_keystore_engine_once, init_keystore_engine);
+}
+
+const char* rsa_get_key_id(const RSA* rsa) {
+  return reinterpret_cast<char*>(
+      RSA_get_ex_data(rsa, g_keystore_engine->rsa_ex_index()));
+}
+
+const char* ecdsa_get_key_id(const EC_KEY* ec_key) {
+  return reinterpret_cast<char*>(
+      EC_KEY_get_ex_data(ec_key, g_keystore_engine->ec_key_ex_index()));
+}
 
 struct EVP_PKEY_Delete {
     void operator()(EVP_PKEY* p) const {
