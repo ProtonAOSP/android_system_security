@@ -526,7 +526,7 @@ String16 KeyStoreService::grant(const String16& name, int32_t granteeUid) {
         return String16();
     }
 
-    return String16(mKeyStore->addGrant(String8(name).string(), granteeUid, callingUid).c_str());
+    return String16(mKeyStore->addGrant(String8(name).string(), callingUid, granteeUid).c_str());
 }
 
 KeyStoreServiceReturnCode KeyStoreService::ungrant(const String16& name, int32_t granteeUid) {
