@@ -573,7 +573,7 @@ const UserState* KeyStore::getUserStateByUid(uid_t uid) const {
 }
 
 bool KeyStore::upgradeBlob(const char* filename, Blob* blob, const uint8_t oldVersion,
-                           const BlobType type, uid_t uid) {
+                           const BlobType type, uid_t userId) {
     bool updated = false;
     uint8_t version = oldVersion;
 
@@ -583,7 +583,7 @@ bool KeyStore::upgradeBlob(const char* filename, Blob* blob, const uint8_t oldVe
 
         blob->setType(type);
         if (type == TYPE_KEY_PAIR) {
-            importBlobAsKey(blob, filename, uid);
+            importBlobAsKey(blob, filename, userId);
         }
         version = 1;
         updated = true;
@@ -615,7 +615,7 @@ struct BIO_Delete {
 };
 typedef std::unique_ptr<BIO, BIO_Delete> Unique_BIO;
 
-ResponseCode KeyStore::importBlobAsKey(Blob* blob, const char* filename, uid_t uid) {
+ResponseCode KeyStore::importBlobAsKey(Blob* blob, const char* filename, uid_t userId) {
     // We won't even write to the blob directly with this BIO, so const_cast is okay.
     Unique_BIO b(BIO_new_mem_buf(const_cast<uint8_t*>(blob->getValue()), blob->getLength()));
     if (b.get() == NULL) {
@@ -643,13 +643,13 @@ ResponseCode KeyStore::importBlobAsKey(Blob* blob, const char* filename, uid_t u
         return ResponseCode::SYSTEM_ERROR;
     }
 
-    ResponseCode rc = importKey(pkcs8key.get(), len, filename, get_user_id(uid),
+    ResponseCode rc = importKey(pkcs8key.get(), len, filename, userId,
                                 blob->isEncrypted() ? KEYSTORE_FLAG_ENCRYPTED : KEYSTORE_FLAG_NONE);
     if (rc != ResponseCode::NO_ERROR) {
         return rc;
     }
 
-    return get(filename, blob, TYPE_KEY_PAIR, uid);
+    return get(filename, blob, TYPE_KEY_PAIR, userId);
 }
 
 void KeyStore::readMetaData() {
