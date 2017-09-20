@@ -1869,6 +1869,13 @@ KeyStoreServiceReturnCode KeyStoreService::upgradeKeyBlob(const String16& name, 
 
         String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, uid, ::TYPE_KEYMASTER_10));
         error = mKeyStore->del(filename.string(), ::TYPE_ANY, get_user_id(uid));
+        if(error == ResponseCode::KEY_NOT_FOUND){
+            uid_t euid = get_keystore_euid(uid);
+            if ((euid != uid) && (euid == AID_WIFI)) {
+                filename=mKeyStore->getKeyNameForUidWithDir(name8, euid, ::TYPE_KEYMASTER_10);
+                error=mKeyStore->del(filename.string(), ::TYPE_ANY, get_user_id(euid));
+            }
+        }
         if (!error.isOk()) {
             ALOGI("upgradeKeyBlob keystore->del failed %d", (int)error);
             return;
