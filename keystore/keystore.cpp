@@ -522,7 +522,7 @@ ResponseCode KeyStore::getKeyForName(Blob* keyBlob, const android::String8& keyN
     // They might be using a granted key.
     auto grant = mGrants.get(uid, keyName.string());
     if (!grant) return ResponseCode::KEY_NOT_FOUND;
-    filepath8.format("%s/%s", grant->owner_dir_name_.c_str(),
+    filepath8 = String8::format("%s/%s", grant->owner_dir_name_.c_str(),
             getKeyNameForUid(String8(grant->alias_.c_str()), grant->owner_uid_, type).c_str());
 
     // It is a granted key. Try to load it.
