@@ -70,6 +70,8 @@ class KeyStore {
                                       const BlobType type);
     android::String8 getKeyNameForUidWithDir(const android::String8& keyName, uid_t uid,
                                              const BlobType type);
+    NullOr<android::String8> getBlobFileNameIfExists(const android::String8& alias, uid_t uid,
+                                                    const BlobType type);
 
     /*
      * Delete entries owned by userId. If keepUnencryptedEntries is true
@@ -88,7 +90,8 @@ class KeyStore {
                       uid_t userId);
 
     std::string addGrant(const char* alias, uid_t granterUid, uid_t granteeUid);
-    bool removeGrant(const char* alias, uid_t granteeUid);
+    bool removeGrant(const char* alias, const uid_t granterUid, const uid_t granteeUid);
+    void removeAllGrantsToUid(const uid_t granteeUid);
 
     ResponseCode importKey(const uint8_t* key, size_t keyLen, const char* filename, uid_t userId,
                            int32_t flags);
