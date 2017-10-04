@@ -75,15 +75,31 @@ const Grant* GrantStore::get(const uid_t uid, const std::string& alias) const {
     return &(*grant);
 }
 
-bool GrantStore::removeByFileAlias(const uid_t uid, const std::string& alias) {
-    auto& uid_grant_list = grants_[uid];
+bool GrantStore::removeByFileAlias(const uid_t granteeUid, const uid_t granterUid,
+        const std::string& alias) {
+    auto& uid_grant_list = grants_[granteeUid];
     for (auto i = uid_grant_list.begin(); i != uid_grant_list.end(); ++i) {
-        if (i->alias_ == alias) {
+        if (i->alias_ == alias && i->owner_uid_ == granterUid) {
             uid_grant_list.erase(i);
             return true;
         }
     }
     return false;
+}
+
+void GrantStore::removeAllGrantsToKey(const uid_t granterUid, const std::string& alias) {
+    for (auto& uid_grant_list : grants_) {
+        for (auto i = uid_grant_list.second.begin(); i != uid_grant_list.second.end(); ++i) {
+            if (i->alias_ == alias && i->owner_uid_ == granterUid) {
+                uid_grant_list.second.erase(i);
+                break;
+            }
+        }
+    }
+}
+
+void GrantStore::removeAllGrantsToUid(const uid_t granteeUid) {
+    grants_.erase(granteeUid);
 }
 
 }  // namespace keystore
