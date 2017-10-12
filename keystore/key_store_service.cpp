@@ -1717,6 +1717,7 @@ KeyStoreServiceReturnCode KeyStoreService::getAuthToken(const KeyCharacteristics
     case AuthTokenTable::AUTH_TOKEN_NOT_FOUND:
     case AuthTokenTable::AUTH_TOKEN_EXPIRED:
     case AuthTokenTable::AUTH_TOKEN_WRONG_SID:
+        ALOGE("getAuthToken failed: %d", err); //STOPSHIP: debug only, to be removed
         return ErrorCode::KEY_USER_NOT_AUTHENTICATED;
     case AuthTokenTable::OP_HANDLE_REQUIRED:
         return failOnTokenMissing ? KeyStoreServiceReturnCode(ErrorCode::KEY_USER_NOT_AUTHENTICATED)
