@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#define LOG_TAG "keystore"
+
 #include "auth_token_table.h"
 
 #include <assert.h>
@@ -77,6 +79,12 @@ time_t clock_gettime_raw() {
 
 void AuthTokenTable::AddAuthenticationToken(const HardwareAuthToken* auth_token) {
     Entry new_entry(auth_token, clock_function_());
+    //STOPSHIP: debug only, to be removed
+    ALOGD("AddAuthenticationToken: timestamp = %llu (%llu), time_received = %lld",
+        static_cast<unsigned long long>(new_entry.timestamp_host_order()),
+        static_cast<unsigned long long>(auth_token->timestamp),
+        static_cast<long long>(new_entry.time_received()));
+
     RemoveEntriesSupersededBy(new_entry);
     if (entries_.size() >= max_entries_) {
         ALOGW("Auth token table filled up; replacing oldest entry");
@@ -207,7 +215,7 @@ AuthTokenTable::Entry::Entry(const HardwareAuthToken* token, time_t current_time
     : token_(token), time_received_(current_time), last_use_(current_time),
       operation_completed_(token_->challenge == 0) {}
 
-uint32_t AuthTokenTable::Entry::timestamp_host_order() const {
+uint64_t AuthTokenTable::Entry::timestamp_host_order() const {
     return ntoh(token_->timestamp);
 }
 
