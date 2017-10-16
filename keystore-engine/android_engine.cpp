@@ -21,7 +21,6 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. */
 
 #define LOG_TAG "keystore-engine"
-#include <UniquePtr.h>
 
 #include <pthread.h>
 #include <sys/socket.h>
@@ -39,6 +38,8 @@
 #include <openssl/evp.h>
 #include <openssl/rsa.h>
 #include <openssl/x509.h>
+
+#include <memory>
 
 #ifndef BACKEND_WIFI_HIDL
 #include "keystore_backend_binder.h"
@@ -256,21 +257,21 @@ struct EVP_PKEY_Delete {
         EVP_PKEY_free(p);
     }
 };
-typedef UniquePtr<EVP_PKEY, EVP_PKEY_Delete> Unique_EVP_PKEY;
+typedef std::unique_ptr<EVP_PKEY, EVP_PKEY_Delete> Unique_EVP_PKEY;
 
 struct RSA_Delete {
     void operator()(RSA* p) const {
         RSA_free(p);
     }
 };
-typedef UniquePtr<RSA, RSA_Delete> Unique_RSA;
+typedef std::unique_ptr<RSA, RSA_Delete> Unique_RSA;
 
 struct EC_KEY_Delete {
     void operator()(EC_KEY* ec) const {
         EC_KEY_free(ec);
     }
 };
-typedef UniquePtr<EC_KEY, EC_KEY_Delete> Unique_EC_KEY;
+typedef std::unique_ptr<EC_KEY, EC_KEY_Delete> Unique_EC_KEY;
 
 /* wrap_rsa returns an |EVP_PKEY| that contains an RSA key where the public
  * part is taken from |public_rsa| and the private operations are forwarded to
