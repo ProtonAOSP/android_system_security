@@ -134,6 +134,36 @@ android::String8 KeyStore::getKeyNameForUidWithDir(const android::String8& keyNa
                                     encoded);
 }
 
+android::String8 KeyStore::getBlobFileNameIfExists(const android::String8& alias, uid_t uid) {
+    android::String8 filepath8(getKeyNameForUidWithDir(alias, uid));
+
+    if (!access(filepath8.string(), R_OK | W_OK)) return filepath8;
+
+    // If this is one of the legacy UID->UID mappings, use it.
+    uid_t euid = get_keystore_euid(uid);
+    if (euid != uid) {
+        filepath8 = getKeyNameForUidWithDir(alias, euid);
+        if (!access(filepath8.string(), R_OK | W_OK)) return filepath8;
+    }
+
+    // They might be using a granted key (<uid>_<granted_alias>), try parsing the alias.
+    char* end;
+    uid_t granter_uid = strtoul(alias, &end, 10);
+    // Does the alias look like a granted key?
+    if (end[0] != '_' || end[1] == 0 || (!granter_uid)) {
+        return android::String8();
+    }
+    android::String8 granted_alias(end + 1);
+
+    filepath8 = getKeyNameForUidWithDir(granted_alias, granter_uid);
+    if (hasGrant(filepath8.string(), uid)) {
+        if (!access(filepath8.string(), R_OK | W_OK)) return filepath8;
+    }
+
+    return android::String8();
+}
+
+
 void KeyStore::resetUser(uid_t userId, bool keepUnenryptedEntries) {
     android::String8 prefix("");
     android::Vector<android::String16> aliases;
@@ -485,39 +515,13 @@ bool KeyStore::isHardwareBacked(const android::String16& keyType) const {
 
 ResponseCode KeyStore::getKeyForName(Blob* keyBlob, const android::String8& keyName,
                                      const uid_t uid, const BlobType type) {
-    android::String8 filepath8(getKeyNameForUidWithDir(keyName, uid));
+    auto filepath8 = getBlobFileNameIfExists(keyName, uid);
     uid_t userId = get_user_id(uid);
 
-    ResponseCode responseCode = get(filepath8.string(), keyBlob, type, userId);
-    if (responseCode == NO_ERROR) {
-        return responseCode;
-    }
+    if (!filepath8.isEmpty())
+        return get(filepath8.string(), keyBlob, type, userId);
 
-    // If this is one of the legacy UID->UID mappings, use it.
-    uid_t euid = get_keystore_euid(uid);
-    if (euid != uid) {
-        filepath8 = getKeyNameForUidWithDir(keyName, euid);
-        responseCode = get(filepath8.string(), keyBlob, type, userId);
-        if (responseCode == NO_ERROR) {
-            return responseCode;
-        }
-    }
-
-    // They might be using a granted key.
-    android::String8 filename8 = getKeyName(keyName);
-    char* end;
-    strtoul(filename8.string(), &end, 10);
-    if (end[0] != '_' || end[1] == 0) {
-        return KEY_NOT_FOUND;
-    }
-    filepath8 = android::String8::format("%s/%s", getUserState(userId)->getUserDirName(),
-                                         filename8.string());
-    if (!hasGrant(filepath8.string(), uid)) {
-        return responseCode;
-    }
-
-    // It is a granted key. Try to load it.
-    return get(filepath8.string(), keyBlob, type, userId);
+    return ResponseCode::KEY_NOT_FOUND;
 }
 
 UserState* KeyStore::getUserState(uid_t userId) {
@@ -575,7 +579,7 @@ const grant_t* KeyStore::getGrant(const char* filename, uid_t uid) const {
 }
 
 bool KeyStore::upgradeBlob(const char* filename, Blob* blob, const uint8_t oldVersion,
-                           const BlobType type, uid_t uid) {
+                           const BlobType type, uid_t userId) {
     bool updated = false;
     uint8_t version = oldVersion;
 
@@ -585,7 +589,7 @@ bool KeyStore::upgradeBlob(const char* filename, Blob* blob, const uint8_t oldVe
 
         blob->setType(type);
         if (type == TYPE_KEY_PAIR) {
-            importBlobAsKey(blob, filename, uid);
+            importBlobAsKey(blob, filename, userId);
         }
         version = 1;
         updated = true;
@@ -617,7 +621,7 @@ struct BIO_Delete {
 };
 typedef UniquePtr<BIO, BIO_Delete> Unique_BIO;
 
-ResponseCode KeyStore::importBlobAsKey(Blob* blob, const char* filename, uid_t uid) {
+ResponseCode KeyStore::importBlobAsKey(Blob* blob, const char* filename, uid_t userId) {
     // We won't even write to the blob directly with this BIO, so const_cast is okay.
     Unique_BIO b(BIO_new_mem_buf(const_cast<uint8_t*>(blob->getValue()), blob->getLength()));
     if (b.get() == NULL) {
@@ -645,13 +649,13 @@ ResponseCode KeyStore::importBlobAsKey(Blob* blob, const char* filename, uid_t u
         return SYSTEM_ERROR;
     }
 
-    ResponseCode rc = importKey(pkcs8key.get(), len, filename, get_user_id(uid),
+    ResponseCode rc = importKey(pkcs8key.get(), len, filename, userId,
                                 blob->isEncrypted() ? KEYSTORE_FLAG_ENCRYPTED : KEYSTORE_FLAG_NONE);
     if (rc != NO_ERROR) {
         return rc;
     }
 
-    return get(filename, blob, TYPE_KEY_PAIR, uid);
+    return get(filename, blob, TYPE_KEY_PAIR, userId);
 }
 
 void KeyStore::readMetaData() {
