@@ -191,16 +191,21 @@ KeyStoreServiceReturnCode KeyStoreService::del(const String16& name, int targetU
     }
     String8 name8(name);
     ALOGI("del %s %d", name8.string(), targetUid);
-    String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, targetUid, ::TYPE_ANY));
-    ResponseCode result = mKeyStore->del(filename.string(), ::TYPE_ANY, get_user_id(targetUid));
+    auto filename = mKeyStore->getBlobFileNameIfExists(name8, targetUid, ::TYPE_ANY);
+    if (!filename.isOk()) return ResponseCode::KEY_NOT_FOUND;
+
+    ResponseCode result = mKeyStore->del(filename.value().string(), ::TYPE_ANY,
+            get_user_id(targetUid));
     if (result != ResponseCode::NO_ERROR) {
         return result;
     }
 
-    // Also delete any characteristics files
-    String8 chrFilename(
-        mKeyStore->getKeyNameForUidWithDir(name8, targetUid, ::TYPE_KEY_CHARACTERISTICS));
-    return mKeyStore->del(chrFilename.string(), ::TYPE_KEY_CHARACTERISTICS, get_user_id(targetUid));
+    filename = mKeyStore->getBlobFileNameIfExists(name8, targetUid, ::TYPE_KEY_CHARACTERISTICS);
+    if (filename.isOk()) {
+        return mKeyStore->del(filename.value().string(), ::TYPE_KEY_CHARACTERISTICS,
+                get_user_id(targetUid));
+    }
+    return ResponseCode::NO_ERROR;
 }
 
 KeyStoreServiceReturnCode KeyStoreService::exist(const String16& name, int targetUid) {
@@ -209,13 +214,8 @@ KeyStoreServiceReturnCode KeyStoreService::exist(const String16& name, int targe
         return ResponseCode::PERMISSION_DENIED;
     }
 
-    String8 name8(name);
-    String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, targetUid, ::TYPE_ANY));
-
-    if (access(filename.string(), R_OK) == -1) {
-        return (errno != ENOENT) ? ResponseCode::SYSTEM_ERROR : ResponseCode::KEY_NOT_FOUND;
-    }
-    return ResponseCode::NO_ERROR;
+    auto filename = mKeyStore->getBlobFileNameIfExists(String8(name), targetUid, ::TYPE_ANY);
+    return filename.isOk() ? ResponseCode::NO_ERROR : ResponseCode::KEY_NOT_FOUND;
 }
 
 KeyStoreServiceReturnCode KeyStoreService::list(const String16& prefix, int targetUid,
@@ -555,17 +555,16 @@ int64_t KeyStoreService::getmtime(const String16& name, int32_t uid) {
         return -1L;
     }
 
-    String8 name8(name);
-    String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, targetUid, ::TYPE_ANY));
+    auto filename = mKeyStore->getBlobFileNameIfExists(String8(name), targetUid, ::TYPE_ANY);
 
-    if (access(filename.string(), R_OK) == -1) {
-        ALOGW("could not access %s for getmtime", filename.string());
+    if (!filename.isOk()) {
+        ALOGW("could not access %s for getmtime", filename.value().string());
         return -1L;
     }
 
-    int fd = TEMP_FAILURE_RETRY(open(filename.string(), O_NOFOLLOW, O_RDONLY));
+    int fd = TEMP_FAILURE_RETRY(open(filename.value().string(), O_NOFOLLOW, O_RDONLY));
     if (fd < 0) {
-        ALOGW("could not open %s for getmtime", filename.string());
+        ALOGW("could not open %s for getmtime", filename.value().string());
         return -1L;
     }
 
@@ -573,7 +572,7 @@ int64_t KeyStoreService::getmtime(const String16& name, int32_t uid) {
     int ret = fstat(fd, &s);
     close(fd);
     if (ret == -1) {
-        ALOGW("could not stat %s for getmtime", filename.string());
+        ALOGW("could not stat %s for getmtime", filename.value().string());
         return -1L;
     }
 
@@ -1868,8 +1867,12 @@ KeyStoreServiceReturnCode KeyStoreService::upgradeKeyBlob(const String16& name, 
             return;
         }
 
-        String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, uid, ::TYPE_KEYMASTER_10));
-        error = mKeyStore->del(filename.string(), ::TYPE_ANY, get_user_id(uid));
+        auto filename = mKeyStore->getBlobFileNameIfExists(name8, uid, ::TYPE_KEYMASTER_10);
+        if (!filename.isOk()) {
+            ALOGI("trying to upgrade a non existing blob");
+            return;
+        }
+        error = mKeyStore->del(filename.value().string(), ::TYPE_ANY, get_user_id(uid));
         if (!error.isOk()) {
             ALOGI("upgradeKeyBlob keystore->del failed %d", (int)error);
             return;
@@ -1882,7 +1885,7 @@ KeyStoreServiceReturnCode KeyStoreService::upgradeKeyBlob(const String16& name, 
         newBlob.setSuperEncrypted(blob->isSuperEncrypted());
         newBlob.setCriticalToDeviceEncryption(blob->isCriticalToDeviceEncryption());
 
-        error = mKeyStore->put(filename.string(), &newBlob, get_user_id(uid));
+        error = mKeyStore->put(filename.value().string(), &newBlob, get_user_id(uid));
         if (!error.isOk()) {
             ALOGI("upgradeKeyBlob keystore->put failed %d", (int)error);
             return;
