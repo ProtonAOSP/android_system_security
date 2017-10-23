@@ -244,7 +244,7 @@ bool AuthTokenTable::Entry::Supersedes(const Entry& entry) const {
     return (token_->userId == entry.token_->userId &&
             token_->authenticatorType == entry.token_->authenticatorType &&
             token_->authenticatorId == entry.token_->authenticatorId &&
-            timestamp_host_order() > entry.timestamp_host_order());
+            is_newer_than(&entry));
 }
 
 }  // namespace keymaster
