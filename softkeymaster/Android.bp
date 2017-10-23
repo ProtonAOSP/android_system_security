@@ -1,0 +1,40 @@
+cc_defaults {
+    name: "softkeymaster_defaults",
+
+    cflags: [
+        "-Wall",
+        "-Werror",
+        "-fvisibility=hidden",
+    ],
+}
+
+cc_library_shared {
+    name: "keystore.default",
+    defaults: ["softkeymaster_defaults"],
+
+    relative_install_path: "hw",
+    srcs: ["module.cpp"],
+    include_dirs: ["system/security/keystore"],
+    shared_libs: [
+        "libcrypto",
+        "libkeystore_binder",
+        "liblog",
+        "libsoftkeymaster",
+    ],
+}
+
+cc_library_shared {
+    name: "libsoftkeymaster",
+    defaults: ["softkeymaster_defaults"],
+
+    srcs: ["keymaster_openssl.cpp"],
+    include_dirs: ["system/security/keystore"],
+    local_include_dirs: [],
+    shared_libs: [
+        "libcrypto",
+        "libkeystore_binder",
+        "liblog",
+    ],
+
+    export_include_dirs: ["include"],
+}
