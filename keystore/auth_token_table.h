@@ -114,9 +114,15 @@ class AuthTokenTable {
         bool Supersedes(const Entry& entry) const;
         bool SatisfiesAuth(const std::vector<uint64_t>& sids, HardwareAuthenticatorType auth_type);
 
-        bool is_newer_than(const Entry* entry) {
+        bool is_newer_than(const Entry* entry) const {
             if (!entry) return true;
-            return timestamp_host_order() > entry->timestamp_host_order();
+            uint64_t ts = timestamp_host_order();
+            uint64_t other_ts = entry->timestamp_host_order();
+            // Normally comparing timestamp_host_order alone is sufficient, but here is an
+            // additional hack to compare time_received value for some devices where their auth
+            // tokens contain fixed timestamp (due to the a stuck secure RTC on them)
+            return (ts > other_ts) ||
+                   ((ts == other_ts) && (time_received_ > entry->time_received_));
         }
 
         void mark_completed() { operation_completed_ = true; }
