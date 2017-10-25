@@ -1,0 +1,197 @@
+cc_defaults {
+    name: "keystore_defaults",
+
+    cflags: [
+        "-Wall",
+        "-Werror",
+        "-Wextra",
+        "-Wunused",
+    ],
+
+    sanitize: {
+        misc_undefined: ["integer"],
+    },
+
+    clang: true,
+}
+
+cc_binary {
+    name: "keystore",
+    defaults: ["keystore_defaults"],
+
+    srcs: [
+        ":IKeyAttestationApplicationIdProvider.aidl",
+        "auth_token_table.cpp",
+        "blob.cpp",
+        "entropy.cpp",
+        "grant_store.cpp",
+        "key_store_service.cpp",
+        "keyblob_utils.cpp",
+        "keymaster_enforcement.cpp",
+        "keystore.cpp",
+        "keystore_attestation_id.cpp",
+        "keystore_main.cpp",
+        "keystore_utils.cpp",
+        "legacy_keymaster_device_wrapper.cpp",
+        "operation.cpp",
+        "permissions.cpp",
+        "user_state.cpp",
+    ],
+    shared_libs: [
+        "android.hardware.keymaster@3.0",
+        "android.system.wifi.keystore@1.0",
+        "libbinder",
+        "libcrypto",
+        "libcutils",
+        "libhardware",
+        "libhidlbase",
+        "libhidltransport",
+        "libhwbinder",
+        "libkeymaster_messages",
+        "libkeymaster_portable",
+        "libkeymaster_staging",
+        "libkeystore_binder",
+        "liblog",
+        "libselinux",
+        "libsoftkeymaster",
+        "libsoftkeymasterdevice",
+        "libutils",
+        "libwifikeystorehal",
+    ],
+    init_rc: ["keystore.rc"],
+    aidl: {
+        include_dirs: ["frameworks/base/core/java/"],
+    },
+
+    product_variables: {
+        pdk: {
+            enabled: false,
+        },
+    },
+}
+
+cc_binary {
+    name: "keystore_cli",
+    defaults: ["keystore_defaults"],
+    tags: ["debug"],
+
+    srcs: ["keystore_cli.cpp"],
+    shared_libs: [
+        "android.hardware.keymaster@3.0",
+        "libbinder",
+        "libcrypto",
+        "libcutils",
+        "libhidlbase",
+        "libhwbinder",
+        "libkeystore_binder",
+        "liblog",
+        "libutils",
+    ],
+}
+
+cc_binary {
+    name: "keystore_cli_v2",
+    defaults: ["keystore_defaults"],
+    tags: ["debug"],
+
+    cflags: [
+        "-DKEYMASTER_NAME_TAGS",
+        "-Wno-unused-parameter",
+    ],
+    srcs: ["keystore_cli_v2.cpp"],
+    shared_libs: [
+        "android.hardware.keymaster@3.0",
+        "libchrome",
+        "libhidlbase",
+        "libhwbinder",
+        "libkeystore_binder",
+    ],
+
+    local_include_dirs: ["include"],
+}
+
+// Library for keystore clients
+cc_library_shared {
+    name: "libkeystore_binder",
+    defaults: ["keystore_defaults"],
+
+    srcs: [
+        "IKeystoreService.cpp",
+        "KeyAttestationApplicationId.cpp",
+        "KeyAttestationPackageInfo.cpp",
+        "Signature.cpp",
+        "authorization_set.cpp",
+        "keyblob_utils.cpp",
+        "keystore_aidl_hidl_marshalling_utils.cpp",
+        "keystore_client.proto",
+        "keystore_client_impl.cpp",
+        "keystore_get.cpp",
+        "keystore_tags_utils.cpp",
+    ],
+    shared_libs: [
+        "android.hardware.keymaster@3.0",
+        "libbinder",
+        "libhidlbase",
+        "libhwbinder",
+        "liblog",
+        "libprotobuf-cpp-lite",
+        "libutils",
+    ],
+
+    proto: {
+        type: "lite",
+        export_proto_headers: true,
+    },
+    export_include_dirs: ["include"],
+    export_shared_lib_headers: [
+        "android.hardware.keymaster@3.0",
+        "libbinder",
+        "libhidlbase",
+        "libhwbinder",
+    ],
+}
+
+// Library for keystore clients using the WiFi HIDL interface
+cc_library_shared {
+    name: "libkeystore-wifi-hidl",
+    defaults: ["keystore_defaults"],
+
+    srcs: ["keystore_get_wifi_hidl.cpp"],
+    shared_libs: [
+        "android.system.wifi.keystore@1.0",
+        "libbase",
+        "libhidlbase",
+        "libhidltransport",
+        "liblog",
+        "libutils",
+    ],
+
+    export_include_dirs: ["include"],
+
+    vendor: true,
+}
+
+// Library for unit tests
+cc_library_static {
+    name: "libkeystore_test",
+    defaults: ["keystore_defaults"],
+
+    srcs: ["auth_token_table.cpp"],
+    static_libs: ["libgtest_main"],
+    shared_libs: [
+        "android.hardware.keymaster@3.0",
+        "libhidlbase",
+        "libhwbinder",
+        "libkeymaster_messages",
+        "libutils",
+    ],
+    export_shared_lib_headers: [
+        "android.hardware.keymaster@3.0",
+        "libhidlbase",
+        "libhwbinder",
+    ],
+
+    export_include_dirs: ["include"],
+}
+
+subdirs = ["tests"]
