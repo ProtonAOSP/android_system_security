@@ -30,7 +30,7 @@ extern "C" {
  * length. The third argument is a pointer to an array that will be malloc()
  * and the caller is responsible for calling free() on the buffer.
  */
-ssize_t keystore_get(const char *key, size_t length, uint8_t** value);
+ssize_t keystore_get(const char* key, size_t length, uint8_t** value);
 
 #ifdef __cplusplus
 }
