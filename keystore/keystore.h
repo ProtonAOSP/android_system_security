@@ -70,6 +70,8 @@ class KeyStore {
                                       const BlobType type);
     android::String8 getKeyNameForUidWithDir(const android::String8& keyName, uid_t uid,
                                              const BlobType type);
+    NullOr<android::String8> getBlobFileNameIfExists(const android::String8& alias, uid_t uid,
+                                                    const BlobType type);
 
     /*
      * Delete entries owned by userId. If keepUnencryptedEntries is true
