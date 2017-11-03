@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#define LOG_TAG "keystore"
+
 #include "key_store_service.h"
 
 #include <fcntl.h>
@@ -111,7 +113,9 @@ int32_t KeyStoreService::del(const String16& name, int targetUid) {
         return ::PERMISSION_DENIED;
     }
     String8 name8(name);
-    String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, targetUid));
+    String8 filename = mKeyStore->getBlobFileNameIfExists(name8, targetUid);
+    if (filename.isEmpty()) return ResponseCode::KEY_NOT_FOUND;
+
     return mKeyStore->del(filename.string(), ::TYPE_ANY, get_user_id(targetUid));
 }
 
@@ -121,13 +125,8 @@ int32_t KeyStoreService::exist(const String16& name, int targetUid) {
         return ::PERMISSION_DENIED;
     }
 
-    String8 name8(name);
-    String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, targetUid));
-
-    if (access(filename.string(), R_OK) == -1) {
-        return (errno != ENOENT) ? ::SYSTEM_ERROR : ::KEY_NOT_FOUND;
-    }
-    return ::NO_ERROR;
+    String8 filename = mKeyStore->getBlobFileNameIfExists(String8(name), targetUid);
+    return (!filename.isEmpty()) ? ResponseCode::NO_ERROR : ResponseCode::KEY_NOT_FOUND;
 }
 
 int32_t KeyStoreService::list(const String16& prefix, int targetUid, Vector<String16>* matches) {
@@ -459,10 +458,9 @@ int64_t KeyStoreService::getmtime(const String16& name, int32_t uid) {
         return -1L;
     }
 
-    String8 name8(name);
-    String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, targetUid));
+    String8 filename = mKeyStore->getBlobFileNameIfExists(String8(name), targetUid);
 
-    if (access(filename.string(), R_OK) == -1) {
+    if (filename.isEmpty()) {
         ALOGW("could not access %s for getmtime", filename.string());
         return -1L;
     }
@@ -1555,12 +1553,17 @@ int32_t KeyStoreService::upgradeKeyBlob(const String16& name, uid_t uid,
     UniquePtr<uint8_t, Malloc_Delete> upgraded_key_deleter(
         const_cast<uint8_t*>(upgraded_key.key_material));
 
-    rc = del(name, uid);
+    String8 filename = mKeyStore->getBlobFileNameIfExists(name8, uid);
+    if (filename.isEmpty()) {
+        ALOGI("trying to upgrade a non existing blob");
+        return KEY_NOT_FOUND;
+    }
+    rc = mKeyStore->del(filename.string(), ::TYPE_ANY, get_user_id(uid));
     if (rc != ::NO_ERROR) {
+        ALOGI("upgradeKeyBlob keystore->del failed %d", rc);
         return rc;
     }
 
-    String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, uid));
     Blob newBlob(upgraded_key.key_material, upgraded_key.key_material_size, nullptr /* info */,
                  0 /* infoLength */, ::TYPE_KEYMASTER_10);
     newBlob.setFallback(blob->isFallback());
