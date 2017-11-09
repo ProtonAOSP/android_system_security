@@ -53,7 +53,6 @@ cc_binary {
         "libkeystore_binder",
         "liblog",
         "libselinux",
-        "libsoftkeymaster",
         "libsoftkeymasterdevice",
         "libutils",
         "libwifikeystorehal",

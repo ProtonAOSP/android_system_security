@@ -64,23 +64,4 @@ enum KeyStoreFlag : uint8_t {
     KEYSTORE_FLAG_CRITICAL_TO_DEVICE_ENCRYPTION = 1 << 3,
 };
 
-/**
- * Returns the size of the softkey magic header value for measuring
- * and allocating purposes.
- */
-size_t get_softkey_header_size();
-
-/**
- * Adds the magic softkey header to a key blob.
- *
- * Returns NULL if the destination array is too small. Otherwise it
- * returns the offset directly after the magic value.
- */
-uint8_t* add_softkey_header(uint8_t* key_blob, size_t key_blob_length);
-
-/**
- * Returns true if the key blob has a magic softkey header at the beginning.
- */
-bool is_softkey(const uint8_t* key_blob, const size_t key_blob_length);
-
 #endif
