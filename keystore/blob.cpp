@@ -272,8 +272,9 @@ ResponseCode Blob::readBlob(const std::string& filename, const uint8_t* aes_key,
         return ResponseCode::VALUE_CORRUPTED;
     }
 
-    if ((isEncrypted() || isSuperEncrypted()) && (state != STATE_NO_ERROR)) {
-        return ResponseCode::LOCKED;
+    if ((isEncrypted() || isSuperEncrypted())) {
+        if (state == STATE_LOCKED) return ResponseCode::LOCKED;
+        if (state == STATE_UNINITIALIZED) return ResponseCode::UNINITIALIZED;
     }
 
     if (fileLength < offsetof(blobv3, value)) return ResponseCode::VALUE_CORRUPTED;
