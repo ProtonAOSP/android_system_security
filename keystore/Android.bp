@@ -115,9 +115,12 @@ cc_library_shared {
     defaults: ["keystore_defaults"],
 
     srcs: [
-        "IKeystoreService.cpp",
+        ":IKeystoreService.aidl",
         "KeyAttestationApplicationId.cpp",
         "KeyAttestationPackageInfo.cpp",
+        "KeymasterArguments.cpp",
+        "KeystoreArguments.cpp",
+        "OperationResult.cpp",
         "Signature.cpp",
         "authorization_set.cpp",
         "keyblob_utils.cpp",
@@ -140,6 +143,10 @@ cc_library_shared {
     proto: {
         type: "lite",
         export_proto_headers: true,
+    },
+    aidl: {
+        export_aidl_headers: true,
+        include_dirs: ["frameworks/base/core/java/"],
     },
     export_include_dirs: ["include"],
     export_shared_lib_headers: [

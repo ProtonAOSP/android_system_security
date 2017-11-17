@@ -15,8 +15,8 @@
 #ifndef KEYSTORE_KEYSTORE_CLIENT_MOCK_H_
 #define KEYSTORE_KEYSTORE_CLIENT_MOCK_H_
 
-#include "gmock/gmock.h"
 #include "keystore/keystore_client.h"
+#include "gmock/gmock.h"
 
 using testing::_;
 

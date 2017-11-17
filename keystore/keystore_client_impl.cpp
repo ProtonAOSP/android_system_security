@@ -19,10 +19,10 @@
 #include <string>
 #include <vector>
 
+#include <android/security/IKeystoreService.h>
 #include <binder/IBinder.h>
 #include <binder/IInterface.h>
 #include <binder/IServiceManager.h>
-#include <keystore/IKeystoreService.h>
 #include <keystore/keystore.h>
 #include <log/log.h>
 #include <utils/String16.h>
@@ -31,13 +31,6 @@
 #include "keystore_client.pb.h"
 #include <keystore/authorization_set.h>
 #include <keystore/keystore_hidl_support.h>
-
-using android::ExportResult;
-using keystore::KeyCharacteristics;
-using android::OperationResult;
-using android::String16;
-using keystore::AuthorizationSet;
-using keystore::AuthorizationSetBuilder;
 
 namespace {
 
@@ -49,6 +42,13 @@ constexpr uint32_t kAESKeySize = 256;      // bits
 constexpr uint32_t kHMACKeySize = 256;     // bits
 constexpr uint32_t kHMACOutputSize = 256;  // bits
 
+using android::String16;
+using android::security::keymaster::ExportResult;
+using android::security::keymaster::OperationResult;
+using keystore::AuthorizationSet;
+using keystore::AuthorizationSetBuilder;
+using keystore::KeyCharacteristics;
+using keystore::KeyStoreServiceReturnCode;
 }  // namespace
 
 namespace keystore {
@@ -56,7 +56,7 @@ namespace keystore {
 KeystoreClientImpl::KeystoreClientImpl() {
     service_manager_ = android::defaultServiceManager();
     keystore_binder_ = service_manager_->getService(String16("android.security.keystore"));
-    keystore_ = android::interface_cast<android::IKeystoreService>(keystore_binder_);
+    keystore_ = android::interface_cast<android::security::IKeystoreService>(keystore_binder_);
 }
 
 bool KeystoreClientImpl::encryptWithAuthentication(const std::string& key_name,
@@ -86,7 +86,7 @@ bool KeystoreClientImpl::encryptWithAuthentication(const std::string& key_name,
         return false;
     }
     auto init_vector_blob = output_params.GetTagValue(TAG_NONCE);
-    if (!init_vector_blob.isOk()){
+    if (!init_vector_blob.isOk()) {
         ALOGE("Encrypt: Missing initialization vector.");
         return false;
     }
@@ -154,8 +154,7 @@ bool KeystoreClientImpl::oneShotOperation(KeyPurpose purpose, const std::string&
                                           AuthorizationSet* output_parameters,
                                           std::string* output_data) {
     uint64_t handle;
-    auto result =
-        beginOperation(purpose, key_name, input_parameters, output_parameters, &handle);
+    auto result = beginOperation(purpose, key_name, input_parameters, output_parameters, &handle);
     if (!result.isOk()) {
         ALOGE("BeginOperation failed: %d", int32_t(result));
         return false;
@@ -178,26 +177,33 @@ bool KeystoreClientImpl::oneShotOperation(KeyPurpose purpose, const std::string&
     return true;
 }
 
-KeyStoreNativeReturnCode KeystoreClientImpl::addRandomNumberGeneratorEntropy(const std::string& entropy) {
-    return keystore_->addRngEntropy(blob2hidlVec(entropy));
+KeyStoreNativeReturnCode
+KeystoreClientImpl::addRandomNumberGeneratorEntropy(const std::string& entropy) {
+    int32_t result;
+    auto binder_result = keystore_->addRngEntropy(blob2hidlVec(entropy), &result);
+    if (!binder_result.isOk()) return ResponseCode::SYSTEM_ERROR;
+    return KeyStoreNativeReturnCode(result);
 }
 
-KeyStoreNativeReturnCode KeystoreClientImpl::generateKey(const std::string& key_name,
-                                        const AuthorizationSet& key_parameters,
-                                        AuthorizationSet* hardware_enforced_characteristics,
-                                        AuthorizationSet* software_enforced_characteristics) {
+KeyStoreNativeReturnCode
+KeystoreClientImpl::generateKey(const std::string& key_name, const AuthorizationSet& key_parameters,
+                                AuthorizationSet* hardware_enforced_characteristics,
+                                AuthorizationSet* software_enforced_characteristics) {
     String16 key_name16(key_name.data(), key_name.size());
-    KeyCharacteristics characteristics;
-    auto result =
-        keystore_->generateKey(key_name16, key_parameters.hidl_data(), hidl_vec<uint8_t>(),
-                               kDefaultUID, KEYSTORE_FLAG_NONE, &characteristics);
+    ::android::security::keymaster::KeyCharacteristics characteristics;
+    int32_t result;
+    auto binder_result = keystore_->generateKey(
+        key_name16, ::android::security::keymaster::KeymasterArguments(key_parameters.hidl_data()),
+        hidl_vec<uint8_t>() /* entropy */, kDefaultUID, KEYSTORE_FLAG_NONE, &characteristics,
+        &result);
+    if (!binder_result.isOk()) return ResponseCode::SYSTEM_ERROR;
 
     /* assignment (hidl_vec<KeyParameter> -> AuthorizationSet) makes a deep copy.
      * There are no references to Parcel memory after that, and ownership of the newly acquired
      * memory is with the AuthorizationSet objects. */
-    *hardware_enforced_characteristics = characteristics.teeEnforced;
-    *software_enforced_characteristics = characteristics.softwareEnforced;
-    return result;
+    *hardware_enforced_characteristics = characteristics.teeEnforced.getParameters();
+    *software_enforced_characteristics = characteristics.softwareEnforced.getParameters();
+    return KeyStoreNativeReturnCode(result);
 }
 
 KeyStoreNativeReturnCode
@@ -205,66 +211,80 @@ KeystoreClientImpl::getKeyCharacteristics(const std::string& key_name,
                                           AuthorizationSet* hardware_enforced_characteristics,
                                           AuthorizationSet* software_enforced_characteristics) {
     String16 key_name16(key_name.data(), key_name.size());
-    KeyCharacteristics characteristics;
-    auto result = keystore_->getKeyCharacteristics(key_name16, hidl_vec<uint8_t>(), hidl_vec<uint8_t>(),
-                                                      kDefaultUID, &characteristics);
+    ::android::security::keymaster::KeyCharacteristics characteristics;
+    int32_t result;
+    auto binder_result = keystore_->getKeyCharacteristics(
+        key_name16, android::security::keymaster::KeymasterBlob(),
+        android::security::keymaster::KeymasterBlob(), kDefaultUID, &characteristics, &result);
 
     /* assignment (hidl_vec<KeyParameter> -> AuthorizationSet) makes a deep copy.
      * There are no references to Parcel memory after that, and ownership of the newly acquired
      * memory is with the AuthorizationSet objects. */
-    *hardware_enforced_characteristics = characteristics.teeEnforced;
-    *software_enforced_characteristics = characteristics.softwareEnforced;
-    return result;
+    *hardware_enforced_characteristics = characteristics.teeEnforced.getParameters();
+    *software_enforced_characteristics = characteristics.softwareEnforced.getParameters();
+    return KeyStoreNativeReturnCode(result);
 }
 
-KeyStoreNativeReturnCode KeystoreClientImpl::importKey(const std::string& key_name,
-                                      const AuthorizationSet& key_parameters,
-                                      KeyFormat key_format,
-                                      const std::string& key_data,
-                                      AuthorizationSet* hardware_enforced_characteristics,
-                                      AuthorizationSet* software_enforced_characteristics) {
+KeyStoreNativeReturnCode
+KeystoreClientImpl::importKey(const std::string& key_name, const AuthorizationSet& key_parameters,
+                              KeyFormat key_format, const std::string& key_data,
+                              AuthorizationSet* hardware_enforced_characteristics,
+                              AuthorizationSet* software_enforced_characteristics) {
     String16 key_name16(key_name.data(), key_name.size());
     auto hidlKeyData = blob2hidlVec(key_data);
-    KeyCharacteristics characteristics;
-    auto result = keystore_->importKey(key_name16, key_parameters.hidl_data(), key_format,
-            hidlKeyData, kDefaultUID, KEYSTORE_FLAG_NONE, &characteristics);
-
+    ::android::security::keymaster::KeyCharacteristics characteristics;
+    int32_t result;
+    auto binder_result = keystore_->importKey(
+        key_name16, ::android::security::keymaster::KeymasterArguments(key_parameters.hidl_data()),
+        (int)key_format, hidlKeyData, kDefaultUID, KEYSTORE_FLAG_NONE, &characteristics, &result);
     /* assignment (hidl_vec<KeyParameter> -> AuthorizationSet) makes a deep copy.
      * There are no references to Parcel memory after that, and ownership of the newly acquired
      * memory is with the AuthorizationSet objects. */
-    *hardware_enforced_characteristics = characteristics.teeEnforced;
-    *software_enforced_characteristics = characteristics.softwareEnforced;
-    return result;
+    *hardware_enforced_characteristics = characteristics.teeEnforced.getParameters();
+    *software_enforced_characteristics = characteristics.softwareEnforced.getParameters();
+    return KeyStoreNativeReturnCode(result);
 }
 
 KeyStoreNativeReturnCode KeystoreClientImpl::exportKey(KeyFormat export_format,
-                                      const std::string& key_name, std::string* export_data) {
+                                                       const std::string& key_name,
+                                                       std::string* export_data) {
     String16 key_name16(key_name.data(), key_name.size());
     ExportResult export_result;
-    keystore_->exportKey(key_name16, export_format, hidl_vec<uint8_t>(), hidl_vec<uint8_t>(),
-                         kDefaultUID, &export_result);
+    auto binder_result = keystore_->exportKey(
+        key_name16, (int)export_format, android::security::keymaster::KeymasterBlob(),
+        android::security::keymaster::KeymasterBlob(), kDefaultUID, &export_result);
+    if (!binder_result.isOk()) return ResponseCode::SYSTEM_ERROR;
     *export_data = hidlVec2String(export_result.exportData);
     return export_result.resultCode;
 }
 
 KeyStoreNativeReturnCode KeystoreClientImpl::deleteKey(const std::string& key_name) {
     String16 key_name16(key_name.data(), key_name.size());
-    return keystore_->del(key_name16, kDefaultUID);
+    int32_t result;
+    auto binder_result = keystore_->del(key_name16, kDefaultUID, &result);
+    if (!binder_result.isOk()) return ResponseCode::SYSTEM_ERROR;
+    return KeyStoreNativeReturnCode(result);
 }
 
 KeyStoreNativeReturnCode KeystoreClientImpl::deleteAllKeys() {
-    return keystore_->clear_uid(kDefaultUID);
+    int32_t result;
+    auto binder_result = keystore_->clear_uid(kDefaultUID, &result);
+    if (!binder_result.isOk()) return ResponseCode::SYSTEM_ERROR;
+    return KeyStoreNativeReturnCode(result);
 }
 
-KeyStoreNativeReturnCode KeystoreClientImpl::beginOperation(KeyPurpose purpose, const std::string& key_name,
-                                           const AuthorizationSet& input_parameters,
-                                           AuthorizationSet* output_parameters,
-                                           uint64_t* handle) {
+KeyStoreNativeReturnCode
+KeystoreClientImpl::beginOperation(KeyPurpose purpose, const std::string& key_name,
+                                   const AuthorizationSet& input_parameters,
+                                   AuthorizationSet* output_parameters, uint64_t* handle) {
     android::sp<android::IBinder> token(new android::BBinder);
     String16 key_name16(key_name.data(), key_name.size());
     OperationResult result;
-    keystore_->begin(token, key_name16, purpose, true /*pruneable*/, input_parameters.hidl_data(),
-                     hidl_vec<uint8_t>(), kDefaultUID, &result);
+    auto binder_result = keystore_->begin(
+        token, key_name16, (int)purpose, true /*pruneable*/,
+        android::security::keymaster::KeymasterArguments(input_parameters.hidl_data()),
+        hidl_vec<uint8_t>() /* entropy */, kDefaultUID, &result);
+    if (!binder_result.isOk()) return ResponseCode::SYSTEM_ERROR;
     if (result.resultCode.isOk()) {
         *handle = getNextVirtualHandle();
         active_operations_[*handle] = result.token;
@@ -275,19 +295,20 @@ KeyStoreNativeReturnCode KeystoreClientImpl::beginOperation(KeyPurpose purpose, 
     return result.resultCode;
 }
 
-KeyStoreNativeReturnCode KeystoreClientImpl::updateOperation(uint64_t handle,
-                                            const AuthorizationSet& input_parameters,
-                                            const std::string& input_data,
-                                            size_t* num_input_bytes_consumed,
-                                            AuthorizationSet* output_parameters,
-                                            std::string* output_data) {
+KeyStoreNativeReturnCode
+KeystoreClientImpl::updateOperation(uint64_t handle, const AuthorizationSet& input_parameters,
+                                    const std::string& input_data, size_t* num_input_bytes_consumed,
+                                    AuthorizationSet* output_parameters, std::string* output_data) {
     if (active_operations_.count(handle) == 0) {
         return ErrorCode::INVALID_OPERATION_HANDLE;
     }
     OperationResult result;
     auto hidlInputData = blob2hidlVec(input_data);
-    keystore_->update(active_operations_[handle], input_parameters.hidl_data(), hidlInputData,
-            &result);
+    auto binder_result = keystore_->update(
+        active_operations_[handle],
+        android::security::keymaster::KeymasterArguments(input_parameters.hidl_data()),
+        hidlInputData, &result);
+    if (!binder_result.isOk()) return ResponseCode::SYSTEM_ERROR;
 
     if (result.resultCode.isOk()) {
         *num_input_bytes_consumed = result.inputConsumed;
@@ -300,19 +321,20 @@ KeyStoreNativeReturnCode KeystoreClientImpl::updateOperation(uint64_t handle,
     return result.resultCode;
 }
 
-KeyStoreNativeReturnCode KeystoreClientImpl::finishOperation(uint64_t handle,
-                                            const AuthorizationSet& input_parameters,
-                                            const std::string& signature_to_verify,
-                                            AuthorizationSet* output_parameters,
-                                            std::string* output_data) {
+KeyStoreNativeReturnCode
+KeystoreClientImpl::finishOperation(uint64_t handle, const AuthorizationSet& input_parameters,
+                                    const std::string& signature_to_verify,
+                                    AuthorizationSet* output_parameters, std::string* output_data) {
     if (active_operations_.count(handle) == 0) {
         return ErrorCode::INVALID_OPERATION_HANDLE;
     }
     OperationResult result;
     auto hidlSignature = blob2hidlVec(signature_to_verify);
-    keystore_->finish(active_operations_[handle], input_parameters.hidl_data(),
-                      hidlSignature,
-                      hidl_vec<uint8_t>(), &result);
+    auto binder_result = keystore_->finish(
+        active_operations_[handle],
+        android::security::keymaster::KeymasterArguments(input_parameters.hidl_data()),
+        (std::vector<uint8_t>)hidlSignature, hidl_vec<uint8_t>(), &result);
+    if (!binder_result.isOk()) return ResponseCode::SYSTEM_ERROR;
 
     if (result.resultCode.isOk()) {
         if (result.outParams.size()) {
@@ -329,32 +351,36 @@ KeyStoreNativeReturnCode KeystoreClientImpl::abortOperation(uint64_t handle) {
     if (active_operations_.count(handle) == 0) {
         return ErrorCode::INVALID_OPERATION_HANDLE;
     }
-    auto error_code = keystore_->abort(active_operations_[handle]);
-    if (error_code.isOk()) {
+    int32_t result;
+    // Current implementation does not return exceptions in android::binder::Status
+    auto binder_result = keystore_->abort(active_operations_[handle], &result);
+    if (!binder_result.isOk()) return ResponseCode::SYSTEM_ERROR;
+    if (KeyStoreNativeReturnCode(result).isOk()) {
         active_operations_.erase(handle);
     }
-    return error_code;
+    return KeyStoreNativeReturnCode(result);
 }
 
 bool KeystoreClientImpl::doesKeyExist(const std::string& key_name) {
     String16 key_name16(key_name.data(), key_name.size());
-    auto error_code = keystore_->exist(key_name16, kDefaultUID);
-    return error_code.isOk();
+    int32_t result;
+    auto binder_result = keystore_->exist(key_name16, kDefaultUID, &result);
+    if (!binder_result.isOk()) return false;  // binder error
+    return result;
 }
 
 bool KeystoreClientImpl::listKeys(const std::string& prefix,
                                   std::vector<std::string>* key_name_list) {
     String16 prefix16(prefix.data(), prefix.size());
-    android::Vector<String16> matches;
-    auto error_code = keystore_->list(prefix16, kDefaultUID, &matches);
-    if (error_code.isOk()) {
-        for (const auto& match : matches) {
-            android::String8 key_name(match);
-            key_name_list->push_back(prefix + std::string(key_name.string(), key_name.size()));
-        }
-        return true;
+    std::vector<::android::String16> matches;
+    auto binder_result = keystore_->list(prefix16, kDefaultUID, &matches);
+    if (!binder_result.isOk()) return false;
+
+    for (const auto& match : matches) {
+        android::String8 key_name(match);
+        key_name_list->push_back(prefix + std::string(key_name.string(), key_name.size()));
     }
-    return false;
+    return true;
 }
 
 uint64_t KeystoreClientImpl::getNextVirtualHandle() {
@@ -385,9 +411,8 @@ bool KeystoreClientImpl::createOrVerifyEncryptionKey(const std::string& key_name
             .Authorization(TAG_NO_AUTH_REQUIRED);
         AuthorizationSet hardware_enforced_characteristics;
         AuthorizationSet software_enforced_characteristics;
-        auto result =
-            generateKey(key_name, key_parameters, &hardware_enforced_characteristics,
-                        &software_enforced_characteristics);
+        auto result = generateKey(key_name, key_parameters, &hardware_enforced_characteristics,
+                                  &software_enforced_characteristics);
         if (!result.isOk()) {
             ALOGE("Failed to generate encryption key: %d", int32_t(result));
             return false;
@@ -423,9 +448,8 @@ bool KeystoreClientImpl::createOrVerifyAuthenticationKey(const std::string& key_
             .Authorization(TAG_NO_AUTH_REQUIRED);
         AuthorizationSet hardware_enforced_characteristics;
         AuthorizationSet software_enforced_characteristics;
-        auto result =
-            generateKey(key_name, key_parameters, &hardware_enforced_characteristics,
-                        &software_enforced_characteristics);
+        auto result = generateKey(key_name, key_parameters, &hardware_enforced_characteristics,
+                                  &software_enforced_characteristics);
         if (!result.isOk()) {
             ALOGE("Failed to generate authentication key: %d", int32_t(result));
             return false;
@@ -442,32 +466,32 @@ bool KeystoreClientImpl::verifyEncryptionKeyAttributes(const std::string& key_na
     AuthorizationSet hardware_enforced_characteristics;
     AuthorizationSet software_enforced_characteristics;
     auto result = getKeyCharacteristics(key_name, &hardware_enforced_characteristics,
-                                           &software_enforced_characteristics);
+                                        &software_enforced_characteristics);
     if (!result.isOk()) {
         ALOGE("Failed to query encryption key: %d", int32_t(result));
         return false;
     }
     *verified = true;
     auto algorithm = NullOrOr(hardware_enforced_characteristics.GetTagValue(TAG_ALGORITHM),
-            software_enforced_characteristics.GetTagValue(TAG_ALGORITHM));
+                              software_enforced_characteristics.GetTagValue(TAG_ALGORITHM));
     if (!algorithm.isOk() || algorithm.value() != Algorithm::AES) {
         ALOGW("Found encryption key with invalid algorithm.");
         *verified = false;
     }
     auto key_size = NullOrOr(hardware_enforced_characteristics.GetTagValue(TAG_KEY_SIZE),
-            software_enforced_characteristics.GetTagValue(TAG_KEY_SIZE));
+                             software_enforced_characteristics.GetTagValue(TAG_KEY_SIZE));
     if (!key_size.isOk() || key_size.value() != kAESKeySize) {
         ALOGW("Found encryption key with invalid size.");
         *verified = false;
     }
     auto block_mode = NullOrOr(hardware_enforced_characteristics.GetTagValue(TAG_BLOCK_MODE),
-            software_enforced_characteristics.GetTagValue(TAG_BLOCK_MODE));
+                               software_enforced_characteristics.GetTagValue(TAG_BLOCK_MODE));
     if (!block_mode.isOk() || block_mode.value() != BlockMode::CBC) {
         ALOGW("Found encryption key with invalid block mode.");
         *verified = false;
     }
     auto padding_mode = NullOrOr(hardware_enforced_characteristics.GetTagValue(TAG_PADDING),
-            software_enforced_characteristics.GetTagValue(TAG_PADDING));
+                                 software_enforced_characteristics.GetTagValue(TAG_PADDING));
     if (!padding_mode.isOk() || padding_mode.value() != PaddingMode::PKCS7) {
         ALOGW("Found encryption key with invalid padding mode.");
         *verified = false;
@@ -483,32 +507,32 @@ bool KeystoreClientImpl::verifyAuthenticationKeyAttributes(const std::string& ke
     AuthorizationSet hardware_enforced_characteristics;
     AuthorizationSet software_enforced_characteristics;
     auto result = getKeyCharacteristics(key_name, &hardware_enforced_characteristics,
-                                           &software_enforced_characteristics);
+                                        &software_enforced_characteristics);
     if (!result.isOk()) {
         ALOGE("Failed to query authentication key: %d", int32_t(result));
         return false;
     }
     *verified = true;
     auto algorithm = NullOrOr(hardware_enforced_characteristics.GetTagValue(TAG_ALGORITHM),
-            software_enforced_characteristics.GetTagValue(TAG_ALGORITHM));
-    if (!algorithm.isOk() || algorithm.value() != Algorithm::HMAC){
+                              software_enforced_characteristics.GetTagValue(TAG_ALGORITHM));
+    if (!algorithm.isOk() || algorithm.value() != Algorithm::HMAC) {
         ALOGW("Found authentication key with invalid algorithm.");
         *verified = false;
     }
     auto key_size = NullOrOr(hardware_enforced_characteristics.GetTagValue(TAG_KEY_SIZE),
-            software_enforced_characteristics.GetTagValue(TAG_KEY_SIZE));
+                             software_enforced_characteristics.GetTagValue(TAG_KEY_SIZE));
     if (!key_size.isOk() || key_size.value() != kHMACKeySize) {
         ALOGW("Found authentication key with invalid size.");
         *verified = false;
     }
     auto mac_size = NullOrOr(hardware_enforced_characteristics.GetTagValue(TAG_MIN_MAC_LENGTH),
-            software_enforced_characteristics.GetTagValue(TAG_MIN_MAC_LENGTH));
+                             software_enforced_characteristics.GetTagValue(TAG_MIN_MAC_LENGTH));
     if (!mac_size.isOk() || mac_size.value() != kHMACOutputSize) {
         ALOGW("Found authentication key with invalid minimum mac size.");
         *verified = false;
     }
     auto digest = NullOrOr(hardware_enforced_characteristics.GetTagValue(TAG_DIGEST),
-            software_enforced_characteristics.GetTagValue(TAG_DIGEST));
+                           software_enforced_characteristics.GetTagValue(TAG_DIGEST));
     if (!digest.isOk() || digest.value() != Digest::SHA_2_256) {
         ALOGW("Found authentication key with invalid digest list.");
         *verified = false;

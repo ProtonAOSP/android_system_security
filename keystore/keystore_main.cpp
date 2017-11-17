@@ -30,6 +30,7 @@
 #include "key_store_service.h"
 #include "keystore.h"
 #include "permissions.h"
+#include <android/security/IKeystoreService.h>
 #include "legacy_keymaster_device_wrapper.h"
 #include "include/keystore/keystore_hidl_support.h"
 #include "include/keystore/keystore_return_types.h"

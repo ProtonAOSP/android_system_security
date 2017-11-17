@@ -24,8 +24,8 @@
 #include <utils/Vector.h>
 
 #include "blob.h"
-#include "include/keystore/keymaster_tags.h"
 #include "grant_store.h"
+#include "include/keystore/keymaster_tags.h"
 
 using ::keystore::NullOr;
 
@@ -71,7 +71,7 @@ class KeyStore {
     android::String8 getKeyNameForUidWithDir(const android::String8& keyName, uid_t uid,
                                              const BlobType type);
     NullOr<android::String8> getBlobFileNameIfExists(const android::String8& alias, uid_t uid,
-                                                    const BlobType type);
+                                                     const BlobType type);
 
     /*
      * Delete entries owned by userId. If keepUnencryptedEntries is true
@@ -135,7 +135,9 @@ class KeyStore {
 
     ::keystore::GrantStore mGrants;
 
-    typedef struct { uint32_t version; } keystore_metadata_t;
+    typedef struct {
+        uint32_t version;
+    } keystore_metadata_t;
 
     keystore_metadata_t mMetaData;
 

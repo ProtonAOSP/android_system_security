@@ -22,11 +22,12 @@
 
 #include "keystore_backend_binder.h"
 
+#include <android/security/IKeystoreService.h>
 #include <binder/IServiceManager.h>
 #include <keystore/keystore.h>
-#include <keystore/IKeystoreService.h>
 #include <keystore/keystore_hidl_support.h>
 
+using android::security::IKeystoreService;
 using namespace android;
 using keystore::blob2hidlVec;
 using keystore::hidl_vec;
@@ -35,9 +36,8 @@ namespace {
 const char keystore_service_name[] = "android.security.keystore";
 };
 
-int32_t KeystoreBackendBinder::sign(
-        const char *key_id, const uint8_t* in, size_t len, uint8_t** reply,
-        size_t* reply_len) {
+int32_t KeystoreBackendBinder::sign(const char* key_id, const uint8_t* in, size_t len,
+                                    uint8_t** reply, size_t* reply_len) {
     sp<IServiceManager> sm = defaultServiceManager();
     sp<IBinder> binder = sm->getService(String16(keystore_service_name));
     sp<IKeystoreService> service = interface_cast<IKeystoreService>(binder);
@@ -47,20 +47,21 @@ int32_t KeystoreBackendBinder::sign(
         return -1;
     }
 
-    auto inBlob = blob2hidlVec(in ,len);
-    hidl_vec<uint8_t> reply_vec;
+    auto inBlob = blob2hidlVec(in, len);
+    std::vector<uint8_t> reply_vec;
     auto ret = service->sign(String16(key_id), inBlob, &reply_vec);
     if (!ret.isOk()) {
         return -1;
     }
 
-    *reply = reply_vec.releaseData();
+    hidl_vec<uint8_t> reply_hidl(reply_vec);  // makes copy
+    *reply = reply_hidl.releaseData();
     *reply_len = reply_vec.size();
     return 0;
 }
 
-int32_t KeystoreBackendBinder::get_pubkey(
-        const char *key_id, uint8_t** pubkey, size_t* pubkey_len) {
+int32_t KeystoreBackendBinder::get_pubkey(const char* key_id, uint8_t** pubkey,
+                                          size_t* pubkey_len) {
     sp<IServiceManager> sm = defaultServiceManager();
     sp<IBinder> binder = sm->getService(String16(keystore_service_name));
     sp<IKeystoreService> service = interface_cast<IKeystoreService>(binder);
@@ -70,13 +71,14 @@ int32_t KeystoreBackendBinder::get_pubkey(
         return -1;
     }
 
-    hidl_vec<uint8_t> pubkey_vec;
+    std::vector<uint8_t> pubkey_vec;
     auto ret = service->get_pubkey(String16(key_id), &pubkey_vec);
     if (!ret.isOk()) {
         return -1;
     }
 
-    *pubkey = pubkey_vec.releaseData();
+    hidl_vec<uint8_t> hidl_pubkey(pubkey_vec);  // makes copy
+    *pubkey = hidl_pubkey.releaseData();        // caller should clean up memory.
     *pubkey_len = pubkey_vec.size();
     return 0;
 }
