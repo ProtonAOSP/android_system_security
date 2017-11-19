@@ -26,9 +26,8 @@
 #include <utils/String16.h>
 #include <utils/String8.h>
 
-#include <keystore/IKeystoreService.h>
-
 #include <android/hardware/keymaster/3.0/IKeymasterDevice.h>
+#include <android/security/IKeystoreService.h>
 
 #include "keystore_utils.h"
 #include "permissions.h"
@@ -131,8 +130,8 @@ android::String8 KeyStore::getKeyName(const android::String8& keyName, const Blo
     }
 }
 
-android::String8 KeyStore::getKeyNameForUid(
-    const android::String8& keyName, uid_t uid, const BlobType type) {
+android::String8 KeyStore::getKeyNameForUid(const android::String8& keyName, uid_t uid,
+                                            const BlobType type) {
     std::vector<char> encoded(encode_key_length(keyName) + 1);  // add 1 for null char
     encode_key(encoded.data(), keyName);
     if (type == TYPE_KEY_CHARACTERISTICS) {
@@ -142,8 +141,8 @@ android::String8 KeyStore::getKeyNameForUid(
     }
 }
 
-android::String8 KeyStore::getKeyNameForUidWithDir(
-    const android::String8& keyName, uid_t uid, const BlobType type) {
+android::String8 KeyStore::getKeyNameForUidWithDir(const android::String8& keyName, uid_t uid,
+                                                   const BlobType type) {
     std::vector<char> encoded(encode_key_length(keyName) + 1);  // add 1 for null char
     encode_key(encoded.data(), keyName);
 
@@ -157,7 +156,7 @@ android::String8 KeyStore::getKeyNameForUidWithDir(
 }
 
 NullOr<android::String8> KeyStore::getBlobFileNameIfExists(const android::String8& alias, uid_t uid,
-                                                          const BlobType type) {
+                                                           const BlobType type) {
     android::String8 filepath8(getKeyNameForUidWithDir(alias, uid, type));
 
     if (!access(filepath8.string(), R_OK | W_OK)) return filepath8;
@@ -172,13 +171,13 @@ NullOr<android::String8> KeyStore::getBlobFileNameIfExists(const android::String
     // They might be using a granted key.
     auto grant = mGrants.get(uid, alias.string());
     if (grant) {
-        filepath8 = String8::format("%s/%s", grant->owner_dir_name_.c_str(),
-                getKeyNameForUid(String8(grant->alias_.c_str()), grant->owner_uid_, type).c_str());
+        filepath8 = String8::format(
+            "%s/%s", grant->owner_dir_name_.c_str(),
+            getKeyNameForUid(String8(grant->alias_.c_str()), grant->owner_uid_, type).c_str());
         if (!access(filepath8.string(), R_OK | W_OK)) return filepath8;
     }
     return {};
 }
-
 
 void KeyStore::resetUser(uid_t userId, bool keepUnenryptedEntries) {
     android::String8 prefix("");
@@ -224,9 +223,9 @@ void KeyStore::resetUser(uid_t userId, bool keepUnenryptedEntries) {
 
             // del() will fail silently if no cached characteristics are present for this alias.
             android::String8 chr_filename(aliases[i]);
-            chr_filename = android::String8::format("%s/%s", userState->getUserDirName(),
-                                            getKeyName(chr_filename,
-                                                TYPE_KEY_CHARACTERISTICS).string());
+            chr_filename = android::String8::format(
+                "%s/%s", userState->getUserDirName(),
+                getKeyName(chr_filename, TYPE_KEY_CHARACTERISTICS).string());
             del(chr_filename, ::TYPE_KEY_CHARACTERISTICS, userId);
         }
     }
@@ -351,8 +350,8 @@ ResponseCode KeyStore::del(const char* filename, const BlobType type, uid_t user
             // remove possible grants
             mGrants.removeAllGrantsToKey(uid, alias);
         }
-        return (unlink(filename) && errno != ENOENT) ?
-                ResponseCode::SYSTEM_ERROR : ResponseCode::NO_ERROR;
+        return (unlink(filename) && errno != ENOENT) ? ResponseCode::SYSTEM_ERROR
+                                                     : ResponseCode::NO_ERROR;
     }
     if (rc != ResponseCode::NO_ERROR) {
         return rc;
@@ -368,8 +367,8 @@ ResponseCode KeyStore::del(const char* filename, const BlobType type, uid_t user
             return ResponseCode::SYSTEM_ERROR;
     }
 
-    rc = (unlink(filename) && errno != ENOENT) ?
-            ResponseCode::SYSTEM_ERROR : ResponseCode::NO_ERROR;
+    rc =
+        (unlink(filename) && errno != ENOENT) ? ResponseCode::SYSTEM_ERROR : ResponseCode::NO_ERROR;
 
     if (rc == ResponseCode::NO_ERROR && keyBlob.getType() != ::TYPE_KEY_CHARACTERISTICS) {
         // now that we have successfully deleted a key, let's make sure there are no stale grants
@@ -419,8 +418,8 @@ static void decode_key(char* out, const char* in, size_t length) {
 
 static NullOr<std::tuple<uid_t, std::string>> filename2UidAlias(const std::string& filepath) {
     auto filenamebase = filepath.find_last_of('/');
-    std::string filename = filenamebase == std::string::npos ? filepath :
-            filepath.substr(filenamebase + 1);
+    std::string filename =
+        filenamebase == std::string::npos ? filepath : filepath.substr(filenamebase + 1);
 
     if (filename[0] == '.') return {};
 
@@ -524,8 +523,8 @@ ResponseCode KeyStore::importKey(const uint8_t* key, size_t keyLen, const char* 
     hidl_vec<uint8_t> blob;
 
     ErrorCode error;
-    auto hidlCb = [&] (ErrorCode ret, const hidl_vec<uint8_t>& keyBlob,
-            const KeyCharacteristics& /* ignored */) {
+    auto hidlCb = [&](ErrorCode ret, const hidl_vec<uint8_t>& keyBlob,
+                      const KeyCharacteristics& /* ignored */) {
         error = ret;
         if (error != ErrorCode::OK) return;
         blob = keyBlob;
@@ -533,7 +532,7 @@ ResponseCode KeyStore::importKey(const uint8_t* key, size_t keyLen, const char* 
     auto input = blob2hidlVec(key, keyLen);
 
     ErrorCode rc = KS_HANDLE_HIDL_ERROR(
-            mDevice->importKey(params.hidl_data(), KeyFormat::PKCS8, input, hidlCb));
+        mDevice->importKey(params.hidl_data(), KeyFormat::PKCS8, input, hidlCb));
     if (rc != ErrorCode::OK) return ResponseCode::SYSTEM_ERROR;
     if (error != ErrorCode::OK) {
         ALOGE("Keymaster error %d importing key pair", error);
@@ -556,14 +555,12 @@ bool KeyStore::isHardwareBacked(const android::String16& /*keyType*/) const {
     }
 
     bool isSecure = false;
-    auto hidlcb = [&] (bool _isSecure, bool, bool, bool, bool, const hidl_string&,
-                       const hidl_string&) {
-        isSecure = _isSecure;
-    };
+    auto hidlcb = [&](bool _isSecure, bool, bool, bool, bool, const hidl_string&,
+                      const hidl_string&) { isSecure = _isSecure; };
     auto rc = mDevice->getHardwareFeatures(hidlcb);
     if (!rc.isOk()) {
         ALOGE("Communication with keymaster HAL failed while retrieving hardware features (%s)",
-                rc.description().c_str());
+              rc.description().c_str());
         return false;
     }
     return isSecure;
@@ -574,8 +571,7 @@ ResponseCode KeyStore::getKeyForName(Blob* keyBlob, const android::String8& keyN
     auto filepath8 = getBlobFileNameIfExists(keyName, uid, type);
     uid_t userId = get_user_id(uid);
 
-    if (filepath8.isOk())
-        return get(filepath8.value().string(), keyBlob, type, userId);
+    if (filepath8.isOk()) return get(filepath8.value().string(), keyBlob, type, userId);
 
     return ResponseCode::KEY_NOT_FOUND;
 }

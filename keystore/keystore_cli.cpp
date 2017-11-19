@@ -18,8 +18,9 @@
 #include <stdint.h>
 #include <string.h>
 #include <sys/types.h>
+#include <vector>
 
-#include <keystore/IKeystoreService.h>
+#include <android/security/IKeystoreService.h>
 #include <binder/IPCThreadState.h>
 #include <binder/IServiceManager.h>
 
@@ -27,6 +28,7 @@
 
 using namespace android;
 using namespace keystore;
+using android::security::IKeystoreService;
 
 static const char* responses[] = {
     NULL,
@@ -48,7 +50,8 @@ static const char* responses[] = {
 #define NO_ARG_INT_RETURN(cmd) \
     do { \
         if (strcmp(argv[1], #cmd) == 0) { \
-            int32_t ret = service->cmd(); \
+            int32_t ret = -1; \
+            service->cmd(&ret); \
             if (ret < 0) { \
                 fprintf(stderr, "%s: could not connect: %d\n", argv[0], ret); \
                 return 1; \
@@ -66,7 +69,8 @@ static const char* responses[] = {
                 fprintf(stderr, "Usage: %s " #cmd " <name>\n", argv[0]); \
                 return 1; \
             } \
-            int32_t ret = service->cmd(String16(argv[2])); \
+            int32_t ret = -1; \
+            service->cmd(String16(argv[2]), &ret); \
             if (ret < 0) { \
                 fprintf(stderr, "%s: could not connect: %d\n", argv[0], ret); \
                 return 1; \
@@ -84,7 +88,8 @@ static const char* responses[] = {
                 fprintf(stderr, "Usage: %s " #cmd " <name>\n", argv[0]); \
                 return 1; \
             } \
-            int32_t ret = service->cmd(atoi(argv[2])); \
+            int32_t ret = -1; \
+            service->cmd(atoi(argv[2]), &ret); \
             if (ret < 0) { \
                 fprintf(stderr, "%s: could not connect: %d\n", argv[0], ret); \
                 return 1; \
@@ -107,7 +112,8 @@ static const char* responses[] = {
                 uid = atoi(argv[3]); \
                 fprintf(stderr, "Running as uid %d\n", uid); \
             } \
-            int32_t ret = service->cmd(String16(argv[2]), uid); \
+            int32_t ret = -1; \
+            service->cmd(String16(argv[2]), uid, &ret); \
             if (ret < 0) { \
                 fprintf(stderr, "%s: could not connect: %d\n", argv[0], ret); \
                 return 1; \
@@ -125,18 +131,15 @@ static const char* responses[] = {
                 fprintf(stderr, "Usage: %s " #cmd " <name> <uid>\n", argv[0]); \
                 return 1; \
             } \
-            hidl_vec<uint8_t> data; \
+            std::vector<uint8_t> data; \
             int uid = -1; \
             if (argc > 3) { \
                 uid = atoi(argv[3]); \
                 fprintf(stderr, "Running as uid %d\n", uid); \
             } \
-            int32_t ret = service->cmd(String16(argv[2]), uid, &data); \
-            if (ret < 0) { \
-                fprintf(stderr, "%s: could not connect: %d\n", argv[0], ret); \
-                return 1; \
-            } else if (ret != ::NO_ERROR) { \
-                fprintf(stderr, "%s: " #cmd ": %s (%d)\n", argv[0], responses[ret], ret); \
+            ::android::binder::Status ret = service->cmd(String16(argv[2]), uid, &data); \
+            if (!ret.isOk()) { \
+                fprintf(stderr, "Exception code: %d\n", ret.exceptionCode()); \
                 return 1; \
             } else { \
                 fwrite(&data[0], data.size(), 1, stdout); \
@@ -146,7 +149,7 @@ static const char* responses[] = {
         } \
     } while (0)
 
-#define STING_ARG_DATA_STDIN_INT_RETURN(cmd) \
+#define STRING_ARG_DATA_STDIN_INT_RETURN(cmd) \
     do { \
         if (strcmp(argv[1], #cmd) == 0) { \
             if (argc < 3) { \
@@ -156,7 +159,8 @@ static const char* responses[] = {
             uint8_t* data; \
             size_t dataSize; \
             read_input(&data, &dataSize); \
-            int32_t ret = service->cmd(String16(argv[2]), data, dataSize); \
+            int32_t ret = -1; \
+            service->cmd(String16(argv[2]), data, dataSize, &ret); \
             if (ret < 0) { \
                 fprintf(stderr, "%s: could not connect: %d\n", argv[0], ret); \
                 return 1; \
@@ -174,13 +178,10 @@ static const char* responses[] = {
                 fprintf(stderr, "Usage: %s " #cmd " <name>\n", argv[0]); \
                 return 1; \
             } \
-            hidl_vec<uint8_t> data; \
-            int32_t ret = service->cmd(String16(argv[2]), &data); \
-            if (ret < 0) { \
-                fprintf(stderr, "%s: could not connect: %d\n", argv[0], ret); \
-                return 1; \
-            } else if (ret != ::NO_ERROR) { \
-                fprintf(stderr, "%s: " #cmd ": %s (%d)\n", argv[0], responses[ret], ret); \
+            std::vector<uint8_t> data; \
+            ::android::binder::Status ret = service->cmd(String16(argv[2]), &data); \
+            if (!ret.isOk()) { \
+                fprintf(stderr, "Exception code: %d\n", ret.exceptionCode()); \
                 return 1; \
             } else { \
                 fwrite(&data[0], data.size(), 1, stdout); \
@@ -191,16 +192,14 @@ static const char* responses[] = {
     } while (0)
 
 static int list(const sp<IKeystoreService>& service, const String16& name, int uid) {
-    Vector<String16> matches;
-    int32_t ret = service->list(name, uid, &matches);
-    if (ret < 0) {
-        fprintf(stderr, "list: could not connect: %d\n", ret);
-        return 1;
-    } else if (ret != ::NO_ERROR) {
-        fprintf(stderr, "list: %s (%d)\n", responses[ret], ret);
+    std::vector<String16> matches;
+    ::android::binder::Status ret = service->list(name, uid, &matches);
+
+    if (!ret.isOk()) {
+        fprintf(stderr, "list: exception (%d)\n", ret.exceptionCode());
         return 1;
     } else {
-        Vector<String16>::const_iterator it = matches.begin();
+        std::vector<String16>::const_iterator it = matches.begin();
         for (; it != matches.end(); ++it) {
             printf("%s\n", String8(*it).string());
         }
