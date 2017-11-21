@@ -1,6 +1,5 @@
 // Unit test for AuthTokenTable
-// TODO: enable after fixing b/68149839
-/*
+
 cc_test {
     cflags: [
         "-Wall",
@@ -17,4 +16,3 @@ cc_test {
     ],
     shared_libs: ["libkeymaster_messages"],
 }
-*/

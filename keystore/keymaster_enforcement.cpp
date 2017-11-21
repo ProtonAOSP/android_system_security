@@ -29,6 +29,8 @@
 #include <hardware/hw_auth_token.h>
 #include <list>
 
+#include <keystore/keystore_hidl_support.h>
+
 namespace keystore {
 
 class AccessTimeMap {
@@ -482,12 +484,11 @@ bool KeymasterEnforcement::AuthTokenMatches(const AuthorizationSet& auth_set,
               sizeof(hw_auth_token_t), auth_token_blob.value().size());
         return false;
     }
-
-    hw_auth_token_t auth_token;
-    memcpy(&auth_token, &auth_token_blob.value()[0], sizeof(hw_auth_token_t));
-    if (auth_token.version != HW_AUTH_TOKEN_VERSION) {
+    uint8_t auth_token_version = auth_token_blob.value()[0];
+    HardwareAuthToken auth_token = hidlVec2AuthToken(auth_token_blob.value());
+    if (auth_token_version != HW_AUTH_TOKEN_VERSION) {
         ALOGE("Bug: Auth token is the version %hhu (or is not an auth token). Expected %d",
-              auth_token.version, HW_AUTH_TOKEN_VERSION);
+              auth_token_version, HW_AUTH_TOKEN_VERSION);
         return false;
     }
 
@@ -502,9 +503,9 @@ bool KeymasterEnforcement::AuthTokenMatches(const AuthorizationSet& auth_set,
         return false;
     }
 
-    if (user_secure_id != auth_token.user_id && user_secure_id != auth_token.authenticator_id) {
+    if (user_secure_id != auth_token.userId && user_secure_id != auth_token.authenticatorId) {
         ALOGI("Auth token SIDs %" PRIu64 " and %" PRIu64 " do not match key SID %" PRIu64,
-              auth_token.user_id, auth_token.authenticator_id, user_secure_id);
+              auth_token.userId, auth_token.authenticatorId, user_secure_id);
         return false;
     }
 
@@ -513,11 +514,11 @@ bool KeymasterEnforcement::AuthTokenMatches(const AuthorizationSet& auth_set,
         return false;
     }
 
-    assert(auth_set[auth_type_index].tag == KM_TAG_USER_AUTH_TYPE);
+    assert(auth_set[auth_type_index].tag == TAG_USER_AUTH_TYPE);
     auto key_auth_type_mask = authorizationValue(TAG_USER_AUTH_TYPE, auth_set[auth_type_index]);
     if (!key_auth_type_mask.isOk()) return false;
 
-    uint32_t token_auth_type = ntoh(auth_token.authenticator_type);
+    uint32_t token_auth_type = ntoh(auth_token.authenticatorType);
     if ((uint32_t(key_auth_type_mask.value()) & token_auth_type) == 0) {
         ALOGE("Key requires match of auth type mask 0%uo, but token contained 0%uo",
               key_auth_type_mask.value(), token_auth_type);
@@ -525,7 +526,7 @@ bool KeymasterEnforcement::AuthTokenMatches(const AuthorizationSet& auth_set,
     }
 
     if (auth_timeout_index != -1 && is_begin_operation) {
-        assert(auth_set[auth_timeout_index].tag == KM_TAG_AUTH_TIMEOUT);
+        assert(auth_set[auth_timeout_index].tag == TAG_AUTH_TIMEOUT);
         auto auth_token_timeout =
             authorizationValue(TAG_AUTH_TIMEOUT, auth_set[auth_timeout_index]);
         if (!auth_token_timeout.isOk()) return false;

@@ -77,12 +77,12 @@ time_t clock_gettime_raw() {
     return time.tv_sec;
 }
 
-void AuthTokenTable::AddAuthenticationToken(const HardwareAuthToken* auth_token) {
-    Entry new_entry(auth_token, clock_function_());
+void AuthTokenTable::AddAuthenticationToken(std::unique_ptr<const HardwareAuthToken>&& auth_token) {
+    Entry new_entry(std::move(auth_token), clock_function_());
     //STOPSHIP: debug only, to be removed
     ALOGD("AddAuthenticationToken: timestamp = %llu (%llu), time_received = %lld",
         static_cast<unsigned long long>(new_entry.timestamp_host_order()),
-        static_cast<unsigned long long>(auth_token->timestamp),
+        static_cast<unsigned long long>(new_entry.token().timestamp),
         static_cast<long long>(new_entry.time_received()));
 
     RemoveEntriesSupersededBy(new_entry);
@@ -137,13 +137,13 @@ AuthTokenTable::FindAuthPerOpAuthorization(const std::vector<uint64_t>& sids,
     if (op_handle == 0) return OP_HANDLE_REQUIRED;
 
     auto matching_op = find_if(
-        entries_, [&](Entry& e) { return e.token()->challenge == op_handle && !e.completed(); });
+        entries_, [&](Entry& e) { return e.token().challenge == op_handle && !e.completed(); });
 
     if (matching_op == entries_.end()) return AUTH_TOKEN_NOT_FOUND;
 
     if (!matching_op->SatisfiesAuth(sids, auth_type)) return AUTH_TOKEN_WRONG_SID;
 
-    *found = matching_op->token();
+    *found = &matching_op->token();
     return OK;
 }
 
@@ -172,7 +172,7 @@ AuthTokenTable::Error AuthTokenTable::FindTimedAuthorization(const std::vector<u
     }
 
     newest_match->UpdateLastUse(now);
-    *found = newest_match->token();
+    *found = &newest_match->token();
     return OK;
 }
 
@@ -202,7 +202,7 @@ bool AuthTokenTable::IsSupersededBySomeEntry(const Entry& entry) {
 }
 
 void AuthTokenTable::MarkCompleted(const uint64_t op_handle) {
-    auto found = find_if(entries_, [&](Entry& e) { return e.token()->challenge == op_handle; });
+    auto found = find_if(entries_, [&](Entry& e) { return e.token().challenge == op_handle; });
     if (found == entries_.end()) return;
 
     assert(!IsSupersededBySomeEntry(*found));
@@ -211,8 +211,8 @@ void AuthTokenTable::MarkCompleted(const uint64_t op_handle) {
     if (IsSupersededBySomeEntry(*found)) entries_.erase(found);
 }
 
-AuthTokenTable::Entry::Entry(const HardwareAuthToken* token, time_t current_time)
-    : token_(token), time_received_(current_time), last_use_(current_time),
+AuthTokenTable::Entry::Entry(std::unique_ptr<const HardwareAuthToken>&& token, time_t current_time)
+    : token_(std::move(token)), time_received_(current_time), last_use_(current_time),
       operation_completed_(token_->challenge == 0) {}
 
 uint64_t AuthTokenTable::Entry::timestamp_host_order() const {

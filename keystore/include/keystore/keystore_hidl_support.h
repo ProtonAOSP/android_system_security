@@ -19,6 +19,7 @@
 #define KEYSTORE_KEYSTORE_HIDL_SUPPORT_H_
 
 #include <android/hardware/keymaster/3.0/IKeymasterDevice.h>
+#include <hardware/hw_auth_token.h>
 #include <hidl/Status.h>
 #include <keystore/keymaster_tags.h>
 #include <ostream>
@@ -119,6 +120,38 @@ inline static hidl_vec<uint8_t> authToken2HidlVec(const HardwareAuthToken& token
     pos = std::copy(token.hmac.data(), token.hmac.data() + token.hmac.size(), pos);
 
     return result;
+}
+
+template <typename T, typename InIter>
+inline static InIter copy_bytes_from_iterator(T* value, InIter src) {
+    uint8_t* value_ptr = reinterpret_cast<uint8_t*>(value);
+    std::copy(src, src + sizeof(value), value_ptr);
+    return src + sizeof(value);
+}
+
+inline static HardwareAuthToken hidlVec2AuthToken(const hidl_vec<uint8_t>& buffer) {
+    HardwareAuthToken token;
+    static_assert(
+        std::is_same<decltype(token.hmac), ::android::hardware::hidl_array<uint8_t, 32>>::value,
+        "This function assumes token HMAC is 32 bytes, but it might not be.");
+    static_assert(1 /* version size */ + sizeof(token.challenge) + sizeof(token.userId) +
+                          sizeof(token.authenticatorId) + sizeof(token.authenticatorType) +
+                          sizeof(token.timestamp) + 32 /* HMAC size */
+                      == sizeof(hw_auth_token_t),
+                  "HardwareAuthToken content size does not match hw_auth_token_t size");
+
+    if (buffer.size() != sizeof(hw_auth_token_t)) return {};
+
+    auto pos = buffer.begin();
+    ++pos; // skip first byte
+    pos = copy_bytes_from_iterator(&token.challenge, pos);
+    pos = copy_bytes_from_iterator(&token.userId, pos);
+    pos = copy_bytes_from_iterator(&token.authenticatorId, pos);
+    pos = copy_bytes_from_iterator(&token.authenticatorType, pos);
+    pos = copy_bytes_from_iterator(&token.timestamp, pos);
+    pos = std::copy(pos, pos + token.hmac.size(), &token.hmac[0]);
+
+    return token;
 }
 
 inline std::string hidlVec2String(const hidl_vec<uint8_t>& value) {
