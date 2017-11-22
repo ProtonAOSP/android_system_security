@@ -109,13 +109,31 @@ cc_binary {
     local_include_dirs: ["include"],
 }
 
+cc_library_headers {
+    name: "libkeystore_headers",
+    export_include_dirs: ["include"],
+    shared_libs: [
+        "android.hardware.keymaster@3.0",
+        "libbinder",
+        "libhidlbase",
+        "libhwbinder",
+        "liblog",
+        "libprotobuf-cpp-lite",
+        "libutils",
+    ],
+    export_shared_lib_headers: [
+        "android.hardware.keymaster@3.0",
+        "libbinder",
+        "libhidlbase",
+        "libhwbinder",
+    ],
+}
 // Library for keystore clients
 cc_library_shared {
     name: "libkeystore_binder",
     defaults: ["keystore_defaults"],
 
     srcs: [
-        ":IKeystoreService.aidl",
         "KeyAttestationApplicationId.cpp",
         "KeyAttestationPackageInfo.cpp",
         "KeymasterArguments.cpp",
@@ -130,6 +148,7 @@ cc_library_shared {
         "keystore_get.cpp",
         "keystore_tags_utils.cpp",
     ],
+    static_libs: ["libkeystore_aidl",],
     shared_libs: [
         "android.hardware.keymaster@3.0",
         "libbinder",
@@ -149,6 +168,9 @@ cc_library_shared {
         include_dirs: ["frameworks/base/core/java/"],
     },
     export_include_dirs: ["include"],
+    export_static_lib_headers: [
+        "libkeystore_aidl",
+    ],
     export_shared_lib_headers: [
         "android.hardware.keymaster@3.0",
         "libbinder",
