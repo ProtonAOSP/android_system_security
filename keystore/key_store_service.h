@@ -20,6 +20,7 @@
 #include <android/security/BnKeystoreService.h>
 
 #include "auth_token_table.h"
+#include "confirmation_manager.h"
 
 #include "KeyStore.h"
 #include "keystore_keymaster_enforcement.h"
@@ -36,7 +37,9 @@ namespace keystore {
 class KeyStoreService : public android::security::BnKeystoreService,
                         android::IBinder::DeathRecipient {
   public:
-    explicit KeyStoreService(KeyStore* keyStore) : mKeyStore(keyStore), mOperationMap(this) {}
+    explicit KeyStoreService(KeyStore* keyStore)
+        : mKeyStore(keyStore), mOperationMap(this),
+          mConfirmationManager(new ConfirmationManager(this)) {}
     virtual ~KeyStoreService() = default;
 
     void binderDied(const android::wp<android::IBinder>& who);
@@ -160,12 +163,21 @@ class KeyStoreService : public android::security::BnKeystoreService,
                     ::android::security::keymaster::KeymasterCertificateChain* chain,
                     int32_t* _aidl_return) override;
     ::android::binder::Status onDeviceOffBody(int32_t* _aidl_return) override;
+
     ::android::binder::Status importWrappedKey(
         const ::android::String16& wrappedKeyAlias, const ::std::vector<uint8_t>& wrappedKey,
         const ::android::String16& wrappingKeyAlias, const ::std::vector<uint8_t>& maskingKey,
         const ::android::security::keymaster::KeymasterArguments& params, int64_t rootSid,
         int64_t fingerprintSid, ::android::security::keymaster::KeyCharacteristics* characteristics,
         int32_t* _aidl_return) override;
+
+    ::android::binder::Status presentConfirmationPrompt(
+        const ::android::sp<::android::IBinder>& listener, const ::android::String16& promptText,
+        const ::std::vector<uint8_t>& extraData, const ::android::String16& locale,
+        int32_t uiOptionsAsFlags, int32_t* _aidl_return) override;
+    ::android::binder::Status
+    cancelConfirmationPrompt(const ::android::sp<::android::IBinder>& listener,
+                             int32_t* _aidl_return) override;
 
   private:
     static const int32_t UID_SELF = -1;
@@ -276,8 +288,15 @@ class KeyStoreService : public android::security::BnKeystoreService,
     KeyStoreServiceReturnCode upgradeKeyBlob(const android::String16& name, uid_t targetUid,
                                              const AuthorizationSet& params, Blob* blob);
 
+    /**
+     * Adds a Confirmation Token to the key parameters if needed.
+     */
+    void appendConfirmationTokenIfNeeded(const KeyCharacteristics& keyCharacteristics,
+                                         std::vector<KeyParameter>* params);
+
     KeyStore* mKeyStore;
     OperationMap mOperationMap;
+    android::sp<ConfirmationManager> mConfirmationManager;
     keystore::AuthTokenTable mAuthTokenTable;
     KeystoreKeymasterEnforcement enforcement_policy;
 };

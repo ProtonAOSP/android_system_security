@@ -55,6 +55,7 @@ using android::security::keymaster::KeymasterArguments;
 using android::security::keymaster::KeymasterBlob;
 using android::security::keymaster::KeymasterCertificateChain;
 using android::security::keymaster::OperationResult;
+using ConfirmationResponseCode = android::hardware::confirmationui::V1_0::ResponseCode;
 
 constexpr size_t kMaxOperations = 15;
 constexpr double kIdRotationPeriod = 30 * 24 * 60 * 60; /* Thirty days, in seconds */
@@ -138,6 +139,7 @@ void KeyStoreService::binderDied(const wp<IBinder>& who) {
         int32_t unused_result;
         abort(token, &unused_result);
     }
+    mConfirmationManager->binderDied(who);
 }
 
 Status KeyStoreService::getState(int32_t userId, int32_t* aidl_return) {
@@ -1359,6 +1361,23 @@ Status KeyStoreService::begin(const sp<IBinder>& appToken, const String16& name,
     return Status::ok();
 }
 
+void KeyStoreService::appendConfirmationTokenIfNeeded(const KeyCharacteristics& keyCharacteristics,
+                                                      std::vector<KeyParameter>* params) {
+    if (!(containsTag(keyCharacteristics.softwareEnforced, Tag::TRUSTED_CONFIRMATION_REQUIRED) ||
+          containsTag(keyCharacteristics.hardwareEnforced, Tag::TRUSTED_CONFIRMATION_REQUIRED))) {
+        return;
+    }
+
+    hidl_vec<uint8_t> confirmationToken = mConfirmationManager->getLatestConfirmationToken();
+    if (confirmationToken.size() == 0) {
+        return;
+    }
+
+    params->push_back(
+        Authorization(keymaster::TAG_CONFIRMATION_TOKEN, std::move(confirmationToken)));
+    ALOGD("Appending confirmation token\n");
+}
+
 Status KeyStoreService::update(const sp<IBinder>& token, const KeymasterArguments& params,
                                const ::std::vector<uint8_t>& data, OperationResult* result) {
     if (!checkAllowedOperationParams(params.getParameters())) {
@@ -1387,6 +1406,9 @@ Status KeyStoreService::update(const sp<IBinder>& token, const KeymasterArgument
         false /* is_begin_operation */);
     if (!result->resultCode.isOk()) return Status::ok();
 
+    std::vector<KeyParameter> inParams = params.getParameters();
+    appendConfirmationTokenIfNeeded(op.characteristics, &inParams);
+
     auto hidlCb = [&](ErrorCode ret, uint32_t inputConsumed,
                       const hidl_vec<KeyParameter>& outParams,
                       const ::std::vector<uint8_t>& output) {
@@ -1398,8 +1420,8 @@ Status KeyStoreService::update(const sp<IBinder>& token, const KeymasterArgument
         }
     };
 
-    KeyStoreServiceReturnCode rc = KS_HANDLE_HIDL_ERROR(op.device->update(
-        op.handle, params.getParameters(), data, authToken, VerificationToken(), hidlCb));
+    KeyStoreServiceReturnCode rc = KS_HANDLE_HIDL_ERROR(
+        op.device->update(op.handle, inParams, data, authToken, VerificationToken(), hidlCb));
 
     // just a reminder: on success result->resultCode was set in the callback. So we only overwrite
     // it if there was a communication error indicated by the ErrorCode.
@@ -1438,6 +1460,9 @@ Status KeyStoreService::finish(const sp<IBinder>& token, const KeymasterArgument
     key_auths.append(op.characteristics.softwareEnforced.begin(),
                      op.characteristics.softwareEnforced.end());
 
+    std::vector<KeyParameter> inParams = params.getParameters();
+    appendConfirmationTokenIfNeeded(op.characteristics, &inParams);
+
     result->resultCode = enforcement_policy.AuthorizeOperation(
         op.purpose, op.keyid, key_auths, params.getParameters(), authToken, op.handle,
         false /* is_begin_operation */);
@@ -1453,7 +1478,7 @@ Status KeyStoreService::finish(const sp<IBinder>& token, const KeymasterArgument
     };
 
     KeyStoreServiceReturnCode rc = KS_HANDLE_HIDL_ERROR(
-        op.device->finish(op.handle, params.getParameters(),
+        op.device->finish(op.handle, inParams,
                           ::std::vector<uint8_t>() /* TODO(swillden): wire up input to finish() */,
                           signature, authToken, VerificationToken(), hidlCb));
     mOperationMap.removeOperation(token);
@@ -1794,6 +1819,20 @@ Status KeyStoreService::importWrappedKey(
     charBlob.setSecurityLevel(securityLevel);
 
     return AIDL_RETURN(mKeyStore->put(cFilename.string(), &charBlob, get_user_id(callingUid)));
+}
+
+Status KeyStoreService::presentConfirmationPrompt(const sp<IBinder>& listener,
+                                                  const String16& promptText,
+                                                  const ::std::vector<uint8_t>& extraData,
+                                                  const String16& locale, int32_t uiOptionsAsFlags,
+                                                  int32_t* aidl_return) {
+    return mConfirmationManager->presentConfirmationPrompt(listener, promptText, extraData, locale,
+                                                           uiOptionsAsFlags, aidl_return);
+}
+
+Status KeyStoreService::cancelConfirmationPrompt(const sp<IBinder>& listener,
+                                                 int32_t* aidl_return) {
+    return mConfirmationManager->cancelConfirmationPrompt(listener, aidl_return);
 }
 
 /**
