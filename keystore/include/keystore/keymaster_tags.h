@@ -60,7 +60,6 @@
  */
 
 #include <android/hardware/keymaster/3.0/IHwKeymasterDevice.h>
-#include <hardware/hw_auth_token.h>
 #include <type_traits>
 
 namespace keystore {

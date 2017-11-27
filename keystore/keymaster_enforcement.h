@@ -121,7 +121,7 @@ class KeymasterEnforcement {
     /*
      * Returns true if the specified auth_token is older than the specified timeout.
      */
-    virtual bool auth_token_timed_out(const hw_auth_token_t& token, uint32_t timeout) const = 0;
+    virtual bool auth_token_timed_out(const HardwareAuthToken& token, uint32_t timeout) const = 0;
 
     /*
      * Get current time in seconds from some starting point.  This value is used to compute relative
@@ -138,7 +138,7 @@ class KeymasterEnforcement {
      * Returns true if the specified auth_token has a valid signature, or if signature validation is
      * not available.
      */
-    virtual bool ValidateTokenSignature(const hw_auth_token_t& token) const = 0;
+    virtual bool ValidateTokenSignature(const HardwareAuthToken& token) const = 0;
 
   private:
     ErrorCode AuthorizeUpdateOrFinish(const AuthorizationSet& auth_set,

@@ -204,13 +204,15 @@ cc_library_static {
     name: "libkeystore_test",
     defaults: ["keystore_defaults"],
 
-    srcs: ["auth_token_table.cpp"],
+    srcs: [
+        "auth_token_table.cpp",
+        "authorization_set.cpp",
+    ],
     static_libs: ["libgtest_main"],
     shared_libs: [
         "android.hardware.keymaster@3.0",
         "libhidlbase",
         "libhwbinder",
-        "libkeymaster_messages",
         "libutils",
     ],
     export_shared_lib_headers: [
