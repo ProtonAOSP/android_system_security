@@ -17,7 +17,6 @@
 
 #include "authorization_set.h"
 #include <binder/Parcelable.h>
-#include <hardware/keymaster_defs.h>
 
 namespace android {
 namespace security {
