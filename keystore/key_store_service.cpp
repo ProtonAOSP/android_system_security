@@ -40,6 +40,8 @@
 #include "keystore_utils.h"
 #include <keystore/keystore_hidl_support.h>
 
+#include <hardware/hw_auth_token.h>
+
 namespace keystore {
 
 using namespace android;
@@ -1539,8 +1541,7 @@ Status KeyStoreService::addAuthToken(const ::std::vector<uint8_t>& authTokenAsVe
         "This function assumes token HMAC is 32 bytes, but it might not be.");
     std::copy(authToken.hmac, authToken.hmac + sizeof(authToken.hmac), hidlAuthToken->hmac.data());
 
-    // The table takes ownership of authToken.
-    mAuthTokenTable.AddAuthenticationToken(hidlAuthToken.release());
+    mAuthTokenTable.AddAuthenticationToken(std::move(hidlAuthToken));
     *aidl_return = static_cast<int32_t>(ResponseCode::NO_ERROR);
     return Status::ok();
 }

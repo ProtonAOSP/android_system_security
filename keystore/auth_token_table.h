@@ -17,7 +17,6 @@
 #include <memory>
 #include <vector>
 
-#include <hardware/hw_auth_token.h>
 #include <keystore/authorization_set.h>
 
 #ifndef KEYSTORE_AUTH_TOKEN_TABLE_H_
@@ -61,7 +60,7 @@ class AuthTokenTable {
     /**
      * Add an authorization token to the table.  The table takes ownership of the argument.
      */
-    void AddAuthenticationToken(const HardwareAuthToken* token);
+    void AddAuthenticationToken(std::unique_ptr<const HardwareAuthToken>&& auth_token);
 
     /**
      * Find an authorization token that authorizes the operation specified by \p operation_handle on
@@ -97,7 +96,7 @@ class AuthTokenTable {
 
     class Entry {
       public:
-        Entry(const HardwareAuthToken* token, time_t current_time);
+        Entry(std::unique_ptr<const HardwareAuthToken>&& token, time_t current_time);
         Entry(Entry&& entry) { *this = std::move(entry); }
 
         void operator=(Entry&& rhs) {
@@ -127,7 +126,7 @@ class AuthTokenTable {
 
         void mark_completed() { operation_completed_ = true; }
 
-        const HardwareAuthToken* token() { return token_.get(); }
+        const HardwareAuthToken& token() { return *token_.get(); }
         time_t time_received() const { return time_received_; }
         bool completed() const { return operation_completed_; }
         uint64_t timestamp_host_order() const;
