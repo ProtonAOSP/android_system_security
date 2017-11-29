@@ -693,6 +693,8 @@ KeyStoreServiceReturnCode KeyStoreService::generateKey(const String16& name,
                                                        const hidl_vec<uint8_t>& entropy, int uid,
                                                        int flags,
                                                        KeyCharacteristics* outCharacteristics) {
+    // TODO(jbires): remove this getCallingUid call upon implementation of b/25646100
+    uid_t originalUid = IPCThreadState::self()->getCallingUid();
     uid = getEffectiveUid(uid);
     KeyStoreServiceReturnCode rc =
         checkBinderPermissionAndKeystoreState(P_INSERT, uid, flags & KEYSTORE_FLAG_ENCRYPTED);
@@ -705,7 +707,10 @@ KeyStoreServiceReturnCode KeyStoreService::generateKey(const String16& name,
     }
 
     if (containsTag(params, Tag::INCLUDE_UNIQUE_ID)) {
-        if (!checkBinderPermission(P_GEN_UNIQUE_ID)) return ResponseCode::PERMISSION_DENIED;
+        if (!checkBinderPermission(P_GEN_UNIQUE_ID) &&
+              originalUid != IPCThreadState::self()->getCallingUid()) {
+            return ResponseCode::PERMISSION_DENIED;
+        }
     }
 
     bool usingFallback = false;
