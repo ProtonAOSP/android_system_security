@@ -125,8 +125,8 @@ inline static hidl_vec<uint8_t> authToken2HidlVec(const HardwareAuthToken& token
 template <typename T, typename InIter>
 inline static InIter copy_bytes_from_iterator(T* value, InIter src) {
     uint8_t* value_ptr = reinterpret_cast<uint8_t*>(value);
-    std::copy(src, src + sizeof(value), value_ptr);
-    return src + sizeof(value);
+    std::copy(src, src + sizeof(T), value_ptr);
+    return src + sizeof(T);
 }
 
 inline static HardwareAuthToken hidlVec2AuthToken(const hidl_vec<uint8_t>& buffer) {
