@@ -6,7 +6,11 @@ cc_test {
         "-Werror",
         "-Wextra",
     ],
-    srcs: ["auth_token_table_test.cpp"],
+    srcs: [
+        "auth_token_table_test.cpp",
+        "auth_token_formatting_test.cpp",
+        "gtest_main.cpp",
+    ],
     name: "keystore_unit_tests",
     tags: ["test"],
     static_libs: [
