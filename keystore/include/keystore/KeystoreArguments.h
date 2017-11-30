@@ -17,7 +17,6 @@
 
 #include "KeystoreArg.h"
 #include <binder/Parcelable.h>
-#include <hardware/keymaster_defs.h>
 #include <utils/RefBase.h>
 
 namespace android {

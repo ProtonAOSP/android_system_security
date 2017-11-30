@@ -50,7 +50,9 @@ cc_binary {
         "libkeymaster_messages",
         "libkeymaster_portable",
         "libkeymaster_staging",
+        "libkeystore_aidl",
         "libkeystore_binder",
+        "libkeystore_parcelables",
         "liblog",
         "libselinux",
         "libsoftkeymasterdevice",
@@ -82,7 +84,9 @@ cc_binary {
         "libcutils",
         "libhidlbase",
         "libhwbinder",
+        "libkeystore_aidl", // for IKeyStoreService.asInterface()
         "libkeystore_binder",
+        "libkeystore_parcelables",
         "liblog",
         "libutils",
     ],
@@ -109,12 +113,23 @@ cc_binary {
     local_include_dirs: ["include"],
 }
 
-cc_library_headers {
-    name: "libkeystore_headers",
+cc_library_shared {
+    name: "libkeystore_parcelables",
+    defaults: ["keystore_defaults"],
     export_include_dirs: ["include"],
+    srcs: [
+        "KeyAttestationApplicationId.cpp",
+        "KeyAttestationPackageInfo.cpp",
+        "KeymasterArguments.cpp",
+        "KeystoreArguments.cpp",
+        "OperationResult.cpp",
+        "Signature.cpp",
+        "keystore_aidl_hidl_marshalling_utils.cpp",
+    ],
     shared_libs: [
         "android.hardware.keymaster@3.0",
         "libbinder",
+        "libhardware",
         "libhidlbase",
         "libhwbinder",
         "liblog",
@@ -134,27 +149,21 @@ cc_library_shared {
     defaults: ["keystore_defaults"],
 
     srcs: [
-        "KeyAttestationApplicationId.cpp",
-        "KeyAttestationPackageInfo.cpp",
-        "KeymasterArguments.cpp",
-        "KeystoreArguments.cpp",
-        "OperationResult.cpp",
-        "Signature.cpp",
         "authorization_set.cpp",
         "keyblob_utils.cpp",
-        "keystore_aidl_hidl_marshalling_utils.cpp",
         "keystore_client.proto",
         "keystore_client_impl.cpp",
         "keystore_get.cpp",
         "keystore_tags_utils.cpp",
     ],
-    static_libs: ["libkeystore_aidl",],
     shared_libs: [
         "android.hardware.keymaster@3.0",
         "libbinder",
         "libhidlbase",
         "libhwbinder",
         "liblog",
+        "libkeystore_aidl",
+        "libkeystore_parcelables",
         "libprotobuf-cpp-lite",
         "libutils",
     ],
@@ -168,14 +177,13 @@ cc_library_shared {
         include_dirs: ["frameworks/base/core/java/"],
     },
     export_include_dirs: ["include"],
-    export_static_lib_headers: [
-        "libkeystore_aidl",
-    ],
     export_shared_lib_headers: [
         "android.hardware.keymaster@3.0",
         "libbinder",
         "libhidlbase",
         "libhwbinder",
+        "libkeystore_aidl",
+        "libkeystore_parcelables",
     ],
 }
 

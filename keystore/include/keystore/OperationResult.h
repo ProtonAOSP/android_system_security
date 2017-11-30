@@ -19,7 +19,6 @@
 #include "keystore_return_types.h"
 #include <binder/Parcelable.h>
 #include <binder/Parcel.h>
-#include <hardware/keymaster_defs.h>
 
 namespace android {
 namespace security {
