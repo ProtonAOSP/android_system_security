@@ -797,6 +797,8 @@ KeyStoreService::generateKey(const String16& name, const KeymasterArguments& par
                              const ::std::vector<uint8_t>& entropy, int uid, int flags,
                              android::security::keymaster::KeyCharacteristics* outCharacteristics,
                              int32_t* aidl_return) {
+    // TODO(jbires): remove this getCallingUid call upon implementation of b/25646100
+    uid_t originalUid = IPCThreadState::self()->getCallingUid();
     uid = getEffectiveUid(uid);
     KeyStoreServiceReturnCode rc =
         checkBinderPermissionAndKeystoreState(P_INSERT, uid, flags & KEYSTORE_FLAG_ENCRYPTED);
@@ -811,7 +813,9 @@ KeyStoreService::generateKey(const String16& name, const KeymasterArguments& par
     }
 
     if (containsTag(params.getParameters(), Tag::INCLUDE_UNIQUE_ID)) {
-        if (!checkBinderPermission(P_GEN_UNIQUE_ID)) {
+        //TODO(jbires): remove uid checking upon implementation of b/25646100
+        if (!checkBinderPermission(P_GEN_UNIQUE_ID) &&
+            originalUid != IPCThreadState::self()->getCallingUid()) {
             *aidl_return = static_cast<int32_t>(ResponseCode::PERMISSION_DENIED);
             return Status::ok();
         }
