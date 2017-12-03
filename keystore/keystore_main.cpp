@@ -26,14 +26,14 @@
 
 #include <cutils/log.h>
 
+#include "KeyStore.h"
 #include "entropy.h"
-#include "key_store_service.h"
-#include "keystore.h"
-#include "permissions.h"
-#include <android/security/IKeystoreService.h>
-#include "legacy_keymaster_device_wrapper.h"
 #include "include/keystore/keystore_hidl_support.h"
 #include "include/keystore/keystore_return_types.h"
+#include "key_store_service.h"
+#include "legacy_keymaster_device_wrapper.h"
+#include "permissions.h"
+#include <android/security/IKeystoreService.h>
 
 /* KeyStore is a secured storage for key-value pairs. In this implementation,
  * each file stores one key-value pair. Keys are encoded in file names, and
@@ -41,9 +41,9 @@
  * user-defined password. To keep things simple, buffers are always larger than
  * the maximum space we needed, so boundary checks on buffers are omitted. */
 
+using ::android::hardware::configureRpcThreadpool;
 using ::android::system::wifi::keystore::V1_0::IKeystore;
 using ::android::system::wifi::keystore::V1_0::implementation::Keystore;
-using ::android::hardware::configureRpcThreadpool;
 
 /**
  * TODO implement keystore daemon using binderized keymaster HAL.
@@ -81,14 +81,14 @@ int main(int argc, char* argv[]) {
     bool allowNewFallbackDevice = false;
 
     keystore::KeyStoreServiceReturnCode rc;
-    rc = KS_HANDLE_HIDL_ERROR(dev->getHardwareFeatures(
-            [&] (bool, bool, bool, bool supportsAttestation, bool, const hidl_string&,
-                 const hidl_string&) {
-                // Attestation support indicates the hardware is keymaster 2.0 or higher.
-                // For these devices we will not allow the fallback device for import or generation
-                // of keys. The fallback device is only used for legacy keys present on the device.
-                allowNewFallbackDevice = !supportsAttestation;
-            }));
+    rc = KS_HANDLE_HIDL_ERROR(
+        dev->getHardwareFeatures([&](bool, bool, bool, bool supportsAttestation, bool,
+                                     const hidl_string&, const hidl_string&) {
+            // Attestation support indicates the hardware is keymaster 2.0 or higher.
+            // For these devices we will not allow the fallback device for import or generation
+            // of keys. The fallback device is only used for legacy keys present on the device.
+            allowNewFallbackDevice = !supportsAttestation;
+        }));
 
     if (!rc.isOk()) {
         return -1;

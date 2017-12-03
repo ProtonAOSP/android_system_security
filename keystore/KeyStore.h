@@ -17,8 +17,6 @@
 #ifndef KEYSTORE_KEYSTORE_H_
 #define KEYSTORE_KEYSTORE_H_
 
-#include "user_state.h"
-
 #include <android/hardware/keymaster/3.0/IKeymasterDevice.h>
 
 #include <utils/Vector.h>
@@ -26,6 +24,7 @@
 #include "blob.h"
 #include "grant_store.h"
 #include "include/keystore/keymaster_tags.h"
+#include "user_state.h"
 
 using ::keystore::NullOr;
 
@@ -135,9 +134,7 @@ class KeyStore {
 
     ::keystore::GrantStore mGrants;
 
-    typedef struct {
-        uint32_t version;
-    } keystore_metadata_t;
+    typedef struct { uint32_t version; } keystore_metadata_t;
 
     keystore_metadata_t mMetaData;
 
