@@ -126,14 +126,12 @@ bool OperationMap::getOperationAuthToken(const sp<IBinder>& token,
     return true;
 }
 
-bool OperationMap::setOperationAuthToken(const sp<IBinder>& token,
-                                         const HardwareAuthToken* authToken) {
+bool OperationMap::setOperationAuthToken(const sp<IBinder>& token, HardwareAuthToken authToken) {
     auto entry = mMap.find(token);
     if (entry == mMap.end()) {
         return false;
     }
-    entry->second.authToken.reset(new HardwareAuthToken);
-    *entry->second.authToken = *authToken;
+    entry->second.authToken = std::make_unique<HardwareAuthToken>(std::move(authToken));
     return true;
 }
 

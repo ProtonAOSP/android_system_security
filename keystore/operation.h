@@ -57,7 +57,7 @@ class OperationMap {
     bool getOperationAuthToken(const android::sp<android::IBinder>& token,
                                const HardwareAuthToken** outToken);
     bool setOperationAuthToken(const android::sp<android::IBinder>& token,
-                               const HardwareAuthToken* authToken);
+                               HardwareAuthToken authToken);
     android::sp<android::IBinder> getOldestPruneableOperation();
     std::vector<android::sp<android::IBinder>>
     getOperationsForToken(const android::sp<android::IBinder>& appToken);

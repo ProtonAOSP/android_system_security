@@ -1342,7 +1342,7 @@ Status KeyStoreService::begin(const sp<IBinder>& appToken, const String16& name,
     result->token = operationToken;
 
     if (authToken) {
-        mOperationMap.setOperationAuthToken(operationToken, authToken);
+        mOperationMap.setOperationAuthToken(operationToken, *authToken);
     }
     // Return the authentication lookup result. If this is a per operation
     // auth'd key then the resultCode will be ::OP_AUTH_NEEDED and the
@@ -1956,7 +1956,7 @@ KeyStoreServiceReturnCode KeyStoreService::addOperationAuthTokenIfNeeded(const s
             return result;
         }
         if (authToken) {
-            mOperationMap.setOperationAuthToken(token, authToken);
+            mOperationMap.setOperationAuthToken(token, *authToken);
         }
     }
     addAuthTokenToParams(params, authToken);
