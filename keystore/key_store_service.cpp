@@ -813,7 +813,7 @@ KeyStoreService::generateKey(const String16& name, const KeymasterArguments& par
     }
 
     if (containsTag(params.getParameters(), Tag::INCLUDE_UNIQUE_ID)) {
-        //TODO(jbires): remove uid checking upon implementation of b/25646100
+        // TODO(jbires): remove uid checking upon implementation of b/25646100
         if (!checkBinderPermission(P_GEN_UNIQUE_ID) ||
             originalUid != IPCThreadState::self()->getCallingUid()) {
             *aidl_return = static_cast<int32_t>(ResponseCode::PERMISSION_DENIED);
@@ -1363,74 +1363,65 @@ Status KeyStoreService::update(const sp<IBinder>& token, const KeymasterArgument
         result->resultCode = ErrorCode::INVALID_ARGUMENT;
         return Status::ok();
     }
-    km_device_t dev;
-    uint64_t handle;
-    KeyPurpose purpose;
-    km_id_t keyid;
-    const KeyCharacteristics* characteristics;
-    if (!mOperationMap.getOperation(token, &handle, &keyid, &purpose, &dev, &characteristics)) {
+
+    auto getOpResult = mOperationMap.getOperation(token);
+    if (!getOpResult.isOk()) {
         result->resultCode = ErrorCode::INVALID_OPERATION_HANDLE;
         return Status::ok();
     }
+    const auto& op = getOpResult.value();
+
     AuthorizationSet opParams = params.getParameters();
     result->resultCode = addOperationAuthTokenIfNeeded(token, &opParams);
-    if (!result->resultCode.isOk()) {
-        return Status::ok();
-    }
+    if (!result->resultCode.isOk()) return Status::ok();
 
     // Check that all key authorization policy requirements are met.
-    AuthorizationSet key_auths(characteristics->teeEnforced);
-    key_auths.append(&characteristics->softwareEnforced[0],
-                     &characteristics->softwareEnforced[characteristics->softwareEnforced.size()]);
+    AuthorizationSet key_auths(op.characteristics.teeEnforced);
+    key_auths.append(op.characteristics.softwareEnforced.begin(),
+                     op.characteristics.softwareEnforced.end());
+
     result->resultCode = enforcement_policy.AuthorizeOperation(
-        purpose, keyid, key_auths, opParams, handle, false /* is_begin_operation */);
-    if (!result->resultCode.isOk()) {
-        return Status::ok();
-    }
+        op.purpose, op.keyid, key_auths, opParams, op.handle, false /* is_begin_operation */);
+    if (!result->resultCode.isOk()) return Status::ok();
 
     auto hidlCb = [&](ErrorCode ret, uint32_t inputConsumed,
                       const hidl_vec<KeyParameter>& outParams,
                       const ::std::vector<uint8_t>& output) {
         result->resultCode = ret;
-        if (!result->resultCode.isOk()) {
-            return;
+        if (result->resultCode.isOk()) {
+            result->inputConsumed = inputConsumed;
+            result->outParams = outParams;
+            result->data = output;
         }
-        result->inputConsumed = inputConsumed;
-        result->outParams = outParams;
-        result->data = output;
     };
 
     KeyStoreServiceReturnCode rc =
-        KS_HANDLE_HIDL_ERROR(dev->update(handle, opParams.hidl_data(), data, hidlCb));
+        KS_HANDLE_HIDL_ERROR(op.device->update(op.handle, opParams.hidl_data(), data, hidlCb));
+
     // just a reminder: on success result->resultCode was set in the callback. So we only overwrite
     // it if there was a communication error indicated by the ErrorCode.
-    if (!rc.isOk()) {
-        result->resultCode = rc;
-    }
+    if (!rc.isOk()) result->resultCode = rc;
+
     return Status::ok();
 }
 
 Status KeyStoreService::finish(const sp<IBinder>& token, const KeymasterArguments& params,
                                const ::std::vector<uint8_t>& signature,
                                const ::std::vector<uint8_t>& entropy, OperationResult* result) {
+    auto getOpResult = mOperationMap.getOperation(token);
+    if (!getOpResult.isOk()) {
+        result->resultCode = ErrorCode::INVALID_OPERATION_HANDLE;
+        return Status::ok();
+    }
+    const auto& op = std::move(getOpResult.value());
     if (!checkAllowedOperationParams(params.getParameters())) {
         result->resultCode = ErrorCode::INVALID_ARGUMENT;
         return Status::ok();
     }
-    km_device_t dev;
-    uint64_t handle;
-    KeyPurpose purpose;
-    km_id_t keyid;
-    const KeyCharacteristics* characteristics;
-    if (!mOperationMap.getOperation(token, &handle, &keyid, &purpose, &dev, &characteristics)) {
-        result->resultCode = ErrorCode::INVALID_OPERATION_HANDLE;
-        return Status::ok();
-    }
+
     AuthorizationSet opParams = params.getParameters();
     result->resultCode = addOperationAuthTokenIfNeeded(token, &opParams);
-    if (!result->resultCode.isOk()) {
-        return Status::ok();
-    }
+    if (!result->resultCode.isOk()) return Status::ok();
 
     if (entropy.size()) {
         int resultCode;
@@ -1442,29 +1433,29 @@ Status KeyStoreService::finish(const sp<IBinder>& token, const KeymasterArgument
     }
 
     // Check that all key authorization policy requirements are met.
-    AuthorizationSet key_auths(characteristics->teeEnforced);
-    key_auths.append(&characteristics->softwareEnforced[0],
-                     &characteristics->softwareEnforced[characteristics->softwareEnforced.size()]);
+    AuthorizationSet key_auths(op.characteristics.teeEnforced);
+    key_auths.append(op.characteristics.softwareEnforced.begin(),
+                     op.characteristics.softwareEnforced.end());
+
     result->resultCode = enforcement_policy.AuthorizeOperation(
-        purpose, keyid, key_auths, opParams, handle, false /* is_begin_operation */);
+        op.purpose, op.keyid, key_auths, opParams, op.handle, false /* is_begin_operation */);
     if (!result->resultCode.isOk()) return Status::ok();
 
     auto hidlCb = [&](ErrorCode ret, const hidl_vec<KeyParameter>& outParams,
                       const ::std::vector<uint8_t>& output) {
         result->resultCode = ret;
-        if (!result->resultCode.isOk()) {
+        if (result->resultCode.isOk()) {
+            result->outParams = outParams;
+            result->data = output;
         }
-        result->outParams = outParams;
-        result->data = output;
     };
 
     KeyStoreServiceReturnCode rc = KS_HANDLE_HIDL_ERROR(
-        dev->finish(handle, opParams.hidl_data(),
-                    ::std::vector<uint8_t>() /* TODO(swillden): wire up input to finish() */,
-                    signature, hidlCb));
-    // Remove the operation regardless of the result
+        op.device->finish(op.handle, opParams.hidl_data(),
+                          ::std::vector<uint8_t>() /* TODO(swillden): wire up input to finish() */,
+                          signature, hidlCb));
     mOperationMap.removeOperation(token);
-    mAuthTokenTable.MarkCompleted(handle);
+    mAuthTokenTable.MarkCompleted(op.handle);
 
     // just a reminder: on success result->resultCode was set in the callback. So we only overwrite
     // it if there was a communication error indicated by the ErrorCode.
@@ -1475,35 +1466,20 @@ Status KeyStoreService::finish(const sp<IBinder>& token, const KeymasterArgument
 }
 
 Status KeyStoreService::abort(const sp<IBinder>& token, int32_t* aidl_return) {
-    km_device_t dev;
-    uint64_t handle;
-    KeyPurpose purpose;
-    km_id_t keyid;
-    if (!mOperationMap.getOperation(token, &handle, &keyid, &purpose, &dev, NULL)) {
-        *aidl_return =
-            static_cast<int32_t>(KeyStoreServiceReturnCode(ErrorCode::INVALID_OPERATION_HANDLE));
+    auto getOpResult = mOperationMap.removeOperation(token);
+    if (!getOpResult.isOk()) {
+        *aidl_return = static_cast<int32_t>(ErrorCode::INVALID_OPERATION_HANDLE);
         return Status::ok();
     }
-    mOperationMap.removeOperation(token);
+    auto op = std::move(getOpResult.value());
+    mAuthTokenTable.MarkCompleted(op.handle);
 
-    ErrorCode error_code = KS_HANDLE_HIDL_ERROR(dev->abort(handle));
-    mAuthTokenTable.MarkCompleted(handle);
+    ErrorCode error_code = KS_HANDLE_HIDL_ERROR(op.device->abort(op.handle));
     *aidl_return = static_cast<int32_t>(KeyStoreServiceReturnCode(error_code));
     return Status::ok();
 }
 
 Status KeyStoreService::isOperationAuthorized(const sp<IBinder>& token, bool* aidl_return) {
-    km_device_t dev;
-    uint64_t handle;
-    const KeyCharacteristics* characteristics;
-    KeyPurpose purpose;
-    km_id_t keyid;
-    if (!mOperationMap.getOperation(token, &handle, &keyid, &purpose, &dev, &characteristics)) {
-        *aidl_return = false;
-        return Status::ok();
-    }
-    const HardwareAuthToken* authToken = NULL;
-    mOperationMap.getOperationAuthToken(token, &authToken);
     AuthorizationSet ignored;
     auto authResult = addOperationAuthTokenIfNeeded(token, &ignored);
     *aidl_return = authResult.isOk();
@@ -1940,26 +1916,18 @@ KeyStoreServiceReturnCode KeyStoreService::getAuthToken(const KeyCharacteristics
  */
 KeyStoreServiceReturnCode KeyStoreService::addOperationAuthTokenIfNeeded(const sp<IBinder>& token,
                                                                          AuthorizationSet* params) {
-    const HardwareAuthToken* authToken = nullptr;
-    mOperationMap.getOperationAuthToken(token, &authToken);
-    if (!authToken) {
-        km_device_t dev;
-        uint64_t handle;
-        const KeyCharacteristics* characteristics = nullptr;
-        KeyPurpose purpose;
-        km_id_t keyid;
-        if (!mOperationMap.getOperation(token, &handle, &keyid, &purpose, &dev, &characteristics)) {
-            return ErrorCode::INVALID_OPERATION_HANDLE;
-        }
-        auto result = getAuthToken(*characteristics, handle, purpose, &authToken);
-        if (!result.isOk()) {
-            return result;
-        }
-        if (authToken) {
-            mOperationMap.setOperationAuthToken(token, *authToken);
-        }
+    auto getOpResult = mOperationMap.getOperation(token);
+    if (!getOpResult.isOk()) return ErrorCode::INVALID_OPERATION_HANDLE;
+    const auto& op = getOpResult.value();
+
+    if (!op.authToken) {
+        const HardwareAuthToken* found = nullptr;
+        auto result = getAuthToken(op.characteristics, op.handle, op.purpose, &found);
+        if (!result.isOk()) return result;
+        if (found) mOperationMap.setOperationAuthToken(token, *found);
+        assert(*op.authToken == *found);
     }
-    addAuthTokenToParams(params, authToken);
+    addAuthTokenToParams(params, op.authToken.get());
     return ResponseCode::NO_ERROR;
 }
 

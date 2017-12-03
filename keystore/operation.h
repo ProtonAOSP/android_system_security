@@ -38,51 +38,45 @@ using ::android::sp;
  */
 
 class OperationMap {
-    typedef ::android::sp<::android::hardware::keymaster::V3_0::IKeymasterDevice> km_device_t;
+    typedef sp<::android::hardware::keymaster::V3_0::IKeymasterDevice> km_device_t;
 
   public:
-    explicit OperationMap(IBinder::DeathRecipient* deathRecipient);
-    android::sp<android::IBinder> addOperation(uint64_t handle, uint64_t keyid, KeyPurpose purpose,
-                                               const km_device_t& dev,
-                                               const android::sp<android::IBinder>& appToken,
-                                               KeyCharacteristics&& characteristics,
-                                               bool pruneable);
-    bool getOperation(const android::sp<android::IBinder>& token, uint64_t* outHandle,
-                      uint64_t* outKeyid, KeyPurpose* outPurpose, km_device_t* outDev,
-                      const KeyCharacteristics** outCharacteristics);
-    bool removeOperation(const android::sp<android::IBinder>& token);
-    bool hasPruneableOperation() const;
-    size_t getOperationCount() const { return mMap.size(); }
-    size_t getPruneableOperationCount() const;
-    bool getOperationAuthToken(const android::sp<android::IBinder>& token,
-                               const HardwareAuthToken** outToken);
-    bool setOperationAuthToken(const android::sp<android::IBinder>& token,
-                               HardwareAuthToken authToken);
-    android::sp<android::IBinder> getOldestPruneableOperation();
-    std::vector<android::sp<android::IBinder>>
-    getOperationsForToken(const android::sp<android::IBinder>& appToken);
-
-  private:
-    void updateLru(const android::sp<android::IBinder>& token);
-    void removeOperationTracking(const android::sp<android::IBinder>& token,
-                                 const android::sp<android::IBinder>& appToken);
     struct Operation {
-        Operation();
+        Operation() = default;
         Operation(uint64_t handle, uint64_t keyid, KeyPurpose purpose, const km_device_t& device,
-                  KeyCharacteristics&& characteristics, android::sp<android::IBinder> appToken);
+                  KeyCharacteristics&& characteristics, sp<IBinder> appToken);
+        Operation(Operation&&) = default;
+        Operation(const Operation&) = delete;
+
         uint64_t handle;
         uint64_t keyid;
         KeyPurpose purpose;
         km_device_t device;
         KeyCharacteristics characteristics;
-        android::sp<android::IBinder> appToken;
+        sp<IBinder> appToken;
         std::unique_ptr<HardwareAuthToken> authToken;
     };
-    std::map<android::sp<android::IBinder>, Operation> mMap;
-    std::vector<android::sp<android::IBinder>> mLru;
-    std::map<android::sp<android::IBinder>, std::vector<android::sp<android::IBinder>>>
-        mAppTokenMap;
-    android::IBinder::DeathRecipient* mDeathRecipient;
+
+    explicit OperationMap(IBinder::DeathRecipient* deathRecipient);
+    sp<IBinder> addOperation(uint64_t handle, uint64_t keyid, KeyPurpose purpose,
+                             const km_device_t& dev, const sp<IBinder>& appToken,
+                             KeyCharacteristics&& characteristics, bool pruneable);
+    NullOr<const Operation&> getOperation(const sp<IBinder>& token);
+    NullOr<Operation> removeOperation(const sp<IBinder>& token);
+    bool hasPruneableOperation() const;
+    size_t getOperationCount() const { return mMap.size(); }
+    size_t getPruneableOperationCount() const;
+    bool setOperationAuthToken(const sp<IBinder>& token, HardwareAuthToken authToken);
+    sp<IBinder> getOldestPruneableOperation();
+    std::vector<sp<IBinder>> getOperationsForToken(const sp<IBinder>& appToken);
+
+  private:
+    void updateLru(const sp<IBinder>& token);
+    void removeOperationTracking(const sp<IBinder>& token, const sp<IBinder>& appToken);
+    std::map<sp<IBinder>, Operation> mMap;
+    std::vector<sp<IBinder>> mLru;
+    std::map<sp<IBinder>, std::vector<sp<IBinder>>> mAppTokenMap;
+    IBinder::DeathRecipient* mDeathRecipient;
 };
 
 }  // namespace keystore
