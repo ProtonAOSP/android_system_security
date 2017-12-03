@@ -16,7 +16,6 @@
 #define KEYSTORE_INCLUDE_KEYSTORE_KEYCHARACTERISTICS_H_
 
 #include <binder/Parcelable.h>
-#include <hardware/keymaster_defs.h>
 
 #include "KeymasterArguments.h"
 

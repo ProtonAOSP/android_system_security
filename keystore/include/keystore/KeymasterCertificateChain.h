@@ -15,9 +15,7 @@
 #ifndef KEYSTORE_INCLUDE_KEYSTORE_KEYMASTERCERTIFICATECHAIN_H_
 #define KEYSTORE_INCLUDE_KEYSTORE_KEYMASTERCERTIFICATECHAIN_H_
 
-#include "authorization_set.h"
 #include <binder/Parcelable.h>
-#include <hardware/keymaster_defs.h>
 
 namespace android {
 namespace security {

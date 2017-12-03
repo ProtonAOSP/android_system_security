@@ -15,8 +15,9 @@
 #ifndef KEYSTORE_INCLUDE_KEYSTORE_KEYMASTERARGUMENTS_H_
 #define KEYSTORE_INCLUDE_KEYSTORE_KEYMASTERARGUMENTS_H_
 
-#include "authorization_set.h"
 #include <binder/Parcelable.h>
+
+#include "keymaster_tags.h"
 
 namespace android {
 namespace security {
