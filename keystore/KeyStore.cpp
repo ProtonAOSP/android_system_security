@@ -35,10 +35,11 @@
 
 namespace keystore {
 
-const char* KeyStore::sOldMasterKey = ".masterkey";
-const char* KeyStore::sMetaDataFile = ".metadata";
+const char* KeyStore::kOldMasterKey = ".masterkey";
+const char* KeyStore::kMetaDataFile = ".metadata";
 
-const android::String16 KeyStore::sRSAKeyType("RSA");
+const android::String16 KeyStore::kRsaKeyType("RSA");
+const android::String16 KeyStore::kEcKeyType("EC");
 
 using android::String8;
 
@@ -548,23 +549,22 @@ ResponseCode KeyStore::importKey(const uint8_t* key, size_t keyLen, const char* 
     return put(filename, &keyBlob, userId);
 }
 
-bool KeyStore::isHardwareBacked(const android::String16& /*keyType*/) const {
-    using ::android::hardware::hidl_string;
+bool KeyStore::isHardwareBacked(const android::String16& keyType) const {
     if (mDevice == NULL) {
         ALOGW("can't get keymaster device");
         return false;
     }
 
-    bool isSecure = false;
-    auto hidlcb = [&](bool _isSecure, bool, bool, bool, bool, const hidl_string&,
-                      const hidl_string&) { isSecure = _isSecure; };
-    auto rc = mDevice->getHardwareFeatures(hidlcb);
-    if (!rc.isOk()) {
-        ALOGE("Communication with keymaster HAL failed while retrieving hardware features (%s)",
-              rc.description().c_str());
+    auto version = mDevice->halVersion();
+    if (version.error != ErrorCode::OK) {
+        ALOGE("Failed to get HAL version info");
         return false;
     }
-    return isSecure;
+
+    if (!version.isSecure) return false;
+
+    if (keyType == kRsaKeyType) return true;  // All versions support RSA
+    return keyType == kEcKeyType && version.supportsEc;
 }
 
 ResponseCode KeyStore::getKeyForName(Blob* keyBlob, const android::String8& keyName,
@@ -701,7 +701,7 @@ ResponseCode KeyStore::importBlobAsKey(Blob* blob, const char* filename, uid_t u
 }
 
 void KeyStore::readMetaData() {
-    int in = TEMP_FAILURE_RETRY(open(sMetaDataFile, O_RDONLY));
+    int in = TEMP_FAILURE_RETRY(open(kMetaDataFile, O_RDONLY));
     if (in < 0) {
         return;
     }
@@ -726,7 +726,7 @@ void KeyStore::writeMetaData() {
               sizeof(mMetaData));
     }
     close(out);
-    rename(tmpFileName, sMetaDataFile);
+    rename(tmpFileName, kMetaDataFile);
 }
 
 bool KeyStore::upgradeKeystore() {
@@ -739,8 +739,8 @@ bool KeyStore::upgradeKeystore() {
         userState->initialize();
 
         // Migrate the old .masterkey file to user 0.
-        if (access(sOldMasterKey, R_OK) == 0) {
-            if (rename(sOldMasterKey, userState->getMasterKeyFileName()) < 0) {
+        if (access(kOldMasterKey, R_OK) == 0) {
+            if (rename(kOldMasterKey, userState->getMasterKeyFileName()) < 0) {
                 ALOGE("couldn't migrate old masterkey: %s", strerror(errno));
                 return false;
             }

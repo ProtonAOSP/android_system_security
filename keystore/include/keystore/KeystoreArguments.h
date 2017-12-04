@@ -17,6 +17,7 @@
 
 #include <binder/Parcelable.h>
 #include <utils/RefBase.h>
+#include <utils/Vector.h>
 
 #include "KeystoreArg.h"
 #include "keystore_return_types.h"

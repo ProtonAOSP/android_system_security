@@ -14,13 +14,10 @@
  * limitations under the License.
  */
 
-//#define LOG_NDEBUG 0
-#define LOG_TAG "keystore"
-
+#include <android-base/logging.h>
 #include <android/system/wifi/keystore/1.0/IKeystore.h>
 #include <binder/IPCThreadState.h>
 #include <binder/IServiceManager.h>
-#include <cutils/log.h>
 #include <utils/StrongPointer.h>
 #include <wifikeystorehal/keystore.h>
 
@@ -53,57 +50,37 @@ using keystore::Keymaster;
 
 int main(int argc, char* argv[]) {
     using android::hardware::hidl_string;
-    if (argc < 2) {
-        ALOGE("A directory must be specified!");
-        return 1;
-    }
-    if (chdir(argv[1]) == -1) {
-        ALOGE("chdir: %s: %s", argv[1], strerror(errno));
-        return 1;
-    }
+    CHECK(argc >= 2) << "A directory must be specified!";
+    CHECK(chdir(argv[1]) != -1) << "chdir: " << argv[1] << ": " << strerror(errno);
 
     Entropy entropy;
-    if (!entropy.open()) {
-        return 1;
-    }
+    CHECK(entropy.open()) << "Failed to open entropy source.";
 
     auto hwdev = android::hardware::keymaster::V3_0::IKeymasterDevice::getService();
-    if (hwdev.get() == nullptr) return -1;
+    CHECK(hwdev.get()) << "Failed to load @3.0::IKeymasterDevice";
     sp<Keymaster> dev = new keystore::Keymaster3(hwdev);
 
     auto fbdev = android::keystore::makeSoftwareKeymasterDevice();
     if (fbdev.get() == nullptr) return -1;
     sp<Keymaster> fallback = new keystore::Keymaster3(fbdev);
 
-    if (configure_selinux() == -1) {
-        return -1;
-    }
+    CHECK(configure_selinux() != -1) << "Failed to configure SELinux.";
 
-    bool allowNewFallbackDevice = false;
+    auto halVersion = dev->halVersion();
+    CHECK(halVersion.error == keystore::ErrorCode::OK)
+        << "Error " << toString(halVersion.error) << " getting HAL version";
 
-    keystore::KeyStoreServiceReturnCode rc;
-    rc = KS_HANDLE_HIDL_ERROR(
-        dev->getHardwareFeatures([&](bool, bool, bool, bool supportsAttestation, bool,
-                                     const hidl_string&, const hidl_string&) {
-            // Attestation support indicates the hardware is keymaster 2.0 or higher.
-            // For these devices we will not allow the fallback device for import or generation
-            // of keys. The fallback device is only used for legacy keys present on the device.
-            allowNewFallbackDevice = !supportsAttestation;
-        }));
-
-    if (!rc.isOk()) {
-        return -1;
-    }
+    // If the hardware is keymaster 2.0 or higher we will not allow the fallback device for import
+    // or generation of keys. The fallback device is only used for legacy keys present on the
+    // device.
+    bool allowNewFallbackDevice = halVersion.majorVersion >= 2 && halVersion.isSecure;
 
     keystore::KeyStore keyStore(&entropy, dev, fallback, allowNewFallbackDevice);
     keyStore.initialize();
     android::sp<android::IServiceManager> sm = android::defaultServiceManager();
     android::sp<keystore::KeyStoreService> service = new keystore::KeyStoreService(&keyStore);
     android::status_t ret = sm->addService(android::String16("android.security.keystore"), service);
-    if (ret != android::OK) {
-        ALOGE("Couldn't register binder service!");
-        return -1;
-    }
+    CHECK(ret == android::OK) << "Couldn't register binder service!";
 
     /**
      * Register the wifi keystore HAL service to run in passthrough mode.
@@ -113,9 +90,7 @@ int main(int argc, char* argv[]) {
     configureRpcThreadpool(1, false /* callerWillJoin */);
     android::sp<IKeystore> wifiKeystoreHalService = new Keystore();
     android::status_t err = wifiKeystoreHalService->registerAsService();
-    if (ret != android::OK) {
-        ALOGE("Cannot register wifi keystore HAL service: %d", err);
-    }
+    CHECK(ret == android::OK) << "Cannot register wifi keystore HAL service: " << err;
 
     /*
      * This thread is just going to process Binder transactions.

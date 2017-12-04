@@ -40,11 +40,11 @@ cc_binary {
     ],
     shared_libs: [
         "android.hardware.keymaster@3.0",
+        "android.hardware.keymaster@4.0",
         "android.system.wifi.keystore@1.0",
         "libbase",
         "libbinder",
         "libcrypto",
-        "libcutils",
         "libhardware",
         "libhidlbase",
         "libhidltransport",
@@ -131,7 +131,7 @@ cc_library_shared {
         "keystore_aidl_hidl_marshalling_utils.cpp",
     ],
     shared_libs: [
-        "android.hardware.keymaster@3.0",
+        "android.hardware.keymaster@4.0",
         "libbinder",
         "libhardware",
         "libhidlbase",
@@ -141,7 +141,7 @@ cc_library_shared {
         "libutils",
     ],
     export_shared_lib_headers: [
-        "android.hardware.keymaster@3.0",
+        "android.hardware.keymaster@4.0",
         "libbinder",
         "libhidlbase",
         "libhwbinder",
@@ -222,13 +222,13 @@ cc_library_static {
     ],
     static_libs: ["libgtest_main"],
     shared_libs: [
-        "android.hardware.keymaster@3.0",
+        "android.hardware.keymaster@4.0",
         "libhidlbase",
         "libhwbinder",
         "libutils",
     ],
     export_shared_lib_headers: [
-        "android.hardware.keymaster@3.0",
+        "android.hardware.keymaster@4.0",
         "libhidlbase",
         "libhwbinder",
     ],

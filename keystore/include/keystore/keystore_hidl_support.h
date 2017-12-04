@@ -18,13 +18,16 @@
 #ifndef KEYSTORE_KEYSTORE_HIDL_SUPPORT_H_
 #define KEYSTORE_KEYSTORE_HIDL_SUPPORT_H_
 
-#include <android/hardware/keymaster/3.0/IKeymasterDevice.h>
-#include <hardware/hw_auth_token.h>
-#include <hidl/Status.h>
-#include <keystore/keymaster_tags.h>
 #include <ostream>
 #include <sstream>
 #include <string>
+
+#include <android-base/logging.h>
+#include <android/hardware/keymaster/3.0/IKeymasterDevice.h>
+#include <hardware/hw_auth_token.h>
+#include <hidl/Status.h>
+
+#include <keystore/keymaster_tags.h>
 
 namespace keystore {
 
@@ -98,14 +101,16 @@ inline static OutIter copy_bytes_to_iterator(const T& value, OutIter dest) {
     return std::copy(value_ptr, value_ptr + sizeof(value), dest);
 }
 
-inline static hidl_vec<uint8_t> authToken2HidlVec(const HardwareAuthToken& token) {
-    static_assert(
-        std::is_same<decltype(token.hmac), ::android::hardware::hidl_array<uint8_t, 32>>::value,
-        "This function assumes token HMAC is 32 bytes, but it might not be.");
+constexpr size_t kHmacSize = 32;
+
+inline static hidl_vec<uint8_t> authToken2HidlVec(const Km3HardwareAuthToken& token) {
+    static_assert(std::is_same<decltype(token.hmac),
+                               ::android::hardware::hidl_array<uint8_t, kHmacSize>>::value,
+                  "This function assumes token HMAC is 32 bytes, but it might not be.");
     static_assert(1 /* version size */ + sizeof(token.challenge) + sizeof(token.userId) +
                           sizeof(token.authenticatorId) + sizeof(token.authenticatorType) +
-                          sizeof(token.timestamp) + 32 /* HMAC size */
-                      == sizeof(hw_auth_token_t),
+                          sizeof(token.timestamp) + kHmacSize ==
+                      sizeof(hw_auth_token_t),
                   "HardwareAuthToken content size does not match hw_auth_token_t size");
 
     hidl_vec<uint8_t> result;
@@ -129,27 +134,80 @@ inline static InIter copy_bytes_from_iterator(T* value, InIter src) {
     return src + sizeof(T);
 }
 
-inline static HardwareAuthToken hidlVec2AuthToken(const hidl_vec<uint8_t>& buffer) {
-    HardwareAuthToken token;
-    static_assert(
-        std::is_same<decltype(token.hmac), ::android::hardware::hidl_array<uint8_t, 32>>::value,
-        "This function assumes token HMAC is 32 bytes, but it might not be.");
+inline static Km3HardwareAuthToken hidlVec2Km3AuthToken(const hidl_vec<uint8_t>& buffer) {
+    Km3HardwareAuthToken token;
+    static_assert(std::is_same<decltype(token.hmac),
+                               ::android::hardware::hidl_array<uint8_t, kHmacSize>>::value,
+                  "This function assumes token HMAC is 32 bytes, but it might not be.");
     static_assert(1 /* version size */ + sizeof(token.challenge) + sizeof(token.userId) +
                           sizeof(token.authenticatorId) + sizeof(token.authenticatorType) +
-                          sizeof(token.timestamp) + 32 /* HMAC size */
-                      == sizeof(hw_auth_token_t),
+                          sizeof(token.timestamp) + kHmacSize ==
+                      sizeof(hw_auth_token_t),
                   "HardwareAuthToken content size does not match hw_auth_token_t size");
 
     if (buffer.size() != sizeof(hw_auth_token_t)) return {};
 
     auto pos = buffer.begin();
-    ++pos; // skip first byte
+    ++pos;  // skip first byte
     pos = copy_bytes_from_iterator(&token.challenge, pos);
     pos = copy_bytes_from_iterator(&token.userId, pos);
     pos = copy_bytes_from_iterator(&token.authenticatorId, pos);
     pos = copy_bytes_from_iterator(&token.authenticatorType, pos);
     pos = copy_bytes_from_iterator(&token.timestamp, pos);
     pos = std::copy(pos, pos + token.hmac.size(), &token.hmac[0]);
+
+    return token;
+}
+
+inline static hidl_vec<uint8_t> authToken2HidlVec(const HardwareAuthToken& token) {
+    static_assert(1 /* version size */ + sizeof(token.challenge) + sizeof(token.userId) +
+                          sizeof(token.authenticatorId) + sizeof(token.authenticatorType) +
+                          sizeof(token.timestamp) + kHmacSize ==
+                      sizeof(hw_auth_token_t),
+                  "HardwareAuthToken content size does not match hw_auth_token_t size");
+
+    hidl_vec<uint8_t> result;
+    result.resize(sizeof(hw_auth_token_t));
+    auto pos = result.begin();
+    *pos++ = 0;  // Version byte
+    pos = copy_bytes_to_iterator(token.challenge, pos);
+    pos = copy_bytes_to_iterator(token.userId, pos);
+    pos = copy_bytes_to_iterator(token.authenticatorId, pos);
+    auto auth_type = htonl(static_cast<uint32_t>(token.authenticatorType));
+    pos = copy_bytes_to_iterator(auth_type, pos);
+    auto timestamp = htonq(token.timestamp);
+    pos = copy_bytes_to_iterator(timestamp, pos);
+    if (token.mac.size() != kHmacSize) {
+        std::fill(pos, pos + kHmacSize, 0);
+    } else {
+        std::copy(token.mac.begin(), token.mac.end(), pos);
+    }
+
+    return result;
+}
+
+inline static HardwareAuthToken hidlVec2AuthToken(const hidl_vec<uint8_t>& buffer) {
+    HardwareAuthToken token;
+    static_assert(1 /* version size */ + sizeof(token.challenge) + sizeof(token.userId) +
+                          sizeof(token.authenticatorId) + sizeof(token.authenticatorType) +
+                          sizeof(token.timestamp) + kHmacSize ==
+                      sizeof(hw_auth_token_t),
+                  "HardwareAuthToken content size does not match hw_auth_token_t size");
+
+    if (buffer.size() != sizeof(hw_auth_token_t)) return {};
+
+    auto pos = buffer.begin();
+    ++pos;  // skip first byte
+    pos = copy_bytes_from_iterator(&token.challenge, pos);
+    pos = copy_bytes_from_iterator(&token.userId, pos);
+    pos = copy_bytes_from_iterator(&token.authenticatorId, pos);
+    pos = copy_bytes_from_iterator(&token.authenticatorType, pos);
+    token.authenticatorType = static_cast<HardwareAuthenticatorType>(
+        ntohl(static_cast<uint32_t>(token.authenticatorType)));
+    pos = copy_bytes_from_iterator(&token.timestamp, pos);
+    token.timestamp = ntohq(token.timestamp);
+    token.mac.resize(kHmacSize);
+    std::copy(pos, pos + kHmacSize, token.mac.data());
 
     return token;
 }

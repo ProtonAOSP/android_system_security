@@ -122,9 +122,10 @@ class KeyStore {
     const UserState* getUserStateByUid(uid_t uid) const;
 
   private:
-    static const char* sOldMasterKey;
-    static const char* sMetaDataFile;
-    static const android::String16 sRSAKeyType;
+    static const char* kOldMasterKey;
+    static const char* kMetaDataFile;
+    static const android::String16 kRsaKeyType;
+    static const android::String16 kEcKeyType;
     Entropy* mEntropy;
 
     sp<Keymaster> mDevice;

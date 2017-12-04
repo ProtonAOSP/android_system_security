@@ -15,99 +15,90 @@
  ** limitations under the License.
  */
 
-#ifndef KEYSTORE_KEYMASTER_3_H_
-#define KEYSTORE_KEYMASTER_3_H_
+#ifndef KEYMASTER_3_DEVICE_WRAPPER_H_
+#define KEYMASTER_3_DEVICE_WRAPPER_H_
 
+#include <android/hardware/keymaster/3.0/IKeymasterDevice.h>
 #include <keystore/keymaster_types.h>
-#include <utils/StrongPointer.h>
 
 #include "Keymaster.h"
 
 namespace keystore {
 
-using android::sp;
 using IKeymaster3Device = ::android::hardware::keymaster::V3_0::IKeymasterDevice;
+
+using ::android::sp;
+using ::android::hardware::hidl_string;
+using ::android::hardware::hidl_vec;
+using ::android::hardware::Return;
+using ::android::hardware::Void;
+using ::android::hardware::details::return_status;
 
 class Keymaster3 : public Keymaster {
   public:
-    Keymaster3(sp<IKeymasterDevice> km3_dev) : km3_dev_(km3_dev) {}
+    Keymaster3(sp<IKeymaster3Device> km3_dev) : km3_dev_(km3_dev) {}
 
     VersionResult halVersion() override;
 
-    Return<void> getHardwareFeatures(getHardwareFeatures_cb _hidl_cb) override {
-        getVersionIfNeeded();
-        _hidl_cb(isSecure_, supportsEllipticCurve_, supportsSymmetricCryptography_,
-                 supportsAttestation_, supportsAllDigests_,
-                 keymasterName_ + " (wrapped by keystore::Keymaster3)", authorName_);
-        return android::hardware::Void();
+    Return<void> getHardwareInfo(getHardwareInfo_cb _hidl_cb);
+
+    Return<void> getHmacSharingParameters(getHmacSharingParameters_cb _hidl_cb) override {
+        _hidl_cb(ErrorCode::UNIMPLEMENTED, {});
+        return Void();
     }
 
-    Return<ErrorCode> addRngEntropy(const hidl_vec<uint8_t>& data) override {
-        return km3_dev_->addRngEntropy(data);
+    Return<void> computeSharedHmac(const hidl_vec<HmacSharingParameters>&,
+                                   computeSharedHmac_cb _hidl_cb) override {
+        _hidl_cb(ErrorCode::UNIMPLEMENTED, {});
+        return Void();
     }
 
+    Return<void> verifyAuthorization(uint64_t, const hidl_vec<KeyParameter>&,
+                                     const HardwareAuthToken&,
+                                     verifyAuthorization_cb _hidl_cb) override {
+        _hidl_cb(ErrorCode::UNIMPLEMENTED, {});
+        return Void();
+    }
+
+    Return<ErrorCode> addRngEntropy(const hidl_vec<uint8_t>& data) override;
     Return<void> generateKey(const hidl_vec<KeyParameter>& keyParams,
-                             generateKey_cb _hidl_cb) override {
-        return km3_dev_->generateKey(keyParams, _hidl_cb);
-    }
-
+                             generateKey_cb _hidl_cb) override;
     Return<void> getKeyCharacteristics(const hidl_vec<uint8_t>& keyBlob,
                                        const hidl_vec<uint8_t>& clientId,
                                        const hidl_vec<uint8_t>& appData,
-                                       getKeyCharacteristics_cb _hidl_cb) override {
-        return km3_dev_->getKeyCharacteristics(keyBlob, clientId, appData, _hidl_cb);
-    }
-
+                                       getKeyCharacteristics_cb _hidl_cb) override;
     Return<void> importKey(const hidl_vec<KeyParameter>& params, KeyFormat keyFormat,
-                           const hidl_vec<uint8_t>& keyData, importKey_cb _hidl_cb) override {
-        return km3_dev_->importKey(params, keyFormat, keyData, _hidl_cb);
+                           const hidl_vec<uint8_t>& keyData, importKey_cb _hidl_cb) override;
+
+    Return<void> importWrappedKey(const hidl_vec<uint8_t>&, const hidl_vec<uint8_t>&,
+                                  const hidl_vec<uint8_t>&, importWrappedKey_cb _hidl_cb) {
+        _hidl_cb(ErrorCode::UNIMPLEMENTED, {}, {});
+        return Void();
     }
 
     Return<void> exportKey(KeyFormat exportFormat, const hidl_vec<uint8_t>& keyBlob,
                            const hidl_vec<uint8_t>& clientId, const hidl_vec<uint8_t>& appData,
-                           exportKey_cb _hidl_cb) override {
-        return km3_dev_->exportKey(exportFormat, keyBlob, clientId, appData, _hidl_cb);
-    }
-
+                           exportKey_cb _hidl_cb) override;
     Return<void> attestKey(const hidl_vec<uint8_t>& keyToAttest,
                            const hidl_vec<KeyParameter>& attestParams,
-                           attestKey_cb _hidl_cb) override {
-        return km3_dev_->attestKey(keyToAttest, attestParams, _hidl_cb);
-    }
-
+                           attestKey_cb _hidl_cb) override;
     Return<void> upgradeKey(const hidl_vec<uint8_t>& keyBlobToUpgrade,
                             const hidl_vec<KeyParameter>& upgradeParams,
-                            upgradeKey_cb _hidl_cb) override {
-        return km3_dev_->upgradeKey(keyBlobToUpgrade, upgradeParams, _hidl_cb);
-    }
-
-    Return<ErrorCode> deleteKey(const hidl_vec<uint8_t>& keyBlob) override {
-        return km3_dev_->deleteKey(keyBlob);
-    }
-
-    Return<ErrorCode> deleteAllKeys() override { return km3_dev_->deleteAllKeys(); }
-
-    Return<ErrorCode> destroyAttestationIds() override { return km3_dev_->destroyAttestationIds(); }
-
+                            upgradeKey_cb _hidl_cb) override;
+    Return<ErrorCode> deleteKey(const hidl_vec<uint8_t>& keyBlob) override;
+    Return<ErrorCode> deleteAllKeys() override;
+    Return<ErrorCode> destroyAttestationIds() override;
     Return<void> begin(KeyPurpose purpose, const hidl_vec<uint8_t>& key,
-                       const hidl_vec<KeyParameter>& inParams, begin_cb _hidl_cb) override {
-        return km3_dev_->begin(purpose, key, inParams, _hidl_cb);
-    }
-
+                       const hidl_vec<KeyParameter>& inParams, const HardwareAuthToken& authToken,
+                       begin_cb _hidl_cb) override;
     Return<void> update(uint64_t operationHandle, const hidl_vec<KeyParameter>& inParams,
-                        const hidl_vec<uint8_t>& input, update_cb _hidl_cb) override {
-        return km3_dev_->update(operationHandle, inParams, input, _hidl_cb);
-    }
-
+                        const hidl_vec<uint8_t>& input, const HardwareAuthToken& authToken,
+                        const VerificationToken& verificationToken, update_cb _hidl_cb) override;
     Return<void> finish(uint64_t operationHandle, const hidl_vec<KeyParameter>& inParams,
                         const hidl_vec<uint8_t>& input, const hidl_vec<uint8_t>& signature,
-                        finish_cb _hidl_cb) override {
-        return km3_dev_->finish(operationHandle, inParams, input, signature, _hidl_cb);
-    }
-
-    Return<ErrorCode> abort(uint64_t operationHandle) override {
-        return km3_dev_->abort(operationHandle);
-    }
+                        const HardwareAuthToken& authToken,
+                        const VerificationToken& verificationToken, finish_cb _hidl_cb) override;
+    Return<ErrorCode> abort(uint64_t operationHandle) override;
 
   private:
     void getVersionIfNeeded();
@@ -125,6 +116,8 @@ class Keymaster3 : public Keymaster {
     std::string authorName_;
 };
 
+sp<IKeymaster3Device> makeSoftwareKeymasterDevice();
+
 }  // namespace keystore
 
-#endif  // KEYSTORE_KEYMASTER_3_H_
+#endif  // KEYMASTER_3_DEVICE_WRAPPER_H_

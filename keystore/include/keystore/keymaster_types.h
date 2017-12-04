@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <android/hardware/keymaster/3.0/IKeymasterDevice.h>
-#include <android/hardware/keymaster/3.0/types.h>
+#include <android/hardware/keymaster/4.0/IKeymasterDevice.h>
+#include <android/hardware/keymaster/4.0/types.h>
 
 /**
  * This header lifts the types from the current Keymaster version into the keystore namespace.
@@ -21,9 +21,13 @@
 
 namespace keystore {
 
-namespace keymaster = ::android::hardware::keymaster::V3_0;
+namespace keymaster = ::android::hardware::keymaster::V4_0;
 
 using keymaster::IKeymasterDevice;
 using keymaster::SecurityLevel;
+
+using Km3HardwareAuthToken = ::android::hardware::keymaster::V3_0::HardwareAuthToken;
+using Km3HardwareAuthenticatorType =
+    ::android::hardware::keymaster::V3_0::HardwareAuthenticatorType;
 
 }  // namespace keystore
