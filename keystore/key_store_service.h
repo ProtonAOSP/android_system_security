@@ -35,10 +35,9 @@ namespace keystore {
 // binder::Status. Input parameters cannot be null unless annotated with @nullable in .aidl file.
 class KeyStoreService : public android::security::BnKeystoreService,
                         android::IBinder::DeathRecipient {
-    typedef ::android::sp<::android::hardware::keymaster::V3_0::IKeymasterDevice> km_device_t;
-
   public:
     explicit KeyStoreService(KeyStore* keyStore) : mKeyStore(keyStore), mOperationMap(this) {}
+    virtual ~KeyStoreService() = default;
 
     void binderDied(const android::wp<android::IBinder>& who);
 
@@ -217,7 +216,7 @@ class KeyStoreService : public android::security::BnKeystoreService,
      */
     bool checkAllowedOperationParams(const hidl_vec<KeyParameter>& params);
 
-    ErrorCode getOperationCharacteristics(const hidl_vec<uint8_t>& key, km_device_t* dev,
+    ErrorCode getOperationCharacteristics(const hidl_vec<uint8_t>& key, sp<Keymaster>* dev,
                                           const AuthorizationSet& params, KeyCharacteristics* out);
 
     /**
@@ -274,7 +273,7 @@ class KeyStoreService : public android::security::BnKeystoreService,
     KeyStoreServiceReturnCode upgradeKeyBlob(const android::String16& name, uid_t targetUid,
                                              const AuthorizationSet& params, Blob* blob);
 
-    ::KeyStore* mKeyStore;
+    KeyStore* mKeyStore;
     OperationMap mOperationMap;
     keystore::AuthTokenTable mAuthTokenTable;
     KeystoreKeymasterEnforcement enforcement_policy;

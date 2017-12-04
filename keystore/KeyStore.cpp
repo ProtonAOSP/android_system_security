@@ -33,15 +33,16 @@
 #include "permissions.h"
 #include <keystore/keystore_hidl_support.h>
 
+namespace keystore {
+
 const char* KeyStore::sOldMasterKey = ".masterkey";
 const char* KeyStore::sMetaDataFile = ".metadata";
 
 const android::String16 KeyStore::sRSAKeyType("RSA");
 
-using namespace keystore;
 using android::String8;
 
-KeyStore::KeyStore(Entropy* entropy, const km_device_t& device, const km_device_t& fallback,
+KeyStore::KeyStore(Entropy* entropy, const sp<Keymaster>& device, const sp<Keymaster>& fallback,
                    bool allowNewFallback)
     : mEntropy(entropy), mDevice(device), mFallbackDevice(fallback),
       mAllowNewFallback(allowNewFallback) {
@@ -798,3 +799,5 @@ bool KeyStore::upgradeKeystore() {
 
     return upgraded;
 }
+
+}  // namespace keystore

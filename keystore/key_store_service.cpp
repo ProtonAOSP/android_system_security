@@ -1832,7 +1832,7 @@ bool KeyStoreService::checkAllowedOperationParams(const hidl_vec<KeyParameter>& 
 }
 
 ErrorCode KeyStoreService::getOperationCharacteristics(const hidl_vec<uint8_t>& key,
-                                                       km_device_t* dev,
+                                                       sp<Keymaster>* dev,
                                                        const AuthorizationSet& params,
                                                        KeyCharacteristics* out) {
     ::std::vector<uint8_t> appId;

@@ -24,8 +24,6 @@
 #include <openssl/evp.h>
 #include <openssl/pem.h>
 
-#include <hardware/keymaster_defs.h>
-
 #include <memory>
 
 #include <keystore/authorization_set.h>

@@ -17,16 +17,15 @@
 //#define LOG_NDEBUG 0
 #define LOG_TAG "keystore"
 
+#include <android/system/wifi/keystore/1.0/IKeystore.h>
 #include <binder/IPCThreadState.h>
 #include <binder/IServiceManager.h>
-
-#include <android/hardware/keymaster/3.0/IHwKeymasterDevice.h>
-#include <android/system/wifi/keystore/1.0/IKeystore.h>
+#include <cutils/log.h>
+#include <utils/StrongPointer.h>
 #include <wifikeystorehal/keystore.h>
 
-#include <cutils/log.h>
-
 #include "KeyStore.h"
+#include "Keymaster3.h"
 #include "entropy.h"
 #include "include/keystore/keystore_hidl_support.h"
 #include "include/keystore/keystore_return_types.h"
@@ -41,9 +40,12 @@
  * user-defined password. To keep things simple, buffers are always larger than
  * the maximum space we needed, so boundary checks on buffers are omitted. */
 
+using ::android::sp;
 using ::android::hardware::configureRpcThreadpool;
 using ::android::system::wifi::keystore::V1_0::IKeystore;
 using ::android::system::wifi::keystore::V1_0::implementation::Keystore;
+
+using keystore::Keymaster;
 
 /**
  * TODO implement keystore daemon using binderized keymaster HAL.
@@ -65,14 +67,13 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    auto dev = android::hardware::keymaster::V3_0::IKeymasterDevice::getService();
-    if (dev.get() == nullptr) {
-        return -1;
-    }
-    auto fallback = android::keystore::makeSoftwareKeymasterDevice();
-    if (dev.get() == nullptr) {
-        return -1;
-    }
+    auto hwdev = android::hardware::keymaster::V3_0::IKeymasterDevice::getService();
+    if (hwdev.get() == nullptr) return -1;
+    sp<Keymaster> dev = new keystore::Keymaster3(hwdev);
+
+    auto fbdev = android::keystore::makeSoftwareKeymasterDevice();
+    if (fbdev.get() == nullptr) return -1;
+    sp<Keymaster> fallback = new keystore::Keymaster3(fbdev);
 
     if (configure_selinux() == -1) {
         return -1;
@@ -94,7 +95,7 @@ int main(int argc, char* argv[]) {
         return -1;
     }
 
-    KeyStore keyStore(&entropy, dev, fallback, allowNewFallbackDevice);
+    keystore::KeyStore keyStore(&entropy, dev, fallback, allowNewFallbackDevice);
     keyStore.initialize();
     android::sp<android::IServiceManager> sm = android::defaultServiceManager();
     android::sp<keystore::KeyStoreService> service = new keystore::KeyStoreService(&keyStore);

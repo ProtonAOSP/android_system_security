@@ -22,6 +22,7 @@ cc_binary {
     srcs: [
         ":IKeyAttestationApplicationIdProvider.aidl",
         "KeyStore.cpp",
+        "Keymaster3.cpp",
         "auth_token_table.cpp",
         "blob.cpp",
         "entropy.cpp",
@@ -40,6 +41,7 @@ cc_binary {
     shared_libs: [
         "android.hardware.keymaster@3.0",
         "android.system.wifi.keystore@1.0",
+        "libbase",
         "libbinder",
         "libcrypto",
         "libcutils",

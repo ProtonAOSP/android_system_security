@@ -21,24 +21,25 @@
 
 #include <utils/Vector.h>
 
+#include "Keymaster.h"
 #include "blob.h"
 #include "grant_store.h"
 #include "include/keystore/keymaster_tags.h"
 #include "user_state.h"
 
-using ::keystore::NullOr;
+namespace keystore {
+
+using ::android::sp;
 
 class KeyStore {
-    typedef ::android::sp<::android::hardware::keymaster::V3_0::IKeymasterDevice> km_device_t;
-
   public:
-    KeyStore(Entropy* entropy, const km_device_t& device, const km_device_t& fallback,
+    KeyStore(Entropy* entropy, const sp<Keymaster>& device, const sp<Keymaster>& fallback,
              bool allowNewFallback);
     ~KeyStore();
 
-    km_device_t& getDevice() { return mDevice; }
+    sp<Keymaster>& getDevice() { return mDevice; }
 
-    NullOr<km_device_t&> getFallbackDevice() {
+    NullOr<sp<Keymaster>&> getFallbackDevice() {
         // we only return the fallback device if the creation of new fallback key blobs is
         // allowed. (also see getDevice below)
         if (mAllowNewFallback) {
@@ -48,7 +49,7 @@ class KeyStore {
         }
     }
 
-    km_device_t& getDevice(const Blob& blob) {
+    sp<Keymaster>& getDevice(const Blob& blob) {
         // We return a device, based on the nature of the blob to provide backward
         // compatibility with old key blobs generated using the fallback device.
         return blob.isFallback() ? mFallbackDevice : mDevice;
@@ -126,8 +127,8 @@ class KeyStore {
     static const android::String16 sRSAKeyType;
     Entropy* mEntropy;
 
-    km_device_t mDevice;
-    km_device_t mFallbackDevice;
+    sp<Keymaster> mDevice;
+    sp<Keymaster> mFallbackDevice;
     bool mAllowNewFallback;
 
     android::Vector<UserState*> mMasterKeys;
@@ -156,5 +157,7 @@ class KeyStore {
 
     bool upgradeKeystore();
 };
+
+}  // namespace keystore
 
 #endif  // KEYSTORE_KEYSTORE_H_
