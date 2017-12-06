@@ -32,10 +32,14 @@ namespace keystore {
  */
 class Grant {
 public:
-    Grant(const std::string& alias, const std::string& key_file, const uint64_t grant_no);
-    std::string alias_;
-    std::string key_file_;
-    uint64_t grant_no_;
+    Grant(const std::string& alias, const std::string& owner_dir_name, const uid_t owner_uid,
+          const uint64_t grant_no);
+    // the following three field are used to recover the key filename that the grant refers to
+    std::string alias_;            ///< original/wrapped key alias
+    std::string owner_dir_name_;   ///< key owner key directory
+    uid_t owner_uid_;              ///< key owner uid
+
+    uint64_t grant_no_;            ///< numeric grant identifier - randomly assigned
 
     operator const uint64_t&() const { return grant_no_; }
 };
@@ -52,9 +56,12 @@ public:
 class GrantStore {
 public:
     GrantStore() : grants_() {}
-    std::string put(const uid_t uid, const std::string& alias, const std::string& key_file);
+    std::string put(const uid_t uid, const std::string& alias, const std::string& owner_dir_name,
+                    const uid_t owner_uid);
     const Grant* get(const uid_t uid, const std::string& alias) const;
-    bool removeByFileName(const uid_t uid, const std::string& filename);
+    bool removeByFileAlias(const uid_t granteeUid, const uid_t granterUid, const std::string& alias);
+    void removeAllGrantsToKey(const uid_t granterUid, const std::string& alias);
+    void removeAllGrantsToUid(const uid_t granteeUid);
 
     // GrantStore is neither copyable nor movable.
     GrantStore(const GrantStore&) = delete;

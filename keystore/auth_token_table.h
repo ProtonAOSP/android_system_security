@@ -124,7 +124,7 @@ class AuthTokenTable {
         const HardwareAuthToken* token() { return token_.get(); }
         time_t time_received() const { return time_received_; }
         bool completed() const { return operation_completed_; }
-        uint32_t timestamp_host_order() const;
+        uint64_t timestamp_host_order() const;
         HardwareAuthenticatorType authenticator_type() const;
 
       private:
