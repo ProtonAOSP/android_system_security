@@ -30,6 +30,13 @@ class KeyAttestationPackageInfo : public Parcelable {
   public:
     typedef SharedNullableIterator<const content::pm::Signature, std::vector>
         ConstSignatureIterator;
+    typedef std::vector<std::unique_ptr<content::pm::Signature>>
+        SignaturesVector;
+    typedef std::shared_ptr<SignaturesVector> SharedSignaturesVector;
+
+    KeyAttestationPackageInfo(
+        const String16& packageName, int32_t versionCode, SharedSignaturesVector signatures);
+    KeyAttestationPackageInfo();
 
     status_t writeToParcel(Parcel*) const override;
     status_t readFromParcel(const Parcel* parcel) override;
@@ -43,7 +50,7 @@ class KeyAttestationPackageInfo : public Parcelable {
   private:
     std::unique_ptr<String16> packageName_;
     int32_t versionCode_;
-    std::shared_ptr<std::vector<std::unique_ptr<content::pm::Signature>>> signatures_;
+    SharedSignaturesVector signatures_;
 };
 
 }  // namespace keymaster
