@@ -17,11 +17,13 @@
 
 #include "include/keystore/OperationResult.h"
 
-#include <binder/Parcel.h>
 #include <utility>
 
+#include <binder/Parcel.h>
+
+#include <keystore/keymaster_types.h>
+
 #include "keystore_aidl_hidl_marshalling_utils.h"
-#include <keystore/keymaster_tags.h>
 
 namespace android {
 namespace security {

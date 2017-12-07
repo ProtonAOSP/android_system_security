@@ -5,6 +5,7 @@ cc_test {
         "-Wall",
         "-Werror",
         "-Wextra",
+        "-O0",
     ],
     srcs: [
         "auth_token_table_test.cpp",
@@ -14,7 +15,10 @@ cc_test {
     name: "keystore_unit_tests",
     tags: ["test"],
     static_libs: [
+        "libbase",
         "libgtest_main",
+        "libhidlbase",
+        "libkeymaster4support",
         "libkeystore_test",
         "liblog",
     ],

@@ -17,8 +17,7 @@
 #ifndef KEYSTORE_KEYSTORE_UTILS_H_
 #define KEYSTORE_KEYSTORE_UTILS_H_
 
-#include <stdint.h>
-
+#include <cstdint>
 #include <vector>
 
 #include <openssl/evp.h>
@@ -26,7 +25,7 @@
 
 #include <memory>
 
-#include <keystore/authorization_set.h>
+#include <keystore/keymaster_types.h>
 
 #include "blob.h"
 
@@ -65,6 +64,6 @@ inline static hidl_vec<uint8_t> blob2hidlVec(const Blob& blob) {
     return result;
 }
 
-} // namespace keystore
+}  // namespace keystore
 
 #endif  // KEYSTORE_KEYSTORE_UTILS_H_

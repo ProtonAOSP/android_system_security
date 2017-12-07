@@ -21,10 +21,11 @@
 
 #include <utils/Vector.h>
 
+#include <keystore/keymaster_types.h>
+
 #include "Keymaster.h"
 #include "blob.h"
 #include "grant_store.h"
-#include "include/keystore/keymaster_tags.h"
 #include "user_state.h"
 
 namespace keystore {

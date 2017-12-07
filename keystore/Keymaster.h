@@ -18,7 +18,6 @@
 #ifndef SYSTEM_SECURITY_KEYSTORE_KEYMASTER__H_
 #define SYSTEM_SECURITY_KEYSTORE_KEYMASTER__H_
 
-#include <keystore/keymaster_tags.h>
 #include <keystore/keymaster_types.h>
 
 namespace keystore {

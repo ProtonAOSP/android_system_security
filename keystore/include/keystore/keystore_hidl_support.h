@@ -27,7 +27,7 @@
 #include <hardware/hw_auth_token.h>
 #include <hidl/Status.h>
 
-#include <keystore/keymaster_tags.h>
+#include <keystore/keymaster_types.h>
 
 namespace keystore {
 

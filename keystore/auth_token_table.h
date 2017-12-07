@@ -17,7 +17,6 @@
 #include <memory>
 #include <vector>
 
-#include <keystore/authorization_set.h>
 #include <keystore/keymaster_types.h>
 
 #ifndef KEYSTORE_AUTH_TOKEN_TABLE_H_
@@ -59,7 +58,7 @@ class AuthTokenTable {
     };
 
     /**
-     * Add an authorization token to the table.  The table takes ownership of the argument.
+     * Add an authorization token to the table.
      */
     void AddAuthenticationToken(HardwareAuthToken&& auth_token);
 

@@ -16,18 +16,22 @@
 
 #include <gtest/gtest.h>
 
-#include <android/hardware/keymaster/3.0/types.h>
 #include <endian.h>
-#include <hardware/hw_auth_token.h>
 #include <hidl/HidlSupport.h>
 #include <keymaster/logger.h>
 
-#include "../auth_token_table.h"
+#include <keystore/keymaster_types.h>
 #include <keystore/keystore_hidl_support.h>
+
+#include "../auth_token_table.h"
 
 using std::vector;
 
 namespace keystore {
+
+using android::hardware::hidl_array;
+using android::hardware::hidl_vec;
+
 namespace test {
 
 namespace {
@@ -65,9 +69,6 @@ class StdoutLogger : public ::keymaster::Logger {
 StdoutLogger logger;
 
 }  // namespace
-
-using android::hardware::hidl_array;
-using android::hardware::hidl_vec;
 
 constexpr const uint8_t test_token[69] = {
     0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,

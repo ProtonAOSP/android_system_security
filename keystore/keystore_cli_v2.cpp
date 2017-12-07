@@ -17,16 +17,13 @@
 #include <string>
 #include <vector>
 
-#include "base/command_line.h"
-#include "base/files/file_util.h"
-#include "base/strings/string_util.h"
-#include "keystore/authorization_set.h"
-#include "keystore/keymaster_tags.h"
-#include "keystore/keystore_client_impl.h"
+#include <base/command_line.h>
+#include <base/files/file_util.h>
+#include <base/strings/string_util.h>
+#include <keystore/keymaster_types.h>
+#include <keystore/keystore_client_impl.h>
 
 using base::CommandLine;
-using keystore::AuthorizationSet;
-//using keymaster::AuthorizationSetBuilder;
 using keystore::KeystoreClient;
 
 namespace {
@@ -57,12 +54,13 @@ void PrintUsageAndExit() {
 
 std::unique_ptr<KeystoreClient> CreateKeystoreInstance() {
     return std::unique_ptr<KeystoreClient>(
-            static_cast<KeystoreClient*>(new keystore::KeystoreClientImpl));
+        static_cast<KeystoreClient*>(new keystore::KeystoreClientImpl));
 }
 
 void PrintTags(const AuthorizationSet& parameters) {
     for (auto iter = parameters.begin(); iter != parameters.end(); ++iter) {
-        printf("  %s\n", stringifyTag(iter->tag));
+        auto tag_str = toString(iter->tag);
+        printf("  %s\n", tag_str.c_str());
     }
 }
 
@@ -79,7 +77,7 @@ bool TestKey(const std::string& name, bool required, const AuthorizationSet& par
     AuthorizationSet hardware_enforced_characteristics;
     AuthorizationSet software_enforced_characteristics;
     auto result = keystore->generateKey("tmp", parameters, &hardware_enforced_characteristics,
-                                           &software_enforced_characteristics);
+                                        &software_enforced_characteristics);
     const char kBoldRedAbort[] = "\033[1;31mABORT\033[0m";
     if (!result.isOk()) {
         LOG(ERROR) << "Failed to generate key: " << result;
@@ -120,9 +118,7 @@ AuthorizationSet GetRSASignParameters(uint32_t key_size, bool sha256_only) {
         .Padding(PaddingMode::RSA_PSS)
         .Authorization(TAG_NO_AUTH_REQUIRED);
     if (!sha256_only) {
-        parameters.Digest(Digest::SHA_2_224)
-            .Digest(Digest::SHA_2_384)
-            .Digest(Digest::SHA_2_512);
+        parameters.Digest(Digest::SHA_2_224).Digest(Digest::SHA_2_384).Digest(Digest::SHA_2_512);
     }
     return parameters;
 }
@@ -142,9 +138,7 @@ AuthorizationSet GetECDSAParameters(uint32_t key_size, bool sha256_only) {
         .Digest(Digest::SHA_2_256)
         .Authorization(TAG_NO_AUTH_REQUIRED);
     if (!sha256_only) {
-        parameters.Digest(Digest::SHA_2_224)
-            .Digest(Digest::SHA_2_384)
-            .Digest(Digest::SHA_2_512);
+        parameters.Digest(Digest::SHA_2_224).Digest(Digest::SHA_2_384).Digest(Digest::SHA_2_512);
     }
     return parameters;
 }
@@ -205,7 +199,8 @@ int BrilloPlatformTest(const std::string& prefix, bool test_for_0_3) {
     const char kBoldYellowWarning[] = "\033[1;33mWARNING\033[0m";
     if (test_for_0_3) {
         printf("%s: Testing for keymaster v0.3. "
-               "This does not meet Brillo requirements.\n", kBoldYellowWarning);
+               "This does not meet Brillo requirements.\n",
+               kBoldYellowWarning);
     }
     int test_count = 0;
     int fail_count = 0;
@@ -280,7 +275,7 @@ int GenerateKey(const std::string& name) {
     AuthorizationSet hardware_enforced_characteristics;
     AuthorizationSet software_enforced_characteristics;
     auto result = keystore->generateKey(name, params, &hardware_enforced_characteristics,
-                                           &software_enforced_characteristics);
+                                        &software_enforced_characteristics);
     printf("GenerateKey: %d\n", int32_t(result));
     if (result.isOk()) {
         PrintKeyCharacteristics(hardware_enforced_characteristics,
@@ -294,7 +289,7 @@ int GetCharacteristics(const std::string& name) {
     AuthorizationSet hardware_enforced_characteristics;
     AuthorizationSet software_enforced_characteristics;
     auto result = keystore->getKeyCharacteristics(name, &hardware_enforced_characteristics,
-                                                     &software_enforced_characteristics);
+                                                  &software_enforced_characteristics);
     printf("GetCharacteristics: %d\n", int32_t(result));
     if (result.isOk()) {
         PrintKeyCharacteristics(hardware_enforced_characteristics,
@@ -352,8 +347,8 @@ int SignAndVerify(const std::string& name) {
     sign_params.Digest(Digest::SHA_2_256);
     AuthorizationSet output_params;
     uint64_t handle;
-    auto result = keystore->beginOperation(KeyPurpose::SIGN, name, sign_params,
-                                              &output_params, &handle);
+    auto result =
+        keystore->beginOperation(KeyPurpose::SIGN, name, sign_params, &output_params, &handle);
     if (!result.isOk()) {
         printf("Sign: BeginOperation failed: %d\n", int32_t(result));
         return result;
@@ -377,8 +372,8 @@ int SignAndVerify(const std::string& name) {
     // We have a signature, now verify it.
     std::string signature_to_verify = output_data;
     output_data.clear();
-    result = keystore->beginOperation(KeyPurpose::VERIFY, name, sign_params, &output_params,
-                                      &handle);
+    result =
+        keystore->beginOperation(KeyPurpose::VERIFY, name, sign_params, &output_params, &handle);
     if (!result.isOk()) {
         printf("Verify: BeginOperation failed: %d\n", int32_t(result));
         return result;

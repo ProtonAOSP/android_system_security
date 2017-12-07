@@ -28,9 +28,10 @@
 #include <utils/String16.h>
 #include <utils/String8.h>
 
-#include "keystore_client.pb.h"
-#include <keystore/authorization_set.h>
+#include <keystore/keymaster_types.h>
 #include <keystore/keystore_hidl_support.h>
+
+#include "keystore_client.pb.h"
 
 namespace {
 

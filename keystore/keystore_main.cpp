@@ -15,21 +15,23 @@
  */
 
 #include <android-base/logging.h>
+#include <android/security/IKeystoreService.h>
 #include <android/system/wifi/keystore/1.0/IKeystore.h>
 #include <binder/IPCThreadState.h>
 #include <binder/IServiceManager.h>
+#include <hidl/HidlTransportSupport.h>
 #include <utils/StrongPointer.h>
 #include <wifikeystorehal/keystore.h>
+
+#include <keystore/keystore_hidl_support.h>
+#include <keystore/keystore_return_types.h>
 
 #include "KeyStore.h"
 #include "Keymaster3.h"
 #include "entropy.h"
-#include "include/keystore/keystore_hidl_support.h"
-#include "include/keystore/keystore_return_types.h"
 #include "key_store_service.h"
 #include "legacy_keymaster_device_wrapper.h"
 #include "permissions.h"
-#include <android/security/IKeystoreService.h>
 
 /* KeyStore is a secured storage for key-value pairs. In this implementation,
  * each file stores one key-value pair. Keys are encoded in file names, and

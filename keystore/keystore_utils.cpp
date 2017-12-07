@@ -25,8 +25,9 @@
 #include <cutils/log.h>
 #include <private/android_filesystem_config.h>
 
-#include <keystore/authorization_set.h>
+#include <keystore/keymaster_types.h>
 #include <keystore/keystore_client.h>
+
 size_t readFully(int fd, uint8_t* data, size_t size) {
     size_t remaining = size;
     while (remaining > 0) {
