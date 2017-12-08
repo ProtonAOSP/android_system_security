@@ -69,6 +69,8 @@ cc_binary {
             enabled: false,
         },
     },
+
+    required: ["keystore_cli_v2"],
 }
 
 cc_binary {
