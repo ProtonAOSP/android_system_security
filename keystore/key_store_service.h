@@ -145,7 +145,7 @@ class KeyStoreService : public android::security::BnKeystoreService,
                                     int32_t* _aidl_return) override;
     ::android::binder::Status isOperationAuthorized(const ::android::sp<::android::IBinder>& token,
                                                     bool* _aidl_return) override;
-    ::android::binder::Status addAuthToken(const ::std::vector<uint8_t>& authToken,
+    ::android::binder::Status addAuthToken(const ::std::vector<uint8_t>& authToken, int32_t userId,
                                            int32_t* _aidl_return) override;
     ::android::binder::Status onUserAdded(int32_t userId, int32_t parentId,
                                           int32_t* _aidl_return) override;
