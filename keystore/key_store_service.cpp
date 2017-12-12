@@ -705,9 +705,8 @@ KeyStoreServiceReturnCode KeyStoreService::generateKey(const String16& name,
         ALOGE("Non-system uid %d cannot set FLAG_CRITICAL_TO_DEVICE_ENCRYPTION", uid);
         return ResponseCode::PERMISSION_DENIED;
     }
-
     if (containsTag(params, Tag::INCLUDE_UNIQUE_ID)) {
-        if (!checkBinderPermission(P_GEN_UNIQUE_ID) &&
+        if (!checkBinderPermission(P_GEN_UNIQUE_ID) ||
               originalUid != IPCThreadState::self()->getCallingUid()) {
             return ResponseCode::PERMISSION_DENIED;
         }
