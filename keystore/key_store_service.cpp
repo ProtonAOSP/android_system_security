@@ -814,7 +814,7 @@ KeyStoreService::generateKey(const String16& name, const KeymasterArguments& par
 
     if (containsTag(params.getParameters(), Tag::INCLUDE_UNIQUE_ID)) {
         //TODO(jbires): remove uid checking upon implementation of b/25646100
-        if (!checkBinderPermission(P_GEN_UNIQUE_ID) &&
+        if (!checkBinderPermission(P_GEN_UNIQUE_ID) ||
             originalUid != IPCThreadState::self()->getCallingUid()) {
             *aidl_return = static_cast<int32_t>(ResponseCode::PERMISSION_DENIED);
             return Status::ok();
