@@ -34,6 +34,8 @@
 #include <keystore/KeyAttestationPackageInfo.h>
 #include <keystore/Signature.h>
 
+#include <private/android_filesystem_config.h> /* for AID_SYSTEM */
+
 #include <openssl/asn1t.h>
 #include <openssl/sha.h>
 
@@ -229,16 +231,28 @@ StatusOr<std::vector<uint8_t>> gather_attestation_application_id(uid_t uid) {
     auto& pm = KeyAttestationApplicationIdProvider::get();
 
     /* Get the attestation application ID from package manager */
-    KeyAttestationApplicationId key_attestation_id;
-    auto status = pm.getKeyAttestationApplicationId(uid, &key_attestation_id);
-    if (!status.isOk()) {
-        ALOGE("package manager request for key attestation ID failed with: %s",
-              status.exceptionMessage().string());
-        return FAILED_TRANSACTION;
+    KeyAttestationApplicationId* key_attestation_id = nullptr;
+    if (uid == AID_SYSTEM) {
+      KeyAttestationPackageInfo::SharedSignaturesVector signatures(
+                new KeyAttestationPackageInfo::SignaturesVector());
+        signatures->push_back(std::unique_ptr<content::pm::Signature>(
+                new content::pm::Signature()));
+
+        std::unique_ptr<KeyAttestationPackageInfo> package_info(
+                new KeyAttestationPackageInfo(
+                        String16("AndroidSystem"), 1, signatures));
+        key_attestation_id = new KeyAttestationApplicationId(std::move(package_info));
+    } else {
+        auto status = pm.getKeyAttestationApplicationId(uid, key_attestation_id);
+        if (!status.isOk()) {
+            ALOGE("package manager request for key attestation ID failed with: %s %d",
+                  status.exceptionMessage().string(), status.exceptionCode());
+            return FAILED_TRANSACTION;
+        }
     }
 
     /* DER encode the attestation application ID */
-    return build_attestation_application_id(key_attestation_id);
+    return build_attestation_application_id(*key_attestation_id);
 }
 
 }  // namespace security

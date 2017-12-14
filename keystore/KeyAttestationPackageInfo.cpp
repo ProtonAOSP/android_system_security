@@ -23,6 +23,15 @@ namespace android {
 namespace security {
 namespace keymaster {
 
+KeyAttestationPackageInfo::KeyAttestationPackageInfo() = default;
+
+KeyAttestationPackageInfo::KeyAttestationPackageInfo(
+        const String16& packageName, int32_t versionCode,
+        SharedSignaturesVector signatures) :
+    packageName_(new String16(packageName)), versionCode_(versionCode),
+    signatures_(signatures) {
+}
+
 status_t KeyAttestationPackageInfo::writeToParcel(Parcel* parcel) const {
     auto rc = parcel->writeString16(packageName_);
     if (rc != NO_ERROR) return rc;
@@ -37,7 +46,7 @@ status_t KeyAttestationPackageInfo::readFromParcel(const Parcel* parcel) {
     rc = parcel->readInt32(&versionCode_);
     if (rc != NO_ERROR) return rc;
 
-    std::unique_ptr<std::vector<std::unique_ptr<content::pm::Signature>>> temp_vector;
+    std::unique_ptr<SignaturesVector> temp_vector;
     rc = parcel->readParcelableVector(&temp_vector);
     if (rc != NO_ERROR) return rc;
     signatures_.reset(temp_vector.release());

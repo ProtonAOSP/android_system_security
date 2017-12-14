@@ -30,6 +30,8 @@ class KeyAttestationApplicationId : public Parcelable {
   public:
     typedef SharedNullableIterator<const KeyAttestationPackageInfo, std::vector>
         ConstKeyAttestationPackageInfoIterator;
+    KeyAttestationApplicationId();
+    KeyAttestationApplicationId(std::unique_ptr<KeyAttestationPackageInfo> package);
 
     status_t writeToParcel(Parcel*) const override;
     status_t readFromParcel(const Parcel* parcel) override;
