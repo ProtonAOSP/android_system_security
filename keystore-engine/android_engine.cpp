@@ -199,7 +199,7 @@ class KeystoreEngine {
     memset(&rsa_method_, 0, sizeof(rsa_method_));
     rsa_method_.common.is_static = 1;
     rsa_method_.private_transform = rsa_private_transform;
-    rsa_method_.flags = RSA_FLAG_CACHE_PUBLIC | RSA_FLAG_OPAQUE;
+    rsa_method_.flags = RSA_FLAG_OPAQUE;
     ENGINE_set_RSA_method(engine_, &rsa_method_, sizeof(rsa_method_));
 
     memset(&ecdsa_method_, 0, sizeof(ecdsa_method_));
