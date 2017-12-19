@@ -15,16 +15,9 @@
 #ifndef KEYSTORE_INCLUDE_KEYSTORE_EXPORTRESULT_H_
 #define KEYSTORE_INCLUDE_KEYSTORE_EXPORTRESULT_H_
 
-#include <stdint.h>
-
-#include <memory>
-#include <vector>
-
 #include <binder/Parcelable.h>
-#include <hardware/keymaster_defs.h>
 
 #include "keystore_return_types.h"
-#include "utils.h"
 
 namespace android {
 namespace security {

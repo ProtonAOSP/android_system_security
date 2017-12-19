@@ -15,12 +15,15 @@
 #ifndef KEYSTORE_INCLUDE_KEYSTORE_KEYATTESTATIONPACKAGEINFO_H_
 #define KEYSTORE_INCLUDE_KEYSTORE_KEYATTESTATIONPACKAGEINFO_H_
 
+#include <stdint.h>
+
+#include <memory>
+#include <vector>
+
+#include <binder/Parcelable.h>
+
 #include "Signature.h"
 #include "utils.h"
-#include <binder/Parcelable.h>
-#include <memory>
-#include <stdint.h>
-#include <vector>
 
 namespace android {
 namespace security {
