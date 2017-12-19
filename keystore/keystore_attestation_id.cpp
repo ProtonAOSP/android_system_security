@@ -45,7 +45,9 @@ namespace android {
 
 namespace {
 
-static std::vector<uint8_t> signature2SHA256(const content::pm::Signature& sig) {
+constexpr const char* kAttestationSystemPackageName = "AndroidSystem";
+
+std::vector<uint8_t> signature2SHA256(const content::pm::Signature& sig) {
     std::vector<uint8_t> digest_buffer(SHA256_DIGEST_LENGTH);
     SHA256(sig.data().data(), sig.data().size(), digest_buffer.data());
     return digest_buffer;
@@ -97,7 +99,8 @@ ASN1_SEQUENCE(KM_ATTESTATION_APPLICATION_ID) = {
     ASN1_SET_OF(KM_ATTESTATION_APPLICATION_ID, signature_digests, ASN1_OCTET_STRING),
 } ASN1_SEQUENCE_END(KM_ATTESTATION_APPLICATION_ID);
 IMPLEMENT_ASN1_FUNCTIONS(KM_ATTESTATION_APPLICATION_ID);
-}
+
+}  // namespace
 
 }  // namespace android
 
@@ -228,22 +231,18 @@ void unused_functions_silencer() {
 }  // namespace
 
 StatusOr<std::vector<uint8_t>> gather_attestation_application_id(uid_t uid) {
-    auto& pm = KeyAttestationApplicationIdProvider::get();
+    KeyAttestationApplicationId key_attestation_id;
 
-    /* Get the attestation application ID from package manager */
-    KeyAttestationApplicationId* key_attestation_id = nullptr;
     if (uid == AID_SYSTEM) {
-      KeyAttestationPackageInfo::SharedSignaturesVector signatures(
-                new KeyAttestationPackageInfo::SignaturesVector());
-        signatures->push_back(std::unique_ptr<content::pm::Signature>(
-                new content::pm::Signature()));
-
-        std::unique_ptr<KeyAttestationPackageInfo> package_info(
-                new KeyAttestationPackageInfo(
-                        String16("AndroidSystem"), 1, signatures));
-        key_attestation_id = new KeyAttestationApplicationId(std::move(package_info));
+        /* Use a fixed ID for system callers */
+        auto pinfo = std::make_unique<KeyAttestationPackageInfo>(
+            String16(kAttestationSystemPackageName), 1 /* version code */,
+            std::make_shared<KeyAttestationPackageInfo::SignaturesVector>());
+        key_attestation_id = KeyAttestationApplicationId(std::move(pinfo));
     } else {
-        auto status = pm.getKeyAttestationApplicationId(uid, key_attestation_id);
+        /* Get the attestation application ID from package manager */
+        auto& pm = KeyAttestationApplicationIdProvider::get();
+        auto status = pm.getKeyAttestationApplicationId(uid, &key_attestation_id);
         if (!status.isOk()) {
             ALOGE("package manager request for key attestation ID failed with: %s %d",
                   status.exceptionMessage().string(), status.exceptionCode());
@@ -252,7 +251,7 @@ StatusOr<std::vector<uint8_t>> gather_attestation_application_id(uid_t uid) {
     }
 
     /* DER encode the attestation application ID */
-    return build_attestation_application_id(*key_attestation_id);
+    return build_attestation_application_id(key_attestation_id);
 }
 
 }  // namespace security
