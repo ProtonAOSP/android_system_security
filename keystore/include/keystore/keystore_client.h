@@ -62,7 +62,7 @@ class KeystoreClient {
     // Note: implementations may generate more than one key but they will always
     // have |key_name| as a prefix.
     virtual bool encryptWithAuthentication(const std::string& key_name, const std::string& data,
-                                           std::string* encrypted_data) = 0;
+                                           int32_t flags, std::string* encrypted_data) = 0;
 
     // Decrypts and authenticates |encrypted_data| as output by
     // EncryptWithAuthentication using the key(s) identified by |key_name|. On
@@ -85,8 +85,8 @@ class KeystoreClient {
 
     // Adds |entropy| to the random number generator. Returns KM_ERROR_OK on
     // success and a Keystore ResponseCode or keymaster_error_t on failure.
-    virtual KeyStoreNativeReturnCode
-    addRandomNumberGeneratorEntropy(const std::string& entropy) = 0;
+    virtual KeyStoreNativeReturnCode addRandomNumberGeneratorEntropy(const std::string& entropy,
+                                                                     int32_t flags) = 0;
 
     // Generates a key according to the given |key_parameters| and stores it with
     // the given |key_name|. The [hardware|software]_enforced_characteristics of
@@ -95,7 +95,7 @@ class KeystoreClient {
     // failure.
     virtual KeyStoreNativeReturnCode
     generateKey(const std::string& key_name, const keystore::AuthorizationSet& key_parameters,
-                keystore::AuthorizationSet* hardware_enforced_characteristics,
+                int32_t flags, keystore::AuthorizationSet* hardware_enforced_characteristics,
                 keystore::AuthorizationSet* software_enforced_characteristics) = 0;
 
     // Provides the [hardware|software]_enforced_characteristics of a key

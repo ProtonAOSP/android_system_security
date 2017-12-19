@@ -100,7 +100,7 @@ class KeyStoreService : public android::security::BnKeystoreService,
     ::android::binder::Status is_hardware_backed(const ::android::String16& string,
                                                  int32_t* _aidl_return) override;
     ::android::binder::Status clear_uid(int64_t uid, int32_t* _aidl_return) override;
-    ::android::binder::Status addRngEntropy(const ::std::vector<uint8_t>& data,
+    ::android::binder::Status addRngEntropy(const ::std::vector<uint8_t>& data, int32_t flags,
                                             int32_t* _aidl_return) override;
     ::android::binder::Status
     generateKey(const ::android::String16& alias,

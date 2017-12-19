@@ -40,7 +40,7 @@ class Keymaster : public keymaster::IKeymasterDevice {
     struct VersionResult {
         ErrorCode error;
         uint8_t majorVersion;
-        bool isSecure;
+        SecurityLevel securityLevel;
         bool supportsEc;
     };
 

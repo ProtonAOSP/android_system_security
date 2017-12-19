@@ -35,7 +35,7 @@ class KeystoreClientImpl : public KeystoreClient {
 
     // KeystoreClient methods.
     bool encryptWithAuthentication(const std::string& key_name, const std::string& data,
-                                   std::string* encrypted_data) override;
+                                   int32_t flags, std::string* encrypted_data) override;
     bool decryptWithAuthentication(const std::string& key_name, const std::string& encrypted_data,
                                    std::string* data) override;
     bool oneShotOperation(KeyPurpose purpose, const std::string& key_name,
@@ -43,10 +43,11 @@ class KeystoreClientImpl : public KeystoreClient {
                           const std::string& input_data, const std::string& signature_to_verify,
                           keystore::AuthorizationSet* output_parameters,
                           std::string* output_data) override;
-    KeyStoreNativeReturnCode addRandomNumberGeneratorEntropy(const std::string& entropy) override;
+    KeyStoreNativeReturnCode addRandomNumberGeneratorEntropy(const std::string& entropy,
+                                                             int32_t flags) override;
     KeyStoreNativeReturnCode
     generateKey(const std::string& key_name, const keystore::AuthorizationSet& key_parameters,
-                keystore::AuthorizationSet* hardware_enforced_characteristics,
+                int32_t flags, keystore::AuthorizationSet* hardware_enforced_characteristics,
                 keystore::AuthorizationSet* software_enforced_characteristics) override;
     KeyStoreNativeReturnCode
     getKeyCharacteristics(const std::string& key_name,
@@ -90,11 +91,11 @@ class KeystoreClientImpl : public KeystoreClient {
 
     // Creates an encryption key suitable for EncryptWithAuthentication or
     // verifies attributes if the key already exists. Returns true on success.
-    bool createOrVerifyEncryptionKey(const std::string& key_name);
+    bool createOrVerifyEncryptionKey(const std::string& key_name, int32_t flags);
 
     // Creates an authentication key suitable for EncryptWithAuthentication or
     // verifies attributes if the key already exists. Returns true on success.
-    bool createOrVerifyAuthenticationKey(const std::string& key_name);
+    bool createOrVerifyAuthenticationKey(const std::string& key_name, int32_t flags);
 
     // Verifies attributes of an encryption key suitable for
     // EncryptWithAuthentication. Returns true on success and populates |verified|
