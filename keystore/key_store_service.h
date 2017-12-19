@@ -21,7 +21,7 @@
 
 #include "auth_token_table.h"
 
-#include "keystore.h"
+#include "KeyStore.h"
 #include "keystore_keymaster_enforcement.h"
 #include "operation.h"
 #include "permissions.h"
