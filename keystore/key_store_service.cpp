@@ -1702,6 +1702,100 @@ Status KeyStoreService::onDeviceOffBody(int32_t* aidl_return) {
     return Status::ok();
 }
 
+#define AIDL_RETURN(rc)                                                                            \
+    (*_aidl_return = static_cast<int32_t>(KeyStoreServiceReturnCode(rc)), Status::ok())
+
+Status KeyStoreService::importWrappedKey(
+    const ::android::String16& wrappedKeyAlias, const ::std::vector<uint8_t>& wrappedKey,
+    const ::android::String16& wrappingKeyAlias, const ::std::vector<uint8_t>& maskingKey,
+    const KeymasterArguments& params, int64_t rootSid, int64_t fingerprintSid,
+    ::android::security::keymaster::KeyCharacteristics* outCharacteristics, int32_t* _aidl_return) {
+
+    uid_t callingUid = IPCThreadState::self()->getCallingUid();
+
+    if (!checkBinderPermission(P_INSERT, callingUid)) {
+        return AIDL_RETURN(ResponseCode::PERMISSION_DENIED);
+    }
+
+    Blob wrappingKeyBlob;
+    String8 wrappingKeyName8(wrappingKeyAlias);
+    KeyStoreServiceReturnCode rc =
+        mKeyStore->getKeyForName(&wrappingKeyBlob, wrappingKeyName8, callingUid, TYPE_KEYMASTER_10);
+    if (!rc.isOk()) {
+        return AIDL_RETURN(rc);
+    }
+
+    SecurityLevel securityLevel = wrappingKeyBlob.getSecurityLevel();
+    auto dev = mKeyStore->getDevice(securityLevel);
+    if (!dev) {
+        return AIDL_RETURN(ErrorCode::HARDWARE_TYPE_UNAVAILABLE);
+    }
+
+    auto hidlWrappingKey = blob2hidlVec(wrappingKeyBlob);
+    String8 wrappedKeyAlias8(wrappedKeyAlias);
+
+    KeyStoreServiceReturnCode error;
+
+    auto hidlCb = [&](ErrorCode ret, const ::std::vector<uint8_t>& keyBlob,
+                      const KeyCharacteristics& keyCharacteristics) {
+        error = ret;
+        if (!error.isOk()) {
+            return;
+        }
+        if (outCharacteristics) {
+            *outCharacteristics =
+                ::android::security::keymaster::KeyCharacteristics(keyCharacteristics);
+        }
+
+        // Write the key:
+        String8 filename(
+            mKeyStore->getKeyNameForUidWithDir(wrappedKeyAlias8, callingUid, ::TYPE_KEYMASTER_10));
+
+        Blob ksBlob(&keyBlob[0], keyBlob.size(), NULL, 0, ::TYPE_KEYMASTER_10);
+        ksBlob.setSecurityLevel(securityLevel);
+
+        if (containsTag(keyCharacteristics.hardwareEnforced, Tag::USER_SECURE_ID)) {
+            ksBlob.setSuperEncrypted(true);
+        }
+
+        error = mKeyStore->put(filename.string(), &ksBlob, get_user_id(callingUid));
+    };
+
+    // TODO b/70904859 sanitize params and forward to keymaster
+    // forward rootSid and fingerprintSid
+    (void)params;
+    (void)rootSid;
+    (void)fingerprintSid;
+    rc = KS_HANDLE_HIDL_ERROR(
+        dev->importWrappedKey(wrappedKey, hidlWrappingKey, maskingKey, hidlCb));
+    // possible hidl error
+    if (!rc.isOk()) {
+        return AIDL_RETURN(rc);
+    }
+    // now check error from callback
+    if (!error.isOk()) {
+        return AIDL_RETURN(error);
+    }
+
+    // Write the characteristics:
+    String8 cFilename(mKeyStore->getKeyNameForUidWithDir(wrappedKeyAlias8, callingUid,
+                                                         ::TYPE_KEY_CHARACTERISTICS));
+
+    AuthorizationSet opParams = params.getParameters();
+    std::stringstream kcStream;
+    opParams.Serialize(&kcStream);
+    if (kcStream.bad()) {
+        return AIDL_RETURN(ResponseCode::SYSTEM_ERROR);
+    }
+    auto kcBuf = kcStream.str();
+
+    Blob charBlob(reinterpret_cast<const uint8_t*>(kcBuf.data()), kcBuf.size(), NULL, 0,
+                  ::TYPE_KEY_CHARACTERISTICS);
+    charBlob.setSecurityLevel(securityLevel);
+
+    return AIDL_RETURN(mKeyStore->put(cFilename.string(), &charBlob, get_user_id(callingUid)));
+}
+
 /**
  * Prune the oldest pruneable operation.
  */

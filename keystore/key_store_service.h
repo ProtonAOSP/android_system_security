@@ -160,6 +160,12 @@ class KeyStoreService : public android::security::BnKeystoreService,
                     ::android::security::keymaster::KeymasterCertificateChain* chain,
                     int32_t* _aidl_return) override;
     ::android::binder::Status onDeviceOffBody(int32_t* _aidl_return) override;
+    ::android::binder::Status importWrappedKey(
+        const ::android::String16& wrappedKeyAlias, const ::std::vector<uint8_t>& wrappedKey,
+        const ::android::String16& wrappingKeyAlias, const ::std::vector<uint8_t>& maskingKey,
+        const ::android::security::keymaster::KeymasterArguments& params, int64_t rootSid,
+        int64_t fingerprintSid, ::android::security::keymaster::KeyCharacteristics* characteristics,
+        int32_t* _aidl_return) override;
 
   private:
     static const int32_t UID_SELF = -1;
