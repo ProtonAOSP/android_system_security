@@ -17,15 +17,7 @@
 #ifndef KEYSTORE_INCLUDE_KEYSTORE_KEYSTOREARG_H
 #define KEYSTORE_INCLUDE_KEYSTORE_KEYSTOREARG_H
 
-#include <vector>
-
-#include <binder/IInterface.h>
-#include <binder/Parcel.h>
-#include <keystore/keymaster_tags.h>
 #include <utils/RefBase.h>
-
-#include "keystore.h"
-#include "keystore_return_types.h"
 
 namespace android {
 namespace security {

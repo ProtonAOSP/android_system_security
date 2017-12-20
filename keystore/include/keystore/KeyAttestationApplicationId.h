@@ -15,10 +15,10 @@
 #ifndef KEYSTORE_INCLUDE_KEYSTORE_KEYATTESTATIONAPPLICATIONID_H_
 #define KEYSTORE_INCLUDE_KEYSTORE_KEYATTESTATIONAPPLICATIONID_H_
 
-#include "utils.h"
-#include <binder/Parcelable.h>
 #include <memory>
 #include <vector>
+
+#include <binder/Parcelable.h>
 
 #include "KeyAttestationPackageInfo.h"
 

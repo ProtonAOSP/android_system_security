@@ -16,7 +16,7 @@
 
 #define LOG_TAG "keystore"
 
-#include "keystore.h"
+#include "KeyStore.h"
 
 #include <dirent.h>
 #include <fcntl.h>

@@ -15,10 +15,11 @@
 #ifndef KEYSTORE_INCLUDE_KEYSTORE_OPERATIONRESULT_H_
 #define KEYSTORE_INCLUDE_KEYSTORE_OPERATIONRESULT_H_
 
-#include "KeymasterArguments.h"
-#include "keystore_return_types.h"
-#include <binder/Parcelable.h>
 #include <binder/Parcel.h>
+#include <binder/Parcelable.h>
+
+#include "keymaster_tags.h"
+#include "keystore_return_types.h"
 
 namespace android {
 namespace security {
