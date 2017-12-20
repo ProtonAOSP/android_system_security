@@ -51,6 +51,8 @@ using ::android::hidl::manager::V1_1::IServiceManager;
 using ::android::hardware::hidl_string;
 using ::android::hardware::hidl_vec;
 using ::android::hardware::keymaster::V4_0::SecurityLevel;
+using ::android::hardware::keymaster::V4_0::HmacSharingParameters;
+using ::android::hardware::keymaster::V4_0::ErrorCode;
 
 using keystore::Keymaster;
 using keystore::Keymaster3;
@@ -106,6 +108,52 @@ KeymasterDevices enumerateKeymasterDevices(IServiceManager* serviceManager) {
     return result;
 }
 
+void performHmacKeyHandshake(std::initializer_list<const sp<Keymaster>> keymasters) {
+    hidl_vec<HmacSharingParameters> hmacSharingParams(keymasters.size());
+    int index = 0;
+    for (const auto& km : keymasters) {
+        if (!km) continue;
+        ErrorCode ec = ErrorCode::OK;
+        auto rc =
+            km->getHmacSharingParameters([&](ErrorCode error, const HmacSharingParameters& params) {
+                ec = error;
+                if (error == ErrorCode::OK) hmacSharingParams[index] = params;
+            });
+        CHECK(rc.isOk()) << "Communication error while calling getHmacSharingParameters on"
+                            " Keymaster with index: "
+                         << index;
+        CHECK(ec == ErrorCode::OK) << "Failed to get HmacSharingParameters from"
+                                      " Keymaster with index: "
+                                   << index;
+        ++index;
+    }
+    hmacSharingParams.resize(index);
+    hidl_vec<uint8_t> sharingCheck;
+    index = 0;
+    for (const auto& km : keymasters) {
+        if (!km) continue;
+        ErrorCode ec = ErrorCode::OK;
+        auto rc = km->computeSharedHmac(
+            hmacSharingParams, [&](ErrorCode error, const hidl_vec<uint8_t>& sharingCheck_) {
+                ec = error;
+                if (error != ErrorCode::OK) return;
+                if (index == 0) {
+                    sharingCheck = sharingCheck_;
+                } else {
+                    CHECK(sharingCheck == sharingCheck_)
+                        << "Hmac Key computation failed (current index: " << index << ")";
+                }
+            });
+        CHECK(rc.isOk()) << "Communication error while calling computeSharedHmac on"
+                            " Keymaster with index: "
+                         << index;
+        CHECK(ec == ErrorCode::OK) << "Failed to compute shared hmac key from"
+                                      " Keymaster with index: "
+                                   << index;
+        ++index;
+    }
+}
+
 KeymasterDevices initializeKeymasters() {
     auto serviceManager = android::hidl::manager::V1_1::IServiceManager::getService();
     CHECK(serviceManager.get()) << "Failed to get ServiceManager";
@@ -113,7 +161,10 @@ KeymasterDevices initializeKeymasters() {
     CHECK(result[SecurityLevel::TRUSTED_ENVIRONMENT] || !result[SecurityLevel::STRONGBOX])
         << "We cannot have a Strongbox keymaster implementation without a TEE implementation";
     auto softKeymaster = result[SecurityLevel::SOFTWARE];
-    if (!result[SecurityLevel::TRUSTED_ENVIRONMENT]) {
+    if (result[SecurityLevel::TRUSTED_ENVIRONMENT]) {
+        performHmacKeyHandshake(
+            {result[SecurityLevel::TRUSTED_ENVIRONMENT], result[SecurityLevel::STRONGBOX]});
+    } else {
         result = enumerateKeymasterDevices<Keymaster3>(serviceManager.get());
     }
     if (softKeymaster) result[SecurityLevel::SOFTWARE] = softKeymaster;
