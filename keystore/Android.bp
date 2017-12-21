@@ -51,7 +51,6 @@ cc_binary {
         "libhwbinder",
         "libkeymaster_messages",
         "libkeymaster_portable",
-        "libkeymaster_staging",
         "libkeystore_aidl",
         "libkeystore_binder",
         "libkeystore_parcelables",
