@@ -1539,13 +1539,14 @@ Status KeyStoreService::attestKey(const String16& name, const KeymasterArguments
         return Status::ok();
     }
 
-    if (isDeviceIdAttestationRequested(params)) {
-        // There is a dedicated attestDeviceIds() method for device ID attestation.
+    uid_t callingUid = IPCThreadState::self()->getCallingUid();
+
+    if (isDeviceIdAttestationRequested(params) && (callingUid != AID_SYSTEM)) {
+        // Only the system context may request Device ID attestation combined with key attestation.
+        // Otherwise, There is a dedicated attestDeviceIds() method for device ID attestation.
         *aidl_return = static_cast<int32_t>(KeyStoreServiceReturnCode(ErrorCode::INVALID_ARGUMENT));
         return Status::ok();
     }
-
-    uid_t callingUid = IPCThreadState::self()->getCallingUid();
 
     AuthorizationSet mutableParams = params.getParameters();
     KeyStoreServiceReturnCode rc = updateParamsForAttestation(callingUid, &mutableParams);
