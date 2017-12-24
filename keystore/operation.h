@@ -17,13 +17,16 @@
 #ifndef KEYSTORE_OPERATION_H_
 #define KEYSTORE_OPERATION_H_
 
+#include <map>
+#include <vector>
+
 #include <binder/Binder.h>
 #include <binder/IBinder.h>
-#include <keystore/keymaster_tags.h>
-#include <map>
-#include <utils/LruCache.h>
 #include <utils/StrongPointer.h>
-#include <vector>
+
+#include <keystore/keymaster_tags.h>
+
+#include "Keymaster.h"
 
 namespace keystore {
 
@@ -38,28 +41,28 @@ using ::android::sp;
  */
 
 class OperationMap {
-    typedef sp<::android::hardware::keymaster::V3_0::IKeymasterDevice> km_device_t;
-
   public:
     struct Operation {
         Operation() = default;
-        Operation(uint64_t handle, uint64_t keyid, KeyPurpose purpose, const km_device_t& device,
+        Operation(uint64_t handle, uint64_t keyid, KeyPurpose purpose, const sp<Keymaster>& device,
                   KeyCharacteristics&& characteristics, sp<IBinder> appToken);
         Operation(Operation&&) = default;
         Operation(const Operation&) = delete;
 
+        bool hasAuthToken() const { return authToken.mac.size() == 0; }
+
         uint64_t handle;
         uint64_t keyid;
         KeyPurpose purpose;
-        km_device_t device;
+        sp<Keymaster> device;
         KeyCharacteristics characteristics;
         sp<IBinder> appToken;
-        std::unique_ptr<HardwareAuthToken> authToken;
+        HardwareAuthToken authToken;
     };
 
     explicit OperationMap(IBinder::DeathRecipient* deathRecipient);
     sp<IBinder> addOperation(uint64_t handle, uint64_t keyid, KeyPurpose purpose,
-                             const km_device_t& dev, const sp<IBinder>& appToken,
+                             const sp<Keymaster>& dev, const sp<IBinder>& appToken,
                              KeyCharacteristics&& characteristics, bool pruneable);
     NullOr<const Operation&> getOperation(const sp<IBinder>& token);
     NullOr<Operation> removeOperation(const sp<IBinder>& token);

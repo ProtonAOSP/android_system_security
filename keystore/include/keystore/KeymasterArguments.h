@@ -23,20 +23,18 @@ namespace android {
 namespace security {
 namespace keymaster {
 
-using hardware::keymaster::V3_0::KeyParameter;
-
-// struct for serializing/deserializing a list of KeyParameter's
+// struct for serializing/deserializing a list of KeyParameters
 struct KeymasterArguments : public Parcelable {
     KeymasterArguments(){};
-    explicit KeymasterArguments(const hardware::hidl_vec<KeyParameter>& other);
+    explicit KeymasterArguments(const hardware::hidl_vec<keystore::KeyParameter>& other);
 
     status_t readFromParcel(const Parcel* in) override;
     status_t writeToParcel(Parcel* out) const override;
 
-    const inline hardware::hidl_vec<KeyParameter>& getParameters() const { return data_; }
+    const inline hardware::hidl_vec<keystore::KeyParameter>& getParameters() const { return data_; }
 
   private:
-    hardware::hidl_vec<KeyParameter> data_;
+    hardware::hidl_vec<keystore::KeyParameter> data_;
 };
 
 }  // namespace keymaster

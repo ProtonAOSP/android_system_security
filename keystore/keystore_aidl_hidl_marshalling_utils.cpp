@@ -15,17 +15,15 @@
 ** limitations under the License.
 */
 
-#define LOG_TAG "KeystoreService"
-#include <utils/Log.h>
-
 #include "keystore_aidl_hidl_marshalling_utils.h"
-#include <keystore/keystore_hidl_support.h>
 
-#include "include/keystore/ExportResult.h"
-#include "include/keystore/KeyCharacteristics.h"
-#include "include/keystore/KeymasterBlob.h"
-#include "include/keystore/KeymasterCertificateChain.h"
-#include "include/keystore/KeystoreArg.h"
+#include <keystore/ExportResult.h>
+#include <keystore/KeyCharacteristics.h>
+#include <keystore/KeymasterBlob.h>
+#include <keystore/KeymasterCertificateChain.h>
+#include <keystore/KeystoreArg.h>
+#include <keystore/keymaster_types.h>
+#include <keystore/keystore_hidl_support.h>
 
 namespace keystore {
 
@@ -207,8 +205,8 @@ namespace android {
 namespace security {
 namespace keymaster {
 
-using ::android::hardware::keymaster::V3_0::ErrorCode;
 using ::android::status_t;
+using ::keystore::keymaster::ErrorCode;
 
 ExportResult::ExportResult() : resultCode() {}
 
@@ -228,12 +226,12 @@ status_t ExportResult::writeToParcel(Parcel* out) const {
 
 status_t KeyCharacteristics::readFromParcel(const Parcel* in) {
     softwareEnforced.readFromParcel(in);
-    return teeEnforced.readFromParcel(in);
+    return hardwareEnforced.readFromParcel(in);
 }
 
 status_t KeyCharacteristics::writeToParcel(Parcel* out) const {
     softwareEnforced.writeToParcel(out);
-    return teeEnforced.writeToParcel(out);
+    return hardwareEnforced.writeToParcel(out);
 }
 
 status_t KeymasterBlob::readFromParcel(const Parcel* in) {

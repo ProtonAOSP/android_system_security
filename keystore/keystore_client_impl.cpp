@@ -201,7 +201,7 @@ KeystoreClientImpl::generateKey(const std::string& key_name, const Authorization
     /* assignment (hidl_vec<KeyParameter> -> AuthorizationSet) makes a deep copy.
      * There are no references to Parcel memory after that, and ownership of the newly acquired
      * memory is with the AuthorizationSet objects. */
-    *hardware_enforced_characteristics = characteristics.teeEnforced.getParameters();
+    *hardware_enforced_characteristics = characteristics.hardwareEnforced.getParameters();
     *software_enforced_characteristics = characteristics.softwareEnforced.getParameters();
     return KeyStoreNativeReturnCode(result);
 }
@@ -220,7 +220,7 @@ KeystoreClientImpl::getKeyCharacteristics(const std::string& key_name,
     /* assignment (hidl_vec<KeyParameter> -> AuthorizationSet) makes a deep copy.
      * There are no references to Parcel memory after that, and ownership of the newly acquired
      * memory is with the AuthorizationSet objects. */
-    *hardware_enforced_characteristics = characteristics.teeEnforced.getParameters();
+    *hardware_enforced_characteristics = characteristics.hardwareEnforced.getParameters();
     *software_enforced_characteristics = characteristics.softwareEnforced.getParameters();
     return KeyStoreNativeReturnCode(result);
 }
@@ -240,7 +240,7 @@ KeystoreClientImpl::importKey(const std::string& key_name, const AuthorizationSe
     /* assignment (hidl_vec<KeyParameter> -> AuthorizationSet) makes a deep copy.
      * There are no references to Parcel memory after that, and ownership of the newly acquired
      * memory is with the AuthorizationSet objects. */
-    *hardware_enforced_characteristics = characteristics.teeEnforced.getParameters();
+    *hardware_enforced_characteristics = characteristics.hardwareEnforced.getParameters();
     *software_enforced_characteristics = characteristics.softwareEnforced.getParameters();
     return KeyStoreNativeReturnCode(result);
 }

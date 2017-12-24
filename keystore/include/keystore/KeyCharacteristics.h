@@ -18,25 +18,24 @@
 #include <binder/Parcelable.h>
 
 #include "KeymasterArguments.h"
+#include "keymaster_types.h"
 
 namespace android {
 namespace security {
 namespace keymaster {
 
-using hardware::keymaster::V3_0::KeyParameter;
-
-// Parcelable version of hardware::keymaster::V3_0::KeyCharacteristics
+// Parcelable version of keystore::KeyCharacteristics
 struct KeyCharacteristics : public ::android::Parcelable {
     KeyCharacteristics(){};
-    explicit KeyCharacteristics(const android::hardware::keymaster::V3_0::KeyCharacteristics& other) {
+    explicit KeyCharacteristics(const keystore::KeyCharacteristics& other) {
         softwareEnforced = KeymasterArguments(other.softwareEnforced);
-        teeEnforced = KeymasterArguments(other.teeEnforced);
+        hardwareEnforced = KeymasterArguments(other.hardwareEnforced);
     }
     status_t readFromParcel(const Parcel* in) override;
     status_t writeToParcel(Parcel* out) const override;
 
     KeymasterArguments softwareEnforced;
-    KeymasterArguments teeEnforced;
+    KeymasterArguments hardwareEnforced;
 };
 
 }  // namespace keymaster

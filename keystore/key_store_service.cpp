@@ -1172,16 +1172,12 @@ Status KeyStoreService::exportKey(const String16& name, int32_t format,
     return Status::ok();
 }
 
-static inline void addAuthTokenToParams(AuthorizationSet* params, const HardwareAuthToken* token) {
-    if (token) {
-        params->push_back(TAG_AUTH_TOKEN, authToken2HidlVec(*token));
-    }
-}
-
 Status KeyStoreService::begin(const sp<IBinder>& appToken, const String16& name, int32_t purpose,
                               bool pruneable, const KeymasterArguments& params,
                               const ::std::vector<uint8_t>& entropy, int32_t uid,
                               OperationResult* result) {
+    auto keyPurpose = static_cast<KeyPurpose>(purpose);
+
     uid_t callingUid = IPCThreadState::self()->getCallingUid();
     uid_t targetUid = getEffectiveUid(uid);
     if (!is_granted_to(callingUid, targetUid)) {
@@ -1198,15 +1194,14 @@ Status KeyStoreService::begin(const sp<IBinder>& appToken, const String16& name,
         result->resultCode = ErrorCode::INVALID_ARGUMENT;
         return Status::ok();
     }
+
     Blob keyBlob;
     String8 name8(name);
     result->resultCode = mKeyStore->getKeyForName(&keyBlob, name8, targetUid, TYPE_KEYMASTER_10);
     if (result->resultCode == ResponseCode::LOCKED && keyBlob.isSuperEncrypted()) {
         result->resultCode = ErrorCode::KEY_USER_NOT_AUTHENTICATED;
     }
-    if (!result->resultCode.isOk()) {
-        return Status::ok();
-    }
+    if (!result->resultCode.isOk()) return Status::ok();
 
     auto key = blob2hidlVec(keyBlob);
     auto& dev = mKeyStore->getDevice(keyBlob);
@@ -1226,8 +1221,6 @@ Status KeyStoreService::begin(const sp<IBinder>& appToken, const String16& name,
         return Status::ok();
     }
 
-    const HardwareAuthToken* authToken = NULL;
-
     // Merge these characteristics with the ones cached when the key was generated or imported
     Blob charBlob;
     AuthorizationSet persistedCharacteristics;
@@ -1245,13 +1238,17 @@ Status KeyStoreService::begin(const sp<IBinder>& appToken, const String16& name,
 
     // Replace the sw_enforced set with those persisted to disk, minus hw_enforced
     AuthorizationSet softwareEnforced = characteristics.softwareEnforced;
-    AuthorizationSet teeEnforced = characteristics.teeEnforced;
+    AuthorizationSet hardwareEnforced = characteristics.hardwareEnforced;
     persistedCharacteristics.Union(softwareEnforced);
-    persistedCharacteristics.Subtract(teeEnforced);
+    persistedCharacteristics.Subtract(hardwareEnforced);
     characteristics.softwareEnforced = persistedCharacteristics.hidl_data();
 
-    auto authResult = getAuthToken(characteristics, 0, KeyPurpose(purpose), &authToken,
-                                   /*failOnTokenMissing*/ false);
+    KeyStoreServiceReturnCode authResult;
+    HardwareAuthToken authToken;
+    std::tie(authResult, authToken) =
+        getAuthToken(characteristics, 0 /* no challenge */, keyPurpose,
+                     /*failOnTokenMissing*/ false);
+
     // If per-operation auth is needed we need to begin the operation and
     // the client will need to authorize that operation before calling
     // update. Any other auth issues stop here.
@@ -1259,8 +1256,6 @@ Status KeyStoreService::begin(const sp<IBinder>& appToken, const String16& name,
         result->resultCode = authResult;
         return Status::ok();
     }
-
-    addAuthTokenToParams(&opParams, authToken);
 
     // Add entropy to the device first.
     if (entropy.size()) {
@@ -1281,12 +1276,12 @@ Status KeyStoreService::begin(const sp<IBinder>& appToken, const String16& name,
     }
 
     // Check that all key authorization policy requirements are met.
-    AuthorizationSet key_auths = characteristics.teeEnforced;
-    key_auths.append(&characteristics.softwareEnforced[0],
-                     &characteristics.softwareEnforced[characteristics.softwareEnforced.size()]);
+    AuthorizationSet key_auths = characteristics.hardwareEnforced;
+    key_auths.append(characteristics.softwareEnforced.begin(),
+                     characteristics.softwareEnforced.end());
 
     result->resultCode =
-        enforcement_policy.AuthorizeOperation(KeyPurpose(purpose), keyid, key_auths, opParams,
+        enforcement_policy.AuthorizeOperation(keyPurpose, keyid, key_auths, opParams, authToken,
                                               0 /* op_handle */, true /* is_begin_operation */);
     if (!result->resultCode.isOk()) {
         return Status::ok();
@@ -1312,7 +1307,7 @@ Status KeyStoreService::begin(const sp<IBinder>& appToken, const String16& name,
     };
 
     ErrorCode rc =
-        KS_HANDLE_HIDL_ERROR(dev->begin(KeyPurpose(purpose), key, opParams.hidl_data(), hidlCb));
+        KS_HANDLE_HIDL_ERROR(dev->begin(keyPurpose, key, opParams.hidl_data(), authToken, hidlCb));
     if (rc != ErrorCode::OK) {
         ALOGW("Got error %d from begin()", rc);
     }
@@ -1325,7 +1320,7 @@ Status KeyStoreService::begin(const sp<IBinder>& appToken, const String16& name,
             break;
         }
         rc = KS_HANDLE_HIDL_ERROR(
-            dev->begin(KeyPurpose(purpose), key, opParams.hidl_data(), hidlCb));
+            dev->begin(keyPurpose, key, opParams.hidl_data(), authToken, hidlCb));
     }
     if (rc != ErrorCode::OK) {
         result->resultCode = rc;
@@ -1334,16 +1329,14 @@ Status KeyStoreService::begin(const sp<IBinder>& appToken, const String16& name,
 
     // Note: The operation map takes possession of the contents of "characteristics".
     // It is safe to use characteristics after the following line but it will be empty.
-    sp<IBinder> operationToken =
-        mOperationMap.addOperation(result->handle, keyid, KeyPurpose(purpose), dev, appToken,
-                                   std::move(characteristics), pruneable);
-    assert(characteristics.teeEnforced.size() == 0);
+    sp<IBinder> operationToken = mOperationMap.addOperation(
+        result->handle, keyid, keyPurpose, dev, appToken, std::move(characteristics), pruneable);
+    assert(characteristics.hardwareEnforced.size() == 0);
     assert(characteristics.softwareEnforced.size() == 0);
     result->token = operationToken;
 
-    if (authToken) {
-        mOperationMap.setOperationAuthToken(operationToken, *authToken);
-    }
+    mOperationMap.setOperationAuthToken(operationToken, std::move(authToken));
+
     // Return the authentication lookup result. If this is a per operation
     // auth'd key then the resultCode will be ::OP_AUTH_NEEDED and the
     // application should get an auth token using the handle before the
@@ -1371,17 +1364,18 @@ Status KeyStoreService::update(const sp<IBinder>& token, const KeymasterArgument
     }
     const auto& op = getOpResult.value();
 
-    AuthorizationSet opParams = params.getParameters();
-    result->resultCode = addOperationAuthTokenIfNeeded(token, &opParams);
+    HardwareAuthToken authToken;
+    std::tie(result->resultCode, authToken) = getOperationAuthTokenIfNeeded(token);
     if (!result->resultCode.isOk()) return Status::ok();
 
     // Check that all key authorization policy requirements are met.
-    AuthorizationSet key_auths(op.characteristics.teeEnforced);
+    AuthorizationSet key_auths(op.characteristics.hardwareEnforced);
     key_auths.append(op.characteristics.softwareEnforced.begin(),
                      op.characteristics.softwareEnforced.end());
 
     result->resultCode = enforcement_policy.AuthorizeOperation(
-        op.purpose, op.keyid, key_auths, opParams, op.handle, false /* is_begin_operation */);
+        op.purpose, op.keyid, key_auths, params.getParameters(), authToken, op.handle,
+        false /* is_begin_operation */);
     if (!result->resultCode.isOk()) return Status::ok();
 
     auto hidlCb = [&](ErrorCode ret, uint32_t inputConsumed,
@@ -1395,8 +1389,8 @@ Status KeyStoreService::update(const sp<IBinder>& token, const KeymasterArgument
         }
     };
 
-    KeyStoreServiceReturnCode rc =
-        KS_HANDLE_HIDL_ERROR(op.device->update(op.handle, opParams.hidl_data(), data, hidlCb));
+    KeyStoreServiceReturnCode rc = KS_HANDLE_HIDL_ERROR(op.device->update(
+        op.handle, params.getParameters(), data, authToken, VerificationToken(), hidlCb));
 
     // just a reminder: on success result->resultCode was set in the callback. So we only overwrite
     // it if there was a communication error indicated by the ErrorCode.
@@ -1419,8 +1413,8 @@ Status KeyStoreService::finish(const sp<IBinder>& token, const KeymasterArgument
         return Status::ok();
     }
 
-    AuthorizationSet opParams = params.getParameters();
-    result->resultCode = addOperationAuthTokenIfNeeded(token, &opParams);
+    HardwareAuthToken authToken;
+    std::tie(result->resultCode, authToken) = getOperationAuthTokenIfNeeded(token);
     if (!result->resultCode.isOk()) return Status::ok();
 
     if (entropy.size()) {
@@ -1433,12 +1427,13 @@ Status KeyStoreService::finish(const sp<IBinder>& token, const KeymasterArgument
     }
 
     // Check that all key authorization policy requirements are met.
-    AuthorizationSet key_auths(op.characteristics.teeEnforced);
+    AuthorizationSet key_auths(op.characteristics.hardwareEnforced);
     key_auths.append(op.characteristics.softwareEnforced.begin(),
                      op.characteristics.softwareEnforced.end());
 
     result->resultCode = enforcement_policy.AuthorizeOperation(
-        op.purpose, op.keyid, key_auths, opParams, op.handle, false /* is_begin_operation */);
+        op.purpose, op.keyid, key_auths, params.getParameters(), authToken, op.handle,
+        false /* is_begin_operation */);
     if (!result->resultCode.isOk()) return Status::ok();
 
     auto hidlCb = [&](ErrorCode ret, const hidl_vec<KeyParameter>& outParams,
@@ -1451,9 +1446,9 @@ Status KeyStoreService::finish(const sp<IBinder>& token, const KeymasterArgument
     };
 
     KeyStoreServiceReturnCode rc = KS_HANDLE_HIDL_ERROR(
-        op.device->finish(op.handle, opParams.hidl_data(),
+        op.device->finish(op.handle, params.getParameters(),
                           ::std::vector<uint8_t>() /* TODO(swillden): wire up input to finish() */,
-                          signature, hidlCb));
+                          signature, authToken, VerificationToken(), hidlCb));
     mOperationMap.removeOperation(token);
     mAuthTokenTable.MarkCompleted(op.handle);
 
@@ -1481,8 +1476,9 @@ Status KeyStoreService::abort(const sp<IBinder>& token, int32_t* aidl_return) {
 
 Status KeyStoreService::isOperationAuthorized(const sp<IBinder>& token, bool* aidl_return) {
     AuthorizationSet ignored;
-    auto authResult = addOperationAuthTokenIfNeeded(token, &ignored);
-    *aidl_return = authResult.isOk();
+    KeyStoreServiceReturnCode rc;
+    std::tie(rc, std::ignore) = getOperationAuthTokenIfNeeded(token);
+    *aidl_return = rc.isOk();
     return Status::ok();
 }
 
@@ -1509,19 +1505,7 @@ Status KeyStoreService::addAuthToken(const ::std::vector<uint8_t>& authTokenAsVe
         return Status::ok();
     }
 
-    std::unique_ptr<HardwareAuthToken> hidlAuthToken(new HardwareAuthToken);
-    hidlAuthToken->challenge = authToken.challenge;
-    hidlAuthToken->userId = authToken.user_id;
-    hidlAuthToken->authenticatorId = authToken.authenticator_id;
-    hidlAuthToken->authenticatorType = authToken.authenticator_type;
-    hidlAuthToken->timestamp = authToken.timestamp;
-    static_assert(
-        std::is_same<decltype(hidlAuthToken->hmac),
-                     ::android::hardware::hidl_array<uint8_t, sizeof(authToken.hmac)>>::value,
-        "This function assumes token HMAC is 32 bytes, but it might not be.");
-    std::copy(authToken.hmac, authToken.hmac + sizeof(authToken.hmac), hidlAuthToken->hmac.data());
-
-    mAuthTokenTable.AddAuthenticationToken(std::move(hidlAuthToken));
+    mAuthTokenTable.AddAuthenticationToken(hidlVec2AuthToken(hidl_vec<uint8_t>(authTokenAsVector)));
     *aidl_return = static_cast<int32_t>(ResponseCode::NO_ERROR);
     return Status::ok();
 }
@@ -1814,14 +1798,13 @@ bool KeyStoreService::isKeystoreUnlocked(State state) {
 }
 
 /**
- * Check that all KeyParameter's provided by the application are
- * allowed. Any parameter that keystore adds itself should be disallowed here.
+ * Check that all KeyParameters provided by the application are allowed. Any parameter that keystore
+ * adds itself should be disallowed here.
  */
 bool KeyStoreService::checkAllowedOperationParams(const hidl_vec<KeyParameter>& params) {
     for (size_t i = 0; i < params.size(); ++i) {
         switch (params[i].tag) {
         case Tag::ATTESTATION_APPLICATION_ID:
-        case Tag::AUTH_TOKEN:
         case Tag::RESET_SINCE_ID_ROTATION:
             return false;
         default:
@@ -1832,7 +1815,7 @@ bool KeyStoreService::checkAllowedOperationParams(const hidl_vec<KeyParameter>& 
 }
 
 ErrorCode KeyStoreService::getOperationCharacteristics(const hidl_vec<uint8_t>& key,
-                                                       km_device_t* dev,
+                                                       sp<Keymaster>* dev,
                                                        const AuthorizationSet& params,
                                                        KeyCharacteristics* out) {
     ::std::vector<uint8_t> appId;
@@ -1871,36 +1854,44 @@ ErrorCode KeyStoreService::getOperationCharacteristics(const hidl_vec<uint8_t>& 
  *         KM_ERROR_KEY_USER_NOT_AUTHENTICATED if there is no valid auth
  *         token for the operation
  */
-KeyStoreServiceReturnCode KeyStoreService::getAuthToken(const KeyCharacteristics& characteristics,
-                                                        uint64_t handle, KeyPurpose purpose,
-                                                        const HardwareAuthToken** authToken,
-                                                        bool failOnTokenMissing) {
+std::pair<KeyStoreServiceReturnCode, HardwareAuthToken>
+KeyStoreService::getAuthToken(const KeyCharacteristics& characteristics, uint64_t handle,
+                              KeyPurpose purpose, bool failOnTokenMissing) {
 
-    AuthorizationSet allCharacteristics;
-    for (size_t i = 0; i < characteristics.softwareEnforced.size(); i++) {
-        allCharacteristics.push_back(characteristics.softwareEnforced[i]);
-    }
-    for (size_t i = 0; i < characteristics.teeEnforced.size(); i++) {
-        allCharacteristics.push_back(characteristics.teeEnforced[i]);
-    }
+    AuthorizationSet allCharacteristics(characteristics.softwareEnforced);
+    allCharacteristics.append(characteristics.hardwareEnforced.begin(),
+                              characteristics.hardwareEnforced.end());
+
+    const HardwareAuthToken* authToken = nullptr;
     AuthTokenTable::Error err = mAuthTokenTable.FindAuthorization(
-        allCharacteristics, KeyPurpose(purpose), handle, authToken);
+        allCharacteristics, static_cast<KeyPurpose>(purpose), handle, &authToken);
+
+    KeyStoreServiceReturnCode rc;
+
     switch (err) {
     case AuthTokenTable::OK:
     case AuthTokenTable::AUTH_NOT_REQUIRED:
-        return ResponseCode::NO_ERROR;
+        rc = ResponseCode::NO_ERROR;
+        break;
+
     case AuthTokenTable::AUTH_TOKEN_NOT_FOUND:
     case AuthTokenTable::AUTH_TOKEN_EXPIRED:
     case AuthTokenTable::AUTH_TOKEN_WRONG_SID:
         ALOGE("getAuthToken failed: %d", err);  // STOPSHIP: debug only, to be removed
-        return ErrorCode::KEY_USER_NOT_AUTHENTICATED;
+        rc = ErrorCode::KEY_USER_NOT_AUTHENTICATED;
+        break;
+
     case AuthTokenTable::OP_HANDLE_REQUIRED:
-        return failOnTokenMissing ? KeyStoreServiceReturnCode(ErrorCode::KEY_USER_NOT_AUTHENTICATED)
-                                  : KeyStoreServiceReturnCode(ResponseCode::OP_AUTH_NEEDED);
+        rc = failOnTokenMissing ? KeyStoreServiceReturnCode(ErrorCode::KEY_USER_NOT_AUTHENTICATED)
+                                : KeyStoreServiceReturnCode(ResponseCode::OP_AUTH_NEEDED);
+        break;
+
     default:
         ALOGE("Unexpected FindAuthorization return value %d", err);
-        return ErrorCode::INVALID_ARGUMENT;
+        rc = ErrorCode::INVALID_ARGUMENT;
     }
+
+    return {rc, authToken ? std::move(*authToken) : HardwareAuthToken()};
 }
 
 /**
@@ -1914,21 +1905,23 @@ KeyStoreServiceReturnCode KeyStoreService::getAuthToken(const KeyCharacteristics
  *         KM_ERROR_INVALID_OPERATION_HANDLE if token is not a valid
  *         operation token.
  */
-KeyStoreServiceReturnCode KeyStoreService::addOperationAuthTokenIfNeeded(const sp<IBinder>& token,
-                                                                         AuthorizationSet* params) {
+std::pair<KeyStoreServiceReturnCode, const HardwareAuthToken&>
+KeyStoreService::getOperationAuthTokenIfNeeded(const sp<IBinder>& token) {
+    static HardwareAuthToken emptyToken = {};
+
     auto getOpResult = mOperationMap.getOperation(token);
-    if (!getOpResult.isOk()) return ErrorCode::INVALID_OPERATION_HANDLE;
+    if (!getOpResult.isOk()) return {ErrorCode::INVALID_OPERATION_HANDLE, emptyToken};
     const auto& op = getOpResult.value();
 
-    if (!op.authToken) {
-        const HardwareAuthToken* found = nullptr;
-        auto result = getAuthToken(op.characteristics, op.handle, op.purpose, &found);
-        if (!result.isOk()) return result;
-        if (found) mOperationMap.setOperationAuthToken(token, *found);
-        assert(*op.authToken == *found);
+    if (!op.hasAuthToken()) {
+        KeyStoreServiceReturnCode rc;
+        HardwareAuthToken found;
+        std::tie(rc, found) = getAuthToken(op.characteristics, op.handle, op.purpose);
+        if (!rc.isOk()) return {rc, emptyToken};
+        mOperationMap.setOperationAuthToken(token, std::move(found));
     }
-    addAuthTokenToParams(params, op.authToken.get());
-    return ResponseCode::NO_ERROR;
+
+    return {ResponseCode::NO_ERROR, op.authToken};
 }
 
 /**
@@ -1936,23 +1929,19 @@ KeyStoreServiceReturnCode KeyStoreService::addOperationAuthTokenIfNeeded(const s
  * preserved and keymaster errors become SYSTEM_ERRORs
  */
 KeyStoreServiceReturnCode KeyStoreService::translateResultToLegacyResult(int32_t result) {
-    if (result > 0) {
-        return static_cast<ResponseCode>(result);
-    }
+    if (result > 0) return static_cast<ResponseCode>(result);
     return ResponseCode::SYSTEM_ERROR;
 }
 
 static NullOr<const Algorithm&> getKeyAlgoritmFromKeyCharacteristics(
     const ::android::security::keymaster::KeyCharacteristics& characteristics) {
-    for (size_t i = 0; i < characteristics.teeEnforced.getParameters().size(); ++i) {
-        auto algo =
-            authorizationValue(TAG_ALGORITHM, characteristics.teeEnforced.getParameters()[i]);
-        if (algo.isOk()) return algo.value();
+    for (const auto& param : characteristics.hardwareEnforced.getParameters()) {
+        auto algo = authorizationValue(TAG_ALGORITHM, param);
+        if (algo.isOk()) return algo;
     }
-    for (size_t i = 0; i < characteristics.softwareEnforced.getParameters().size(); ++i) {
-        auto algo =
-            authorizationValue(TAG_ALGORITHM, characteristics.softwareEnforced.getParameters()[i]);
-        if (algo.isOk()) return algo.value();
+    for (const auto& param : characteristics.softwareEnforced.getParameters()) {
+        auto algo = authorizationValue(TAG_ALGORITHM, param);
+        if (algo.isOk()) return algo;
     }
     return {};
 }

@@ -78,7 +78,6 @@ void add_legacy_key_authorizations(int keyType, keystore::AuthorizationSet* para
     params->push_back(TAG_DIGEST, Digest::SHA_2_256);
     params->push_back(TAG_DIGEST, Digest::SHA_2_384);
     params->push_back(TAG_DIGEST, Digest::SHA_2_512);
-    params->push_back(TAG_ALL_USERS);
     params->push_back(TAG_NO_AUTH_REQUIRED);
     params->push_back(TAG_ORIGINATION_EXPIRE_DATETIME, LLONG_MAX);
     params->push_back(TAG_USAGE_EXPIRE_DATETIME, LLONG_MAX);

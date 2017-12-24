@@ -35,10 +35,9 @@ namespace keystore {
 // binder::Status. Input parameters cannot be null unless annotated with @nullable in .aidl file.
 class KeyStoreService : public android::security::BnKeystoreService,
                         android::IBinder::DeathRecipient {
-    typedef ::android::sp<::android::hardware::keymaster::V3_0::IKeymasterDevice> km_device_t;
-
   public:
     explicit KeyStoreService(KeyStore* keyStore) : mKeyStore(keyStore), mOperationMap(this) {}
+    virtual ~KeyStoreService() = default;
 
     void binderDied(const android::wp<android::IBinder>& who);
 
@@ -217,37 +216,34 @@ class KeyStoreService : public android::security::BnKeystoreService,
      */
     bool checkAllowedOperationParams(const hidl_vec<KeyParameter>& params);
 
-    ErrorCode getOperationCharacteristics(const hidl_vec<uint8_t>& key, km_device_t* dev,
+    ErrorCode getOperationCharacteristics(const hidl_vec<uint8_t>& key, sp<Keymaster>* dev,
                                           const AuthorizationSet& params, KeyCharacteristics* out);
 
     /**
      * Get the auth token for this operation from the auth token table.
      *
-     * Returns ::NO_ERROR if the auth token was set or none was required.
-     *         ::OP_AUTH_NEEDED if it is a per op authorization, no
-     *         authorization token exists for that operation and
-     *         failOnTokenMissing is false.
-     *         KM_ERROR_KEY_USER_NOT_AUTHENTICATED if there is no valid auth
-     *         token for the operation
+     * Returns NO_ERROR if the auth token was found or none was required.  If not needed, the
+     *             token will be empty (which keymaster interprets as no auth token).
+     *         OP_AUTH_NEEDED if it is a per op authorization, no authorization token exists for
+     *             that operation and  failOnTokenMissing is false.
+     *         KM_ERROR_KEY_USER_NOT_AUTHENTICATED if there is no valid auth token for the operation
      */
-    KeyStoreServiceReturnCode getAuthToken(const KeyCharacteristics& characteristics,
-                                           uint64_t handle, KeyPurpose purpose,
-                                           const HardwareAuthToken** authToken,
-                                           bool failOnTokenMissing = true);
+    std::pair<KeyStoreServiceReturnCode, HardwareAuthToken>
+    getAuthToken(const KeyCharacteristics& characteristics, uint64_t handle, KeyPurpose purpose,
+                 bool failOnTokenMissing = true);
 
     /**
-     * Add the auth token for the operation to the param list if the operation
-     * requires authorization. Uses the cached result in the OperationMap if available
-     * otherwise gets the token from the AuthTokenTable and caches the result.
+     * Get the auth token for the operation if the operation requires authorization. Uses the cached
+     * result in the OperationMap if available otherwise gets the token from the AuthTokenTable and
+     * caches the result.
      *
-     * Returns ::NO_ERROR if the auth token was added or not needed.
-     *         KM_ERROR_KEY_USER_NOT_AUTHENTICATED if the operation is not
-     *         authenticated.
-     *         KM_ERROR_INVALID_OPERATION_HANDLE if token is not a valid
-     *         operation token.
+     * Returns NO_ERROR if the auth token was found or not needed.  If not needed, the token will
+     *             be empty (which keymaster interprets as no auth token).
+     *         KM_ERROR_KEY_USER_NOT_AUTHENTICATED if the operation is not authenticated.
+     *         KM_ERROR_INVALID_OPERATION_HANDLE if token is not a valid operation token.
      */
-    KeyStoreServiceReturnCode addOperationAuthTokenIfNeeded(const sp<android::IBinder>& token,
-                                                            AuthorizationSet* params);
+    std::pair<KeyStoreServiceReturnCode, const HardwareAuthToken&>
+    getOperationAuthTokenIfNeeded(const sp<android::IBinder>& token);
 
     /**
      * Translate a result value to a legacy return value. All keystore errors are
@@ -274,7 +270,7 @@ class KeyStoreService : public android::security::BnKeystoreService,
     KeyStoreServiceReturnCode upgradeKeyBlob(const android::String16& name, uid_t targetUid,
                                              const AuthorizationSet& params, Blob* blob);
 
-    ::KeyStore* mKeyStore;
+    KeyStore* mKeyStore;
     OperationMap mOperationMap;
     keystore::AuthTokenTable mAuthTokenTable;
     KeystoreKeymasterEnforcement enforcement_policy;

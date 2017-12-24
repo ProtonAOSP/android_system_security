@@ -18,12 +18,12 @@
 #ifndef KEYSTORE_INCLUDE_KEYSTORE_KEYSTORE_RETURN_TYPES_H_
 #define KEYSTORE_INCLUDE_KEYSTORE_KEYSTORE_RETURN_TYPES_H_
 
+#include "keymaster_types.h"
 #include "keystore.h"
-#include <android/hardware/keymaster/3.0/IHwKeymasterDevice.h>
 
 namespace keystore {
 
-using ::android::hardware::keymaster::V3_0::ErrorCode;
+using keymaster::ErrorCode;
 
 class KeyStoreServiceReturnCode;
 class KeyStoreNativeReturnCode;

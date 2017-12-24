@@ -62,26 +62,36 @@
 #include <android/hardware/keymaster/3.0/IHwKeymasterDevice.h>
 #include <type_traits>
 
+#include "keymaster_types.h"
+
 namespace keystore {
 
-using ::android::hardware::keymaster::V3_0::Algorithm;
-using ::android::hardware::keymaster::V3_0::BlockMode;
-using ::android::hardware::keymaster::V3_0::Digest;
-using ::android::hardware::keymaster::V3_0::EcCurve;
-using ::android::hardware::keymaster::V3_0::ErrorCode;
-using ::android::hardware::keymaster::V3_0::HardwareAuthToken;
-using ::android::hardware::keymaster::V3_0::HardwareAuthenticatorType;
-using ::android::hardware::keymaster::V3_0::IKeymasterDevice;
-using ::android::hardware::keymaster::V3_0::KeyBlobUsageRequirements;
-using ::android::hardware::keymaster::V3_0::KeyCharacteristics;
-using ::android::hardware::keymaster::V3_0::KeyDerivationFunction;
-using ::android::hardware::keymaster::V3_0::KeyFormat;
-using ::android::hardware::keymaster::V3_0::KeyOrigin;
-using ::android::hardware::keymaster::V3_0::KeyParameter;
-using ::android::hardware::keymaster::V3_0::KeyPurpose;
-using ::android::hardware::keymaster::V3_0::PaddingMode;
-using ::android::hardware::keymaster::V3_0::Tag;
-using ::android::hardware::keymaster::V3_0::TagType;
+// This namespace alias is temporary.  This file will be removed in favor of the KM4 support
+// library version.
+namespace oldkeymaster = android::hardware::keymaster::V3_0;
+
+using keymaster::ErrorCode;
+using keymaster::HardwareAuthToken;
+using keymaster::HmacSharingParameters;
+using keymaster::IKeymasterDevice;
+using keymaster::KeyCharacteristics;
+using keymaster::KeyOrigin;
+using keymaster::KeyParameter;
+using keymaster::KeyPurpose;
+using keymaster::OperationHandle;
+using keymaster::SecurityLevel;
+using keymaster::Tag;
+using keymaster::VerificationToken;
+using oldkeymaster::Algorithm;
+using oldkeymaster::BlockMode;
+using oldkeymaster::Digest;
+using oldkeymaster::EcCurve;
+using oldkeymaster::HardwareAuthenticatorType;
+using oldkeymaster::KeyBlobUsageRequirements;
+using oldkeymaster::KeyDerivationFunction;
+using oldkeymaster::KeyFormat;
+using oldkeymaster::PaddingMode;
+using oldkeymaster::TagType;
 
 using ::android::hardware::hidl_vec;
 using ::android::hardware::Return;
@@ -131,28 +141,23 @@ DECLARE_TYPED_TAG(MAC_LENGTH);
 DECLARE_TYPED_TAG(CALLER_NONCE);
 DECLARE_TYPED_TAG(MIN_MAC_LENGTH);
 DECLARE_TYPED_TAG(RSA_PUBLIC_EXPONENT);
-DECLARE_TYPED_TAG(ECIES_SINGLE_HASH_MODE);
 DECLARE_TYPED_TAG(INCLUDE_UNIQUE_ID);
 DECLARE_TYPED_TAG(ACTIVE_DATETIME);
 DECLARE_TYPED_TAG(ORIGINATION_EXPIRE_DATETIME);
 DECLARE_TYPED_TAG(USAGE_EXPIRE_DATETIME);
 DECLARE_TYPED_TAG(MIN_SECONDS_BETWEEN_OPS);
 DECLARE_TYPED_TAG(MAX_USES_PER_BOOT);
-DECLARE_TYPED_TAG(ALL_USERS);
-DECLARE_TYPED_TAG(USER_ID);
 DECLARE_TYPED_TAG(USER_SECURE_ID);
 DECLARE_TYPED_TAG(NO_AUTH_REQUIRED);
 DECLARE_TYPED_TAG(AUTH_TIMEOUT);
 DECLARE_TYPED_TAG(ALLOW_WHILE_ON_BODY);
-DECLARE_TYPED_TAG(ALL_APPLICATIONS);
 DECLARE_TYPED_TAG(APPLICATION_ID);
 DECLARE_TYPED_TAG(APPLICATION_DATA);
 DECLARE_TYPED_TAG(CREATION_DATETIME);
-DECLARE_TYPED_TAG(ROLLBACK_RESISTANT);
+DECLARE_TYPED_TAG(ROLLBACK_RESISTANCE);
 DECLARE_TYPED_TAG(ROOT_OF_TRUST);
 DECLARE_TYPED_TAG(ASSOCIATED_DATA);
 DECLARE_TYPED_TAG(NONCE);
-DECLARE_TYPED_TAG(AUTH_TOKEN);
 DECLARE_TYPED_TAG(BOOTLOADER_ONLY);
 DECLARE_TYPED_TAG(OS_VERSION);
 DECLARE_TYPED_TAG(OS_PATCHLEVEL);
@@ -169,23 +174,21 @@ DECLARE_TYPED_TAG(PADDING);
 DECLARE_TYPED_TAG(BLOB_USAGE_REQUIREMENTS);
 DECLARE_TYPED_TAG(ORIGIN);
 DECLARE_TYPED_TAG(USER_AUTH_TYPE);
-DECLARE_TYPED_TAG(KDF);
 DECLARE_TYPED_TAG(EC_CURVE);
 
 template <typename... Elems> struct MetaList {};
 
 using all_tags_t = MetaList<
     TAG_INVALID_t, TAG_KEY_SIZE_t, TAG_MAC_LENGTH_t, TAG_CALLER_NONCE_t, TAG_MIN_MAC_LENGTH_t,
-    TAG_RSA_PUBLIC_EXPONENT_t, TAG_ECIES_SINGLE_HASH_MODE_t, TAG_INCLUDE_UNIQUE_ID_t,
-    TAG_ACTIVE_DATETIME_t, TAG_ORIGINATION_EXPIRE_DATETIME_t, TAG_USAGE_EXPIRE_DATETIME_t,
-    TAG_MIN_SECONDS_BETWEEN_OPS_t, TAG_MAX_USES_PER_BOOT_t, TAG_ALL_USERS_t, TAG_USER_ID_t,
-    TAG_USER_SECURE_ID_t, TAG_NO_AUTH_REQUIRED_t, TAG_AUTH_TIMEOUT_t, TAG_ALLOW_WHILE_ON_BODY_t,
-    TAG_ALL_APPLICATIONS_t, TAG_APPLICATION_ID_t, TAG_APPLICATION_DATA_t, TAG_CREATION_DATETIME_t,
-    TAG_ROLLBACK_RESISTANT_t, TAG_ROOT_OF_TRUST_t, TAG_ASSOCIATED_DATA_t, TAG_NONCE_t,
-    TAG_AUTH_TOKEN_t, TAG_BOOTLOADER_ONLY_t, TAG_OS_VERSION_t, TAG_OS_PATCHLEVEL_t, TAG_UNIQUE_ID_t,
+    TAG_RSA_PUBLIC_EXPONENT_t, TAG_INCLUDE_UNIQUE_ID_t, TAG_ACTIVE_DATETIME_t,
+    TAG_ORIGINATION_EXPIRE_DATETIME_t, TAG_USAGE_EXPIRE_DATETIME_t, TAG_MIN_SECONDS_BETWEEN_OPS_t,
+    TAG_MAX_USES_PER_BOOT_t, TAG_USER_SECURE_ID_t, TAG_NO_AUTH_REQUIRED_t, TAG_AUTH_TIMEOUT_t,
+    TAG_ALLOW_WHILE_ON_BODY_t, TAG_APPLICATION_ID_t, TAG_APPLICATION_DATA_t,
+    TAG_CREATION_DATETIME_t, TAG_ROLLBACK_RESISTANCE_t, TAG_ROOT_OF_TRUST_t, TAG_ASSOCIATED_DATA_t,
+    TAG_NONCE_t, TAG_BOOTLOADER_ONLY_t, TAG_OS_VERSION_t, TAG_OS_PATCHLEVEL_t, TAG_UNIQUE_ID_t,
     TAG_ATTESTATION_CHALLENGE_t, TAG_ATTESTATION_APPLICATION_ID_t, TAG_RESET_SINCE_ID_ROTATION_t,
     TAG_PURPOSE_t, TAG_ALGORITHM_t, TAG_BLOCK_MODE_t, TAG_DIGEST_t, TAG_PADDING_t,
-    TAG_BLOB_USAGE_REQUIREMENTS_t, TAG_ORIGIN_t, TAG_USER_AUTH_TYPE_t, TAG_KDF_t, TAG_EC_CURVE_t>;
+    TAG_BLOB_USAGE_REQUIREMENTS_t, TAG_ORIGIN_t, TAG_USER_AUTH_TYPE_t, TAG_EC_CURVE_t>;
 
 /* implementation in keystore_utils.cpp */
 extern const char* stringifyTag(Tag tag);
@@ -234,7 +237,6 @@ MAKE_TAG_ENUM_VALUE_ACCESSOR(TAG_BLOB_USAGE_REQUIREMENTS, f.keyBlobUsageRequirem
 MAKE_TAG_ENUM_VALUE_ACCESSOR(TAG_BLOCK_MODE, f.blockMode)
 MAKE_TAG_ENUM_VALUE_ACCESSOR(TAG_DIGEST, f.digest)
 MAKE_TAG_ENUM_VALUE_ACCESSOR(TAG_EC_CURVE, f.ecCurve)
-MAKE_TAG_ENUM_VALUE_ACCESSOR(TAG_KDF, f.keyDerivationFunction)
 MAKE_TAG_ENUM_VALUE_ACCESSOR(TAG_ORIGIN, f.origin)
 MAKE_TAG_ENUM_VALUE_ACCESSOR(TAG_PADDING, f.paddingMode)
 MAKE_TAG_ENUM_VALUE_ACCESSOR(TAG_PURPOSE, f.purpose)
@@ -345,6 +347,6 @@ authorizationValue(TypedTag<tag_type, tag> ttag, const KeyParameter& param) {
     return accessTagValue(ttag, param);
 }
 
-}  // namespace keymaster
+}  // namespace keystore
 
 #endif  // SYSTEM_SECURITY_KEYSTORE_KEYMASTER_TAGS_H_

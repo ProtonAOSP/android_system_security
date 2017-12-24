@@ -25,8 +25,7 @@ OperationMap::OperationMap(IBinder::DeathRecipient* deathRecipient)
     : mDeathRecipient(deathRecipient) {}
 
 sp<IBinder> OperationMap::addOperation(uint64_t handle, uint64_t keyid, KeyPurpose purpose,
-                                       const OperationMap::km_device_t& dev,
-                                       const sp<IBinder>& appToken,
+                                       const sp<Keymaster>& dev, const sp<IBinder>& appToken,
                                        KeyCharacteristics&& characteristics, bool pruneable) {
     sp<IBinder> token = new ::android::BBinder();
     mMap.emplace(token,
@@ -100,7 +99,7 @@ bool OperationMap::setOperationAuthToken(const sp<IBinder>& token, HardwareAuthT
     auto entry = mMap.find(token);
     if (entry == mMap.end()) return false;
 
-    entry->second.authToken = std::make_unique<HardwareAuthToken>(std::move(authToken));
+    entry->second.authToken = std::move(authToken);
     return true;
 }
 
@@ -111,7 +110,7 @@ std::vector<sp<IBinder>> OperationMap::getOperationsForToken(const sp<IBinder>& 
 }
 
 OperationMap::Operation::Operation(uint64_t handle_, uint64_t keyid_, KeyPurpose purpose_,
-                                   const OperationMap::km_device_t& device_,
+                                   const sp<Keymaster>& device_,
                                    KeyCharacteristics&& characteristics_, sp<IBinder> appToken_)
     : handle(handle_), keyid(keyid_), purpose(purpose_), device(device_),
       characteristics(characteristics_), appToken(appToken_) {}
