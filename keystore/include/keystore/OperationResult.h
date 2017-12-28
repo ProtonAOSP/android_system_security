@@ -18,7 +18,7 @@
 #include <binder/Parcel.h>
 #include <binder/Parcelable.h>
 
-#include "keymaster_tags.h"
+#include "keymaster_types.h"
 #include "keystore_return_types.h"
 
 namespace android {

@@ -785,10 +785,15 @@ Status KeyStoreService::clear_uid(int64_t targetUid64, int32_t* aidl_return) {
     return Status::ok();
 }
 
-Status KeyStoreService::addRngEntropy(const ::std::vector<uint8_t>& entropy, int32_t* aidl_return) {
-    const auto& device = mKeyStore->getDevice();
-    *aidl_return = static_cast<int32_t>(
-        KeyStoreServiceReturnCode(KS_HANDLE_HIDL_ERROR(device->addRngEntropy(entropy))));
+Status KeyStoreService::addRngEntropy(const ::std::vector<uint8_t>& entropy, int32_t flags,
+                                      int32_t* aidl_return) {
+    auto device = mKeyStore->getDevice(flagsToSecurityLevel(flags));
+    if (!device) {
+        *aidl_return = static_cast<int32_t>(ErrorCode::HARDWARE_TYPE_UNAVAILABLE);
+    } else {
+        *aidl_return = static_cast<int32_t>(
+            KeyStoreServiceReturnCode(KS_HANDLE_HIDL_ERROR(device->addRngEntropy(entropy))));
+    }
     return Status::ok();
 }
 
@@ -821,15 +826,18 @@ KeyStoreService::generateKey(const String16& name, const KeymasterArguments& par
         }
     }
 
-    bool usingFallback = false;
-    auto& dev = mKeyStore->getDevice();
+    SecurityLevel securityLevel = flagsToSecurityLevel(flags);
+    auto dev = mKeyStore->getDevice(securityLevel);
+    if (!dev) {
+        *aidl_return = static_cast<int32_t>(ErrorCode::HARDWARE_TYPE_UNAVAILABLE);
+        return Status::ok();
+    }
     AuthorizationSet keyCharacteristics = params.getParameters();
 
     // TODO: Seed from Linux RNG before this.
-    int32_t result;
-    addRngEntropy(entropy, &result);  // binder error is not possible.
-    if (!KeyStoreServiceReturnCode(result).isOk()) {
-        *aidl_return = static_cast<int32_t>(result);
+    rc = KS_HANDLE_HIDL_ERROR(dev->addRngEntropy(entropy));
+    if (!rc.isOk()) {
+        *aidl_return = static_cast<int32_t>(rc);
         return Status::ok();
     }
 
@@ -849,7 +857,7 @@ KeyStoreService::generateKey(const String16& name, const KeymasterArguments& par
         String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, uid, ::TYPE_KEYMASTER_10));
 
         Blob keyBlob(&hidlKeyBlob[0], hidlKeyBlob.size(), NULL, 0, ::TYPE_KEYMASTER_10);
-        keyBlob.setFallback(usingFallback);
+        keyBlob.setSecurityLevel(securityLevel);
         keyBlob.setCriticalToDeviceEncryption(flags & KEYSTORE_FLAG_CRITICAL_TO_DEVICE_ENCRYPTION);
         if (isAuthenticationBound(params.getParameters()) &&
             !keyBlob.isCriticalToDeviceEncryption()) {
@@ -867,13 +875,13 @@ KeyStoreService::generateKey(const String16& name, const KeymasterArguments& par
     }
     if (!error.isOk()) {
         ALOGE("Failed to generate key -> falling back to software keymaster");
-        usingFallback = true;
+        securityLevel = SecurityLevel::SOFTWARE;
         auto fallback = mKeyStore->getFallbackDevice();
-        if (!fallback.isOk()) {
+        if (!fallback) {
             *aidl_return = static_cast<int32_t>(error);
             return Status::ok();
         }
-        rc = KS_HANDLE_HIDL_ERROR(fallback.value()->generateKey(params.getParameters(), hidl_cb));
+        rc = KS_HANDLE_HIDL_ERROR(fallback->generateKey(params.getParameters(), hidl_cb));
         if (!rc.isOk()) {
             *aidl_return = static_cast<int32_t>(rc);
             return Status::ok();
@@ -897,7 +905,7 @@ KeyStoreService::generateKey(const String16& name, const KeymasterArguments& par
     auto kc_buf = kc_stream.str();
     Blob charBlob(reinterpret_cast<const uint8_t*>(kc_buf.data()), kc_buf.size(), NULL, 0,
                   ::TYPE_KEY_CHARACTERISTICS);
-    charBlob.setFallback(usingFallback);
+    charBlob.setSecurityLevel(securityLevel);
     charBlob.setEncrypted(flags & KEYSTORE_FLAG_ENCRYPTED);
 
     *aidl_return =
@@ -956,7 +964,7 @@ Status KeyStoreService::getKeyCharacteristics(
     }
 
     auto hidlKeyBlob = blob2hidlVec(keyBlob);
-    auto& dev = mKeyStore->getDevice(keyBlob);
+    auto dev = mKeyStore->getDevice(keyBlob);
 
     KeyStoreServiceReturnCode error;
 
@@ -1024,8 +1032,12 @@ KeyStoreService::importKey(const String16& name, const KeymasterArguments& param
         return Status::ok();
     }
 
-    bool usingFallback = false;
-    auto& dev = mKeyStore->getDevice();
+    SecurityLevel securityLevel = flagsToSecurityLevel(flags);
+    auto dev = mKeyStore->getDevice(securityLevel);
+    if (!dev) {
+        *aidl_return = static_cast<int32_t>(ErrorCode::HARDWARE_TYPE_UNAVAILABLE);
+        return Status::ok();
+    }
 
     String8 name8(name);
 
@@ -1045,7 +1057,7 @@ KeyStoreService::importKey(const String16& name, const KeymasterArguments& param
         String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, uid, ::TYPE_KEYMASTER_10));
 
         Blob ksBlob(&keyBlob[0], keyBlob.size(), NULL, 0, ::TYPE_KEYMASTER_10);
-        ksBlob.setFallback(usingFallback);
+        ksBlob.setSecurityLevel(securityLevel);
         ksBlob.setCriticalToDeviceEncryption(flags & KEYSTORE_FLAG_CRITICAL_TO_DEVICE_ENCRYPTION);
         if (isAuthenticationBound(params.getParameters()) &&
             !ksBlob.isCriticalToDeviceEncryption()) {
@@ -1066,14 +1078,14 @@ KeyStoreService::importKey(const String16& name, const KeymasterArguments& param
     // now check error from callback
     if (!error.isOk()) {
         ALOGE("Failed to import key -> falling back to software keymaster");
-        usingFallback = true;
+        securityLevel = SecurityLevel::SOFTWARE;
         auto fallback = mKeyStore->getFallbackDevice();
-        if (!fallback.isOk()) {
+        if (!fallback) {
             *aidl_return = static_cast<int32_t>(error);
             return Status::ok();
         }
-        rc = KS_HANDLE_HIDL_ERROR(fallback.value()->importKey(params.getParameters(),
-                                                              KeyFormat(format), keyData, hidlCb));
+        rc = KS_HANDLE_HIDL_ERROR(
+            fallback->importKey(params.getParameters(), KeyFormat(format), keyData, hidlCb));
         // possible hidl error
         if (!rc.isOk()) {
             *aidl_return = static_cast<int32_t>(rc);
@@ -1100,7 +1112,7 @@ KeyStoreService::importKey(const String16& name, const KeymasterArguments& param
 
     Blob charBlob(reinterpret_cast<const uint8_t*>(kcBuf.data()), kcBuf.size(), NULL, 0,
                   ::TYPE_KEY_CHARACTERISTICS);
-    charBlob.setFallback(usingFallback);
+    charBlob.setSecurityLevel(securityLevel);
     charBlob.setEncrypted(flags & KEYSTORE_FLAG_ENCRYPTED);
 
     *aidl_return =
@@ -1131,7 +1143,7 @@ Status KeyStoreService::exportKey(const String16& name, int32_t format,
     }
 
     auto key = blob2hidlVec(keyBlob);
-    auto& dev = mKeyStore->getDevice(keyBlob);
+    auto dev = mKeyStore->getDevice(keyBlob);
 
     auto hidlCb = [&](ErrorCode ret, const ::android::hardware::hidl_vec<uint8_t>& keyMaterial) {
         result->resultCode = ret;
@@ -1204,7 +1216,7 @@ Status KeyStoreService::begin(const sp<IBinder>& appToken, const String16& name,
     if (!result->resultCode.isOk()) return Status::ok();
 
     auto key = blob2hidlVec(keyBlob);
-    auto& dev = mKeyStore->getDevice(keyBlob);
+    auto dev = mKeyStore->getDevice(keyBlob);
     AuthorizationSet opParams = params.getParameters();
     KeyCharacteristics characteristics;
     result->resultCode = getOperationCharacteristics(key, &dev, opParams, &characteristics);
@@ -1259,9 +1271,7 @@ Status KeyStoreService::begin(const sp<IBinder>& appToken, const String16& name,
 
     // Add entropy to the device first.
     if (entropy.size()) {
-        int32_t resultCode;
-        addRngEntropy(entropy, &resultCode);  // binder error is not possible
-        result->resultCode = KeyStoreServiceReturnCode(resultCode);
+        result->resultCode = KS_HANDLE_HIDL_ERROR(dev->addRngEntropy(entropy));
         if (!result->resultCode.isOk()) {
             return Status::ok();
         }
@@ -1418,9 +1428,7 @@ Status KeyStoreService::finish(const sp<IBinder>& token, const KeymasterArgument
     if (!result->resultCode.isOk()) return Status::ok();
 
     if (entropy.size()) {
-        int resultCode;
-        addRngEntropy(entropy, &resultCode);  // binder error is not possible
-        result->resultCode = KeyStoreServiceReturnCode(resultCode);
+        result->resultCode = KS_HANDLE_HIDL_ERROR(op.device->addRngEntropy(entropy));
         if (!result->resultCode.isOk()) {
             return Status::ok();
         }
@@ -1574,7 +1582,7 @@ Status KeyStoreService::attestKey(const String16& name, const KeymasterArguments
     };
 
     auto hidlKey = blob2hidlVec(keyBlob);
-    auto& dev = mKeyStore->getDevice(keyBlob);
+    auto dev = mKeyStore->getDevice(keyBlob);
     rc = KS_HANDLE_HIDL_ERROR(dev->attestKey(hidlKey, mutableParams.hidl_data(), hidlCb));
     if (!rc.isOk()) {
         *aidl_return = static_cast<int32_t>(rc);
@@ -1624,7 +1632,15 @@ KeyStoreService::attestDeviceIds(const KeymasterArguments& params,
     }
 
     // Generate temporary key.
-    auto& dev = mKeyStore->getDevice();
+    sp<Keymaster> dev;
+    SecurityLevel securityLevel;
+    std::tie(dev, securityLevel) = mKeyStore->getMostSecureDevice();
+
+    if (securityLevel == SecurityLevel::SOFTWARE) {
+        *aidl_return = static_cast<int32_t>(ResponseCode::SYSTEM_ERROR);
+        return Status::ok();
+    }
+
     KeyStoreServiceReturnCode error;
     ::std::vector<uint8_t> hidlKey;
 
@@ -1684,6 +1700,100 @@ Status KeyStoreService::onDeviceOffBody(int32_t* aidl_return) {
     mAuthTokenTable.onDeviceOffBody();
     *aidl_return = static_cast<int32_t>(ResponseCode::NO_ERROR);
     return Status::ok();
+}
+
+#define AIDL_RETURN(rc)                                                                            \
+    (*_aidl_return = static_cast<int32_t>(KeyStoreServiceReturnCode(rc)), Status::ok())
+
+Status KeyStoreService::importWrappedKey(
+    const ::android::String16& wrappedKeyAlias, const ::std::vector<uint8_t>& wrappedKey,
+    const ::android::String16& wrappingKeyAlias, const ::std::vector<uint8_t>& maskingKey,
+    const KeymasterArguments& params, int64_t rootSid, int64_t fingerprintSid,
+    ::android::security::keymaster::KeyCharacteristics* outCharacteristics, int32_t* _aidl_return) {
+
+    uid_t callingUid = IPCThreadState::self()->getCallingUid();
+
+    if (!checkBinderPermission(P_INSERT, callingUid)) {
+        return AIDL_RETURN(ResponseCode::PERMISSION_DENIED);
+    }
+
+    Blob wrappingKeyBlob;
+    String8 wrappingKeyName8(wrappingKeyAlias);
+    KeyStoreServiceReturnCode rc =
+        mKeyStore->getKeyForName(&wrappingKeyBlob, wrappingKeyName8, callingUid, TYPE_KEYMASTER_10);
+    if (!rc.isOk()) {
+        return AIDL_RETURN(rc);
+    }
+
+    SecurityLevel securityLevel = wrappingKeyBlob.getSecurityLevel();
+    auto dev = mKeyStore->getDevice(securityLevel);
+    if (!dev) {
+        return AIDL_RETURN(ErrorCode::HARDWARE_TYPE_UNAVAILABLE);
+    }
+
+    auto hidlWrappingKey = blob2hidlVec(wrappingKeyBlob);
+    String8 wrappedKeyAlias8(wrappedKeyAlias);
+
+    KeyStoreServiceReturnCode error;
+
+    auto hidlCb = [&](ErrorCode ret, const ::std::vector<uint8_t>& keyBlob,
+                      const KeyCharacteristics& keyCharacteristics) {
+        error = ret;
+        if (!error.isOk()) {
+            return;
+        }
+        if (outCharacteristics) {
+            *outCharacteristics =
+                ::android::security::keymaster::KeyCharacteristics(keyCharacteristics);
+        }
+
+        // Write the key:
+        String8 filename(
+            mKeyStore->getKeyNameForUidWithDir(wrappedKeyAlias8, callingUid, ::TYPE_KEYMASTER_10));
+
+        Blob ksBlob(&keyBlob[0], keyBlob.size(), NULL, 0, ::TYPE_KEYMASTER_10);
+        ksBlob.setSecurityLevel(securityLevel);
+
+        if (containsTag(keyCharacteristics.hardwareEnforced, Tag::USER_SECURE_ID)) {
+            ksBlob.setSuperEncrypted(true);
+        }
+
+        error = mKeyStore->put(filename.string(), &ksBlob, get_user_id(callingUid));
+    };
+
+    // TODO b/70904859 sanitize params and forward to keymaster
+    // forward rootSid and fingerprintSid
+    (void)params;
+    (void)rootSid;
+    (void)fingerprintSid;
+    rc = KS_HANDLE_HIDL_ERROR(
+        dev->importWrappedKey(wrappedKey, hidlWrappingKey, maskingKey, hidlCb));
+    // possible hidl error
+    if (!rc.isOk()) {
+        return AIDL_RETURN(rc);
+    }
+    // now check error from callback
+    if (!error.isOk()) {
+        return AIDL_RETURN(error);
+    }
+
+    // Write the characteristics:
+    String8 cFilename(mKeyStore->getKeyNameForUidWithDir(wrappedKeyAlias8, callingUid,
+                                                         ::TYPE_KEY_CHARACTERISTICS));
+
+    AuthorizationSet opParams = params.getParameters();
+    std::stringstream kcStream;
+    opParams.Serialize(&kcStream);
+    if (kcStream.bad()) {
+        return AIDL_RETURN(ResponseCode::SYSTEM_ERROR);
+    }
+    auto kcBuf = kcStream.str();
+
+    Blob charBlob(reinterpret_cast<const uint8_t*>(kcBuf.data()), kcBuf.size(), NULL, 0,
+                  ::TYPE_KEY_CHARACTERISTICS);
+    charBlob.setSecurityLevel(securityLevel);
+
+    return AIDL_RETURN(mKeyStore->put(cFilename.string(), &charBlob, get_user_id(callingUid)));
 }
 
 /**
@@ -2048,7 +2158,7 @@ KeyStoreServiceReturnCode KeyStoreService::upgradeKeyBlob(const String16& name, 
     ALOGI("upgradeKeyBlob %s %d", name8.string(), uid);
 
     auto hidlKey = blob2hidlVec(*blob);
-    auto& dev = mKeyStore->getDevice(*blob);
+    auto dev = mKeyStore->getDevice(*blob);
 
     KeyStoreServiceReturnCode error;
     auto hidlCb = [&](ErrorCode ret, const ::std::vector<uint8_t>& upgradedKeyBlob) {
@@ -2070,7 +2180,7 @@ KeyStoreServiceReturnCode KeyStoreService::upgradeKeyBlob(const String16& name, 
 
         Blob newBlob(&upgradedKeyBlob[0], upgradedKeyBlob.size(), nullptr /* info */,
                      0 /* infoLength */, ::TYPE_KEYMASTER_10);
-        newBlob.setFallback(blob->isFallback());
+        newBlob.setSecurityLevel(blob->getSecurityLevel());
         newBlob.setEncrypted(blob->isEncrypted());
         newBlob.setSuperEncrypted(blob->isSuperEncrypted());
         newBlob.setCriticalToDeviceEncryption(blob->isCriticalToDeviceEncryption());

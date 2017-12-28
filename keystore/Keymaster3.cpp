@@ -98,7 +98,8 @@ void Keymaster3::getVersionIfNeeded() {
         [&](bool isSecure, bool supportsEllipticCurve, bool supportsSymmetricCryptography,
             bool supportsAttestation, bool supportsAllDigests, const hidl_string& keymasterName,
             const hidl_string& keymasterAuthorName) {
-            isSecure_ = isSecure;
+            securityLevel_ =
+                isSecure ? SecurityLevel::TRUSTED_ENVIRONMENT : SecurityLevel::SOFTWARE;
             supportsEllipticCurve_ = supportsEllipticCurve;
             supportsSymmetricCryptography_ = supportsSymmetricCryptography;
             supportsAttestation_ = supportsAttestation;
@@ -109,7 +110,7 @@ void Keymaster3::getVersionIfNeeded() {
 
     CHECK(rc.isOk()) << "Got error " << rc.description() << " trying to get hardware features";
 
-    if (!isSecure_) {
+    if (securityLevel_ == SecurityLevel::SOFTWARE) {
         majorVersion_ = 3;
     } else if (supportsAttestation_) {
         majorVersion_ = 3;  // Could be 2, doesn't matter.
@@ -122,13 +123,12 @@ void Keymaster3::getVersionIfNeeded() {
 
 Keymaster::VersionResult Keymaster3::halVersion() {
     getVersionIfNeeded();
-    return {ErrorCode::OK, majorVersion_, isSecure_, supportsEllipticCurve_};
+    return {ErrorCode::OK, majorVersion_, securityLevel_, supportsEllipticCurve_};
 }
 
 Return<void> Keymaster3::getHardwareInfo(Keymaster3::getHardwareInfo_cb _hidl_cb) {
     getVersionIfNeeded();
-    _hidl_cb(isSecure_ ? SecurityLevel::TRUSTED_ENVIRONMENT : SecurityLevel::SOFTWARE,
-             keymasterName_ + " (wrapped by keystore::Keymaster3)", authorName_);
+    _hidl_cb(securityLevel_, keymasterName_ + " (wrapped by keystore::Keymaster3)", authorName_);
     return Void();
 }
 

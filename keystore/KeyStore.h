@@ -21,39 +21,53 @@
 
 #include <utils/Vector.h>
 
+#include <keystore/keymaster_types.h>
+
 #include "Keymaster.h"
 #include "blob.h"
 #include "grant_store.h"
-#include "include/keystore/keymaster_tags.h"
 #include "user_state.h"
 
 namespace keystore {
 
 using ::android::sp;
 
+class KeymasterDevices : public std::array<sp<Keymaster>, 3> {
+  public:
+    sp<Keymaster>& operator[](SecurityLevel secLevel);
+    sp<Keymaster> operator[](SecurityLevel secLevel) const;
+};
+
 class KeyStore {
   public:
-    KeyStore(Entropy* entropy, const sp<Keymaster>& device, const sp<Keymaster>& fallback,
-             bool allowNewFallback);
+    KeyStore(Entropy* entropy, const KeymasterDevices& kmDevices,
+             SecurityLevel minimalAllowedSecurityLevelForNewKeys);
     ~KeyStore();
 
-    sp<Keymaster>& getDevice() { return mDevice; }
+    sp<Keymaster> getDevice(SecurityLevel securityLevel) const { return mKmDevices[securityLevel]; }
 
-    NullOr<sp<Keymaster>&> getFallbackDevice() {
+    std::pair<sp<Keymaster>, SecurityLevel> getMostSecureDevice() const {
+        SecurityLevel level = SecurityLevel::STRONGBOX;
+        do {
+            if (mKmDevices[level].get()) {
+                return {mKmDevices[level], level};
+            }
+            level = static_cast<SecurityLevel>(static_cast<uint32_t>(level) - 1);
+        } while (level != SecurityLevel::SOFTWARE);
+        return {nullptr, SecurityLevel::SOFTWARE};
+    }
+
+    sp<Keymaster> getFallbackDevice() const {
         // we only return the fallback device if the creation of new fallback key blobs is
         // allowed. (also see getDevice below)
         if (mAllowNewFallback) {
-            return mFallbackDevice;
+            return mKmDevices[SecurityLevel::SOFTWARE];
         } else {
-            return {};
+            return nullptr;
         }
     }
 
-    sp<Keymaster>& getDevice(const Blob& blob) {
-        // We return a device, based on the nature of the blob to provide backward
-        // compatibility with old key blobs generated using the fallback device.
-        return blob.isFallback() ? mFallbackDevice : mDevice;
-    }
+    sp<Keymaster> getDevice(const Blob& blob) { return mKmDevices[blob.getSecurityLevel()]; }
 
     ResponseCode initialize();
 
@@ -128,8 +142,7 @@ class KeyStore {
     static const android::String16 kEcKeyType;
     Entropy* mEntropy;
 
-    sp<Keymaster> mDevice;
-    sp<Keymaster> mFallbackDevice;
+    KeymasterDevices mKmDevices;
     bool mAllowNewFallback;
 
     android::Vector<UserState*> mMasterKeys;

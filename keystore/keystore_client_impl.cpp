@@ -28,9 +28,10 @@
 #include <utils/String16.h>
 #include <utils/String8.h>
 
-#include "keystore_client.pb.h"
-#include <keystore/authorization_set.h>
+#include <keystore/keymaster_types.h>
 #include <keystore/keystore_hidl_support.h>
+
+#include "keystore_client.pb.h"
 
 namespace {
 
@@ -60,18 +61,18 @@ KeystoreClientImpl::KeystoreClientImpl() {
 }
 
 bool KeystoreClientImpl::encryptWithAuthentication(const std::string& key_name,
-                                                   const std::string& data,
+                                                   const std::string& data, int32_t flags,
                                                    std::string* encrypted_data) {
     // The encryption algorithm is AES-256-CBC with PKCS #7 padding and a random
     // IV. The authentication algorithm is HMAC-SHA256 and is computed over the
     // cipher-text (i.e. Encrypt-then-MAC approach). This was chosen over AES-GCM
     // because hardware support for GCM is not mandatory for all Brillo devices.
     std::string encryption_key_name = key_name + kEncryptSuffix;
-    if (!createOrVerifyEncryptionKey(encryption_key_name)) {
+    if (!createOrVerifyEncryptionKey(encryption_key_name, flags)) {
         return false;
     }
     std::string authentication_key_name = key_name + kAuthenticateSuffix;
-    if (!createOrVerifyAuthenticationKey(authentication_key_name)) {
+    if (!createOrVerifyAuthenticationKey(authentication_key_name, flags)) {
         return false;
     }
     AuthorizationSetBuilder encrypt_params;
@@ -178,24 +179,23 @@ bool KeystoreClientImpl::oneShotOperation(KeyPurpose purpose, const std::string&
 }
 
 KeyStoreNativeReturnCode
-KeystoreClientImpl::addRandomNumberGeneratorEntropy(const std::string& entropy) {
+KeystoreClientImpl::addRandomNumberGeneratorEntropy(const std::string& entropy, int32_t flags) {
     int32_t result;
-    auto binder_result = keystore_->addRngEntropy(blob2hidlVec(entropy), &result);
+    auto binder_result = keystore_->addRngEntropy(blob2hidlVec(entropy), flags, &result);
     if (!binder_result.isOk()) return ResponseCode::SYSTEM_ERROR;
     return KeyStoreNativeReturnCode(result);
 }
 
 KeyStoreNativeReturnCode
 KeystoreClientImpl::generateKey(const std::string& key_name, const AuthorizationSet& key_parameters,
-                                AuthorizationSet* hardware_enforced_characteristics,
+                                int32_t flags, AuthorizationSet* hardware_enforced_characteristics,
                                 AuthorizationSet* software_enforced_characteristics) {
     String16 key_name16(key_name.data(), key_name.size());
     ::android::security::keymaster::KeyCharacteristics characteristics;
     int32_t result;
     auto binder_result = keystore_->generateKey(
         key_name16, ::android::security::keymaster::KeymasterArguments(key_parameters.hidl_data()),
-        hidl_vec<uint8_t>() /* entropy */, kDefaultUID, KEYSTORE_FLAG_NONE, &characteristics,
-        &result);
+        hidl_vec<uint8_t>() /* entropy */, kDefaultUID, flags, &characteristics, &result);
     if (!binder_result.isOk()) return ResponseCode::SYSTEM_ERROR;
 
     /* assignment (hidl_vec<KeyParameter> -> AuthorizationSet) makes a deep copy.
@@ -387,7 +387,7 @@ uint64_t KeystoreClientImpl::getNextVirtualHandle() {
     return next_virtual_handle_++;
 }
 
-bool KeystoreClientImpl::createOrVerifyEncryptionKey(const std::string& key_name) {
+bool KeystoreClientImpl::createOrVerifyEncryptionKey(const std::string& key_name, int32_t flags) {
     bool key_exists = doesKeyExist(key_name);
     if (key_exists) {
         bool verified = false;
@@ -411,8 +411,9 @@ bool KeystoreClientImpl::createOrVerifyEncryptionKey(const std::string& key_name
             .Authorization(TAG_NO_AUTH_REQUIRED);
         AuthorizationSet hardware_enforced_characteristics;
         AuthorizationSet software_enforced_characteristics;
-        auto result = generateKey(key_name, key_parameters, &hardware_enforced_characteristics,
-                                  &software_enforced_characteristics);
+        auto result =
+            generateKey(key_name, key_parameters, flags, &hardware_enforced_characteristics,
+                        &software_enforced_characteristics);
         if (!result.isOk()) {
             ALOGE("Failed to generate encryption key: %d", int32_t(result));
             return false;
@@ -424,7 +425,8 @@ bool KeystoreClientImpl::createOrVerifyEncryptionKey(const std::string& key_name
     return true;
 }
 
-bool KeystoreClientImpl::createOrVerifyAuthenticationKey(const std::string& key_name) {
+bool KeystoreClientImpl::createOrVerifyAuthenticationKey(const std::string& key_name,
+                                                         int32_t flags) {
     bool key_exists = doesKeyExist(key_name);
     if (key_exists) {
         bool verified = false;
@@ -448,8 +450,9 @@ bool KeystoreClientImpl::createOrVerifyAuthenticationKey(const std::string& key_
             .Authorization(TAG_NO_AUTH_REQUIRED);
         AuthorizationSet hardware_enforced_characteristics;
         AuthorizationSet software_enforced_characteristics;
-        auto result = generateKey(key_name, key_parameters, &hardware_enforced_characteristics,
-                                  &software_enforced_characteristics);
+        auto result =
+            generateKey(key_name, key_parameters, flags, &hardware_enforced_characteristics,
+                        &software_enforced_characteristics);
         if (!result.isOk()) {
             ALOGE("Failed to generate authentication key: %d", int32_t(result));
             return false;

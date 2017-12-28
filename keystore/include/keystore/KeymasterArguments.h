@@ -17,7 +17,7 @@
 
 #include <binder/Parcelable.h>
 
-#include "keymaster_tags.h"
+#include <keystore/keymaster_types.h>
 
 namespace android {
 namespace security {

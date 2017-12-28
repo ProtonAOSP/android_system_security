@@ -62,8 +62,8 @@ TEST(AuthTokenTableTest, Create) {
     AuthTokenTable table;
 }
 
-HardwareAuthToken make_token(uint64_t rsid, uint64_t ssid = 0, uint64_t challenge = 0,
-                             uint64_t timestamp = 0) {
+static HardwareAuthToken make_token(uint64_t rsid, uint64_t ssid = 0, uint64_t challenge = 0,
+                                    uint64_t timestamp = 0) {
     HardwareAuthToken token;
     token.userId = rsid;
     token.authenticatorId = ssid;

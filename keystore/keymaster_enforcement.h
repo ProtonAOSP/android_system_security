@@ -19,7 +19,7 @@
 
 #include <stdio.h>
 
-#include <keystore/authorization_set.h>
+#include <keystore/keymaster_types.h>
 
 namespace keystore {
 

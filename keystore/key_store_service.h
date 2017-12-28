@@ -100,7 +100,7 @@ class KeyStoreService : public android::security::BnKeystoreService,
     ::android::binder::Status is_hardware_backed(const ::android::String16& string,
                                                  int32_t* _aidl_return) override;
     ::android::binder::Status clear_uid(int64_t uid, int32_t* _aidl_return) override;
-    ::android::binder::Status addRngEntropy(const ::std::vector<uint8_t>& data,
+    ::android::binder::Status addRngEntropy(const ::std::vector<uint8_t>& data, int32_t flags,
                                             int32_t* _aidl_return) override;
     ::android::binder::Status
     generateKey(const ::android::String16& alias,
@@ -160,6 +160,12 @@ class KeyStoreService : public android::security::BnKeystoreService,
                     ::android::security::keymaster::KeymasterCertificateChain* chain,
                     int32_t* _aidl_return) override;
     ::android::binder::Status onDeviceOffBody(int32_t* _aidl_return) override;
+    ::android::binder::Status importWrappedKey(
+        const ::android::String16& wrappedKeyAlias, const ::std::vector<uint8_t>& wrappedKey,
+        const ::android::String16& wrappingKeyAlias, const ::std::vector<uint8_t>& maskingKey,
+        const ::android::security::keymaster::KeymasterArguments& params, int64_t rootSid,
+        int64_t fingerprintSid, ::android::security::keymaster::KeyCharacteristics* characteristics,
+        int32_t* _aidl_return) override;
 
   private:
     static const int32_t UID_SELF = -1;

@@ -327,3 +327,12 @@ ResponseCode Blob::readBlob(const std::string& filename, const uint8_t* aes_key,
 
     return ResponseCode::NO_ERROR;
 }
+
+keystore::SecurityLevel Blob::getSecurityLevel() const {
+    return keystore::flagsToSecurityLevel(mBlob.flags);
+}
+
+void Blob::setSecurityLevel(keystore::SecurityLevel secLevel) {
+    mBlob.flags &= ~(KEYSTORE_FLAG_FALLBACK | KEYSTORE_FLAG_STRONGBOX);
+    mBlob.flags |= keystore::securityLevelToFlags(secLevel);
+}

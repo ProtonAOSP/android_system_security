@@ -14,22 +14,28 @@
  * limitations under the License.
  */
 
+#define LOG_TAG "keystore"
+
 #include <android-base/logging.h>
+#include <android/hidl/manager/1.1/IServiceManager.h>
+#include <android/security/IKeystoreService.h>
 #include <android/system/wifi/keystore/1.0/IKeystore.h>
 #include <binder/IPCThreadState.h>
 #include <binder/IServiceManager.h>
+#include <hidl/HidlTransportSupport.h>
 #include <utils/StrongPointer.h>
 #include <wifikeystorehal/keystore.h>
 
+#include <keystore/keystore_hidl_support.h>
+#include <keystore/keystore_return_types.h>
+
 #include "KeyStore.h"
 #include "Keymaster3.h"
+#include "Keymaster4.h"
 #include "entropy.h"
-#include "include/keystore/keystore_hidl_support.h"
-#include "include/keystore/keystore_return_types.h"
 #include "key_store_service.h"
 #include "legacy_keymaster_device_wrapper.h"
 #include "permissions.h"
-#include <android/security/IKeystoreService.h>
 
 /* KeyStore is a secured storage for key-value pairs. In this implementation,
  * each file stores one key-value pair. Keys are encoded in file names, and
@@ -41,12 +47,140 @@ using ::android::sp;
 using ::android::hardware::configureRpcThreadpool;
 using ::android::system::wifi::keystore::V1_0::IKeystore;
 using ::android::system::wifi::keystore::V1_0::implementation::Keystore;
+using ::android::hidl::manager::V1_1::IServiceManager;
+using ::android::hardware::hidl_string;
+using ::android::hardware::hidl_vec;
+using ::android::hardware::keymaster::V4_0::SecurityLevel;
+using ::android::hardware::keymaster::V4_0::HmacSharingParameters;
+using ::android::hardware::keymaster::V4_0::ErrorCode;
 
 using keystore::Keymaster;
+using keystore::Keymaster3;
+using keystore::Keymaster4;
 
-/**
- * TODO implement keystore daemon using binderized keymaster HAL.
- */
+using keystore::KeymasterDevices;
+
+template <typename Wrapper>
+KeymasterDevices enumerateKeymasterDevices(IServiceManager* serviceManager) {
+    KeymasterDevices result;
+    serviceManager->listByInterface(
+        Wrapper::WrappedIKeymasterDevice::descriptor, [&](const hidl_vec<hidl_string>& names) {
+            auto try_get_device = [&](const auto& name, bool fail_silent) {
+                auto device = Wrapper::WrappedIKeymasterDevice::getService(name);
+                if (fail_silent && !device) return;
+                CHECK(device) << "Failed to get service for \""
+                              << Wrapper::WrappedIKeymasterDevice::descriptor
+                              << "\" with interface name \"" << name << "\"";
+
+                sp<Keymaster> kmDevice(new Wrapper(device));
+                auto halVersion = kmDevice->halVersion();
+                SecurityLevel securityLevel = halVersion.securityLevel;
+                LOG(INFO) << "found " << Wrapper::WrappedIKeymasterDevice::descriptor
+                          << " with interface name " << name << " and seclevel "
+                          << toString(securityLevel);
+                CHECK(static_cast<uint32_t>(securityLevel) < result.size())
+                    << "Security level of \"" << Wrapper::WrappedIKeymasterDevice::descriptor
+                    << "\" with interface name \"" << name << "\" out of range";
+                auto& deviceSlot = result[securityLevel];
+                if (deviceSlot) {
+                    if (!fail_silent) {
+                        LOG(WARNING) << "Implementation of \""
+                                     << Wrapper::WrappedIKeymasterDevice::descriptor
+                                     << "\" with interface name \"" << name
+                                     << "\" and security level: " << toString(securityLevel)
+                                     << " Masked by other implementation of Keymaster";
+                    }
+                } else {
+                    deviceSlot = kmDevice;
+                }
+            };
+            bool has_default = false;
+            for (auto& n : names) {
+                try_get_device(n, false);
+                if (n == "default") has_default = true;
+            }
+            // Make sure that we always check the default device. If we enumerate only what is
+            // known to hwservicemanager, we miss a possible passthrough HAL.
+            if (!has_default) {
+                try_get_device("default", true /* fail_silent */);
+            }
+        });
+    return result;
+}
+
+void performHmacKeyHandshake(std::initializer_list<const sp<Keymaster>> keymasters) {
+    hidl_vec<HmacSharingParameters> hmacSharingParams(keymasters.size());
+    int index = 0;
+    for (const auto& km : keymasters) {
+        if (!km) continue;
+        ErrorCode ec = ErrorCode::OK;
+        auto rc =
+            km->getHmacSharingParameters([&](ErrorCode error, const HmacSharingParameters& params) {
+                ec = error;
+                if (error == ErrorCode::OK) hmacSharingParams[index] = params;
+            });
+        CHECK(rc.isOk()) << "Communication error while calling getHmacSharingParameters on"
+                            " Keymaster with index: "
+                         << index;
+        CHECK(ec == ErrorCode::OK) << "Failed to get HmacSharingParameters from"
+                                      " Keymaster with index: "
+                                   << index;
+        ++index;
+    }
+    hmacSharingParams.resize(index);
+    hidl_vec<uint8_t> sharingCheck;
+    index = 0;
+    for (const auto& km : keymasters) {
+        if (!km) continue;
+        ErrorCode ec = ErrorCode::OK;
+        auto rc = km->computeSharedHmac(
+            hmacSharingParams, [&](ErrorCode error, const hidl_vec<uint8_t>& sharingCheck_) {
+                ec = error;
+                if (error != ErrorCode::OK) return;
+                if (index == 0) {
+                    sharingCheck = sharingCheck_;
+                } else {
+                    CHECK(sharingCheck == sharingCheck_)
+                        << "Hmac Key computation failed (current index: " << index << ")";
+                }
+            });
+        CHECK(rc.isOk()) << "Communication error while calling computeSharedHmac on"
+                            " Keymaster with index: "
+                         << index;
+        CHECK(ec == ErrorCode::OK) << "Failed to compute shared hmac key from"
+                                      " Keymaster with index: "
+                                   << index;
+        ++index;
+    }
+}
+
+KeymasterDevices initializeKeymasters() {
+    auto serviceManager = android::hidl::manager::V1_1::IServiceManager::getService();
+    CHECK(serviceManager.get()) << "Failed to get ServiceManager";
+    auto result = enumerateKeymasterDevices<Keymaster4>(serviceManager.get());
+    CHECK(result[SecurityLevel::TRUSTED_ENVIRONMENT] || !result[SecurityLevel::STRONGBOX])
+        << "We cannot have a Strongbox keymaster implementation without a TEE implementation";
+    auto softKeymaster = result[SecurityLevel::SOFTWARE];
+    if (result[SecurityLevel::TRUSTED_ENVIRONMENT]) {
+        performHmacKeyHandshake(
+            {result[SecurityLevel::TRUSTED_ENVIRONMENT], result[SecurityLevel::STRONGBOX]});
+    } else {
+        result = enumerateKeymasterDevices<Keymaster3>(serviceManager.get());
+    }
+    if (softKeymaster) result[SecurityLevel::SOFTWARE] = softKeymaster;
+    if (result[SecurityLevel::SOFTWARE] && !result[SecurityLevel::TRUSTED_ENVIRONMENT]) {
+        LOG(WARNING) << "No secure Keymaster implementation found, but device offers insecure"
+                        " Keymaster HAL. Using as default.";
+        result[SecurityLevel::TRUSTED_ENVIRONMENT] = result[SecurityLevel::SOFTWARE];
+        result[SecurityLevel::SOFTWARE] = nullptr;
+    }
+    if (!result[SecurityLevel::SOFTWARE]) {
+        auto fbdev = android::keystore::makeSoftwareKeymasterDevice();
+        CHECK(fbdev.get()) << "Unable to create Software Keymaster Device";
+        result[SecurityLevel::SOFTWARE] = new keystore::Keymaster3(fbdev);
+    }
+    return result;
+}
 
 int main(int argc, char* argv[]) {
     using android::hardware::hidl_string;
@@ -56,26 +190,25 @@ int main(int argc, char* argv[]) {
     Entropy entropy;
     CHECK(entropy.open()) << "Failed to open entropy source.";
 
-    auto hwdev = android::hardware::keymaster::V3_0::IKeymasterDevice::getService();
-    CHECK(hwdev.get()) << "Failed to load @3.0::IKeymasterDevice";
-    sp<Keymaster> dev = new keystore::Keymaster3(hwdev);
+    auto kmDevices = initializeKeymasters();
 
-    auto fbdev = android::keystore::makeSoftwareKeymasterDevice();
-    if (fbdev.get() == nullptr) return -1;
-    sp<Keymaster> fallback = new keystore::Keymaster3(fbdev);
+    CHECK(kmDevices[SecurityLevel::SOFTWARE]) << "Missing software Keymaster device";
+    CHECK(kmDevices[SecurityLevel::TRUSTED_ENVIRONMENT])
+        << "Error no viable keymaster device found";
 
     CHECK(configure_selinux() != -1) << "Failed to configure SELinux.";
 
-    auto halVersion = dev->halVersion();
+    auto halVersion = kmDevices[SecurityLevel::TRUSTED_ENVIRONMENT]->halVersion();
     CHECK(halVersion.error == keystore::ErrorCode::OK)
         << "Error " << toString(halVersion.error) << " getting HAL version";
 
     // If the hardware is keymaster 2.0 or higher we will not allow the fallback device for import
     // or generation of keys. The fallback device is only used for legacy keys present on the
     // device.
-    bool allowNewFallbackDevice = halVersion.majorVersion >= 2 && halVersion.isSecure;
+    SecurityLevel minimalAllowedSecurityLevelForNewKeys =
+        halVersion.majorVersion >= 2 ? SecurityLevel::TRUSTED_ENVIRONMENT : SecurityLevel::SOFTWARE;
 
-    keystore::KeyStore keyStore(&entropy, dev, fallback, allowNewFallbackDevice);
+    keystore::KeyStore keyStore(&entropy, kmDevices, minimalAllowedSecurityLevelForNewKeys);
     keyStore.initialize();
     android::sp<android::IServiceManager> sm = android::defaultServiceManager();
     android::sp<keystore::KeyStoreService> service = new keystore::KeyStoreService(&keyStore);

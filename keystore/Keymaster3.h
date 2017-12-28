@@ -36,7 +36,8 @@ using ::android::hardware::details::return_status;
 
 class Keymaster3 : public Keymaster {
   public:
-    Keymaster3(sp<IKeymaster3Device> km3_dev) : km3_dev_(km3_dev) {}
+    using WrappedIKeymasterDevice = IKeymaster3Device;
+    Keymaster3(sp<IKeymaster3Device> km3_dev) : km3_dev_(km3_dev), haveVersion_(false) {}
 
     VersionResult halVersion() override;
 
@@ -105,9 +106,9 @@ class Keymaster3 : public Keymaster {
 
     sp<IKeymaster3Device> km3_dev_;
 
-    bool haveVersion_ = false;
+    bool haveVersion_;
     uint8_t majorVersion_;
-    bool isSecure_;
+    SecurityLevel securityLevel_;
     bool supportsEllipticCurve_;
     bool supportsSymmetricCryptography_;
     bool supportsAttestation_;

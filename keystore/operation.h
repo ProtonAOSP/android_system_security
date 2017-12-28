@@ -24,7 +24,7 @@
 #include <binder/IBinder.h>
 #include <utils/StrongPointer.h>
 
-#include <keystore/keymaster_tags.h>
+#include <keystore/keymaster_types.h>
 
 #include "Keymaster.h"
 

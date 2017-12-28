@@ -18,9 +18,11 @@
 #ifndef KEYSTORE_KEYSTORE_AIDL_HIDL_MARSHALLING_UTILS_H_
 #define KEYSTORE_KEYSTORE_AIDL_HIDL_MARSHALLING_UTILS_H_
 
-#include <binder/Parcel.h>
-#include <keystore/keymaster_tags.h>
 #include <utility>
+
+#include <binder/Parcel.h>
+
+#include <keystore/keymaster_types.h>
 
 namespace keystore {
 

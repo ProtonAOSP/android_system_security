@@ -43,10 +43,26 @@ const android::String16 KeyStore::kEcKeyType("EC");
 
 using android::String8;
 
-KeyStore::KeyStore(Entropy* entropy, const sp<Keymaster>& device, const sp<Keymaster>& fallback,
-                   bool allowNewFallback)
-    : mEntropy(entropy), mDevice(device), mFallbackDevice(fallback),
-      mAllowNewFallback(allowNewFallback) {
+sp<Keymaster>& KeymasterDevices::operator[](SecurityLevel secLevel) {
+    static_assert(uint32_t(SecurityLevel::SOFTWARE) == 0 &&
+                      uint32_t(SecurityLevel::TRUSTED_ENVIRONMENT) == 1 &&
+                      uint32_t(SecurityLevel::STRONGBOX) == 2,
+                  "Numeric values of security levels have changed");
+    return at(static_cast<uint32_t>(secLevel));
+}
+
+sp<Keymaster> KeymasterDevices::operator[](SecurityLevel secLevel) const {
+    if (static_cast<uint32_t>(secLevel) > static_cast<uint32_t>(SecurityLevel::STRONGBOX)) {
+        LOG(ERROR) << "Invalid security level requested";
+        return nullptr;
+    }
+    return (*const_cast<KeymasterDevices*>(this))[secLevel];
+}
+
+KeyStore::KeyStore(Entropy* entropy, const KeymasterDevices& kmDevices,
+                   SecurityLevel minimalAllowedSecurityLevelForNewKeys)
+    : mEntropy(entropy), mKmDevices(kmDevices),
+      mAllowNewFallback(minimalAllowedSecurityLevelForNewKeys == SecurityLevel::SOFTWARE) {
     memset(&mMetaData, '\0', sizeof(mMetaData));
 }
 
@@ -359,7 +375,7 @@ ResponseCode KeyStore::del(const char* filename, const BlobType type, uid_t user
         return rc;
     }
 
-    auto& dev = getDevice(keyBlob);
+    auto dev = getDevice(keyBlob);
 
     if (keyBlob.getType() == ::TYPE_KEY_PAIR || keyBlob.getType() == ::TYPE_KEYMASTER_10) {
         auto ret = KS_HANDLE_HIDL_ERROR(dev->deleteKey(blob2hidlVec(keyBlob)));
@@ -533,8 +549,18 @@ ResponseCode KeyStore::importKey(const uint8_t* key, size_t keyLen, const char* 
     };
     auto input = blob2hidlVec(key, keyLen);
 
+    SecurityLevel securityLevel = flagsToSecurityLevel(flags);
+    auto kmDevice = getDevice(securityLevel);
+    if (!kmDevice) {
+        // As of this writing the only caller is KeyStore::get in an attempt to import legacy
+        // software keys. It only ever requests TEE as target which must always be present.
+        // If we see this error, we probably have a new and unanticipated caller.
+        ALOGE("No implementation for security level %d. Cannot import key.", securityLevel);
+        return ResponseCode::SYSTEM_ERROR;
+    }
+
     ErrorCode rc = KS_HANDLE_HIDL_ERROR(
-        mDevice->importKey(params.hidl_data(), KeyFormat::PKCS8, input, hidlCb));
+        kmDevice->importKey(params.hidl_data(), KeyFormat::PKCS8, input, hidlCb));
     if (rc != ErrorCode::OK) return ResponseCode::SYSTEM_ERROR;
     if (error != ErrorCode::OK) {
         ALOGE("Keymaster error %d importing key pair", error);
@@ -544,24 +570,25 @@ ResponseCode KeyStore::importKey(const uint8_t* key, size_t keyLen, const char* 
     Blob keyBlob(&blob[0], blob.size(), NULL, 0, TYPE_KEYMASTER_10);
 
     keyBlob.setEncrypted(flags & KEYSTORE_FLAG_ENCRYPTED);
-    keyBlob.setFallback(false);
+    keyBlob.setSecurityLevel(securityLevel);
 
     return put(filename, &keyBlob, userId);
 }
 
 bool KeyStore::isHardwareBacked(const android::String16& keyType) const {
-    if (mDevice == NULL) {
+    // if strongbox device is present TEE must also be present and of sufficiently high version
+    // to support all keys in hardware
+    if (getDevice(SecurityLevel::STRONGBOX)) return true;
+    if (!getDevice(SecurityLevel::TRUSTED_ENVIRONMENT)) {
         ALOGW("can't get keymaster device");
         return false;
     }
 
-    auto version = mDevice->halVersion();
+    auto version = getDevice(SecurityLevel::TRUSTED_ENVIRONMENT)->halVersion();
     if (version.error != ErrorCode::OK) {
         ALOGE("Failed to get HAL version info");
         return false;
     }
-
-    if (!version.isSecure) return false;
 
     if (keyType == kRsaKeyType) return true;  // All versions support RSA
     return keyType == kEcKeyType && version.supportsEc;

@@ -17,16 +17,13 @@
 #include <string>
 #include <vector>
 
-#include "base/command_line.h"
-#include "base/files/file_util.h"
-#include "base/strings/string_util.h"
-#include "keystore/authorization_set.h"
-#include "keystore/keymaster_tags.h"
-#include "keystore/keystore_client_impl.h"
+#include <base/command_line.h>
+#include <base/files/file_util.h>
+#include <base/strings/string_util.h>
+#include <keystore/keymaster_types.h>
+#include <keystore/keystore_client_impl.h>
 
 using base::CommandLine;
-using keystore::AuthorizationSet;
-//using keymaster::AuthorizationSetBuilder;
 using keystore::KeystoreClient;
 
 namespace {
@@ -42,8 +39,8 @@ void PrintUsageAndExit() {
     printf("Usage: keystore_client_v2 <command> [options]\n");
     printf("Commands: brillo-platform-test [--prefix=<test_name_prefix>] [--test_for_0_3]\n"
            "          list-brillo-tests\n"
-           "          add-entropy --input=<entropy>\n"
-           "          generate --name=<key_name>\n"
+           "          add-entropy --input=<entropy> [--seclevel=software|strongbox|tee(default)]\n"
+           "          generate --name=<key_name> [--seclevel=software|strongbox|tee(default)]\n"
            "          get-chars --name=<key_name>\n"
            "          export --name=<key_name>\n"
            "          delete --name=<key_name>\n"
@@ -51,18 +48,20 @@ void PrintUsageAndExit() {
            "          exists --name=<key_name>\n"
            "          list [--prefix=<key_name_prefix>]\n"
            "          sign-verify --name=<key_name>\n"
-           "          [en|de]crypt --name=<key_name> --in=<file> --out=<file>\n");
+           "          [en|de]crypt --name=<key_name> --in=<file> --out=<file>\n"
+           "                       [--seclevel=software|strongbox|tee(default)]\n");
     exit(1);
 }
 
 std::unique_ptr<KeystoreClient> CreateKeystoreInstance() {
     return std::unique_ptr<KeystoreClient>(
-            static_cast<KeystoreClient*>(new keystore::KeystoreClientImpl));
+        static_cast<KeystoreClient*>(new keystore::KeystoreClientImpl));
 }
 
 void PrintTags(const AuthorizationSet& parameters) {
     for (auto iter = parameters.begin(); iter != parameters.end(); ++iter) {
-        printf("  %s\n", stringifyTag(iter->tag));
+        auto tag_str = toString(iter->tag);
+        printf("  %s\n", tag_str.c_str());
     }
 }
 
@@ -78,8 +77,9 @@ bool TestKey(const std::string& name, bool required, const AuthorizationSet& par
     std::unique_ptr<KeystoreClient> keystore = CreateKeystoreInstance();
     AuthorizationSet hardware_enforced_characteristics;
     AuthorizationSet software_enforced_characteristics;
-    auto result = keystore->generateKey("tmp", parameters, &hardware_enforced_characteristics,
-                                           &software_enforced_characteristics);
+    auto result =
+        keystore->generateKey("tmp", parameters, 0 /*flags*/, &hardware_enforced_characteristics,
+                              &software_enforced_characteristics);
     const char kBoldRedAbort[] = "\033[1;31mABORT\033[0m";
     if (!result.isOk()) {
         LOG(ERROR) << "Failed to generate key: " << result;
@@ -120,9 +120,7 @@ AuthorizationSet GetRSASignParameters(uint32_t key_size, bool sha256_only) {
         .Padding(PaddingMode::RSA_PSS)
         .Authorization(TAG_NO_AUTH_REQUIRED);
     if (!sha256_only) {
-        parameters.Digest(Digest::SHA_2_224)
-            .Digest(Digest::SHA_2_384)
-            .Digest(Digest::SHA_2_512);
+        parameters.Digest(Digest::SHA_2_224).Digest(Digest::SHA_2_384).Digest(Digest::SHA_2_512);
     }
     return parameters;
 }
@@ -142,9 +140,7 @@ AuthorizationSet GetECDSAParameters(uint32_t key_size, bool sha256_only) {
         .Digest(Digest::SHA_2_256)
         .Authorization(TAG_NO_AUTH_REQUIRED);
     if (!sha256_only) {
-        parameters.Digest(Digest::SHA_2_224)
-            .Digest(Digest::SHA_2_384)
-            .Digest(Digest::SHA_2_512);
+        parameters.Digest(Digest::SHA_2_224).Digest(Digest::SHA_2_384).Digest(Digest::SHA_2_512);
     }
     return parameters;
 }
@@ -205,7 +201,8 @@ int BrilloPlatformTest(const std::string& prefix, bool test_for_0_3) {
     const char kBoldYellowWarning[] = "\033[1;33mWARNING\033[0m";
     if (test_for_0_3) {
         printf("%s: Testing for keymaster v0.3. "
-               "This does not meet Brillo requirements.\n", kBoldYellowWarning);
+               "This does not meet Brillo requirements.\n",
+               kBoldYellowWarning);
     }
     int test_count = 0;
     int fail_count = 0;
@@ -259,14 +256,14 @@ void WriteFile(const std::string& filename, const std::string& content) {
     }
 }
 
-int AddEntropy(const std::string& input) {
+int AddEntropy(const std::string& input, int32_t flags) {
     std::unique_ptr<KeystoreClient> keystore = CreateKeystoreInstance();
-    int32_t result = keystore->addRandomNumberGeneratorEntropy(input);
+    int32_t result = keystore->addRandomNumberGeneratorEntropy(input, flags);
     printf("AddEntropy: %d\n", result);
     return result;
 }
 
-int GenerateKey(const std::string& name) {
+int GenerateKey(const std::string& name, int32_t flags) {
     std::unique_ptr<KeystoreClient> keystore = CreateKeystoreInstance();
     AuthorizationSetBuilder params;
     params.RsaSigningKey(2048, 65537)
@@ -279,8 +276,8 @@ int GenerateKey(const std::string& name) {
         .Authorization(TAG_NO_AUTH_REQUIRED);
     AuthorizationSet hardware_enforced_characteristics;
     AuthorizationSet software_enforced_characteristics;
-    auto result = keystore->generateKey(name, params, &hardware_enforced_characteristics,
-                                           &software_enforced_characteristics);
+    auto result = keystore->generateKey(name, params, flags, &hardware_enforced_characteristics,
+                                        &software_enforced_characteristics);
     printf("GenerateKey: %d\n", int32_t(result));
     if (result.isOk()) {
         PrintKeyCharacteristics(hardware_enforced_characteristics,
@@ -294,7 +291,7 @@ int GetCharacteristics(const std::string& name) {
     AuthorizationSet hardware_enforced_characteristics;
     AuthorizationSet software_enforced_characteristics;
     auto result = keystore->getKeyCharacteristics(name, &hardware_enforced_characteristics,
-                                                     &software_enforced_characteristics);
+                                                  &software_enforced_characteristics);
     printf("GetCharacteristics: %d\n", int32_t(result));
     if (result.isOk()) {
         PrintKeyCharacteristics(hardware_enforced_characteristics,
@@ -352,8 +349,8 @@ int SignAndVerify(const std::string& name) {
     sign_params.Digest(Digest::SHA_2_256);
     AuthorizationSet output_params;
     uint64_t handle;
-    auto result = keystore->beginOperation(KeyPurpose::SIGN, name, sign_params,
-                                              &output_params, &handle);
+    auto result =
+        keystore->beginOperation(KeyPurpose::SIGN, name, sign_params, &output_params, &handle);
     if (!result.isOk()) {
         printf("Sign: BeginOperation failed: %d\n", int32_t(result));
         return result;
@@ -377,8 +374,8 @@ int SignAndVerify(const std::string& name) {
     // We have a signature, now verify it.
     std::string signature_to_verify = output_data;
     output_data.clear();
-    result = keystore->beginOperation(KeyPurpose::VERIFY, name, sign_params, &output_params,
-                                      &handle);
+    result =
+        keystore->beginOperation(KeyPurpose::VERIFY, name, sign_params, &output_params, &handle);
     if (!result.isOk()) {
         printf("Verify: BeginOperation failed: %d\n", int32_t(result));
         return result;
@@ -404,11 +401,11 @@ int SignAndVerify(const std::string& name) {
 }
 
 int Encrypt(const std::string& key_name, const std::string& input_filename,
-            const std::string& output_filename) {
+            const std::string& output_filename, int32_t flags) {
     std::unique_ptr<KeystoreClient> keystore = CreateKeystoreInstance();
     std::string input = ReadFile(input_filename);
     std::string output;
-    if (!keystore->encryptWithAuthentication(key_name, input, &output)) {
+    if (!keystore->encryptWithAuthentication(key_name, input, flags, &output)) {
         printf("EncryptWithAuthentication failed.\n");
         return 1;
     }
@@ -429,6 +426,18 @@ int Decrypt(const std::string& key_name, const std::string& input_filename,
     return 0;
 }
 
+uint32_t securityLevelOption2Flags(const CommandLine& cmd) {
+    if (cmd.HasSwitch("seclevel")) {
+        auto str = cmd.GetSwitchValueASCII("seclevel");
+        if (str == "strongbox") {
+            return KEYSTORE_FLAG_STRONGBOX;
+        } else if (str == "software") {
+            return KEYSTORE_FLAG_FALLBACK;
+        }
+    }
+    return KEYSTORE_FLAG_NONE;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -444,9 +453,11 @@ int main(int argc, char** argv) {
     } else if (args[0] == "list-brillo-tests") {
         return ListTestCases();
     } else if (args[0] == "add-entropy") {
-        return AddEntropy(command_line->GetSwitchValueASCII("input"));
+        return AddEntropy(command_line->GetSwitchValueASCII("input"),
+                          securityLevelOption2Flags(*command_line));
     } else if (args[0] == "generate") {
-        return GenerateKey(command_line->GetSwitchValueASCII("name"));
+        return GenerateKey(command_line->GetSwitchValueASCII("name"),
+                           securityLevelOption2Flags(*command_line));
     } else if (args[0] == "get-chars") {
         return GetCharacteristics(command_line->GetSwitchValueASCII("name"));
     } else if (args[0] == "export") {
@@ -462,9 +473,9 @@ int main(int argc, char** argv) {
     } else if (args[0] == "sign-verify") {
         return SignAndVerify(command_line->GetSwitchValueASCII("name"));
     } else if (args[0] == "encrypt") {
-        return Encrypt(command_line->GetSwitchValueASCII("name"),
-                       command_line->GetSwitchValueASCII("in"),
-                       command_line->GetSwitchValueASCII("out"));
+        return Encrypt(
+            command_line->GetSwitchValueASCII("name"), command_line->GetSwitchValueASCII("in"),
+            command_line->GetSwitchValueASCII("out"), securityLevelOption2Flags(*command_line));
     } else if (args[0] == "decrypt") {
         return Decrypt(command_line->GetSwitchValueASCII("name"),
                        command_line->GetSwitchValueASCII("in"),

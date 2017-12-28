@@ -23,6 +23,7 @@ cc_binary {
         ":IKeyAttestationApplicationIdProvider.aidl",
         "KeyStore.cpp",
         "Keymaster3.cpp",
+        "Keymaster4.cpp",
         "auth_token_table.cpp",
         "blob.cpp",
         "entropy.cpp",
@@ -49,6 +50,7 @@ cc_binary {
         "libhidlbase",
         "libhidltransport",
         "libhwbinder",
+        "libkeymaster4support",
         "libkeymaster_messages",
         "libkeymaster_portable",
         "libkeystore_aidl",
@@ -110,6 +112,7 @@ cc_binary {
         "libchrome",
         "libhidlbase",
         "libhwbinder",
+        "libkeymaster4support",
         "libkeystore_binder",
     ],
 
@@ -135,6 +138,7 @@ cc_library_shared {
         "libhardware",
         "libhidlbase",
         "libhwbinder",
+        "libkeymaster4support",
         "liblog",
         "libprotobuf-cpp-lite",
         "libutils",
@@ -144,6 +148,7 @@ cc_library_shared {
         "libbinder",
         "libhidlbase",
         "libhwbinder",
+        "libkeymaster4support",
     ],
 }
 // Library for keystore clients
@@ -152,21 +157,20 @@ cc_library_shared {
     defaults: ["keystore_defaults"],
 
     srcs: [
-        "authorization_set.cpp",
         "keyblob_utils.cpp",
         "keystore_client.proto",
         "keystore_client_impl.cpp",
         "keystore_get.cpp",
-        "keystore_tags_utils.cpp",
     ],
     shared_libs: [
-        "android.hardware.keymaster@3.0",
+        "android.hardware.keymaster@4.0",
         "libbinder",
         "libhidlbase",
         "libhwbinder",
-        "liblog",
+        "libkeymaster4support",
         "libkeystore_aidl",
         "libkeystore_parcelables",
+        "liblog",
         "libprotobuf-cpp-lite",
         "libutils",
     ],
@@ -181,7 +185,7 @@ cc_library_shared {
     },
     export_include_dirs: ["include"],
     export_shared_lib_headers: [
-        "android.hardware.keymaster@3.0",
+        "android.hardware.keymaster@4.0",
         "libbinder",
         "libhidlbase",
         "libhwbinder",
@@ -217,19 +221,21 @@ cc_library_static {
 
     srcs: [
         "auth_token_table.cpp",
-        "authorization_set.cpp",
     ],
+    cflags: [ "-O0", ],
     static_libs: ["libgtest_main"],
     shared_libs: [
         "android.hardware.keymaster@4.0",
         "libhidlbase",
         "libhwbinder",
+        "libkeymaster4support",
         "libutils",
     ],
     export_shared_lib_headers: [
         "android.hardware.keymaster@4.0",
         "libhidlbase",
         "libhwbinder",
+        "libkeymaster4support",
     ],
 
     export_include_dirs: ["include"],
