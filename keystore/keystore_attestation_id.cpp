@@ -37,6 +37,7 @@
 #include <private/android_filesystem_config.h> /* for AID_SYSTEM */
 
 #include <openssl/asn1t.h>
+#include <openssl/bn.h>
 #include <openssl/sha.h>
 
 #include <utils/String8.h>
@@ -148,10 +149,20 @@ status_t build_attestation_package_info(const KeyAttestationPackageInfo& pinfo,
         return UNKNOWN_ERROR;
     }
 
-    if (!ASN1_INTEGER_set(attestation_package_info->version, pinfo.version_code())) {
+    BIGNUM* bn_version = BN_new();
+    if (bn_version == nullptr) {
+        return NO_MEMORY;
+    }
+    if (BN_set_u64(bn_version, static_cast<uint64_t>(pinfo.version_code())) != 1) {
+        BN_free(bn_version);
         return UNKNOWN_ERROR;
     }
-    return NO_ERROR;
+    status_t retval = NO_ERROR;
+    if (BN_to_ASN1_INTEGER(bn_version, attestation_package_info->version) == nullptr) {
+        retval = UNKNOWN_ERROR;
+    }
+    BN_free(bn_version);
+    return retval;
 }
 
 StatusOr<std::vector<uint8_t>>

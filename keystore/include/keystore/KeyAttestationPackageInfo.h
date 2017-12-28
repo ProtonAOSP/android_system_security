@@ -37,22 +37,22 @@ class KeyAttestationPackageInfo : public Parcelable {
         SignaturesVector;
     typedef std::shared_ptr<SignaturesVector> SharedSignaturesVector;
 
-    KeyAttestationPackageInfo(
-        const String16& packageName, int32_t versionCode, SharedSignaturesVector signatures);
+    KeyAttestationPackageInfo(const String16& packageName, int64_t versionCode,
+                              SharedSignaturesVector signatures);
     KeyAttestationPackageInfo();
 
     status_t writeToParcel(Parcel*) const override;
     status_t readFromParcel(const Parcel* parcel) override;
 
     const std::unique_ptr<String16>& package_name() const { return packageName_; }
-    int32_t version_code() const { return versionCode_; }
+    int64_t version_code() const { return versionCode_; }
 
     ConstSignatureIterator sigs_begin() const { return ConstSignatureIterator(signatures_); }
     ConstSignatureIterator sigs_end() const { return ConstSignatureIterator(); }
 
   private:
     std::unique_ptr<String16> packageName_;
-    int32_t versionCode_;
+    int64_t versionCode_;
     SharedSignaturesVector signatures_;
 };
 
