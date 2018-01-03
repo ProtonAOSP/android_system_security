@@ -158,8 +158,6 @@ KeymasterDevices initializeKeymasters() {
     auto serviceManager = android::hidl::manager::V1_1::IServiceManager::getService();
     CHECK(serviceManager.get()) << "Failed to get ServiceManager";
     auto result = enumerateKeymasterDevices<Keymaster4>(serviceManager.get());
-    CHECK(result[SecurityLevel::TRUSTED_ENVIRONMENT] || !result[SecurityLevel::STRONGBOX])
-        << "We cannot have a Strongbox keymaster implementation without a TEE implementation";
     auto softKeymaster = result[SecurityLevel::SOFTWARE];
     if (result[SecurityLevel::TRUSTED_ENVIRONMENT]) {
         performHmacKeyHandshake(
