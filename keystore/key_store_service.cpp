@@ -49,7 +49,6 @@ using namespace android;
 namespace {
 
 using ::android::binder::Status;
-using ::android::hardware::keymaster::V3_0::KeyFormat;
 using android::security::KeystoreArg;
 using android::security::keymaster::ExportResult;
 using android::security::keymaster::KeymasterArguments;

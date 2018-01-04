@@ -15,6 +15,7 @@
 #ifndef SECURITY_KEYSTORE_INCLUDE_KEYSTORE_KEYMASTER_TYPES_H_
 #define SECURITY_KEYSTORE_INCLUDE_KEYSTORE_KEYMASTER_TYPES_H_
 
+#include <android/hardware/keymaster/3.0/types.h>
 #include <android/hardware/keymaster/4.0/IKeymasterDevice.h>
 #include <android/hardware/keymaster/4.0/types.h>
 
