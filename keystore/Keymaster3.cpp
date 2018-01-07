@@ -36,6 +36,10 @@ oldkeymaster::KeyPurpose convert(KeyPurpose purpose) {
     return static_cast<oldkeymaster::KeyPurpose>(purpose);
 }
 
+oldkeymaster::KeyFormat convert(KeyFormat purpose) {
+    return static_cast<oldkeymaster::KeyFormat>(purpose);
+}
+
 oldkeymaster::KeyParameter convert(const KeyParameter& param) {
     oldkeymaster::KeyParameter converted;
     converted.tag = static_cast<oldkeymaster::Tag>(param.tag);
@@ -170,7 +174,7 @@ Return<void> Keymaster3::importKey(const hidl_vec<KeyParameter>& params, KeyForm
                   const oldkeymaster::KeyCharacteristics& chars) {
         _hidl_cb(convert(error), keyBlob, convert(chars));
     };
-    auto rc = km3_dev_->importKey(convert(params), keyFormat, keyData, cb);
+    auto rc = km3_dev_->importKey(convert(params), convert(keyFormat), keyData, cb);
     rc.isOk();  // move ctor prereq
     return rc;
 }
@@ -181,7 +185,7 @@ Return<void> Keymaster3::exportKey(KeyFormat exportFormat, const hidl_vec<uint8_
     auto cb = [&](oldkeymaster::ErrorCode error, const hidl_vec<uint8_t>& keyMaterial) {
         _hidl_cb(convert(error), keyMaterial);
     };
-    auto rc = km3_dev_->exportKey(exportFormat, keyBlob, clientId, appData, cb);
+    auto rc = km3_dev_->exportKey(convert(exportFormat), keyBlob, clientId, appData, cb);
     rc.isOk();  // move ctor prereq
     return rc;
 }
