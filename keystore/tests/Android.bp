@@ -23,4 +23,7 @@ cc_test {
         "liblog",
     ],
     shared_libs: ["libkeymaster_messages"],
+   sanitize: {
+     cfi: false,
+   }
 }
