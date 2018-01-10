@@ -337,6 +337,7 @@ ErrorCode KeymasterEnforcement::AuthorizeBegin(const KeyPurpose purpose, const k
         case Tag::APPLICATION_ID:
         case Tag::OS_VERSION:
         case Tag::OS_PATCHLEVEL:
+        case Tag::TRUSTED_USER_PRESENCE_REQUIRED:
 
         /* TODO(swillden): Handle these */
         case Tag::INCLUDE_UNIQUE_ID:
