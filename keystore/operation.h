@@ -49,7 +49,7 @@ class OperationMap {
         Operation(Operation&&) = default;
         Operation(const Operation&) = delete;
 
-        bool hasAuthToken() const { return authToken.mac.size() == 0; }
+        bool hasAuthToken() const { return authToken.mac.size() != 0; }
 
         uint64_t handle;
         uint64_t keyid;
