@@ -22,8 +22,6 @@ cc_binary {
     srcs: [
         ":IKeyAttestationApplicationIdProvider.aidl",
         "KeyStore.cpp",
-        "Keymaster3.cpp",
-        "Keymaster4.cpp",
         "auth_token_table.cpp",
         "blob.cpp",
         "entropy.cpp",
