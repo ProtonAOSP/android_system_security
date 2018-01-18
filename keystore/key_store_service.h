@@ -94,9 +94,6 @@ class KeyStoreService : public android::security::BnKeystoreService,
                                       int32_t* _aidl_return) override;
     ::android::binder::Status getmtime(const ::android::String16& name, int32_t uid,
                                        int64_t* _aidl_return) override;
-    ::android::binder::Status duplicate(const ::android::String16& srcKey, int32_t srcUid,
-                                        const ::android::String16& destKey, int32_t destUid,
-                                        int32_t* _aidl_return) override;
     ::android::binder::Status is_hardware_backed(const ::android::String16& string,
                                                  int32_t* _aidl_return) override;
     ::android::binder::Status clear_uid(int64_t uid, int32_t* _aidl_return) override;
