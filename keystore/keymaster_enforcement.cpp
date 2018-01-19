@@ -335,9 +335,11 @@ ErrorCode KeymasterEnforcement::AuthorizeBegin(const KeyPurpose purpose, const k
 
         /* Tags that are implicitly verified by secure side */
         case Tag::APPLICATION_ID:
-        case Tag::OS_VERSION:
+        case Tag::BOOT_PATCHLEVEL:
         case Tag::OS_PATCHLEVEL:
+        case Tag::OS_VERSION:
         case Tag::TRUSTED_USER_PRESENCE_REQUIRED:
+        case Tag::VENDOR_PATCHLEVEL:
 
         /* TODO(swillden): Handle these */
         case Tag::INCLUDE_UNIQUE_ID:
