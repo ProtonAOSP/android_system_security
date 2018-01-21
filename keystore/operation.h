@@ -22,16 +22,16 @@
 
 #include <binder/Binder.h>
 #include <binder/IBinder.h>
+#include <keymasterV4_0/Keymaster.h>
 #include <utils/StrongPointer.h>
 
 #include <keystore/keymaster_types.h>
-
-#include "Keymaster.h"
 
 namespace keystore {
 
 using ::android::IBinder;
 using ::android::sp;
+using keymaster::support::Keymaster;
 
 /**
  * OperationMap handles the translation of uint64_t's and keymaster2_device_t's to opaque binder

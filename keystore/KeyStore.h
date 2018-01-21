@@ -18,12 +18,11 @@
 #define KEYSTORE_KEYSTORE_H_
 
 #include <android/hardware/keymaster/3.0/IKeymasterDevice.h>
-
+#include <keymasterV4_0/Keymaster.h>
 #include <utils/Vector.h>
 
 #include <keystore/keymaster_types.h>
 
-#include "Keymaster.h"
 #include "blob.h"
 #include "grant_store.h"
 #include "user_state.h"
@@ -31,6 +30,7 @@
 namespace keystore {
 
 using ::android::sp;
+using keymaster::support::Keymaster;
 
 class KeymasterDevices : public std::array<sp<Keymaster>, 3> {
   public:
