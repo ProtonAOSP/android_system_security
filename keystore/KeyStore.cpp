@@ -585,11 +585,6 @@ bool KeyStore::isHardwareBacked(const android::String16& keyType) const {
     }
 
     auto version = getDevice(SecurityLevel::TRUSTED_ENVIRONMENT)->halVersion();
-    if (version.error != ErrorCode::OK) {
-        ALOGE("Failed to get HAL version info");
-        return false;
-    }
-
     if (keyType == kRsaKeyType) return true;  // All versions support RSA
     return keyType == kEcKeyType && version.supportsEc;
 }
