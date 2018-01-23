@@ -1690,13 +1690,10 @@ Status KeyStoreService::importWrappedKey(
         error = mKeyStore->put(filename.string(), &ksBlob, get_user_id(callingUid));
     };
 
-    // TODO b/70904859 sanitize params and forward to keymaster
-    // forward rootSid and fingerprintSid
-    (void)params;
-    (void)rootSid;
-    (void)fingerprintSid;
-    rc = KS_HANDLE_HIDL_ERROR(
-        dev->importWrappedKey(wrappedKey, hidlWrappingKey, maskingKey, hidlCb));
+    rc = KS_HANDLE_HIDL_ERROR(dev->importWrappedKey(wrappedKey, hidlWrappingKey, maskingKey,
+                                                    params.getParameters(), rootSid, fingerprintSid,
+                                                    hidlCb));
+
     // possible hidl error
     if (!rc.isOk()) {
         return AIDL_RETURN(rc);
