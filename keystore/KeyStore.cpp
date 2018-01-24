@@ -28,10 +28,21 @@
 
 #include <android/hardware/keymaster/3.0/IKeymasterDevice.h>
 #include <android/security/IKeystoreService.h>
+#include <log/log_event_list.h>
+
+#include <private/android_logger.h>
 
 #include "keystore_utils.h"
 #include "permissions.h"
 #include <keystore/keystore_hidl_support.h>
+
+namespace {
+
+// Tags for audit logging. Be careful and don't log sensitive data.
+// Should be in sync with frameworks/base/core/java/android/app/admin/SecurityLogTags.logtags
+constexpr int SEC_TAG_KEY_DESTROYED = 210026;
+
+}  // anonymous namespace
 
 namespace keystore {
 
@@ -381,8 +392,12 @@ ResponseCode KeyStore::del(const char* filename, const BlobType type, uid_t user
         auto ret = KS_HANDLE_HIDL_ERROR(dev->deleteKey(blob2hidlVec(keyBlob)));
 
         // A device doesn't have to implement delete_key.
-        if (ret != ErrorCode::OK && ret != ErrorCode::UNIMPLEMENTED)
-            return ResponseCode::SYSTEM_ERROR;
+        bool success = ret == ErrorCode::OK || ret == ErrorCode::UNIMPLEMENTED;
+        if (__android_log_security() && uidAlias.isOk()) {
+            android_log_event_list(SEC_TAG_KEY_DESTROYED)
+                << int32_t(success) << alias << int32_t(uid) << LOG_ID_SECURITY;
+        }
+        if (!success) return ResponseCode::SYSTEM_ERROR;
     }
 
     rc =
