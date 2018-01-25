@@ -19,12 +19,31 @@
 
 #include <base/command_line.h>
 #include <base/files/file_util.h>
+#include <base/strings/string_number_conversions.h>
+#include <base/strings/string_split.h>
 #include <base/strings/string_util.h>
+#include <base/strings/utf_string_conversions.h>
+#include <base/threading/platform_thread.h>
 #include <keystore/keymaster_types.h>
 #include <keystore/keystore_client_impl.h>
 
+#include <android/hardware/confirmationui/1.0/types.h>
+#include <android/security/BnConfirmationPromptCallback.h>
+#include <android/security/IKeystoreService.h>
+
+#include <binder/IPCThreadState.h>
+#include <binder/IServiceManager.h>
+
+//#include <keystore/keystore.h>
+
 using base::CommandLine;
 using keystore::KeystoreClient;
+
+using android::sp;
+using android::String16;
+using android::security::IKeystoreService;
+using base::CommandLine;
+using ConfirmationResponseCode = android::hardware::confirmationui::V1_0::ResponseCode;
 
 namespace {
 using namespace keystore;
@@ -49,7 +68,10 @@ void PrintUsageAndExit() {
            "          list [--prefix=<key_name_prefix>]\n"
            "          sign-verify --name=<key_name>\n"
            "          [en|de]crypt --name=<key_name> --in=<file> --out=<file>\n"
-           "                       [--seclevel=software|strongbox|tee(default)]\n");
+           "                       [--seclevel=software|strongbox|tee(default)]\n"
+           "          confirmation --prompt_text=<PromptText> --extra_data=<hex>\n"
+           "                       --locale=<locale> [--ui_options=<list_of_ints>]\n"
+           "                       --cancel_after=<seconds>\n");
     exit(1);
 }
 
@@ -438,6 +460,118 @@ uint32_t securityLevelOption2Flags(const CommandLine& cmd) {
     return KEYSTORE_FLAG_NONE;
 }
 
+class ConfirmationListener : public android::security::BnConfirmationPromptCallback {
+  public:
+    ConfirmationListener() {}
+
+    virtual ::android::binder::Status
+    onConfirmationPromptCompleted(int32_t result,
+                                  const ::std::vector<uint8_t>& dataThatWasConfirmed) override {
+        ConfirmationResponseCode responseCode = static_cast<ConfirmationResponseCode>(result);
+        printf("Confirmation prompt completed\n"
+               "responseCode = %d\n",
+               responseCode);
+        printf("dataThatWasConfirmed[%zd] = {", dataThatWasConfirmed.size());
+        size_t newLineCountDown = 16;
+        bool hasPrinted = false;
+        for (uint8_t element : dataThatWasConfirmed) {
+            if (hasPrinted) {
+                printf(", ");
+            }
+            if (newLineCountDown == 0) {
+                printf("\n  ");
+                newLineCountDown = 32;
+            }
+            printf("0x%02x", element);
+            hasPrinted = true;
+        }
+        printf("}\n");
+        exit(0);
+    }
+};
+
+int Confirmation(const std::string& promptText, const std::string& extraDataHex,
+                 const std::string& locale, const std::string& uiOptionsStr,
+                 const std::string& cancelAfter) {
+    sp<android::IServiceManager> sm = android::defaultServiceManager();
+    sp<android::IBinder> binder = sm->getService(String16("android.security.keystore"));
+    sp<IKeystoreService> service = android::interface_cast<IKeystoreService>(binder);
+    if (service == NULL) {
+        printf("error: could not connect to keystore service.\n");
+        return 1;
+    }
+
+    if (promptText.size() == 0) {
+        printf("The --promptText parameter cannot be empty.\n");
+        return 1;
+    }
+
+    std::vector<uint8_t> extraData;
+    if (!base::HexStringToBytes(extraDataHex, &extraData)) {
+        printf("The --extra_data parameter does not appear to be valid hexadecimal.\n");
+        return 1;
+    }
+
+    std::vector<std::string> pieces =
+        base::SplitString(uiOptionsStr, ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
+    int uiOptionsAsFlags = 0;
+    for (auto& p : pieces) {
+        int value;
+        if (!base::StringToInt(p, &value)) {
+            printf("Error parsing %s in --ui_options parameter as a number.\n", p.c_str());
+            return 1;
+        }
+        uiOptionsAsFlags |= (1 << value);
+    }
+
+    double cancelAfterValue = 0.0;
+
+    if (cancelAfter.size() > 0 && !base::StringToDouble(cancelAfter, &cancelAfterValue)) {
+        printf("Error parsing %s in --cancel_after parameter as a double.\n", cancelAfter.c_str());
+        return 1;
+    }
+
+    String16 promptText16(promptText.data(), promptText.size());
+    String16 locale16(locale.data(), locale.size());
+
+    sp<ConfirmationListener> listener = new ConfirmationListener();
+
+    int32_t aidl_return;
+    android::binder::Status status = service->presentConfirmationPrompt(
+        listener, promptText16, extraData, locale16, uiOptionsAsFlags, &aidl_return);
+    if (!status.isOk()) {
+        printf("Presenting confirmation prompt failed with binder status '%s'.\n",
+               status.toString8().c_str());
+        return 1;
+    }
+    ConfirmationResponseCode responseCode = static_cast<ConfirmationResponseCode>(aidl_return);
+    if (responseCode != ConfirmationResponseCode::OK) {
+        printf("Presenting confirmation prompt failed with response code %d.\n", responseCode);
+        return 1;
+    }
+
+    if (cancelAfterValue > 0.0) {
+        printf("Sleeping %.1f seconds before canceling prompt...\n", cancelAfterValue);
+        base::PlatformThread::Sleep(base::TimeDelta::FromSecondsD(cancelAfterValue));
+        status = service->cancelConfirmationPrompt(listener, &aidl_return);
+        if (!status.isOk()) {
+            printf("Canceling confirmation prompt failed with binder status '%s'.\n",
+                   status.toString8().c_str());
+            return 1;
+        }
+        responseCode = static_cast<ConfirmationResponseCode>(aidl_return);
+        if (responseCode != ConfirmationResponseCode::OK) {
+            printf("Canceling confirmation prompt failed with response code %d.\n", responseCode);
+            return 1;
+        }
+    }
+
+    printf("Waiting for prompt to complete - use Ctrl+C to abort...\n");
+    // Use the main thread to process Binder transactions.
+    android::IPCThreadState::self()->joinThreadPool();
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -480,6 +614,12 @@ int main(int argc, char** argv) {
         return Decrypt(command_line->GetSwitchValueASCII("name"),
                        command_line->GetSwitchValueASCII("in"),
                        command_line->GetSwitchValueASCII("out"));
+    } else if (args[0] == "confirmation") {
+        return Confirmation(command_line->GetSwitchValueASCII("prompt_text"),
+                            command_line->GetSwitchValueASCII("extra_data"),
+                            command_line->GetSwitchValueASCII("locale"),
+                            command_line->GetSwitchValueASCII("ui_options"),
+                            command_line->GetSwitchValueASCII("cancel_after"));
     } else {
         PrintUsageAndExit();
     }

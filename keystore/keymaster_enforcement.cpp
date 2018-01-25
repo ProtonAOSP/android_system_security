@@ -347,6 +347,8 @@ ErrorCode KeymasterEnforcement::AuthorizeBegin(const KeyPurpose purpose, const k
         case Tag::RESET_SINCE_ID_ROTATION:
         case Tag::ALLOW_WHILE_ON_BODY:
         case Tag::HARDWARE_TYPE:
+        case Tag::TRUSTED_CONFIRMATION_REQUIRED:
+        case Tag::CONFIRMATION_TOKEN:
             break;
 
         case Tag::BOOTLOADER_ONLY:
