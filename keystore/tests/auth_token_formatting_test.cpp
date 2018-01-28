@@ -19,6 +19,7 @@
 #include <endian.h>
 #include <hidl/HidlSupport.h>
 #include <keymaster/logger.h>
+#include <keymasterV4_0/keymaster_utils.h>
 
 #include <keystore/keymaster_types.h>
 #include <keystore/keystore_hidl_support.h>

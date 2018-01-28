@@ -26,10 +26,15 @@
 #include <android/hardware/keymaster/3.0/IKeymasterDevice.h>
 #include <hardware/hw_auth_token.h>
 #include <hidl/Status.h>
+#include <keymasterV4_0/keymaster_utils.h>
 
 #include <keystore/keymaster_types.h>
 
 namespace keystore {
+
+using android::hardware::keymaster::V4_0::support::blob2hidlVec;
+using android::hardware::keymaster::V4_0::support::hidlVec2AuthToken;
+using android::hardware::keymaster::V4_0::support::authToken2HidlVec;
 
 inline static std::ostream& formatArgs(std::ostream& out) {
     return out;
@@ -68,32 +73,6 @@ inline static ErrorCode ksHandleHidlError(const Return<void>& error, Msgs&&... m
 
 #define KS_HANDLE_HIDL_ERROR(rc)                                                                   \
     ::keystore::ksHandleHidlError(rc, __FILE__, ":", __LINE__, ":", __PRETTY_FUNCTION__)
-
-inline static hidl_vec<uint8_t> blob2hidlVec(const uint8_t* data, const size_t length,
-                                             bool inPlace = true) {
-    hidl_vec<uint8_t> result;
-    if (inPlace)
-        result.setToExternal(const_cast<unsigned char*>(data), length);
-    else {
-        result.resize(length);
-        memcpy(&result[0], data, length);
-    }
-    return result;
-}
-
-inline static hidl_vec<uint8_t> blob2hidlVec(const std::string& value) {
-    hidl_vec<uint8_t> result;
-    result.setToExternal(
-        reinterpret_cast<uint8_t*>(const_cast<std::string::value_type*>(value.data())),
-        static_cast<size_t>(value.size()));
-    return result;
-}
-
-inline static hidl_vec<uint8_t> blob2hidlVec(const std::vector<uint8_t>& blob) {
-    hidl_vec<uint8_t> result;
-    result.setToExternal(const_cast<uint8_t*>(blob.data()), static_cast<size_t>(blob.size()));
-    return result;
-}
 
 template <typename T, typename OutIter>
 inline static OutIter copy_bytes_to_iterator(const T& value, OutIter dest) {
@@ -155,59 +134,6 @@ inline static Km3HardwareAuthToken hidlVec2Km3AuthToken(const hidl_vec<uint8_t>&
     pos = copy_bytes_from_iterator(&token.authenticatorType, pos);
     pos = copy_bytes_from_iterator(&token.timestamp, pos);
     pos = std::copy(pos, pos + token.hmac.size(), &token.hmac[0]);
-
-    return token;
-}
-
-inline static hidl_vec<uint8_t> authToken2HidlVec(const HardwareAuthToken& token) {
-    static_assert(1 /* version size */ + sizeof(token.challenge) + sizeof(token.userId) +
-                          sizeof(token.authenticatorId) + sizeof(token.authenticatorType) +
-                          sizeof(token.timestamp) + kHmacSize ==
-                      sizeof(hw_auth_token_t),
-                  "HardwareAuthToken content size does not match hw_auth_token_t size");
-
-    hidl_vec<uint8_t> result;
-    result.resize(sizeof(hw_auth_token_t));
-    auto pos = result.begin();
-    *pos++ = 0;  // Version byte
-    pos = copy_bytes_to_iterator(token.challenge, pos);
-    pos = copy_bytes_to_iterator(token.userId, pos);
-    pos = copy_bytes_to_iterator(token.authenticatorId, pos);
-    auto auth_type = htonl(static_cast<uint32_t>(token.authenticatorType));
-    pos = copy_bytes_to_iterator(auth_type, pos);
-    auto timestamp = htonq(token.timestamp);
-    pos = copy_bytes_to_iterator(timestamp, pos);
-    if (token.mac.size() != kHmacSize) {
-        std::fill(pos, pos + kHmacSize, 0);
-    } else {
-        std::copy(token.mac.begin(), token.mac.end(), pos);
-    }
-
-    return result;
-}
-
-inline static HardwareAuthToken hidlVec2AuthToken(const hidl_vec<uint8_t>& buffer) {
-    HardwareAuthToken token;
-    static_assert(1 /* version size */ + sizeof(token.challenge) + sizeof(token.userId) +
-                          sizeof(token.authenticatorId) + sizeof(token.authenticatorType) +
-                          sizeof(token.timestamp) + kHmacSize ==
-                      sizeof(hw_auth_token_t),
-                  "HardwareAuthToken content size does not match hw_auth_token_t size");
-
-    if (buffer.size() != sizeof(hw_auth_token_t)) return {};
-
-    auto pos = buffer.begin();
-    ++pos;  // skip first byte
-    pos = copy_bytes_from_iterator(&token.challenge, pos);
-    pos = copy_bytes_from_iterator(&token.userId, pos);
-    pos = copy_bytes_from_iterator(&token.authenticatorId, pos);
-    pos = copy_bytes_from_iterator(&token.authenticatorType, pos);
-    token.authenticatorType = static_cast<HardwareAuthenticatorType>(
-        ntohl(static_cast<uint32_t>(token.authenticatorType)));
-    pos = copy_bytes_from_iterator(&token.timestamp, pos);
-    token.timestamp = ntohq(token.timestamp);
-    token.mac.resize(kHmacSize);
-    std::copy(pos, pos + kHmacSize, token.mac.data());
 
     return token;
 }
