@@ -142,6 +142,11 @@ class KeymasterEnforcement {
      */
     virtual bool ValidateTokenSignature(const HardwareAuthToken& token) const = 0;
 
+    /*
+     * Returns true if the device screen is currently locked for the specified user.
+     */
+    virtual bool is_device_locked(int32_t userId) const = 0;
+
   private:
     ErrorCode AuthorizeUpdateOrFinish(const AuthorizationSet& auth_set,
                                       const HardwareAuthToken& auth_token, uint64_t op_handle);
