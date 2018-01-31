@@ -25,12 +25,15 @@
 #include <algorithm>
 #include <sstream>
 
+#include <android-base/scopeguard.h>
 #include <binder/IInterface.h>
 #include <binder/IPCThreadState.h>
 #include <binder/IPermissionController.h>
 #include <binder/IServiceManager.h>
+#include <log/log_event_list.h>
 
 #include <private/android_filesystem_config.h>
+#include <private/android_logger.h>
 
 #include <android/hardware/keymaster/3.0/IHwKeymasterDevice.h>
 
@@ -60,6 +63,11 @@ using ConfirmationResponseCode = android::hardware::confirmationui::V1_0::Respon
 constexpr size_t kMaxOperations = 15;
 constexpr double kIdRotationPeriod = 30 * 24 * 60 * 60; /* Thirty days, in seconds */
 const char* kTimestampFilePath = "timestamp";
+
+// Tags for audit logging. Be careful and don't log sensitive data.
+// Should be in sync with frameworks/base/core/java/android/app/admin/SecurityLogTags.logtags
+constexpr int SEC_TAG_AUTH_KEY_GENERATED = 210024;
+constexpr int SEC_TAG_KEY_IMPORTED = 210025;
 
 struct BIGNUM_Delete {
     void operator()(BIGNUM* p) const { BN_free(p); }
@@ -735,6 +743,13 @@ KeyStoreService::generateKey(const String16& name, const KeymasterArguments& par
     // TODO(jbires): remove this getCallingUid call upon implementation of b/25646100
     uid_t originalUid = IPCThreadState::self()->getCallingUid();
     uid = getEffectiveUid(uid);
+    auto logOnScopeExit = android::base::make_scope_guard([&] {
+        if (__android_log_security()) {
+            android_log_event_list(SEC_TAG_AUTH_KEY_GENERATED)
+                << int32_t(*aidl_return == static_cast<int32_t>(ResponseCode::NO_ERROR))
+                << String8(name) << int32_t(uid) << LOG_ID_SECURITY;
+        }
+    });
     KeyStoreServiceReturnCode rc =
         checkBinderPermissionAndKeystoreState(P_INSERT, uid, flags & KEYSTORE_FLAG_ENCRYPTED);
     if (!rc.isOk()) {
@@ -950,6 +965,13 @@ KeyStoreService::importKey(const String16& name, const KeymasterArguments& param
                            int32_t* aidl_return) {
 
     uid = getEffectiveUid(uid);
+    auto logOnScopeExit = android::base::make_scope_guard([&] {
+        if (__android_log_security()) {
+            android_log_event_list(SEC_TAG_KEY_IMPORTED)
+                << int32_t(*aidl_return == static_cast<int32_t>(ResponseCode::NO_ERROR))
+                << String8(name) << int32_t(uid) << LOG_ID_SECURITY;
+        }
+    });
     KeyStoreServiceReturnCode rc =
         checkBinderPermissionAndKeystoreState(P_INSERT, uid, flags & KEYSTORE_FLAG_ENCRYPTED);
     if (!rc.isOk()) {
