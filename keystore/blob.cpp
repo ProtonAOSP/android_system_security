@@ -114,13 +114,13 @@ ResponseCode AES_gcm_decrypt(const uint8_t* in, uint8_t* out, size_t len, const 
     out_pos += out_len;
     if (!EVP_DecryptFinal_ex(ctx.get(), out_pos, &out_len)) {
         ALOGD("Failed to decrypt blob; ciphertext or tag is likely corrupted");
-        return ResponseCode::SYSTEM_ERROR;
+        return ResponseCode::VALUE_CORRUPTED;
     }
     out_pos += out_len;
     if (out_pos - out_tmp.get() != static_cast<ssize_t>(len)) {
         ALOGD("Encrypted plaintext is the wrong size, expected %zu, got %zd", len,
               out_pos - out_tmp.get());
-        return ResponseCode::SYSTEM_ERROR;
+        return ResponseCode::VALUE_CORRUPTED;
     }
 
     std::copy(out_tmp.get(), out_pos, out);
