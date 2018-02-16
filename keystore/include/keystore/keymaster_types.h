@@ -83,6 +83,7 @@ using keymaster::TAG_RESET_SINCE_ID_ROTATION;
 using keymaster::TAG_RSA_PUBLIC_EXPONENT;
 using keymaster::TAG_USAGE_EXPIRE_DATETIME;
 using keymaster::TAG_USER_AUTH_TYPE;
+using keymaster::TAG_USER_ID;
 using keymaster::TAG_USER_SECURE_ID;
 
 using keymaster::NullOr;
