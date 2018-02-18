@@ -64,11 +64,6 @@ constexpr size_t kMaxOperations = 15;
 constexpr double kIdRotationPeriod = 30 * 24 * 60 * 60; /* Thirty days, in seconds */
 const char* kTimestampFilePath = "timestamp";
 
-// Tags for audit logging. Be careful and don't log sensitive data.
-// Should be in sync with frameworks/base/core/java/android/app/admin/SecurityLogTags.logtags
-constexpr int SEC_TAG_AUTH_KEY_GENERATED = 210024;
-constexpr int SEC_TAG_KEY_IMPORTED = 210025;
-
 struct BIGNUM_Delete {
     void operator()(BIGNUM* p) const { BN_free(p); }
 };
@@ -372,6 +367,7 @@ Status KeyStoreService::lock(int32_t userId, int32_t* aidl_return) {
         return Status::ok();
     }
 
+    enforcement_policy.set_device_locked(true, userId);
     mKeyStore->lock(userId);
     *aidl_return = static_cast<int32_t>(ResponseCode::NO_ERROR);
     return Status::ok();
@@ -400,6 +396,7 @@ Status KeyStoreService::unlock(int32_t userId, const String16& pw, int32_t* aidl
         return Status::ok();
     }
 
+    enforcement_policy.set_device_locked(false, userId);
     const String8 password8(pw);
     // read master key, decrypt with password, initialize mMasterKey*.
     *aidl_return = static_cast<int32_t>(mKeyStore->readMasterKey(password8, userId));
@@ -916,6 +913,9 @@ Status KeyStoreService::getKeyCharacteristics(
     auto hidlCb = [&](ErrorCode ret, const KeyCharacteristics& keyCharacteristics) {
         error = ret;
         if (!error.isOk()) {
+            if (error == ErrorCode::INVALID_KEY_BLOB) {
+                log_key_integrity_violation(name8, targetUid);
+            }
             return;
         }
         *outCharacteristics =
@@ -1100,6 +1100,9 @@ Status KeyStoreService::exportKey(const String16& name, int32_t format,
     auto hidlCb = [&](ErrorCode ret, const ::android::hardware::hidl_vec<uint8_t>& keyMaterial) {
         result->resultCode = ret;
         if (!result->resultCode.isOk()) {
+            if (result->resultCode == ErrorCode::INVALID_KEY_BLOB) {
+                log_key_integrity_violation(name8, targetUid);
+            }
             return;
         }
         result->exportData = keyMaterial;
@@ -1262,6 +1265,9 @@ Status KeyStoreService::begin(const sp<IBinder>& appToken, const String16& name,
                       uint64_t operationHandle) {
         result->resultCode = ret;
         if (!result->resultCode.isOk()) {
+            if (result->resultCode == ErrorCode::INVALID_KEY_BLOB) {
+                log_key_integrity_violation(name8, targetUid);
+            }
             return;
         }
         result->handle = operationHandle;
@@ -1466,7 +1472,7 @@ Status KeyStoreService::isOperationAuthorized(const sp<IBinder>& token, bool* ai
 }
 
 Status KeyStoreService::addAuthToken(const ::std::vector<uint8_t>& authTokenAsVector,
-                                     int32_t* aidl_return) {
+                                     int32_t userId, int32_t* aidl_return) {
 
     // TODO(swillden): When gatekeeper and fingerprint are ready, this should be updated to
     // receive a HardwareAuthToken, rather than an opaque byte array.
@@ -1487,6 +1493,8 @@ Status KeyStoreService::addAuthToken(const ::std::vector<uint8_t>& authTokenAsVe
         *aidl_return = static_cast<int32_t>(KeyStoreServiceReturnCode(ErrorCode::INVALID_ARGUMENT));
         return Status::ok();
     }
+
+    enforcement_policy.set_device_locked(false, userId);
 
     mAuthTokenTable.AddAuthenticationToken(hidlVec2AuthToken(hidl_vec<uint8_t>(authTokenAsVector)));
     *aidl_return = static_cast<int32_t>(ResponseCode::NO_ERROR);
@@ -2151,6 +2159,9 @@ KeyStoreServiceReturnCode KeyStoreService::upgradeKeyBlob(const String16& name, 
     auto hidlCb = [&](ErrorCode ret, const ::std::vector<uint8_t>& upgradedKeyBlob) {
         error = ret;
         if (!error.isOk()) {
+            if (error == ErrorCode::INVALID_KEY_BLOB) {
+                log_key_integrity_violation(name8, uid);
+            }
             return;
         }
 

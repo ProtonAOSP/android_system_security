@@ -24,6 +24,9 @@
 
 #include <cutils/log.h>
 #include <private/android_filesystem_config.h>
+#include <private/android_logger.h>
+
+#include <log/log_event_list.h>
 
 #include <keystore/keymaster_types.h>
 #include <keystore/keystore_client.h>
@@ -93,6 +96,12 @@ uid_t get_app_id(uid_t uid) {
 
 uid_t get_user_id(uid_t uid) {
     return uid / AID_USER;
+}
+
+void log_key_integrity_violation(const char* name, uid_t uid) {
+    if (!__android_log_security()) return;
+    android_log_event_list(SEC_TAG_KEY_INTEGRITY_VIOLATION)
+        << name << int32_t(uid) << LOG_ID_SECURITY;
 }
 
 namespace keystore {

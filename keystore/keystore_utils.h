@@ -56,6 +56,15 @@ typedef std::unique_ptr<PKCS8_PRIV_KEY_INFO, PKCS8_PRIV_KEY_INFO_Delete> Unique_
 
 class Blob;
 
+// Tags for audit logging. Be careful and don't log sensitive data.
+// Should be in sync with frameworks/base/core/java/android/app/admin/SecurityLogTags.logtags
+constexpr int SEC_TAG_KEY_DESTROYED = 210026;
+constexpr int SEC_TAG_KEY_INTEGRITY_VIOLATION = 210032;
+constexpr int SEC_TAG_AUTH_KEY_GENERATED = 210024;
+constexpr int SEC_TAG_KEY_IMPORTED = 210025;
+
+void log_key_integrity_violation(const char* name, uid_t uid);
+
 namespace keystore {
 
 hidl_vec<uint8_t> blob2hidlVec(const Blob& blob);

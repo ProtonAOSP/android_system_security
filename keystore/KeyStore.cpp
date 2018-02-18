@@ -26,6 +26,7 @@
 #include <utils/String16.h>
 #include <utils/String8.h>
 
+#include <android-base/scopeguard.h>
 #include <android/hardware/keymaster/3.0/IKeymasterDevice.h>
 #include <android/security/IKeystoreService.h>
 #include <log/log_event_list.h>
@@ -35,14 +36,6 @@
 #include "keystore_utils.h"
 #include "permissions.h"
 #include <keystore/keystore_hidl_support.h>
-
-namespace {
-
-// Tags for audit logging. Be careful and don't log sensitive data.
-// Should be in sync with frameworks/base/core/java/android/app/admin/SecurityLogTags.logtags
-constexpr int SEC_TAG_KEY_DESTROYED = 210026;
-
-}  // anonymous namespace
 
 namespace keystore {
 
@@ -305,10 +298,19 @@ void KeyStore::lock(uid_t userId) {
     userState->setState(STATE_LOCKED);
 }
 
+static void maybeLogKeyIntegrityViolation(const char* filename, const BlobType type);
+
 ResponseCode KeyStore::get(const char* filename, Blob* keyBlob, const BlobType type, uid_t userId) {
     UserState* userState = getUserState(userId);
-    ResponseCode rc =
-        keyBlob->readBlob(filename, userState->getEncryptionKey(), userState->getState());
+    ResponseCode rc;
+
+    auto logOnScopeExit = android::base::make_scope_guard([&] {
+        if (rc == ResponseCode::VALUE_CORRUPTED) {
+            maybeLogKeyIntegrityViolation(filename, type);
+        }
+    });
+
+    rc = keyBlob->readBlob(filename, userState->getEncryptionKey(), userState->getState());
     if (rc != ResponseCode::NO_ERROR) {
         return rc;
     }
@@ -835,6 +837,18 @@ bool KeyStore::upgradeKeystore() {
     }
 
     return upgraded;
+}
+
+static void maybeLogKeyIntegrityViolation(const char* filename, const BlobType type) {
+    if (!__android_log_security() || (type != TYPE_KEY_PAIR && type != TYPE_KEYMASTER_10)) return;
+
+    auto uidAlias = filename2UidAlias(filename);
+    uid_t uid = -1;
+    std::string alias;
+
+    if (uidAlias.isOk()) std::tie(uid, alias) = std::move(uidAlias).value();
+
+    log_key_integrity_violation(alias.c_str(), uid);
 }
 
 }  // namespace keystore
