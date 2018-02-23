@@ -177,6 +177,9 @@ class KeyStoreService : public android::security::BnKeystoreService,
                              int32_t* _aidl_return) override;
     ::android::binder::Status isConfirmationPromptSupported(bool* _aidl_return) override;
 
+    ::android::binder::Status onKeyguardVisibilityChanged(bool isShowing, int32_t userId,
+                                                          int32_t* _aidl_return);
+
   private:
     static const int32_t UID_SELF = -1;
 
