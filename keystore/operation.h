@@ -26,6 +26,10 @@
 #include <utils/StrongPointer.h>
 
 #include <keystore/keymaster_types.h>
+#include <keystore/keystore_hidl_support.h>
+
+#include "operation_proto_handler.h"
+#include "operation_struct.h"
 
 namespace keystore {
 
@@ -42,30 +46,13 @@ using keymaster::support::Keymaster;
 
 class OperationMap {
   public:
-    struct Operation {
-        Operation() = default;
-        Operation(uint64_t handle, uint64_t keyid, KeyPurpose purpose, const sp<Keymaster>& device,
-                  KeyCharacteristics&& characteristics, sp<IBinder> appToken);
-        Operation(Operation&&) = default;
-        Operation(const Operation&) = delete;
-
-        bool hasAuthToken() const { return authToken.mac.size() != 0; }
-
-        uint64_t handle;
-        uint64_t keyid;
-        KeyPurpose purpose;
-        sp<Keymaster> device;
-        KeyCharacteristics characteristics;
-        sp<IBinder> appToken;
-        HardwareAuthToken authToken;
-    };
-
     explicit OperationMap(IBinder::DeathRecipient* deathRecipient);
     sp<IBinder> addOperation(uint64_t handle, uint64_t keyid, KeyPurpose purpose,
                              const sp<Keymaster>& dev, const sp<IBinder>& appToken,
-                             KeyCharacteristics&& characteristics, bool pruneable);
+                             KeyCharacteristics&& characteristics,
+                             const hidl_vec<KeyParameter>& params, bool pruneable);
     NullOr<const Operation&> getOperation(const sp<IBinder>& token);
-    NullOr<Operation> removeOperation(const sp<IBinder>& token);
+    NullOr<Operation> removeOperation(const sp<IBinder>& token, bool wasSuccessful);
     bool hasPruneableOperation() const;
     size_t getOperationCount() const { return mMap.size(); }
     size_t getPruneableOperationCount() const;
