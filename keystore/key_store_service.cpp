@@ -2203,4 +2203,11 @@ KeyStoreServiceReturnCode KeyStoreService::upgradeKeyBlob(const String16& name, 
     return error;
 }
 
+Status KeyStoreService::onKeyguardVisibilityChanged(bool /*isShowing*/, int32_t /*userId*/,
+                                                    int32_t* /*aidl_return*/) {
+    // TODO(67752510)
+
+    return Status::ok();
+}
+
 }  // namespace keystore

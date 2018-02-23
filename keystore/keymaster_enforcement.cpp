@@ -282,8 +282,16 @@ ErrorCode KeymasterEnforcement::AuthorizeBegin(const KeyPurpose purpose, const k
             }
             break;
 
+        case Tag::USER_ID:
+            // TODO(67752510)
+            break;
+
         case Tag::CALLER_NONCE:
             caller_nonce_authorized_by_key = true;
+            break;
+
+        case Tag::UNLOCKED_DEVICE_REQUIRED:
+            // TODO(67752510)
             break;
 
         /* Tags should never be in key auths. */

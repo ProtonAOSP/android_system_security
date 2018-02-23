@@ -84,6 +84,15 @@ class KeystoreKeymasterEnforcement : public KeymasterEnforcement {
         // signing key. Assume the token is good.
         return true;
     }
+
+    bool is_device_locked(int32_t /*userId*/) const override {
+        // TODO(67752510)
+        return false;
+    }
+
+    void set_device_locked(bool /*isLocked*/, int32_t /*userId*/) {
+        // TODO(67752510)
+    }
 };
 
 } // namespace keystore

@@ -85,4 +85,5 @@ interface IKeystoreService {
         in String locale, in int uiOptionsAsFlags);
     int cancelConfirmationPrompt(IBinder listener);
     boolean isConfirmationPromptSupported();
+    int onKeyguardVisibilityChanged(in boolean isShowing, in int userId);
 }
