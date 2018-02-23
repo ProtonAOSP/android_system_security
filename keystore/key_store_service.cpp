@@ -367,7 +367,6 @@ Status KeyStoreService::lock(int32_t userId, int32_t* aidl_return) {
         return Status::ok();
     }
 
-    enforcement_policy.set_device_locked(true, userId);
     mKeyStore->lock(userId);
     *aidl_return = static_cast<int32_t>(ResponseCode::NO_ERROR);
     return Status::ok();
@@ -396,7 +395,6 @@ Status KeyStoreService::unlock(int32_t userId, const String16& pw, int32_t* aidl
         return Status::ok();
     }
 
-    enforcement_policy.set_device_locked(false, userId);
     const String8 password8(pw);
     // read master key, decrypt with password, initialize mMasterKey*.
     *aidl_return = static_cast<int32_t>(mKeyStore->readMasterKey(password8, userId));
@@ -1472,7 +1470,7 @@ Status KeyStoreService::isOperationAuthorized(const sp<IBinder>& token, bool* ai
 }
 
 Status KeyStoreService::addAuthToken(const ::std::vector<uint8_t>& authTokenAsVector,
-                                     int32_t userId, int32_t* aidl_return) {
+                                     int32_t* aidl_return) {
 
     // TODO(swillden): When gatekeeper and fingerprint are ready, this should be updated to
     // receive a HardwareAuthToken, rather than an opaque byte array.
@@ -1493,8 +1491,6 @@ Status KeyStoreService::addAuthToken(const ::std::vector<uint8_t>& authTokenAsVe
         *aidl_return = static_cast<int32_t>(KeyStoreServiceReturnCode(ErrorCode::INVALID_ARGUMENT));
         return Status::ok();
     }
-
-    enforcement_policy.set_device_locked(false, userId);
 
     mAuthTokenTable.AddAuthenticationToken(hidlVec2AuthToken(hidl_vec<uint8_t>(authTokenAsVector)));
     *aidl_return = static_cast<int32_t>(ResponseCode::NO_ERROR);
