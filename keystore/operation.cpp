@@ -26,18 +26,18 @@ OperationMap::OperationMap(IBinder::DeathRecipient* deathRecipient)
 
 sp<IBinder> OperationMap::addOperation(uint64_t handle, uint64_t keyid, KeyPurpose purpose,
                                        const sp<Keymaster>& dev, const sp<IBinder>& appToken,
-                                       KeyCharacteristics&& characteristics, bool pruneable) {
+                                       KeyCharacteristics&& characteristics,
+                                       const hidl_vec<KeyParameter>& params, bool pruneable) {
     sp<IBinder> token = new ::android::BBinder();
-    mMap.emplace(token,
-                 Operation(handle, keyid, purpose, dev, std::move(characteristics), appToken));
+    mMap.emplace(token, Operation(handle, keyid, purpose, dev, std::move(characteristics), appToken,
+                                  params));
     if (pruneable) mLru.push_back(token);
     if (mAppTokenMap.find(appToken) == mAppTokenMap.end()) appToken->linkToDeath(mDeathRecipient);
     mAppTokenMap[appToken].push_back(token);
-
     return token;
 }
 
-NullOr<const OperationMap::Operation&> OperationMap::getOperation(const sp<IBinder>& token) {
+NullOr<const Operation&> OperationMap::getOperation(const sp<IBinder>& token) {
     auto entry = mMap.find(token);
     if (entry == mMap.end()) return {};
 
@@ -53,17 +53,17 @@ void OperationMap::updateLru(const sp<IBinder>& token) {
     }
 }
 
-NullOr<OperationMap::Operation> OperationMap::removeOperation(const sp<IBinder>& token) {
+NullOr<Operation> OperationMap::removeOperation(const sp<IBinder>& token, bool wasSuccessful) {
     auto entry = mMap.find(token);
     if (entry == mMap.end()) return {};
 
     Operation op = std::move(entry->second);
+    uploadOpAsProto(op, wasSuccessful);
     mMap.erase(entry);
 
     auto lruEntry = std::find(mLru.begin(), mLru.end(), token);
     if (lruEntry != mLru.end()) mLru.erase(lruEntry);
     removeOperationTracking(token, op.appToken);
-
     return op;
 }
 
@@ -108,11 +108,5 @@ std::vector<sp<IBinder>> OperationMap::getOperationsForToken(const sp<IBinder>& 
     if (appEntry == mAppTokenMap.end()) return {};
     return appEntry->second;
 }
-
-OperationMap::Operation::Operation(uint64_t handle_, uint64_t keyid_, KeyPurpose purpose_,
-                                   const sp<Keymaster>& device_,
-                                   KeyCharacteristics&& characteristics_, sp<IBinder> appToken_)
-    : handle(handle_), keyid(keyid_), purpose(purpose_), device(device_),
-      characteristics(characteristics_), appToken(appToken_) {}
 
 }  // namespace keystore

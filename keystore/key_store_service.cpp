@@ -38,6 +38,7 @@
 #include <android/hardware/keymaster/3.0/IHwKeymasterDevice.h>
 
 #include "defaults.h"
+#include "key_proto_handler.h"
 #include "keystore_attestation_id.h"
 #include "keystore_keymaster_enforcement.h"
 #include "keystore_utils.h"
@@ -822,6 +823,7 @@ KeyStoreService::generateKey(const String16& name, const KeymasterArguments& par
     }
     if (!error.isOk()) {
         ALOGE("Failed to generate key -> falling back to software keymaster");
+        uploadKeyCharacteristicsAsProto(params.getParameters(), false /* wasCreationSuccessful */);
         securityLevel = SecurityLevel::SOFTWARE;
 
         // No fall back for 3DES
@@ -847,6 +849,8 @@ KeyStoreService::generateKey(const String16& name, const KeymasterArguments& par
             *aidl_return = static_cast<int32_t>(error);
             return Status::ok();
         }
+    } else {
+        uploadKeyCharacteristicsAsProto(params.getParameters(), true /* wasCreationSuccessful */);
     }
 
     if (!containsTag(params.getParameters(), Tag::USER_ID)) {
@@ -1053,6 +1057,7 @@ KeyStoreService::importKey(const String16& name, const KeymasterArguments& param
     // now check error from callback
     if (!error.isOk()) {
         ALOGE("Failed to import key -> falling back to software keymaster");
+        uploadKeyCharacteristicsAsProto(params.getParameters(), false /* wasCreationSuccessful */);
         securityLevel = SecurityLevel::SOFTWARE;
 
         // No fall back for 3DES
@@ -1081,6 +1086,8 @@ KeyStoreService::importKey(const String16& name, const KeymasterArguments& param
             *aidl_return = static_cast<int32_t>(error);
             return Status::ok();
         }
+    } else {
+        uploadKeyCharacteristicsAsProto(params.getParameters(), true /* wasCreationSuccessful */);
     }
 
     // Write the characteristics:
@@ -1338,8 +1345,9 @@ Status KeyStoreService::begin(const sp<IBinder>& appToken, const String16& name,
 
     // Note: The operation map takes possession of the contents of "characteristics".
     // It is safe to use characteristics after the following line but it will be empty.
-    sp<IBinder> operationToken = mOperationMap.addOperation(
-        result->handle, keyid, keyPurpose, dev, appToken, std::move(characteristics), pruneable);
+    sp<IBinder> operationToken =
+        mOperationMap.addOperation(result->handle, keyid, keyPurpose, dev, appToken,
+                                   std::move(characteristics), params.getParameters(), pruneable);
     assert(characteristics.hardwareEnforced.size() == 0);
     assert(characteristics.softwareEnforced.size() == 0);
     result->token = operationToken;
@@ -1479,20 +1487,23 @@ Status KeyStoreService::finish(const sp<IBinder>& token, const KeymasterArgument
         op.device->finish(op.handle, inParams,
                           ::std::vector<uint8_t>() /* TODO(swillden): wire up input to finish() */,
                           signature, authToken, VerificationToken(), hidlCb));
-    // removeOperation() will free the memory 'op' used, so the order is important
-    mAuthTokenTable.MarkCompleted(op.handle);
-    mOperationMap.removeOperation(token);
 
+    bool wasOpSuccessful = true;
     // just a reminder: on success result->resultCode was set in the callback. So we only overwrite
     // it if there was a communication error indicated by the ErrorCode.
     if (!rc.isOk()) {
         result->resultCode = rc;
+        wasOpSuccessful = false;
     }
+
+    // removeOperation() will free the memory 'op' used, so the order is important
+    mAuthTokenTable.MarkCompleted(op.handle);
+    mOperationMap.removeOperation(token, wasOpSuccessful);
     return Status::ok();
 }
 
 Status KeyStoreService::abort(const sp<IBinder>& token, int32_t* aidl_return) {
-    auto getOpResult = mOperationMap.removeOperation(token);
+    auto getOpResult = mOperationMap.removeOperation(token, false /* wasOpSuccessful */);
     if (!getOpResult.isOk()) {
         *aidl_return = static_cast<int32_t>(ErrorCode::INVALID_OPERATION_HANDLE);
         return Status::ok();
