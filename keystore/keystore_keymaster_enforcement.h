@@ -85,14 +85,18 @@ class KeystoreKeymasterEnforcement : public KeymasterEnforcement {
         return true;
     }
 
-    bool is_device_locked(int32_t /*userId*/) const override {
-        // TODO(67752510)
-        return false;
+    bool is_device_locked(int32_t userId) const override {
+        // If we haven't had a set call for this user yet, assume the device is locked.
+        if (mIsDeviceLockedForUser.count(userId) == 0) return true;
+        return mIsDeviceLockedForUser.find(userId)->second;
     }
 
-    void set_device_locked(bool /*isLocked*/, int32_t /*userId*/) {
-        // TODO(67752510)
+    void set_device_locked(bool isLocked, int32_t userId) {
+        mIsDeviceLockedForUser[userId] = isLocked;
     }
+
+  private:
+    std::map<int32_t, bool> mIsDeviceLockedForUser;
 };
 
 } // namespace keystore

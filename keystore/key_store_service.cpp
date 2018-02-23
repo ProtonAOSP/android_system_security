@@ -367,6 +367,7 @@ Status KeyStoreService::lock(int32_t userId, int32_t* aidl_return) {
         return Status::ok();
     }
 
+    enforcement_policy.set_device_locked(true, userId);
     mKeyStore->lock(userId);
     *aidl_return = static_cast<int32_t>(ResponseCode::NO_ERROR);
     return Status::ok();
@@ -395,6 +396,7 @@ Status KeyStoreService::unlock(int32_t userId, const String16& pw, int32_t* aidl
         return Status::ok();
     }
 
+    enforcement_policy.set_device_locked(false, userId);
     const String8 password8(pw);
     // read master key, decrypt with password, initialize mMasterKey*.
     *aidl_return = static_cast<int32_t>(mKeyStore->readMasterKey(password8, userId));
@@ -2203,9 +2205,10 @@ KeyStoreServiceReturnCode KeyStoreService::upgradeKeyBlob(const String16& name, 
     return error;
 }
 
-Status KeyStoreService::onKeyguardVisibilityChanged(bool /*isShowing*/, int32_t /*userId*/,
-                                                    int32_t* /*aidl_return*/) {
-    // TODO(67752510)
+Status KeyStoreService::onKeyguardVisibilityChanged(bool isShowing, int32_t userId,
+                                                    int32_t* aidl_return) {
+    enforcement_policy.set_device_locked(isShowing, userId);
+    *aidl_return = static_cast<int32_t>(ResponseCode::NO_ERROR);
 
     return Status::ok();
 }
