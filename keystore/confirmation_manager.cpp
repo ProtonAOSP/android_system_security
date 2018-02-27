@@ -115,6 +115,19 @@ Status ConfirmationManager::cancelConfirmationPrompt(const sp<IBinder>& listener
     return Status::ok();
 }
 
+// Called by keystore main thread.
+Status ConfirmationManager::isConfirmationPromptSupported(bool* aidl_return) {
+    sp<IConfirmationUI> confirmationUI = IConfirmationUI::tryGetService();
+    if (confirmationUI == nullptr) {
+        ALOGW("Error getting confirmationUI service\n");
+        *aidl_return = false;
+        return Status::ok();
+    }
+
+    *aidl_return = true;
+    return Status::ok();
+}
+
 void ConfirmationManager::finalizeTransaction(ConfirmationResponseCode responseCode,
                                               hidl_vec<uint8_t> dataThatWasConfirmed,
                                               bool callAbortOnHal) {

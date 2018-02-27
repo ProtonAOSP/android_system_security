@@ -1787,6 +1787,10 @@ Status KeyStoreService::cancelConfirmationPrompt(const sp<IBinder>& listener,
     return mConfirmationManager->cancelConfirmationPrompt(listener, aidl_return);
 }
 
+Status KeyStoreService::isConfirmationPromptSupported(bool* aidl_return) {
+    return mConfirmationManager->isConfirmationPromptSupported(aidl_return);
+}
+
 /**
  * Prune the oldest pruneable operation.
  */
