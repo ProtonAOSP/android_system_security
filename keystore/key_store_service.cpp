@@ -579,8 +579,8 @@ Status KeyStoreService::verify(const String16& name, const ::std::vector<uint8_t
 Status KeyStoreService::get_pubkey(const String16& name, ::std::vector<uint8_t>* pubKey) {
     android::security::keymaster::ExportResult result;
     KeymasterBlob clientId;
-    KeymasterBlob appId;
-    exportKey(name, static_cast<int32_t>(KeyFormat::X509), clientId, appId, UID_SELF, &result);
+    KeymasterBlob appData;
+    exportKey(name, static_cast<int32_t>(KeyFormat::X509), clientId, appData, UID_SELF, &result);
     if (!result.resultCode.isOk()) {
         ALOGW("export failed: %d", int32_t(result.resultCode));
         return Status::fromServiceSpecificError(static_cast<int32_t>(result.resultCode));
@@ -855,7 +855,7 @@ KeyStoreService::generateKey(const String16& name, const KeymasterArguments& par
 
 Status KeyStoreService::getKeyCharacteristics(
     const String16& name, const ::android::security::keymaster::KeymasterBlob& clientId,
-    const ::android::security::keymaster::KeymasterBlob& appId, int32_t uid,
+    const ::android::security::keymaster::KeymasterBlob& appData, int32_t uid,
     ::android::security::keymaster::KeyCharacteristics* outCharacteristics, int32_t* aidl_return) {
     if (!outCharacteristics) {
         *aidl_return =
@@ -921,7 +921,7 @@ Status KeyStoreService::getKeyCharacteristics(
     };
 
     rc = KS_HANDLE_HIDL_ERROR(
-        dev->getKeyCharacteristics(hidlKeyBlob, clientId.getData(), appId.getData(), hidlCb));
+        dev->getKeyCharacteristics(hidlKeyBlob, clientId.getData(), appData.getData(), hidlCb));
     if (!rc.isOk()) {
         *aidl_return = static_cast<int32_t>(rc);
         return Status::ok();
@@ -932,8 +932,8 @@ Status KeyStoreService::getKeyCharacteristics(
         if (clientId.getData().size()) {
             upgradeParams.push_back(TAG_APPLICATION_ID, clientId.getData());
         }
-        if (appId.getData().size()) {
-            upgradeParams.push_back(TAG_APPLICATION_DATA, appId.getData());
+        if (appData.getData().size()) {
+            upgradeParams.push_back(TAG_APPLICATION_DATA, appData.getData());
         }
         rc = upgradeKeyBlob(name, targetUid, upgradeParams, &keyBlob);
         if (!rc.isOk()) {
@@ -944,7 +944,7 @@ Status KeyStoreService::getKeyCharacteristics(
         auto upgradedHidlKeyBlob = blob2hidlVec(keyBlob);
 
         rc = KS_HANDLE_HIDL_ERROR(dev->getKeyCharacteristics(
-            upgradedHidlKeyBlob, clientId.getData(), appId.getData(), hidlCb));
+            upgradedHidlKeyBlob, clientId.getData(), appData.getData(), hidlCb));
         if (!rc.isOk()) {
             *aidl_return = static_cast<int32_t>(rc);
             return Status::ok();
@@ -1073,7 +1073,7 @@ KeyStoreService::importKey(const String16& name, const KeymasterArguments& param
 
 Status KeyStoreService::exportKey(const String16& name, int32_t format,
                                   const ::android::security::keymaster::KeymasterBlob& clientId,
-                                  const ::android::security::keymaster::KeymasterBlob& appId,
+                                  const ::android::security::keymaster::KeymasterBlob& appData,
                                   int32_t uid, ExportResult* result) {
 
     uid_t targetUid = getEffectiveUid(uid);
@@ -1106,7 +1106,7 @@ Status KeyStoreService::exportKey(const String16& name, int32_t format,
         result->exportData = keyMaterial;
     };
     KeyStoreServiceReturnCode rc = KS_HANDLE_HIDL_ERROR(
-        dev->exportKey(KeyFormat(format), key, clientId.getData(), appId.getData(), hidlCb));
+        dev->exportKey(KeyFormat(format), key, clientId.getData(), appData.getData(), hidlCb));
     // Overwrite result->resultCode only on HIDL error. Otherwise we want the result set in the
     // callback hidlCb.
     if (!rc.isOk()) {
@@ -1118,8 +1118,8 @@ Status KeyStoreService::exportKey(const String16& name, int32_t format,
         if (clientId.getData().size()) {
             upgradeParams.push_back(TAG_APPLICATION_ID, clientId.getData());
         }
-        if (appId.getData().size()) {
-            upgradeParams.push_back(TAG_APPLICATION_DATA, appId.getData());
+        if (appData.getData().size()) {
+            upgradeParams.push_back(TAG_APPLICATION_DATA, appData.getData());
         }
         result->resultCode = upgradeKeyBlob(name, targetUid, upgradeParams, &keyBlob);
         if (!result->resultCode.isOk()) {
@@ -1129,7 +1129,7 @@ Status KeyStoreService::exportKey(const String16& name, int32_t format,
         auto upgradedHidlKeyBlob = blob2hidlVec(keyBlob);
 
         result->resultCode = KS_HANDLE_HIDL_ERROR(dev->exportKey(
-            KeyFormat(format), upgradedHidlKeyBlob, clientId.getData(), appId.getData(), hidlCb));
+            KeyFormat(format), upgradedHidlKeyBlob, clientId.getData(), appData.getData(), hidlCb));
         if (!result->resultCode.isOk()) {
             return Status::ok();
         }
@@ -1787,6 +1787,10 @@ Status KeyStoreService::cancelConfirmationPrompt(const sp<IBinder>& listener,
     return mConfirmationManager->cancelConfirmationPrompt(listener, aidl_return);
 }
 
+Status KeyStoreService::isConfirmationPromptSupported(bool* aidl_return) {
+    return mConfirmationManager->isConfirmationPromptSupported(aidl_return);
+}
+
 /**
  * Prune the oldest pruneable operation.
  */
@@ -1919,13 +1923,13 @@ ErrorCode KeyStoreService::getOperationCharacteristics(const hidl_vec<uint8_t>& 
                                                        sp<Keymaster>* dev,
                                                        const AuthorizationSet& params,
                                                        KeyCharacteristics* out) {
-    ::std::vector<uint8_t> appId;
+    ::std::vector<uint8_t> clientId;
     ::std::vector<uint8_t> appData;
     for (auto param : params) {
         if (param.tag == Tag::APPLICATION_ID) {
-            appId = authorizationValue(TAG_APPLICATION_ID, param).value();
+            clientId = authorizationValue(TAG_APPLICATION_ID, param).value();
         } else if (param.tag == Tag::APPLICATION_DATA) {
-            appId = authorizationValue(TAG_APPLICATION_DATA, param).value();
+            appData = authorizationValue(TAG_APPLICATION_DATA, param).value();
         }
     }
     ErrorCode error = ErrorCode::OK;
@@ -1938,7 +1942,8 @@ ErrorCode KeyStoreService::getOperationCharacteristics(const hidl_vec<uint8_t>& 
         if (out) *out = keyCharacteristics;
     };
 
-    ErrorCode rc = KS_HANDLE_HIDL_ERROR((*dev)->getKeyCharacteristics(key, appId, appId, hidlCb));
+    ErrorCode rc =
+        KS_HANDLE_HIDL_ERROR((*dev)->getKeyCharacteristics(key, clientId, appData, hidlCb));
     if (rc != ErrorCode::OK) {
         return rc;
     }

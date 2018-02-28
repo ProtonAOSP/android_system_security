@@ -175,6 +175,7 @@ class KeyStoreService : public android::security::BnKeystoreService,
     ::android::binder::Status
     cancelConfirmationPrompt(const ::android::sp<::android::IBinder>& listener,
                              int32_t* _aidl_return) override;
+    ::android::binder::Status isConfirmationPromptSupported(bool* _aidl_return) override;
 
   private:
     static const int32_t UID_SELF = -1;

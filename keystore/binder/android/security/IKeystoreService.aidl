@@ -58,12 +58,12 @@ interface IKeystoreService {
     int addRngEntropy(in byte[] data, int flags);
     int generateKey(String alias, in KeymasterArguments arguments, in byte[] entropy, int uid,
         int flags, out KeyCharacteristics characteristics);
-    int getKeyCharacteristics(String alias, in KeymasterBlob clientId, in KeymasterBlob appId,
+    int getKeyCharacteristics(String alias, in KeymasterBlob clientId, in KeymasterBlob appData,
         int uid, out KeyCharacteristics characteristics);
     int importKey(String alias, in KeymasterArguments arguments, int format,
         in byte[] keyData, int uid, int flags, out KeyCharacteristics characteristics);
     ExportResult exportKey(String alias, int format, in KeymasterBlob clientId,
-        in KeymasterBlob appId, int uid);
+        in KeymasterBlob appData, int uid);
     OperationResult begin(IBinder appToken, String alias, int purpose, boolean pruneable,
         in KeymasterArguments params, in byte[] entropy, int uid);
     OperationResult update(IBinder token, in KeymasterArguments params, in byte[] input);
@@ -84,4 +84,5 @@ interface IKeystoreService {
     int presentConfirmationPrompt(IBinder listener, String promptText, in byte[] extraData,
         in String locale, in int uiOptionsAsFlags);
     int cancelConfirmationPrompt(IBinder listener);
+    boolean isConfirmationPromptSupported();
 }

@@ -61,6 +61,9 @@ class ConfirmationManager : public android::hardware::hidl_death_recipient,
     Status cancelConfirmationPrompt(const android::sp<android::IBinder>& listener,
                                     int32_t* aidl_return);
 
+    // Checks if the confirmationUI HAL is available.
+    Status isConfirmationPromptSupported(bool* aidl_return);
+
     // Gets the latest confirmation token received from the ConfirmationUI HAL.
     hidl_vec<uint8_t> getLatestConfirmationToken();
 
