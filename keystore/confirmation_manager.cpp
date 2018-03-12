@@ -23,6 +23,7 @@
 #include <android/hardware/confirmationui/1.0/types.h>
 #include <android/security/BpConfirmationPromptCallback.h>
 #include <binder/BpBinder.h>
+#include <binder/IPCThreadState.h>
 #include <binder/Parcel.h>
 
 #include "keystore_aidl_hidl_marshalling_utils.h"
@@ -66,6 +67,12 @@ Status ConfirmationManager::presentConfirmationPrompt(const sp<IBinder>& listene
     if (confirmationUI == nullptr) {
         ALOGW("Error getting confirmationUI service\n");
         *aidl_return = static_cast<int32_t>(ConfirmationResponseCode::Unimplemented);
+        return Status::ok();
+    }
+
+    uid_t callingUid = android::IPCThreadState::self()->getCallingUid();
+    if (!mRateLimiting.tryPrompt(callingUid)) {
+        *aidl_return = static_cast<int32_t>(ConfirmationResponseCode::SystemError);
         return Status::ok();
     }
 
@@ -137,6 +144,7 @@ void ConfirmationManager::finalizeTransaction(ConfirmationResponseCode responseC
     // and b) ensure state has been cleared; before doing this...
 
     mMutex.lock();
+    mRateLimiting.processResult(responseCode);
     sp<IBinder> listener = mCurrentListener;
     if (mCurrentListener != nullptr) {
         mCurrentListener->unlinkToDeath(mDeathRecipient);
