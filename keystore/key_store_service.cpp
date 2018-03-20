@@ -593,7 +593,8 @@ Status KeyStoreService::get_pubkey(const String16& name, ::std::vector<uint8_t>*
 Status KeyStoreService::grant(const String16& name, int32_t granteeUid,
                               ::android::String16* aidl_return) {
     uid_t callingUid = IPCThreadState::self()->getCallingUid();
-    auto result = checkBinderPermissionAndKeystoreState(P_GRANT);
+    auto result =
+        checkBinderPermissionAndKeystoreState(P_GRANT, /*targetUid=*/-1, /*checkUnlocked=*/false);
     if (!result.isOk()) {
         *aidl_return = String16();
         return Status::ok();
@@ -614,7 +615,8 @@ Status KeyStoreService::grant(const String16& name, int32_t granteeUid,
 
 Status KeyStoreService::ungrant(const String16& name, int32_t granteeUid, int32_t* aidl_return) {
     uid_t callingUid = IPCThreadState::self()->getCallingUid();
-    KeyStoreServiceReturnCode result = checkBinderPermissionAndKeystoreState(P_GRANT);
+    KeyStoreServiceReturnCode result =
+        checkBinderPermissionAndKeystoreState(P_GRANT, /*targetUid=*/-1, /*checkUnlocked=*/false);
     if (!result.isOk()) {
         *aidl_return = static_cast<int32_t>(result);
         return Status::ok();
