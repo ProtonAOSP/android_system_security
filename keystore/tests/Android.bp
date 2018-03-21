@@ -10,11 +10,13 @@ cc_test {
     srcs: [
         "auth_token_table_test.cpp",
         "auth_token_formatting_test.cpp",
+        "confirmationui_rate_limiting_test.cpp",
         "gtest_main.cpp",
     ],
     name: "keystore_unit_tests",
     tags: ["test"],
     static_libs: [
+        "android.hardware.confirmationui@1.0",
         "libbase",
         "libgtest_main",
         "libhidlbase",
