@@ -1438,8 +1438,9 @@ Status KeyStoreService::finish(const sp<IBinder>& token, const KeymasterArgument
         op.device->finish(op.handle, inParams,
                           ::std::vector<uint8_t>() /* TODO(swillden): wire up input to finish() */,
                           signature, authToken, VerificationToken(), hidlCb));
-    mOperationMap.removeOperation(token);
+    // removeOperation() will free the memory 'op' used, so the order is important
     mAuthTokenTable.MarkCompleted(op.handle);
+    mOperationMap.removeOperation(token);
 
     // just a reminder: on success result->resultCode was set in the callback. So we only overwrite
     // it if there was a communication error indicated by the ErrorCode.
