@@ -820,6 +820,16 @@ KeyStoreService::generateKey(const String16& name, const KeymasterArguments& par
     if (!error.isOk()) {
         ALOGE("Failed to generate key -> falling back to software keymaster");
         securityLevel = SecurityLevel::SOFTWARE;
+
+        // No fall back for 3DES
+        for (auto& param : params.getParameters()) {
+            auto algorithm = authorizationValue(TAG_ALGORITHM, param);
+            if (algorithm.isOk() && algorithm.value() == Algorithm::TRIPLE_DES) {
+                *aidl_return = static_cast<int32_t>(ErrorCode::UNSUPPORTED_ALGORITHM);
+                return Status::ok();
+            }
+        }
+
         auto fallback = mKeyStore->getFallbackDevice();
         if (!fallback) {
             *aidl_return = static_cast<int32_t>(error);
@@ -1033,6 +1043,16 @@ KeyStoreService::importKey(const String16& name, const KeymasterArguments& param
     if (!error.isOk()) {
         ALOGE("Failed to import key -> falling back to software keymaster");
         securityLevel = SecurityLevel::SOFTWARE;
+
+        // No fall back for 3DES
+        for (auto& param : params.getParameters()) {
+            auto algorithm = authorizationValue(TAG_ALGORITHM, param);
+            if (algorithm.isOk() && algorithm.value() == Algorithm::TRIPLE_DES) {
+                *aidl_return = static_cast<int32_t>(ErrorCode::UNSUPPORTED_ALGORITHM);
+                return Status::ok();
+            }
+        }
+
         auto fallback = mKeyStore->getFallbackDevice();
         if (!fallback) {
             *aidl_return = static_cast<int32_t>(error);
