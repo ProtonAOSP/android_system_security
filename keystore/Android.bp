@@ -83,7 +83,7 @@ cc_binary {
 
     srcs: ["keystore_cli.cpp"],
     shared_libs: [
-        "android.hardware.keymaster@3.0",
+        "android.hardware.keymaster@4.0",
         "libbinder",
         "libcrypto",
         "libcutils",
@@ -109,8 +109,8 @@ cc_binary {
     srcs: ["keystore_cli_v2.cpp"],
     shared_libs: [
         "android.hardware.confirmationui@1.0",
-        "android.hardware.keymaster@3.0",
         "libbinder",
+        "android.hardware.keymaster@4.0",
         "libchrome",
         "libutils",
         "libhidlbase",
