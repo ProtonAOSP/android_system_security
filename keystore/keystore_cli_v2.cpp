@@ -502,7 +502,7 @@ int Confirmation(const std::string& promptText, const std::string& extraDataHex,
     }
 
     if (promptText.size() == 0) {
-        printf("The --promptText parameter cannot be empty.\n");
+        printf("The --prompt_text parameter cannot be empty.\n");
         return 1;
     }
 
@@ -615,7 +615,7 @@ int main(int argc, char** argv) {
                        command_line->GetSwitchValueASCII("in"),
                        command_line->GetSwitchValueASCII("out"));
     } else if (args[0] == "confirmation") {
-        return Confirmation(command_line->GetSwitchValueASCII("prompt_text"),
+        return Confirmation(command_line->GetSwitchValueNative("prompt_text"),
                             command_line->GetSwitchValueASCII("extra_data"),
                             command_line->GetSwitchValueASCII("locale"),
                             command_line->GetSwitchValueASCII("ui_options"),
