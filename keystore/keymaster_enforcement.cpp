@@ -223,6 +223,8 @@ ErrorCode KeymasterEnforcement::AuthorizeBegin(const KeyPurpose purpose, const k
     bool caller_nonce_authorized_by_key = false;
     bool authentication_required = false;
     bool auth_token_matched = false;
+    bool unlocked_device_required = false;
+    int32_t user_id = -1;
 
     for (auto& param : auth_set) {
 
@@ -283,7 +285,7 @@ ErrorCode KeymasterEnforcement::AuthorizeBegin(const KeyPurpose purpose, const k
             break;
 
         case Tag::USER_ID:
-            // TODO(67752510)
+            user_id = authorizationValue(TAG_USER_ID, param).value();
             break;
 
         case Tag::CALLER_NONCE:
@@ -291,7 +293,7 @@ ErrorCode KeymasterEnforcement::AuthorizeBegin(const KeyPurpose purpose, const k
             break;
 
         case Tag::UNLOCKED_DEVICE_REQUIRED:
-            // TODO(67752510)
+            unlocked_device_required = true;
             break;
 
         /* Tags should never be in key auths. */
@@ -362,6 +364,19 @@ ErrorCode KeymasterEnforcement::AuthorizeBegin(const KeyPurpose purpose, const k
         case Tag::BOOTLOADER_ONLY:
             return ErrorCode::INVALID_KEY_BLOB;
         }
+    }
+
+    if (unlocked_device_required && is_device_locked(user_id)) {
+        switch (purpose) {
+        case KeyPurpose::ENCRYPT:
+        case KeyPurpose::VERIFY:
+            /* These are okay */
+            break;
+        case KeyPurpose::DECRYPT:
+        case KeyPurpose::SIGN:
+        case KeyPurpose::WRAP_KEY:
+            return ErrorCode::DEVICE_LOCKED;
+        };
     }
 
     if (authentication_required && !auth_token_matched) {
