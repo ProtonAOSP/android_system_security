@@ -552,8 +552,11 @@ Status KeyStoreService::sign(const String16& name, const ::std::vector<uint8_t>&
     hidl_vec<uint8_t> legacy_out;
     KeyStoreServiceReturnCode res =
         doLegacySignVerify(name, data, &legacy_out, hidl_vec<uint8_t>(), KeyPurpose::SIGN);
+    if (!res.isOk()) {
+        return Status::fromServiceSpecificError((res));
+    }
     *out = legacy_out;
-    return Status::fromServiceSpecificError((res));
+    return Status::ok();
 }
 
 Status KeyStoreService::verify(const String16& name, const ::std::vector<uint8_t>& data,
