@@ -39,7 +39,7 @@ class KeyStoreService : public android::security::BnKeystoreService,
   public:
     explicit KeyStoreService(KeyStore* keyStore)
         : mKeyStore(keyStore), mOperationMap(this),
-          mConfirmationManager(new ConfirmationManager(this)) {}
+          mConfirmationManager(new ConfirmationManager(this)), mActiveUserId(0) {}
     virtual ~KeyStoreService() = default;
 
     void binderDied(const android::wp<android::IBinder>& who);
@@ -300,6 +300,7 @@ class KeyStoreService : public android::security::BnKeystoreService,
     android::sp<ConfirmationManager> mConfirmationManager;
     keystore::AuthTokenTable mAuthTokenTable;
     KeystoreKeymasterEnforcement enforcement_policy;
+    int32_t mActiveUserId;
 };
 
 };  // namespace keystore
