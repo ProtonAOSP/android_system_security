@@ -122,9 +122,8 @@ void performHmacKeyHandshake(std::initializer_list<const sp<Keymaster>> keymaste
         CHECK(rc.isOk()) << "Communication error while calling getHmacSharingParameters on"
                             " Keymaster with index: "
                          << index;
-        CHECK(ec == ErrorCode::OK) << "Failed to get HmacSharingParameters from"
-                                      " Keymaster with index: "
-                                   << index;
+        CHECK(ec == ErrorCode::OK) << "Failed to get HmacSharingParameters from Keymaster "
+                                   << km->halVersion().keymasterName << " at index: " << index;
         ++index;
     }
     hmacSharingParams.resize(index);
@@ -160,8 +159,9 @@ KeymasterDevices initializeKeymasters() {
     auto result = enumerateKeymasterDevices<Keymaster4>(serviceManager.get());
     auto softKeymaster = result[SecurityLevel::SOFTWARE];
     if (result[SecurityLevel::TRUSTED_ENVIRONMENT]) {
-        performHmacKeyHandshake(
-            {result[SecurityLevel::TRUSTED_ENVIRONMENT], result[SecurityLevel::STRONGBOX]});
+        // TODO(swillden): Put this back when StrongBox KM works. b/77533310
+        // performHmacKeyHandshake(
+        //     {result[SecurityLevel::TRUSTED_ENVIRONMENT], result[SecurityLevel::STRONGBOX]});
     } else {
         result = enumerateKeymasterDevices<Keymaster3>(serviceManager.get());
     }
