@@ -1413,7 +1413,6 @@ Status KeyStoreService::update(const sp<IBinder>& token, const KeymasterArgument
     if (!result->resultCode.isOk()) return Status::ok();
 
     std::vector<KeyParameter> inParams = params.getParameters();
-    appendConfirmationTokenIfNeeded(op.characteristics, &inParams);
 
     auto hidlCb = [&](ErrorCode ret, uint32_t inputConsumed,
                       const hidl_vec<KeyParameter>& outParams,
