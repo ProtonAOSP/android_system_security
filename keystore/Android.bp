@@ -73,7 +73,6 @@ cc_binary {
 cc_binary {
     name: "keystore_cli",
     defaults: ["keystore_defaults"],
-    tags: ["debug"],
 
     srcs: ["keystore_cli.cpp"],
     shared_libs: [
@@ -92,7 +91,6 @@ cc_binary {
 cc_binary {
     name: "keystore_cli_v2",
     defaults: ["keystore_defaults"],
-    tags: ["debug"],
 
     cflags: [
         "-DKEYMASTER_NAME_TAGS",
