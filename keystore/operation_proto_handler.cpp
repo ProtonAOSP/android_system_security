@@ -23,6 +23,7 @@
 #include <keystore/keymaster_types.h>
 #include <keystore/keystore_hidl_support.h>
 #include <utils/String16.h>
+#include <utils/StrongPointer.h>
 
 #include "operation_config.pb.h"
 
@@ -108,7 +109,7 @@ void uploadOpAsProto(Operation& op, bool wasOpSuccessful) {
     checkKeyCharacteristics(op.characteristics.softwareEnforced, &operationConfig);
     checkKeyCharacteristics(op.characteristics.hardwareEnforced, &operationConfig);
     checkOpCharacteristics(op.params, &operationConfig);
-    auto dropbox = std::make_unique<android::os::DropBoxManager>();
+    android::sp<android::os::DropBoxManager> dropbox(new android::os::DropBoxManager);
     operationConfig.set_was_op_successful(wasOpSuccessful);
 
     size_t size = operationConfig.ByteSize();
