@@ -64,6 +64,8 @@ using ConfirmationResponseCode = android::hardware::confirmationui::V1_0::Respon
 constexpr size_t kMaxOperations = 15;
 constexpr double kIdRotationPeriod = 30 * 24 * 60 * 60; /* Thirty days, in seconds */
 const char* kTimestampFilePath = "timestamp";
+const int ID_ATTESTATION_REQUEST_GENERIC_INFO = 1 << 0;
+const int ID_ATTESTATION_REQUEST_UNIQUE_DEVICE_ID = 1 << 1;
 
 struct BIGNUM_Delete {
     void operator()(BIGNUM* p) const { BN_free(p); }
@@ -1551,24 +1553,28 @@ Status KeyStoreService::addAuthToken(const ::std::vector<uint8_t>& authTokenAsVe
     return Status::ok();
 }
 
-bool isDeviceIdAttestationRequested(const KeymasterArguments& params) {
+int isDeviceIdAttestationRequested(const KeymasterArguments& params) {
     const hardware::hidl_vec<KeyParameter> paramsVec = params.getParameters();
+    int result = 0;
     for (size_t i = 0; i < paramsVec.size(); ++i) {
         switch (paramsVec[i].tag) {
         case Tag::ATTESTATION_ID_BRAND:
         case Tag::ATTESTATION_ID_DEVICE:
-        case Tag::ATTESTATION_ID_IMEI:
         case Tag::ATTESTATION_ID_MANUFACTURER:
-        case Tag::ATTESTATION_ID_MEID:
         case Tag::ATTESTATION_ID_MODEL:
         case Tag::ATTESTATION_ID_PRODUCT:
-        case Tag::ATTESTATION_ID_SERIAL:
-            return true;
-        default:
+            result |= ID_ATTESTATION_REQUEST_GENERIC_INFO;
             break;
+        case Tag::ATTESTATION_ID_IMEI:
+        case Tag::ATTESTATION_ID_MEID:
+        case Tag::ATTESTATION_ID_SERIAL:
+            result |= ID_ATTESTATION_REQUEST_UNIQUE_DEVICE_ID;
+            break;
+        default:
+            continue;
         }
     }
-    return false;
+    return result;
 }
 
 Status KeyStoreService::attestKey(const String16& name, const KeymasterArguments& params,
@@ -1582,9 +1588,15 @@ Status KeyStoreService::attestKey(const String16& name, const KeymasterArguments
 
     uid_t callingUid = IPCThreadState::self()->getCallingUid();
 
-    if (isDeviceIdAttestationRequested(params) && (callingUid != AID_SYSTEM)) {
-        // Only the system context may request Device ID attestation combined with key attestation.
-        // Otherwise, There is a dedicated attestDeviceIds() method for device ID attestation.
+    int needsIdAttestation = isDeviceIdAttestationRequested(params);
+    bool needsUniqueIdAttestation = needsIdAttestation & ID_ATTESTATION_REQUEST_UNIQUE_DEVICE_ID;
+    bool isPrimaryUserSystemUid = (callingUid == AID_SYSTEM);
+    bool isSomeUserSystemUid = (get_app_id(callingUid) == AID_SYSTEM);
+    // Allow system context from any user to request attestation with basic device information,
+    // while only allow system context from user 0 (device owner) to request attestation with
+    // unique device ID.
+    if ((needsIdAttestation && !isSomeUserSystemUid) ||
+        (needsUniqueIdAttestation && !isPrimaryUserSystemUid)) {
         *aidl_return = static_cast<int32_t>(KeyStoreServiceReturnCode(ErrorCode::INVALID_ARGUMENT));
         return Status::ok();
     }
