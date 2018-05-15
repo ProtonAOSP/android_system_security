@@ -14,7 +14,6 @@ cc_test {
         "gtest_main.cpp",
     ],
     name: "keystore_unit_tests",
-    tags: ["test"],
     static_libs: [
         "android.hardware.confirmationui@1.0",
         "libbase",
