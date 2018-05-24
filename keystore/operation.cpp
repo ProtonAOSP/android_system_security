@@ -95,12 +95,19 @@ sp<IBinder> OperationMap::getOldestPruneableOperation() {
     return mLru.front();
 }
 
-bool OperationMap::setOperationAuthToken(const sp<IBinder>& token, HardwareAuthToken authToken) {
+void OperationMap::setOperationAuthToken(const sp<IBinder>& token, HardwareAuthToken authToken) {
     auto entry = mMap.find(token);
-    if (entry == mMap.end()) return false;
+    if (entry == mMap.end()) return;
 
     entry->second.authToken = std::move(authToken);
-    return true;
+}
+
+void OperationMap::setOperationVerificationToken(const sp<IBinder>& token,
+                                                 VerificationToken verificationToken) {
+    auto entry = mMap.find(token);
+    if (entry == mMap.end()) return;
+
+    entry->second.verificationToken = std::move(verificationToken);
 }
 
 std::vector<sp<IBinder>> OperationMap::getOperationsForToken(const sp<IBinder>& appToken) {

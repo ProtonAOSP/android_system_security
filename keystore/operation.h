@@ -56,7 +56,8 @@ class OperationMap {
     bool hasPruneableOperation() const;
     size_t getOperationCount() const { return mMap.size(); }
     size_t getPruneableOperationCount() const;
-    bool setOperationAuthToken(const sp<IBinder>& token, HardwareAuthToken authToken);
+    void setOperationAuthToken(const sp<IBinder>& token, HardwareAuthToken authToken);
+    void setOperationVerificationToken(const sp<IBinder>& token, VerificationToken authToken);
     sp<IBinder> getOldestPruneableOperation();
     std::vector<sp<IBinder>> getOperationsForToken(const sp<IBinder>& appToken);
 
