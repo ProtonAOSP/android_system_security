@@ -50,6 +50,7 @@ struct Operation {
     KeyCharacteristics characteristics;
     sp<IBinder> appToken;
     HardwareAuthToken authToken;
+    VerificationToken verificationToken;
     const hidl_vec<KeyParameter> params;
 };
 

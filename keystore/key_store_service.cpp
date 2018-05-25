@@ -1345,6 +1345,24 @@ Status KeyStoreService::begin(const sp<IBinder>& appToken, const String16& name,
         return Status::ok();
     }
 
+    VerificationToken verificationToken;
+    if (authResult.isOk() && authToken.mac.size() &&
+        dev->halVersion().securityLevel == SecurityLevel::STRONGBOX) {
+        // This operation needs an auth token, but the device is a STRONGBOX, so it can't check the
+        // timestamp in the auth token.  Get a VerificationToken from the TEE, which will be passed
+        // to update() and begin().
+        rc = KS_HANDLE_HIDL_ERROR(mKeyStore->getDevice(SecurityLevel::TRUSTED_ENVIRONMENT)
+                                      ->verifyAuthorization(result->handle,
+                                                            {} /* parametersToVerify */, authToken,
+                                                            [&](auto error, const auto& token) {
+                                                                result->resultCode = error;
+                                                                verificationToken = token;
+                                                            }));
+
+        if (rc != ErrorCode::OK) result->resultCode = rc;
+        if (result->resultCode != ErrorCode::OK) return Status::ok();
+    }
+
     // Note: The operation map takes possession of the contents of "characteristics".
     // It is safe to use characteristics after the following line but it will be empty.
     sp<IBinder> operationToken =
@@ -1355,6 +1373,7 @@ Status KeyStoreService::begin(const sp<IBinder>& appToken, const String16& name,
     result->token = operationToken;
 
     mOperationMap.setOperationAuthToken(operationToken, std::move(authToken));
+    mOperationMap.setOperationVerificationToken(operationToken, std::move(verificationToken));
 
     // Return the authentication lookup result. If this is a per operation
     // auth'd key then the resultCode will be ::OP_AUTH_NEEDED and the
@@ -1428,7 +1447,7 @@ Status KeyStoreService::update(const sp<IBinder>& token, const KeymasterArgument
     };
 
     KeyStoreServiceReturnCode rc = KS_HANDLE_HIDL_ERROR(
-        op.device->update(op.handle, inParams, data, authToken, VerificationToken(), hidlCb));
+        op.device->update(op.handle, inParams, data, authToken, op.verificationToken, hidlCb));
 
     // just a reminder: on success result->resultCode was set in the callback. So we only overwrite
     // it if there was a communication error indicated by the ErrorCode.
@@ -1487,7 +1506,7 @@ Status KeyStoreService::finish(const sp<IBinder>& token, const KeymasterArgument
     KeyStoreServiceReturnCode rc = KS_HANDLE_HIDL_ERROR(
         op.device->finish(op.handle, inParams,
                           ::std::vector<uint8_t>() /* TODO(swillden): wire up input to finish() */,
-                          signature, authToken, VerificationToken(), hidlCb));
+                          signature, authToken, op.verificationToken, hidlCb));
 
     bool wasOpSuccessful = true;
     // just a reminder: on success result->resultCode was set in the callback. So we only overwrite
