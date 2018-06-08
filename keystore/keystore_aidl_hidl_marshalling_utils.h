@@ -18,9 +18,11 @@
 #ifndef KEYSTORE_KEYSTORE_AIDL_HIDL_MARSHALLING_UTILS_H_
 #define KEYSTORE_KEYSTORE_AIDL_HIDL_MARSHALLING_UTILS_H_
 
-#include <binder/Parcel.h>
-#include <keystore/keymaster_tags.h>
 #include <utility>
+
+#include <binder/Parcel.h>
+
+#include <keystore/keymaster_types.h>
 
 namespace keystore {
 
@@ -71,13 +73,7 @@ android::status_t writeKeyParameterToParcel(const KeyParameter& param, android::
 hidl_vec<KeyParameter> readParamSetFromParcel(const android::Parcel& in);
 android::status_t writeParamSetToParcel(const hidl_vec<KeyParameter>& params, android::Parcel* out);
 
-KeyCharacteristics readKeyCharacteristicsFromParcel(const android::Parcel& in);
-android::status_t writeKeyCharacteristicsToParcel(const KeyCharacteristics& keyChara,
-                                                  android::Parcel* out);
-
 hidl_vec<hidl_vec<uint8_t>> readCertificateChainFromParcel(const android::Parcel& in);
-android::status_t writeCertificateChainToParcel(const hidl_vec<hidl_vec<uint8_t>>& certs,
-                                                android::Parcel* out);
 }
 
 #endif  // KEYSTORE_KEYSTORE_AIDL_HIDL_MARSHALLING_UTILS_H_

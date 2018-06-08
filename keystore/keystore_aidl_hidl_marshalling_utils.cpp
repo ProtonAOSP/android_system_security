@@ -15,15 +15,21 @@
 ** limitations under the License.
 */
 
-#define LOG_TAG "KeystoreService"
-#include <utils/Log.h>
-
 #include "keystore_aidl_hidl_marshalling_utils.h"
+
+#include <keystore/ExportResult.h>
+#include <keystore/KeyCharacteristics.h>
+#include <keystore/KeymasterBlob.h>
+#include <keystore/KeymasterCertificateChain.h>
+#include <keystore/KeystoreArg.h>
+#include <keystore/keymaster_types.h>
 #include <keystore/keystore_hidl_support.h>
 
 namespace keystore {
 
+// reads byte[]
 hidl_vec<uint8_t> readKeymasterBlob(const android::Parcel& in, bool inPlace) {
+
     ssize_t length = in.readInt32();
     if (length <= 0) {
         return {};
@@ -43,44 +49,23 @@ android::status_t writeKeymasterBlob(const hidl_vec<uint8_t>& blob, android::Par
 
     if (!size) return ::android::OK;
 
-    return out->write(&blob[0], size);
+    return out->write(blob.data(), size);
 }
 
-NullOr<hidl_vec<uint8_t>> readBlobAsByteArray(const android::Parcel& in, bool inPlace) {
-    // The distinction from readKeymasterBob is that the byte array is not prefixed with a presence
-    // value, instead a -1 in the length field indicates NULL.
-    ssize_t length = in.readInt32();
-    if (length < 0) {
-        return {};
-    }
+android::status_t writeKeymasterBlob(const ::std::vector<int32_t>& blob, android::Parcel* out) {
 
-    if (length == 0) {
-        return hidl_vec<uint8_t>();
-    }
-
-    const void* buf = in.readInplace(length);
-    if (!buf) return hidl_vec<uint8_t>();
-
-    return blob2hidlVec(reinterpret_cast<const uint8_t*>(buf), size_t(length), inPlace);
-}
-
-android::status_t writeBlobAsByteArray(const NullOr<const hidl_vec<uint8_t>&>& blob,
-                                       android::Parcel* out) {
-    if (!blob.isOk()) {
-        return out->writeInt32(-1);
-    }
-    int32_t size =
-        int32_t(std::min<size_t>(blob.value().size(), std::numeric_limits<int32_t>::max()));
+    int32_t size = int32_t(std::min<size_t>(blob.size(), std::numeric_limits<int32_t>::max()));
 
     auto rc = out->writeInt32(size);
     if (rc != ::android::OK) return rc;
 
     if (!size) return ::android::OK;
 
-    return out->write(&blob.value()[0], size);
+    return out->write(blob.data(), size);
 }
 
 NullOr<KeyParameter> readKeyParameterFromParcel(const android::Parcel& in) {
+    // Method must be in sync with KeymasterArgument.java
     if (in.readInt32() == 0) {
         return {};
     }
@@ -105,7 +90,7 @@ NullOr<KeyParameter> readKeyParameterFromParcel(const android::Parcel& in) {
         break;
     case TagType::BIGNUM:
     case TagType::BYTES:
-        result.blob = readKeymasterBlob(in);
+        result.blob = readKeymasterBlob(in);  // byte array
         break;
     default:
         ALOGE("Unsupported KeyParameter tag %d", tag);
@@ -115,6 +100,9 @@ NullOr<KeyParameter> readKeyParameterFromParcel(const android::Parcel& in) {
 }
 
 android::status_t writeKeyParameterToParcel(const KeyParameter& param, android::Parcel* out) {
+    // Method must be in sync with with KeymasterArgument.java
+    // Presence flag must be written by caller.
+
     auto tag = param.tag;
     auto rc = out->writeInt32(uint32_t(tag));
     if (rc != ::android::OK) return rc;
@@ -146,7 +134,8 @@ android::status_t writeKeyParameterToParcel(const KeyParameter& param, android::
 }
 
 hidl_vec<KeyParameter> readParamSetFromParcel(const android::Parcel& in) {
-    ssize_t length = in.readInt32();
+
+    ssize_t length = in.readInt32();  // -1 for null
     size_t ulength = (size_t)length;
     if (length < 0) {
         ulength = 0;
@@ -171,27 +160,12 @@ android::status_t writeParamSetToParcel(const hidl_vec<KeyParameter>& params,
     auto rc = out->writeInt32(size);
     if (rc != ::android::OK) return rc;
     for (int32_t i = 0; i < size; ++i) {
-        rc = out->writeInt32(1);
+        rc = out->writeInt32(1);  // writeTypedObject presence flag.
         if (rc != ::android::OK) return rc;
         rc = writeKeyParameterToParcel(params[i], out);
         if (rc != ::android::OK) return rc;
     }
     return rc;
-}
-
-KeyCharacteristics readKeyCharacteristicsFromParcel(const android::Parcel& in) {
-    KeyCharacteristics result;
-    result.softwareEnforced = readParamSetFromParcel(in);
-    result.teeEnforced = readParamSetFromParcel(in);
-    return result;
-}
-
-android::status_t writeKeyCharacteristicsToParcel(const KeyCharacteristics& keyChara,
-                                                  android::Parcel* out) {
-    auto rc = writeParamSetToParcel(keyChara.softwareEnforced, out);
-    if (rc != ::android::OK) return rc;
-
-    return writeParamSetToParcel(keyChara.teeEnforced, out);
 }
 
 hidl_vec<hidl_vec<uint8_t>> readCertificateChainFromParcel(const android::Parcel& in) {
@@ -209,7 +183,7 @@ hidl_vec<hidl_vec<uint8_t>> readCertificateChainFromParcel(const android::Parcel
         result[i] = readKeymasterBlob(in);
     }
     return result;
-}
+};
 
 android::status_t writeCertificateChainToParcel(const hidl_vec<hidl_vec<uint8_t>>& certs,
                                                 android::Parcel* out) {
@@ -222,4 +196,63 @@ android::status_t writeCertificateChainToParcel(const hidl_vec<hidl_vec<uint8_t>
     }
     return rc;
 }
+
+};  // namespace keystore
+
+// Implementation for  keystore parcelables.
+// TODO: split implementation into separate classes
+namespace android {
+namespace security {
+namespace keymaster {
+
+using ::android::status_t;
+using ::keystore::keymaster::ErrorCode;
+
+ExportResult::ExportResult() : resultCode() {}
+
+ExportResult::~ExportResult() {}
+
+status_t ExportResult::readFromParcel(const Parcel* inn) {
+    const Parcel& in = *inn;
+    resultCode = ErrorCode(in.readInt32());
+    exportData = keystore::readKeymasterBlob(in);
+    return OK;
 }
+
+status_t ExportResult::writeToParcel(Parcel* out) const {
+    out->writeInt32(resultCode);
+    return keystore::writeKeymasterBlob(exportData, out);
+}
+
+status_t KeyCharacteristics::readFromParcel(const Parcel* in) {
+    softwareEnforced.readFromParcel(in);
+    return hardwareEnforced.readFromParcel(in);
+}
+
+status_t KeyCharacteristics::writeToParcel(Parcel* out) const {
+    softwareEnforced.writeToParcel(out);
+    return hardwareEnforced.writeToParcel(out);
+}
+
+status_t KeymasterBlob::readFromParcel(const Parcel* in) {
+    data_ = keystore::readKeymasterBlob(*in, true /* in place */);
+    return OK;
+}
+
+status_t KeymasterBlob::writeToParcel(Parcel* out) const {
+    return keystore::writeKeymasterBlob(data_, out);
+}
+
+status_t KeymasterCertificateChain::readFromParcel(const Parcel* in) {
+    chain = keystore::readCertificateChainFromParcel(*in);
+    return OK;
+}
+
+status_t KeymasterCertificateChain::writeToParcel(Parcel* out) const {
+    return keystore::writeCertificateChainToParcel(chain, out);
+}
+
+}  // namespace keymaster
+}  // namespace security
+
+}  // namespace android

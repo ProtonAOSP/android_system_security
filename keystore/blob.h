@@ -22,6 +22,7 @@
 #include <openssl/aes.h>
 #include <openssl/md5.h>
 
+#include <keystore/keymaster_types.h>
 #include <keystore/keystore.h>
 
 constexpr size_t kValueSize = 32768;
@@ -116,6 +117,9 @@ class Blob {
     void setVersion(uint8_t version) { mBlob.version = version; }
     BlobType getType() const { return BlobType(mBlob.type); }
     void setType(BlobType type) { mBlob.type = uint8_t(type); }
+
+    keystore::SecurityLevel getSecurityLevel() const;
+    void setSecurityLevel(keystore::SecurityLevel);
 
     ResponseCode writeBlob(const std::string& filename, const uint8_t* aes_key, State state,
                            Entropy* entropy);

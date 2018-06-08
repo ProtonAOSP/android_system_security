@@ -19,7 +19,7 @@
 
 #include <stdio.h>
 
-#include <keystore/authorization_set.h>
+#include <keystore/keymaster_types.h>
 
 namespace keystore {
 
@@ -51,7 +51,8 @@ class KeymasterEnforcement {
      */
     ErrorCode AuthorizeOperation(const KeyPurpose purpose, const km_id_t keyid,
                                  const AuthorizationSet& auth_set,
-                                 const AuthorizationSet& operation_params, uint64_t op_handle,
+                                 const AuthorizationSet& operation_params,
+                                 const HardwareAuthToken& auth_token, uint64_t op_handle,
                                  bool is_begin_operation);
 
     /**
@@ -61,16 +62,17 @@ class KeymasterEnforcement {
      */
     ErrorCode AuthorizeBegin(const KeyPurpose purpose, const km_id_t keyid,
                              const AuthorizationSet& auth_set,
-                             const AuthorizationSet& operation_params);
+                             const AuthorizationSet& operation_params,
+                             NullOr<const HardwareAuthToken&> auth_token);
 
     /**
      * Iterates through the authorization set and returns the corresponding keymaster error. Will
      * return KM_ERROR_OK if all criteria is met for the given purpose in the authorization set with
      * the given operation params and handle. Used for encrypt, decrypt sign, and verify.
      */
-    ErrorCode AuthorizeUpdate(const AuthorizationSet& auth_set,
-                              const AuthorizationSet& operation_params, uint64_t op_handle) {
-        return AuthorizeUpdateOrFinish(auth_set, operation_params, op_handle);
+    ErrorCode AuthorizeUpdate(const AuthorizationSet& auth_set, const HardwareAuthToken& auth_token,
+                              uint64_t op_handle) {
+        return AuthorizeUpdateOrFinish(auth_set, auth_token, op_handle);
     }
 
     /**
@@ -78,9 +80,9 @@ class KeymasterEnforcement {
      * return KM_ERROR_OK if all criteria is met for the given purpose in the authorization set with
      * the given operation params and handle. Used for encrypt, decrypt sign, and verify.
      */
-    ErrorCode AuthorizeFinish(const AuthorizationSet& auth_set,
-                              const AuthorizationSet& operation_params, uint64_t op_handle) {
-        return AuthorizeUpdateOrFinish(auth_set, operation_params, op_handle);
+    ErrorCode AuthorizeFinish(const AuthorizationSet& auth_set, const HardwareAuthToken& auth_token,
+                              uint64_t op_handle) {
+        return AuthorizeUpdateOrFinish(auth_set, auth_token, op_handle);
     }
 
     /**
@@ -121,7 +123,7 @@ class KeymasterEnforcement {
     /*
      * Returns true if the specified auth_token is older than the specified timeout.
      */
-    virtual bool auth_token_timed_out(const hw_auth_token_t& token, uint32_t timeout) const = 0;
+    virtual bool auth_token_timed_out(const HardwareAuthToken& token, uint32_t timeout) const = 0;
 
     /*
      * Get current time in seconds from some starting point.  This value is used to compute relative
@@ -138,18 +140,23 @@ class KeymasterEnforcement {
      * Returns true if the specified auth_token has a valid signature, or if signature validation is
      * not available.
      */
-    virtual bool ValidateTokenSignature(const hw_auth_token_t& token) const = 0;
+    virtual bool ValidateTokenSignature(const HardwareAuthToken& token) const = 0;
+
+    /*
+     * Returns true if the device screen is currently locked for the specified user.
+     */
+    virtual bool is_device_locked(int32_t userId) const = 0;
 
   private:
     ErrorCode AuthorizeUpdateOrFinish(const AuthorizationSet& auth_set,
-                                      const AuthorizationSet& operation_params, uint64_t op_handle);
+                                      const HardwareAuthToken& auth_token, uint64_t op_handle);
 
     bool MinTimeBetweenOpsPassed(uint32_t min_time_between, const km_id_t keyid);
     bool MaxUsesPerBootNotExceeded(const km_id_t keyid, uint32_t max_uses);
-    bool AuthTokenMatches(const AuthorizationSet& auth_set,
-                          const AuthorizationSet& operation_params, const uint64_t user_secure_id,
-                          const int auth_type_index, const int auth_timeout_index,
-                          const uint64_t op_handle, bool is_begin_operation) const;
+    bool AuthTokenMatches(const AuthorizationSet& auth_set, const HardwareAuthToken& auth_token,
+                          const uint64_t user_secure_id, const int auth_type_index,
+                          const int auth_timeout_index, const uint64_t op_handle,
+                          bool is_begin_operation) const;
 
     AccessTimeMap* access_time_map_;
     AccessCountMap* access_count_map_;
