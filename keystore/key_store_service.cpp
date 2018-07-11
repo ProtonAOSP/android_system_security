@@ -1708,11 +1708,9 @@ KeyStoreService::attestDeviceIds(const KeymasterArguments& params,
     }
 
     // Generate temporary key.
-    sp<Keymaster> dev;
-    SecurityLevel securityLevel;
-    std::tie(dev, securityLevel) = mKeyStore->getMostSecureDevice();
+    sp<Keymaster> dev = mKeyStore->getDevice(SecurityLevel::TRUSTED_ENVIRONMENT);
 
-    if (securityLevel == SecurityLevel::SOFTWARE) {
+    if (!dev) {
         *aidl_return = static_cast<int32_t>(ResponseCode::SYSTEM_ERROR);
         return Status::ok();
     }
