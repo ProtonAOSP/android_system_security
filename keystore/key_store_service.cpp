@@ -1584,7 +1584,7 @@ Status KeyStoreService::addAuthToken(const ::std::vector<uint8_t>& authTokenAsVe
 }
 
 int isDeviceIdAttestationRequested(const KeymasterArguments& params) {
-    const hardware::hidl_vec<KeyParameter> paramsVec = params.getParameters();
+    const hardware::hidl_vec<KeyParameter>& paramsVec = params.getParameters();
     int result = 0;
     for (size_t i = 0; i < paramsVec.size(); ++i) {
         switch (paramsVec[i].tag) {
