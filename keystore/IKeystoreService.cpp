@@ -106,7 +106,7 @@ static void readByteArray(const Parcel& in, const uint8_t** data, size_t* length
             *length = 0;
         }
     } else {
-        *data = NULL;
+        *data = nullptr;
         *length = 0;
     }
 }
@@ -1056,7 +1056,7 @@ status_t BnKeystoreService::onTransact(uint32_t code, const Parcel& data, Parcel
                         sp<KeystoreArg> arg = new KeystoreArg(data.readInplace(inSize), inSize);
                         args.push_back(arg);
                     } else {
-                        args.push_back(NULL);
+                        args.push_back(nullptr);
                     }
                 }
             }
@@ -1290,7 +1290,7 @@ status_t BnKeystoreService::onTransact(uint32_t code, const Parcel& data, Parcel
     }
     case ADD_AUTH_TOKEN: {
         CHECK_INTERFACE(IKeystoreService, data, reply);
-        const uint8_t* token_bytes = NULL;
+        const uint8_t* token_bytes = nullptr;
         size_t size = 0;
         readByteArray(data, &token_bytes, &size);
         int32_t result = addAuthToken(token_bytes, size);

@@ -29,7 +29,7 @@ using namespace android;
 using namespace keystore;
 
 static const char* responses[] = {
-    NULL,
+    nullptr,
     /* [NO_ERROR]           = */ "No error",
     /* [LOCKED]             = */ "Locked",
     /* [UNINITIALIZED]      = */ "Uninitialized",
@@ -219,7 +219,7 @@ int main(int argc, char* argv[])
     sp<IBinder> binder = sm->getService(String16("android.security.keystore"));
     sp<IKeystoreService> service = interface_cast<IKeystoreService>(binder);
 
-    if (service == NULL) {
+    if (service == nullptr) {
         fprintf(stderr, "%s: error: could not connect to keystore service\n", argv[0]);
         return 1;
     }

@@ -27,7 +27,7 @@ ssize_t keystore_get(const char *key, size_t keyLength, uint8_t** value) {
     sp<IBinder> binder = sm->getService(String16("android.security.keystore"));
     sp<IKeystoreService> service = interface_cast<IKeystoreService>(binder);
 
-    if (service == NULL) {
+    if (service == nullptr) {
         return -1;
     }
 

@@ -66,7 +66,7 @@ bool isAuthenticationBound(const hidl_vec<KeyParameter>& params) {
 std::pair<KeyStoreServiceReturnCode, bool> hadFactoryResetSinceIdRotation() {
     struct stat sbuf;
     if (stat(kTimestampFilePath, &sbuf) == 0) {
-        double diff_secs = difftime(time(NULL), sbuf.st_ctime);
+        double diff_secs = difftime(time(nullptr), sbuf.st_ctime);
         return {ResponseCode::NO_ERROR, diff_secs < kIdRotationPeriod};
     }
 
@@ -178,7 +178,7 @@ KeyStoreServiceReturnCode KeyStoreService::insert(const String16& name,
     String8 name8(name);
     String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, targetUid, ::TYPE_GENERIC));
 
-    Blob keyBlob(&item[0], item.size(), NULL, 0, ::TYPE_GENERIC);
+    Blob keyBlob(&item[0], item.size(), nullptr, 0, ::TYPE_GENERIC);
     keyBlob.setEncrypted(flags & KEYSTORE_FLAG_ENCRYPTED);
 
     return mKeyStore->put(filename.string(), &keyBlob, get_user_id(targetUid));
@@ -399,10 +399,10 @@ KeyStoreServiceReturnCode KeyStoreService::generate(const String16& name, int32_
             return ResponseCode::SYSTEM_ERROR;
         } else if (args->size() == 1) {
             const sp<KeystoreArg>& expArg = args->itemAt(0);
-            if (expArg != NULL) {
+            if (expArg != nullptr) {
                 Unique_BIGNUM pubExpBn(BN_bin2bn(
-                    reinterpret_cast<const unsigned char*>(expArg->data()), expArg->size(), NULL));
-                if (pubExpBn.get() == NULL) {
+                    reinterpret_cast<const unsigned char*>(expArg->data()), expArg->size(), nullptr));
+                if (pubExpBn.get() == nullptr) {
                     ALOGI("Could not convert public exponent to BN");
                     return ResponseCode::SYSTEM_ERROR;
                 }
@@ -426,7 +426,7 @@ KeyStoreServiceReturnCode KeyStoreService::generate(const String16& name, int32_
     }
 
     auto rc = generateKey(name, params.hidl_data(), hidl_vec<uint8_t>(), targetUid, flags,
-                          /*outCharacteristics*/ NULL);
+                          /*outCharacteristics*/ nullptr);
     if (!rc.isOk()) {
         ALOGW("generate failed: %d", int32_t(rc));
     }
@@ -439,7 +439,7 @@ KeyStoreServiceReturnCode KeyStoreService::import(const String16& name,
 
     const uint8_t* ptr = &data[0];
 
-    Unique_PKCS8_PRIV_KEY_INFO pkcs8(d2i_PKCS8_PRIV_KEY_INFO(NULL, &ptr, data.size()));
+    Unique_PKCS8_PRIV_KEY_INFO pkcs8(d2i_PKCS8_PRIV_KEY_INFO(nullptr, &ptr, data.size()));
     if (!pkcs8.get()) {
         return ResponseCode::SYSTEM_ERROR;
     }
@@ -463,7 +463,7 @@ KeyStoreServiceReturnCode KeyStoreService::import(const String16& name,
     }
 
     auto rc = importKey(name, params.hidl_data(), KeyFormat::PKCS8, data, targetUid, flags,
-                        /*outCharacteristics*/ NULL);
+                        /*outCharacteristics*/ nullptr);
 
     if (!rc.isOk()) {
         ALOGW("importKey failed: %d", int32_t(rc));
@@ -731,7 +731,7 @@ KeyStoreServiceReturnCode KeyStoreService::generateKey(const String16& name,
         String8 name8(name);
         String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, uid, ::TYPE_KEYMASTER_10));
 
-        Blob keyBlob(&hidlKeyBlob[0], hidlKeyBlob.size(), NULL, 0, ::TYPE_KEYMASTER_10);
+        Blob keyBlob(&hidlKeyBlob[0], hidlKeyBlob.size(), nullptr, 0, ::TYPE_KEYMASTER_10);
         keyBlob.setFallback(usingFallback);
         keyBlob.setCriticalToDeviceEncryption(flags & KEYSTORE_FLAG_CRITICAL_TO_DEVICE_ENCRYPTION);
         if (isAuthenticationBound(params) && !keyBlob.isCriticalToDeviceEncryption()) {
@@ -772,7 +772,7 @@ KeyStoreServiceReturnCode KeyStoreService::generateKey(const String16& name,
         return ResponseCode::SYSTEM_ERROR;
     }
     auto kc_buf = kc_stream.str();
-    Blob charBlob(reinterpret_cast<const uint8_t*>(kc_buf.data()), kc_buf.size(), NULL, 0,
+    Blob charBlob(reinterpret_cast<const uint8_t*>(kc_buf.data()), kc_buf.size(), nullptr, 0,
                   ::TYPE_KEY_CHARACTERISTICS);
     charBlob.setFallback(usingFallback);
     charBlob.setEncrypted(flags & KEYSTORE_FLAG_ENCRYPTED);
@@ -902,7 +902,7 @@ KeyStoreService::importKey(const String16& name, const hidl_vec<KeyParameter>& p
         // Write the key:
         String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, uid, ::TYPE_KEYMASTER_10));
 
-        Blob ksBlob(&keyBlob[0], keyBlob.size(), NULL, 0, ::TYPE_KEYMASTER_10);
+        Blob ksBlob(&keyBlob[0], keyBlob.size(), nullptr, 0, ::TYPE_KEYMASTER_10);
         ksBlob.setFallback(usingFallback);
         ksBlob.setCriticalToDeviceEncryption(flags & KEYSTORE_FLAG_CRITICAL_TO_DEVICE_ENCRYPTION);
         if (isAuthenticationBound(params) && !ksBlob.isCriticalToDeviceEncryption()) {
@@ -946,7 +946,7 @@ KeyStoreService::importKey(const String16& name, const hidl_vec<KeyParameter>& p
     if (kcStream.bad()) return ResponseCode::SYSTEM_ERROR;
     auto kcBuf = kcStream.str();
 
-    Blob charBlob(reinterpret_cast<const uint8_t*>(kcBuf.data()), kcBuf.size(), NULL, 0,
+    Blob charBlob(reinterpret_cast<const uint8_t*>(kcBuf.data()), kcBuf.size(), nullptr, 0,
                   ::TYPE_KEY_CHARACTERISTICS);
     charBlob.setFallback(usingFallback);
     charBlob.setEncrypted(flags & KEYSTORE_FLAG_ENCRYPTED);
@@ -1069,7 +1069,7 @@ void KeyStoreService::begin(const sp<IBinder>& appToken, const String16& name, K
         return;
     }
 
-    const HardwareAuthToken* authToken = NULL;
+    const HardwareAuthToken* authToken = nullptr;
 
     // Merge these characteristics with the ones cached when the key was generated or imported
     Blob charBlob;
@@ -1310,7 +1310,7 @@ KeyStoreServiceReturnCode KeyStoreService::abort(const sp<IBinder>& token) {
     uint64_t handle;
     KeyPurpose purpose;
     km_id_t keyid;
-    if (!mOperationMap.getOperation(token, &handle, &keyid, &purpose, &dev, NULL)) {
+    if (!mOperationMap.getOperation(token, &handle, &keyid, &purpose, &dev, nullptr)) {
         return ErrorCode::INVALID_OPERATION_HANDLE;
     }
     mOperationMap.removeOperation(token);
@@ -1329,7 +1329,7 @@ bool KeyStoreService::isOperationAuthorized(const sp<IBinder>& token) {
     if (!mOperationMap.getOperation(token, &handle, &keyid, &purpose, &dev, &characteristics)) {
         return false;
     }
-    const HardwareAuthToken* authToken = NULL;
+    const HardwareAuthToken* authToken = nullptr;
     mOperationMap.getOperationAuthToken(token, &authToken);
     AuthorizationSet ignored;
     auto authResult = addOperationAuthTokenIfNeeded(token, &ignored);
@@ -1456,7 +1456,7 @@ KeyStoreServiceReturnCode KeyStoreService::attestDeviceIds(const hidl_vec<KeyPar
 
     uid_t callingUid = IPCThreadState::self()->getCallingUid();
     sp<IBinder> binder = defaultServiceManager()->getService(String16("permission"));
-    if (binder == 0) {
+    if (binder == nullptr) {
         return ErrorCode::CANNOT_ATTEST_IDS;
     }
     if (!interface_cast<IPermissionController>(binder)->checkPermission(
