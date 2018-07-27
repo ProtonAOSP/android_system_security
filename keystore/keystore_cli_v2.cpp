@@ -124,7 +124,7 @@ AuthorizationSet GetRSASignParameters(uint32_t key_size, bool sha256_only) {
             .Digest(Digest::SHA_2_384)
             .Digest(Digest::SHA_2_512);
     }
-    return parameters;
+    return std::move(parameters);
 }
 
 AuthorizationSet GetRSAEncryptParameters(uint32_t key_size) {
@@ -133,7 +133,7 @@ AuthorizationSet GetRSAEncryptParameters(uint32_t key_size) {
         .Padding(PaddingMode::RSA_PKCS1_1_5_ENCRYPT)
         .Padding(PaddingMode::RSA_OAEP)
         .Authorization(TAG_NO_AUTH_REQUIRED);
-    return parameters;
+    return std::move(parameters);
 }
 
 AuthorizationSet GetECDSAParameters(uint32_t key_size, bool sha256_only) {
@@ -146,7 +146,7 @@ AuthorizationSet GetECDSAParameters(uint32_t key_size, bool sha256_only) {
             .Digest(Digest::SHA_2_384)
             .Digest(Digest::SHA_2_512);
     }
-    return parameters;
+    return std::move(parameters);
 }
 
 AuthorizationSet GetAESParameters(uint32_t key_size, bool with_gcm_mode) {
@@ -161,7 +161,7 @@ AuthorizationSet GetAESParameters(uint32_t key_size, bool with_gcm_mode) {
         parameters.Authorization(TAG_BLOCK_MODE, BlockMode::CTR);
         parameters.Padding(PaddingMode::NONE);
     }
-    return parameters;
+    return std::move(parameters);
 }
 
 AuthorizationSet GetHMACParameters(uint32_t key_size, Digest digest) {
@@ -170,7 +170,7 @@ AuthorizationSet GetHMACParameters(uint32_t key_size, Digest digest) {
         .Digest(digest)
         .Authorization(TAG_MIN_MAC_LENGTH, 224)
         .Authorization(TAG_NO_AUTH_REQUIRED);
-    return parameters;
+    return std::move(parameters);
 }
 
 std::vector<TestCase> GetTestCases() {
