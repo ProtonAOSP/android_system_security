@@ -155,7 +155,7 @@ ResponseCode UserState::readMasterKey(const android::String8& pw, Entropy* entro
     if (length > SALT_SIZE && rawBlob.info == SALT_SIZE) {
         salt = (uint8_t*)&rawBlob + length - SALT_SIZE;
     } else {
-        salt = NULL;
+        salt = nullptr;
     }
     uint8_t passwordKey[MASTER_KEY_SIZE_BYTES];
     generateKeyFromPassword(passwordKey, MASTER_KEY_SIZE_BYTES, pw, salt);
@@ -166,7 +166,7 @@ ResponseCode UserState::readMasterKey(const android::String8& pw, Entropy* entro
     }
     if (response == ResponseCode::NO_ERROR && masterKeyBlob.getLength() == MASTER_KEY_SIZE_BYTES) {
         // If salt was missing, generate one and write a new master key file with the salt.
-        if (salt == NULL) {
+        if (salt == nullptr) {
             if (!generateSalt(entropy)) {
                 return ResponseCode::SYSTEM_ERROR;
             }
@@ -209,7 +209,7 @@ bool UserState::reset() {
     }
 
     struct dirent* file;
-    while ((file = readdir(dir)) != NULL) {
+    while ((file = readdir(dir)) != nullptr) {
         // skip . and ..
         if (!strcmp(".", file->d_name) || !strcmp("..", file->d_name)) {
             continue;
@@ -224,7 +224,7 @@ bool UserState::reset() {
 void UserState::generateKeyFromPassword(uint8_t* key, ssize_t keySize, const android::String8& pw,
                                         uint8_t* salt) {
     size_t saltSize;
-    if (salt != NULL) {
+    if (salt != nullptr) {
         saltSize = SALT_SIZE;
     } else {
         // Pre-gingerbread used this hardwired salt, readMasterKey will rewrite these when found

@@ -79,7 +79,7 @@ static AuthorizationSet make_set(uint64_t rsid, uint32_t timeout = 10000) {
         .Authorization(TAG_USER_SECURE_ID, rsid);
     // Use timeout == 0 to indicate tags that require auth per operation.
     if (timeout != 0) builder.Authorization(TAG_AUTH_TIMEOUT, timeout);
-    return builder;
+    return std::move(builder);
 }
 
 // Tests obviously run so fast that a real-time clock with a one-second granularity rarely changes

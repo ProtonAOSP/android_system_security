@@ -59,7 +59,7 @@ int key_id_dup(CRYPTO_EX_DATA* /* to */,
                long /* argl */,
                void* /* argp */) {
     char *key_id = reinterpret_cast<char *>(*from_d);
-    if (key_id != NULL) {
+    if (key_id != nullptr) {
         *from_d = strdup(key_id);
     }
     return 1;
@@ -95,12 +95,12 @@ int rsa_private_transform(RSA *rsa, uint8_t *out, const uint8_t *in, size_t len)
     ensure_keystore_engine();
 
     const char *key_id = rsa_get_key_id(rsa);
-    if (key_id == NULL) {
+    if (key_id == nullptr) {
         ALOGE("key had no key_id!");
         return 0;
     }
 
-    uint8_t* reply = NULL;
+    uint8_t* reply = nullptr;
     size_t reply_len;
     int32_t ret = g_keystore_backend->sign(key_id, in, len, &reply, &reply_len);
     if (ret < 0) {
@@ -109,7 +109,7 @@ int rsa_private_transform(RSA *rsa, uint8_t *out, const uint8_t *in, size_t len)
     } else if (ret != 0) {
         ALOGW("Error during sign from keystore: %d", ret);
         return 0;
-    } else if (reply_len == 0 || reply == NULL) {
+    } else if (reply_len == 0 || reply == nullptr) {
         ALOGW("No valid signature returned");
         return 0;
     }
@@ -149,21 +149,21 @@ static int ecdsa_sign(const uint8_t* digest, size_t digest_len, uint8_t* sig,
     ensure_keystore_engine();
 
     const char *key_id = ecdsa_get_key_id(ec_key);
-    if (key_id == NULL) {
+    if (key_id == nullptr) {
         ALOGE("key had no key_id!");
         return 0;
     }
 
     size_t ecdsa_size = ECDSA_size(ec_key);
 
-    uint8_t* reply = NULL;
+    uint8_t* reply = nullptr;
     size_t reply_len;
     int32_t ret = g_keystore_backend->sign(
             key_id, digest, digest_len, &reply, &reply_len);
     if (ret < 0) {
         ALOGW("There was an error during ecdsa_sign: could not connect");
         return 0;
-    } else if (reply_len == 0 || reply == NULL) {
+    } else if (reply_len == 0 || reply == nullptr) {
         ALOGW("No valid signature returned");
         return 0;
     } else if (reply_len > ecdsa_size) {
@@ -186,13 +186,13 @@ class KeystoreEngine {
  public:
   KeystoreEngine()
       : rsa_index_(RSA_get_ex_new_index(0 /* argl */,
-                                        NULL /* argp */,
-                                        NULL /* new_func */,
+                                        nullptr /* argp */,
+                                        nullptr /* new_func */,
                                         key_id_dup,
                                         key_id_free)),
         ec_key_index_(EC_KEY_get_ex_new_index(0 /* argl */,
-                                              NULL /* argp */,
-                                              NULL /* new_func */,
+                                              nullptr /* argp */,
+                                              nullptr /* new_func */,
                                               key_id_dup,
                                               key_id_free)),
         engine_(ENGINE_new()) {
@@ -278,31 +278,31 @@ typedef std::unique_ptr<EC_KEY, EC_KEY_Delete> Unique_EC_KEY;
  * KeyStore and operate on the key named |key_id|. */
 static EVP_PKEY *wrap_rsa(const char *key_id, const RSA *public_rsa) {
     Unique_RSA rsa(RSA_new_method(g_keystore_engine->engine()));
-    if (rsa.get() == NULL) {
-        return NULL;
+    if (rsa.get() == nullptr) {
+        return nullptr;
     }
 
     char *key_id_copy = strdup(key_id);
-    if (key_id_copy == NULL) {
-        return NULL;
+    if (key_id_copy == nullptr) {
+        return nullptr;
     }
 
     if (!RSA_set_ex_data(rsa.get(), g_keystore_engine->rsa_ex_index(),
                          key_id_copy)) {
         free(key_id_copy);
-        return NULL;
+        return nullptr;
     }
 
     rsa->n = BN_dup(public_rsa->n);
     rsa->e = BN_dup(public_rsa->e);
-    if (rsa->n == NULL || rsa->e == NULL) {
-        return NULL;
+    if (rsa->n == nullptr || rsa->e == nullptr) {
+        return nullptr;
     }
 
     Unique_EVP_PKEY result(EVP_PKEY_new());
-    if (result.get() == NULL ||
+    if (result.get() == nullptr ||
         !EVP_PKEY_assign_RSA(result.get(), rsa.get())) {
-        return NULL;
+        return nullptr;
     }
     OWNERSHIP_TRANSFERRED(rsa);
 
@@ -314,30 +314,30 @@ static EVP_PKEY *wrap_rsa(const char *key_id, const RSA *public_rsa) {
  * KeyStore and operate on the key named |key_id|. */
 static EVP_PKEY *wrap_ecdsa(const char *key_id, const EC_KEY *public_ecdsa) {
     Unique_EC_KEY ec(EC_KEY_new_method(g_keystore_engine->engine()));
-    if (ec.get() == NULL) {
-        return NULL;
+    if (ec.get() == nullptr) {
+        return nullptr;
     }
 
     if (!EC_KEY_set_group(ec.get(), EC_KEY_get0_group(public_ecdsa)) ||
         !EC_KEY_set_public_key(ec.get(), EC_KEY_get0_public_key(public_ecdsa))) {
-        return NULL;
+        return nullptr;
     }
 
     char *key_id_copy = strdup(key_id);
-    if (key_id_copy == NULL) {
-        return NULL;
+    if (key_id_copy == nullptr) {
+        return nullptr;
     }
 
     if (!EC_KEY_set_ex_data(ec.get(), g_keystore_engine->ec_key_ex_index(),
                             key_id_copy)) {
         free(key_id_copy);
-        return NULL;
+        return nullptr;
     }
 
     Unique_EVP_PKEY result(EVP_PKEY_new());
-    if (result.get() == NULL ||
+    if (result.get() == nullptr ||
         !EVP_PKEY_assign_EC_KEY(result.get(), ec.get())) {
-        return NULL;
+        return nullptr;
     }
     OWNERSHIP_TRANSFERRED(ec);
 
@@ -359,22 +359,22 @@ EVP_PKEY* EVP_PKEY_from_keystore(const char* key_id) {
 
     ensure_keystore_engine();
 
-    uint8_t *pubkey = NULL;
+    uint8_t *pubkey = nullptr;
     size_t pubkey_len;
     int32_t ret = g_keystore_backend->get_pubkey(key_id, &pubkey, &pubkey_len);
     if (ret < 0) {
         ALOGW("could not contact keystore");
-        return NULL;
-    } else if (ret != 0 || pubkey == NULL) {
+        return nullptr;
+    } else if (ret != 0 || pubkey == nullptr) {
         ALOGW("keystore reports error: %d", ret);
-        return NULL;
+        return nullptr;
     }
 
     const uint8_t *inp = pubkey;
-    Unique_EVP_PKEY pkey(d2i_PUBKEY(NULL, &inp, pubkey_len));
-    if (pkey.get() == NULL) {
+    Unique_EVP_PKEY pkey(d2i_PUBKEY(nullptr, &inp, pubkey_len));
+    if (pkey.get() == nullptr) {
         ALOGW("Cannot convert pubkey");
-        return NULL;
+        return nullptr;
     }
 
     EVP_PKEY *result;
@@ -391,7 +391,7 @@ EVP_PKEY* EVP_PKEY_from_keystore(const char* key_id) {
     }
     default:
         ALOGE("Unsupported key type %d", EVP_PKEY_type(pkey->type));
-        result = NULL;
+        result = nullptr;
     }
 
     return result;

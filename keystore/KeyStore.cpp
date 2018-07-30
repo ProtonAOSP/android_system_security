@@ -263,7 +263,7 @@ void KeyStore::resetUser(uid_t userId, bool keepUnenryptedEntries) {
 
 bool KeyStore::isEmpty(uid_t userId) const {
     const UserState* userState = getUserState(userId);
-    if (userState == NULL) {
+    if (userState == nullptr) {
         return true;
     }
 
@@ -274,7 +274,7 @@ bool KeyStore::isEmpty(uid_t userId) const {
 
     bool result = true;
     struct dirent* file;
-    while ((file = readdir(dir)) != NULL) {
+    while ((file = readdir(dir)) != nullptr) {
         // We only care about files.
         if (file->d_type != DT_REG) {
             continue;
@@ -487,7 +487,7 @@ ResponseCode KeyStore::list(const android::String8& prefix,
     }
 
     struct dirent* file;
-    while ((file = readdir(dir)) != NULL) {
+    while ((file = readdir(dir)) != nullptr) {
         // We only care about files.
         if (file->d_type != DT_REG) {
             continue;
@@ -504,7 +504,7 @@ ResponseCode KeyStore::list(const android::String8& prefix,
 
             size_t extra = decode_key_length(p, plen);
             char* match = (char*)malloc(extra + 1);
-            if (match != NULL) {
+            if (match != nullptr) {
                 decode_key(match, p, plen);
                 matches->push(android::String16(match, extra));
                 free(match);
@@ -531,7 +531,7 @@ void KeyStore::removeAllGrantsToUid(const uid_t granteeUid) {
 
 ResponseCode KeyStore::importKey(const uint8_t* key, size_t keyLen, const char* filename,
                                  uid_t userId, int32_t flags) {
-    Unique_PKCS8_PRIV_KEY_INFO pkcs8(d2i_PKCS8_PRIV_KEY_INFO(NULL, &key, keyLen));
+    Unique_PKCS8_PRIV_KEY_INFO pkcs8(d2i_PKCS8_PRIV_KEY_INFO(nullptr, &key, keyLen));
     if (!pkcs8.get()) {
         return ResponseCode::SYSTEM_ERROR;
     }
@@ -584,7 +584,7 @@ ResponseCode KeyStore::importKey(const uint8_t* key, size_t keyLen, const char* 
         return ResponseCode::SYSTEM_ERROR;
     }
 
-    Blob keyBlob(&blob[0], blob.size(), NULL, 0, TYPE_KEYMASTER_10);
+    Blob keyBlob(&blob[0], blob.size(), nullptr, 0, TYPE_KEYMASTER_10);
 
     keyBlob.setEncrypted(flags & KEYSTORE_FLAG_ENCRYPTED);
     keyBlob.setSecurityLevel(securityLevel);
@@ -651,7 +651,7 @@ const UserState* KeyStore::getUserState(uid_t userId) const {
         }
     }
 
-    return NULL;
+    return nullptr;
 }
 
 const UserState* KeyStore::getUserStateByUid(uid_t uid) const {
@@ -705,19 +705,19 @@ typedef std::unique_ptr<BIO, BIO_Delete> Unique_BIO;
 ResponseCode KeyStore::importBlobAsKey(Blob* blob, const char* filename, uid_t userId) {
     // We won't even write to the blob directly with this BIO, so const_cast is okay.
     Unique_BIO b(BIO_new_mem_buf(const_cast<uint8_t*>(blob->getValue()), blob->getLength()));
-    if (b.get() == NULL) {
+    if (b.get() == nullptr) {
         ALOGE("Problem instantiating BIO");
         return ResponseCode::SYSTEM_ERROR;
     }
 
-    Unique_EVP_PKEY pkey(PEM_read_bio_PrivateKey(b.get(), NULL, NULL, NULL));
-    if (pkey.get() == NULL) {
+    Unique_EVP_PKEY pkey(PEM_read_bio_PrivateKey(b.get(), nullptr, nullptr, nullptr));
+    if (pkey.get() == nullptr) {
         ALOGE("Couldn't read old PEM file");
         return ResponseCode::SYSTEM_ERROR;
     }
 
     Unique_PKCS8_PRIV_KEY_INFO pkcs8(EVP_PKEY2PKCS8(pkey.get()));
-    int len = i2d_PKCS8_PRIV_KEY_INFO(pkcs8.get(), NULL);
+    int len = i2d_PKCS8_PRIV_KEY_INFO(pkcs8.get(), nullptr);
     if (len < 0) {
         ALOGE("Couldn't measure PKCS#8 length");
         return ResponseCode::SYSTEM_ERROR;
@@ -797,7 +797,7 @@ bool KeyStore::upgradeKeystore() {
         }
 
         struct dirent* file;
-        while ((file = readdir(dir)) != NULL) {
+        while ((file = readdir(dir)) != nullptr) {
             // We only care about files.
             if (file->d_type != DT_REG) {
                 continue;
@@ -821,7 +821,7 @@ bool KeyStore::upgradeKeystore() {
 
             // Rename the file into user directory.
             DIR* otherdir = opendir(otherUser->getUserDirName());
-            if (otherdir == NULL) {
+            if (otherdir == nullptr) {
                 ALOGW("couldn't open user directory for rename");
                 continue;
             }

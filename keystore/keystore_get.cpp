@@ -29,7 +29,7 @@ ssize_t keystore_get(const char* key, size_t keyLength, uint8_t** value) {
     sp<android::security::IKeystoreService> service =
         interface_cast<android::security::IKeystoreService>(binder);
 
-    if (service == NULL) {
+    if (service == nullptr) {
         return -1;
     }
 

@@ -119,7 +119,7 @@ int configure_selinux() {
 
 static bool keystore_selinux_check_access(uid_t uid, perm_t perm, pid_t spid) {
     audit_data ad;
-    char* sctx = NULL;
+    char* sctx = nullptr;
     const char* selinux_class = "keystore_key";
     const char* str_perm = get_perm_label(perm);
 
