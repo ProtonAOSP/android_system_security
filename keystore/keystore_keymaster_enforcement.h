@@ -39,7 +39,7 @@ class KeystoreKeymasterEnforcement : public KeymasterEnforcement {
     }
 
     bool activation_date_valid(uint64_t activation_date) const override {
-        time_t now = time(NULL);
+        time_t now = time(nullptr);
         if (now == static_cast<time_t>(-1)) {
             // Failed to obtain current time -- fail safe: activation_date hasn't yet occurred.
             return false;
@@ -57,7 +57,7 @@ class KeystoreKeymasterEnforcement : public KeymasterEnforcement {
     }
 
     bool expiration_date_passed(uint64_t expiration_date) const override {
-        time_t now = time(NULL);
+        time_t now = time(nullptr);
         if (now == static_cast<time_t>(-1)) {
             // Failed to obtain current time -- fail safe: expiration_date has passed.
             return true;

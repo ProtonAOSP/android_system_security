@@ -42,7 +42,7 @@ int32_t KeystoreBackendBinder::sign(const char* key_id, const uint8_t* in, size_
     sp<IBinder> binder = sm->getService(String16(keystore_service_name));
     sp<IKeystoreService> service = interface_cast<IKeystoreService>(binder);
 
-    if (service == NULL) {
+    if (service == nullptr) {
         ALOGE("could not contact keystore");
         return -1;
     }
@@ -66,7 +66,7 @@ int32_t KeystoreBackendBinder::get_pubkey(const char* key_id, uint8_t** pubkey,
     sp<IBinder> binder = sm->getService(String16(keystore_service_name));
     sp<IKeystoreService> service = interface_cast<IKeystoreService>(binder);
 
-    if (service == NULL) {
+    if (service == nullptr) {
         ALOGE("could not contact keystore");
         return -1;
     }

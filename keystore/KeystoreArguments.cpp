@@ -39,7 +39,7 @@ status_t KeystoreArguments::readFromParcel(const android::Parcel* in) {
                 sp<KeystoreArg> arg = new KeystoreArg(in->readInplace(inSize), inSize);
                 args.push_back(arg);
             } else {
-                args.push_back(NULL);
+                args.push_back(nullptr);
             }
         }
     }

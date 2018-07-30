@@ -33,13 +33,13 @@ using android::system::wifi::keystore::V1_0::IKeystore;
 int32_t KeystoreBackendHidl::sign(
         const char *key_id, const uint8_t* in, size_t len, uint8_t** reply,
         size_t* reply_len) {
-    if (key_id == NULL || in == NULL || reply == NULL || reply_len == NULL) {
+    if (key_id == nullptr || in == nullptr || reply == nullptr || reply_len == nullptr) {
         ALOGE("Null pointer argument passed");
         return -1;
     }
 
     sp<IKeystore> service = IKeystore::tryGetService();
-    if (service == NULL) {
+    if (service == nullptr) {
         ALOGE("could not contact keystore HAL");
         return -1;
     }
@@ -63,13 +63,13 @@ int32_t KeystoreBackendHidl::sign(
 
 int32_t KeystoreBackendHidl::get_pubkey(
         const char *key_id, uint8_t** pubkey, size_t* pubkey_len) {
-    if (key_id == NULL || pubkey == NULL || pubkey_len == NULL) {
+    if (key_id == nullptr || pubkey == nullptr || pubkey_len == nullptr) {
         ALOGE("Null pointer argument passed");
         return -1;
     }
 
     sp<IKeystore> service = IKeystore::tryGetService();
-    if (service == NULL) {
+    if (service == nullptr) {
         ALOGE("could not contact keystore HAL");
         return -1;
     }
