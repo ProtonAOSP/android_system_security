@@ -84,7 +84,7 @@ bool isAuthenticationBound(const hidl_vec<KeyParameter>& params) {
 std::pair<KeyStoreServiceReturnCode, bool> hadFactoryResetSinceIdRotation() {
     struct stat sbuf;
     if (stat(kTimestampFilePath, &sbuf) == 0) {
-        double diff_secs = difftime(time(NULL), sbuf.st_ctime);
+        double diff_secs = difftime(time(nullptr), sbuf.st_ctime);
         return {ResponseCode::NO_ERROR, diff_secs < kIdRotationPeriod};
     }
 
@@ -194,7 +194,7 @@ Status KeyStoreService::insert(const String16& name, const ::std::vector<uint8_t
     String8 name8(name);
     String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, targetUid, ::TYPE_GENERIC));
 
-    Blob keyBlob(&item[0], item.size(), NULL, 0, ::TYPE_GENERIC);
+    Blob keyBlob(&item[0], item.size(), nullptr, 0, ::TYPE_GENERIC);
     keyBlob.setEncrypted(flags & KEYSTORE_FLAG_ENCRYPTED);
 
     *aidl_return =
@@ -462,10 +462,10 @@ Status KeyStoreService::generate(const String16& name, int32_t targetUid, int32_
             return Status::ok();
         } else if (args->size() == 1) {
             const sp<KeystoreArg>& expArg = args->itemAt(0);
-            if (expArg != NULL) {
+            if (expArg != nullptr) {
                 Unique_BIGNUM pubExpBn(BN_bin2bn(
-                    reinterpret_cast<const unsigned char*>(expArg->data()), expArg->size(), NULL));
-                if (pubExpBn.get() == NULL) {
+                    reinterpret_cast<const unsigned char*>(expArg->data()), expArg->size(), nullptr));
+                if (pubExpBn.get() == nullptr) {
                     ALOGI("Could not convert public exponent to BN");
                     *aidl_return = static_cast<int32_t>(ResponseCode::SYSTEM_ERROR);
                     return Status::ok();
@@ -508,7 +508,7 @@ Status KeyStoreService::import_key(const String16& name, const ::std::vector<uin
 
     const uint8_t* ptr = &data[0];
 
-    Unique_PKCS8_PRIV_KEY_INFO pkcs8(d2i_PKCS8_PRIV_KEY_INFO(NULL, &ptr, data.size()));
+    Unique_PKCS8_PRIV_KEY_INFO pkcs8(d2i_PKCS8_PRIV_KEY_INFO(nullptr, &ptr, data.size()));
     if (!pkcs8.get()) {
         *aidl_return = static_cast<int32_t>(ResponseCode::SYSTEM_ERROR);
         return Status::ok();
@@ -537,7 +537,7 @@ Status KeyStoreService::import_key(const String16& name, const ::std::vector<uin
     int import_result;
     auto rc = importKey(name, KeymasterArguments(params.hidl_data()),
                         static_cast<int32_t>(KeyFormat::PKCS8), data, targetUid, flags,
-                        /*outCharacteristics*/ NULL, &import_result);
+                        /*outCharacteristics*/ nullptr, &import_result);
 
     if (!KeyStoreServiceReturnCode(import_result).isOk()) {
         ALOGW("importKey failed: %d", int32_t(import_result));
@@ -806,7 +806,7 @@ KeyStoreService::generateKey(const String16& name, const KeymasterArguments& par
         String8 name8(name);
         String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, uid, ::TYPE_KEYMASTER_10));
 
-        Blob keyBlob(&hidlKeyBlob[0], hidlKeyBlob.size(), NULL, 0, ::TYPE_KEYMASTER_10);
+        Blob keyBlob(&hidlKeyBlob[0], hidlKeyBlob.size(), nullptr, 0, ::TYPE_KEYMASTER_10);
         keyBlob.setSecurityLevel(securityLevel);
         keyBlob.setCriticalToDeviceEncryption(flags & KEYSTORE_FLAG_CRITICAL_TO_DEVICE_ENCRYPTION);
         if (isAuthenticationBound(params.getParameters()) &&
@@ -874,7 +874,7 @@ KeyStoreService::generateKey(const String16& name, const KeymasterArguments& par
         return Status::ok();
     }
     auto kc_buf = kc_stream.str();
-    Blob charBlob(reinterpret_cast<const uint8_t*>(kc_buf.data()), kc_buf.size(), NULL, 0,
+    Blob charBlob(reinterpret_cast<const uint8_t*>(kc_buf.data()), kc_buf.size(), nullptr, 0,
                   ::TYPE_KEY_CHARACTERISTICS);
     charBlob.setSecurityLevel(securityLevel);
     charBlob.setEncrypted(flags & KEYSTORE_FLAG_ENCRYPTED);
@@ -1037,7 +1037,7 @@ KeyStoreService::importKey(const String16& name, const KeymasterArguments& param
         // Write the key:
         String8 filename(mKeyStore->getKeyNameForUidWithDir(name8, uid, ::TYPE_KEYMASTER_10));
 
-        Blob ksBlob(&keyBlob[0], keyBlob.size(), NULL, 0, ::TYPE_KEYMASTER_10);
+        Blob ksBlob(&keyBlob[0], keyBlob.size(), nullptr, 0, ::TYPE_KEYMASTER_10);
         ksBlob.setSecurityLevel(securityLevel);
         ksBlob.setCriticalToDeviceEncryption(flags & KEYSTORE_FLAG_CRITICAL_TO_DEVICE_ENCRYPTION);
         if (isAuthenticationBound(params.getParameters()) &&
@@ -1112,7 +1112,7 @@ KeyStoreService::importKey(const String16& name, const KeymasterArguments& param
     }
     auto kcBuf = kcStream.str();
 
-    Blob charBlob(reinterpret_cast<const uint8_t*>(kcBuf.data()), kcBuf.size(), NULL, 0,
+    Blob charBlob(reinterpret_cast<const uint8_t*>(kcBuf.data()), kcBuf.size(), nullptr, 0,
                   ::TYPE_KEY_CHARACTERISTICS);
     charBlob.setSecurityLevel(securityLevel);
     charBlob.setEncrypted(flags & KEYSTORE_FLAG_ENCRYPTED);
@@ -1687,7 +1687,7 @@ KeyStoreService::attestDeviceIds(const KeymasterArguments& params,
 
     uid_t callingUid = IPCThreadState::self()->getCallingUid();
     sp<IBinder> binder = defaultServiceManager()->getService(String16("permission"));
-    if (binder == 0) {
+    if (binder == nullptr) {
         *aidl_return =
             static_cast<int32_t>(KeyStoreServiceReturnCode(ErrorCode::CANNOT_ATTEST_IDS));
         return Status::ok();
@@ -1825,7 +1825,7 @@ Status KeyStoreService::importWrappedKey(
         String8 filename(
             mKeyStore->getKeyNameForUidWithDir(wrappedKeyAlias8, callingUid, ::TYPE_KEYMASTER_10));
 
-        Blob ksBlob(&keyBlob[0], keyBlob.size(), NULL, 0, ::TYPE_KEYMASTER_10);
+        Blob ksBlob(&keyBlob[0], keyBlob.size(), nullptr, 0, ::TYPE_KEYMASTER_10);
         ksBlob.setSecurityLevel(securityLevel);
 
         if (containsTag(keyCharacteristics.hardwareEnforced, Tag::USER_SECURE_ID)) {
@@ -1860,7 +1860,7 @@ Status KeyStoreService::importWrappedKey(
     }
     auto kcBuf = kcStream.str();
 
-    Blob charBlob(reinterpret_cast<const uint8_t*>(kcBuf.data()), kcBuf.size(), NULL, 0,
+    Blob charBlob(reinterpret_cast<const uint8_t*>(kcBuf.data()), kcBuf.size(), nullptr, 0,
                   ::TYPE_KEY_CHARACTERISTICS);
     charBlob.setSecurityLevel(securityLevel);
 

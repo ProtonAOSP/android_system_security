@@ -496,7 +496,7 @@ int Confirmation(const std::string& promptText, const std::string& extraDataHex,
     sp<android::IServiceManager> sm = android::defaultServiceManager();
     sp<android::IBinder> binder = sm->getService(String16("android.security.keystore"));
     sp<IKeystoreService> service = android::interface_cast<IKeystoreService>(binder);
-    if (service == NULL) {
+    if (service == nullptr) {
         printf("error: could not connect to keystore service.\n");
         return 1;
     }
