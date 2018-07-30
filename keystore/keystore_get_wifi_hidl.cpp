@@ -34,13 +34,13 @@ using android::sp;
 using android::system::wifi::keystore::V1_0::IKeystore;
 
 ssize_t keystore_get(const char *key, size_t keyLength, uint8_t** value) {
-    if (key == NULL || keyLength == 0 || value == NULL) {
+    if (key == nullptr || keyLength == 0 || value == nullptr) {
         ALOGE("Null pointer argument passed");
         return -1;
     }
 
     sp<IKeystore> service = IKeystore::tryGetService();
-    if (service == NULL) {
+    if (service == nullptr) {
         ALOGE("could not contact keystore HAL");
         return -1;
     }

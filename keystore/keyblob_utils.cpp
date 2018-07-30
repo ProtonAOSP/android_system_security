@@ -48,7 +48,7 @@ size_t get_softkey_header_size() {
 
 uint8_t* add_softkey_header(uint8_t* key_blob, size_t key_blob_length) {
     if (key_blob_length < sizeof(SOFT_KEY_MAGIC)) {
-        return NULL;
+        return nullptr;
     }
 
     memcpy(key_blob, SOFT_KEY_MAGIC, sizeof(SOFT_KEY_MAGIC));

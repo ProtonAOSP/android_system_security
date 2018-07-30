@@ -148,7 +148,7 @@ AuthTokenTable::Error AuthTokenTable::FindTimedAuthorization(const std::vector<u
                                                              HardwareAuthenticatorType auth_type,
                                                              const AuthorizationSet& key_info,
                                                              const HardwareAuthToken** found) {
-    Entry* newest_match = NULL;
+    Entry* newest_match = nullptr;
     for (auto& entry : entries_)
         if (entry.SatisfiesAuth(sids, auth_type) && entry.is_newer_than(newest_match))
             newest_match = &entry;
