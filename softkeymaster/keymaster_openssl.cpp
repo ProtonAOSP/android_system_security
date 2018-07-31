@@ -103,7 +103,7 @@ static void logOpenSSLError(const char* location) {
     }
 
     ERR_clear_error();
-    ERR_remove_thread_state(NULL);
+    ERR_remove_thread_state(nullptr);
 }
 
 static int wrap_key(EVP_PKEY* pkey, int type, uint8_t** keyBlob, size_t* keyBlobLength) {
@@ -112,7 +112,7 @@ static int wrap_key(EVP_PKEY* pkey, int type, uint8_t** keyBlob, size_t* keyBlob
      * but must be kept for alignment purposes.
      */
     int publicLen = 0;
-    int privateLen = i2d_PrivateKey(pkey, NULL);
+    int privateLen = i2d_PrivateKey(pkey, nullptr);
 
     if (privateLen <= 0) {
         ALOGE("private key size was too big");
@@ -126,7 +126,7 @@ static int wrap_key(EVP_PKEY* pkey, int type, uint8_t** keyBlob, size_t* keyBlob
     // derData will be returned to the caller, so allocate it with malloc.
     std::unique_ptr<unsigned char, Malloc_Free> derData(
         static_cast<unsigned char*>(malloc(*keyBlobLength)));
-    if (derData.get() == NULL) {
+    if (derData.get() == nullptr) {
         ALOGE("could not allocate memory for key blob");
         return -1;
     }
@@ -165,21 +165,21 @@ static EVP_PKEY* unwrap_key(const uint8_t* keyBlob, const size_t keyBlobLength) 
     const uint8_t* p = keyBlob;
     const uint8_t* const end = keyBlob + keyBlobLength;
 
-    if (keyBlob == NULL) {
+    if (keyBlob == nullptr) {
         ALOGE("supplied key blob was NULL");
-        return NULL;
+        return nullptr;
     }
 
     int type = 0;
     if (keyBlobLength < (get_softkey_header_size() + sizeof(type) + sizeof(publicLen) + 1 +
                          sizeof(privateLen) + 1)) {
         ALOGE("key blob appears to be truncated");
-        return NULL;
+        return nullptr;
     }
 
     if (!is_softkey(p, keyBlobLength)) {
         ALOGE("cannot read key; it was not made by this keymaster");
-        return NULL;
+        return nullptr;
     }
     p += get_softkey_header_size();
 
@@ -192,26 +192,26 @@ static EVP_PKEY* unwrap_key(const uint8_t* keyBlob, const size_t keyBlobLength) 
     }
     if (p + publicLen > end) {
         ALOGE("public key length encoding error: size=%ld, end=%td", publicLen, end - p);
-        return NULL;
+        return nullptr;
     }
 
     p += publicLen;
     if (end - p < 2) {
         ALOGE("private key truncated");
-        return NULL;
+        return nullptr;
     }
     for (size_t i = 0; i < sizeof(type); i++) {
         privateLen = (privateLen << 8) | *p++;
     }
     if (p + privateLen > end) {
         ALOGE("private key length encoding error: size=%ld, end=%td", privateLen, end - p);
-        return NULL;
+        return nullptr;
     }
 
     Unique_EVP_PKEY pkey(d2i_PrivateKey(type, nullptr, &p, privateLen));
-    if (pkey.get() == NULL) {
+    if (pkey.get() == nullptr) {
         logOpenSSLError("unwrap_key");
-        return NULL;
+        return nullptr;
     }
 
     return pkey.release();
@@ -226,28 +226,28 @@ static int generate_dsa_keypair(EVP_PKEY* pkey, const keymaster_dsa_keygen_param
     Unique_DSA dsa(DSA_new());
 
     if (dsa_params->generator_len == 0 || dsa_params->prime_p_len == 0 ||
-        dsa_params->prime_q_len == 0 || dsa_params->generator == NULL ||
-        dsa_params->prime_p == NULL || dsa_params->prime_q == NULL) {
-        if (DSA_generate_parameters_ex(dsa.get(), dsa_params->key_size, NULL, 0, NULL, NULL,
-                                       NULL) != 1) {
+        dsa_params->prime_q_len == 0 || dsa_params->generator == nullptr ||
+        dsa_params->prime_p == nullptr || dsa_params->prime_q == nullptr) {
+        if (DSA_generate_parameters_ex(dsa.get(), dsa_params->key_size, nullptr, 0, nullptr, nullptr,
+                                       nullptr) != 1) {
             logOpenSSLError("generate_dsa_keypair");
             return -1;
         }
     } else {
-        dsa->g = BN_bin2bn(dsa_params->generator, dsa_params->generator_len, NULL);
-        if (dsa->g == NULL) {
+        dsa->g = BN_bin2bn(dsa_params->generator, dsa_params->generator_len, nullptr);
+        if (dsa->g == nullptr) {
             logOpenSSLError("generate_dsa_keypair");
             return -1;
         }
 
-        dsa->p = BN_bin2bn(dsa_params->prime_p, dsa_params->prime_p_len, NULL);
-        if (dsa->p == NULL) {
+        dsa->p = BN_bin2bn(dsa_params->prime_p, dsa_params->prime_p_len, nullptr);
+        if (dsa->p == nullptr) {
             logOpenSSLError("generate_dsa_keypair");
             return -1;
         }
 
-        dsa->q = BN_bin2bn(dsa_params->prime_q, dsa_params->prime_q_len, NULL);
-        if (dsa->q == NULL) {
+        dsa->q = BN_bin2bn(dsa_params->prime_q, dsa_params->prime_q_len, nullptr);
+        if (dsa->q == nullptr) {
             logOpenSSLError("generate_dsa_keypair");
             return -1;
         }
@@ -286,7 +286,7 @@ static int generate_ec_keypair(EVP_PKEY* pkey, const keymaster_ec_keygen_params_
         break;
     }
 
-    if (group.get() == NULL) {
+    if (group.get() == nullptr) {
         logOpenSSLError("generate_ec_keypair");
         return -1;
     }
@@ -298,7 +298,7 @@ static int generate_ec_keypair(EVP_PKEY* pkey, const keymaster_ec_keygen_params_
 
     /* initialize EC key */
     Unique_EC_KEY eckey(EC_KEY_new());
-    if (eckey.get() == NULL) {
+    if (eckey.get() == nullptr) {
         logOpenSSLError("generate_ec_keypair");
         return -1;
     }
@@ -324,7 +324,7 @@ static int generate_ec_keypair(EVP_PKEY* pkey, const keymaster_ec_keygen_params_
 
 static int generate_rsa_keypair(EVP_PKEY* pkey, const keymaster_rsa_keygen_params_t* rsa_params) {
     Unique_BIGNUM bn(BN_new());
-    if (bn.get() == NULL) {
+    if (bn.get() == nullptr) {
         logOpenSSLError("generate_rsa_keypair");
         return -1;
     }
@@ -336,12 +336,12 @@ static int generate_rsa_keypair(EVP_PKEY* pkey, const keymaster_rsa_keygen_param
 
     /* initialize RSA */
     Unique_RSA rsa(RSA_new());
-    if (rsa.get() == NULL) {
+    if (rsa.get() == nullptr) {
         logOpenSSLError("generate_rsa_keypair");
         return -1;
     }
 
-    if (!RSA_generate_key_ex(rsa.get(), rsa_params->modulus_size, bn.get(), NULL) ||
+    if (!RSA_generate_key_ex(rsa.get(), rsa_params->modulus_size, bn.get(), nullptr) ||
         RSA_check_key(rsa.get()) < 0) {
         logOpenSSLError("generate_rsa_keypair");
         return -1;
@@ -360,12 +360,12 @@ __attribute__((visibility("default"))) int openssl_generate_keypair(
     const keymaster0_device_t*, const keymaster_keypair_t key_type, const void* key_params,
     uint8_t** keyBlob, size_t* keyBlobLength) {
     Unique_EVP_PKEY pkey(EVP_PKEY_new());
-    if (pkey.get() == NULL) {
+    if (pkey.get() == nullptr) {
         logOpenSSLError("openssl_generate_keypair");
         return -1;
     }
 
-    if (key_params == NULL) {
+    if (key_params == nullptr) {
         ALOGW("key_params == null");
         return -1;
     } else if (key_type == TYPE_DSA) {
@@ -397,23 +397,23 @@ __attribute__((visibility("default"))) int openssl_import_keypair(const keymaste
                                                                   const size_t key_length,
                                                                   uint8_t** key_blob,
                                                                   size_t* key_blob_length) {
-    if (key == NULL) {
+    if (key == nullptr) {
         ALOGW("input key == NULL");
         return -1;
-    } else if (key_blob == NULL || key_blob_length == NULL) {
+    } else if (key_blob == nullptr || key_blob_length == nullptr) {
         ALOGW("output key blob or length == NULL");
         return -1;
     }
 
-    Unique_PKCS8_PRIV_KEY_INFO pkcs8(d2i_PKCS8_PRIV_KEY_INFO(NULL, &key, key_length));
-    if (pkcs8.get() == NULL) {
+    Unique_PKCS8_PRIV_KEY_INFO pkcs8(d2i_PKCS8_PRIV_KEY_INFO(nullptr, &key, key_length));
+    if (pkcs8.get() == nullptr) {
         logOpenSSLError("openssl_import_keypair");
         return -1;
     }
 
     /* assign to EVP */
     Unique_EVP_PKEY pkey(EVP_PKCS82PKEY(pkcs8.get()));
-    if (pkey.get() == NULL) {
+    if (pkey.get() == nullptr) {
         logOpenSSLError("openssl_import_keypair");
         return -1;
     }
@@ -430,24 +430,24 @@ __attribute__((visibility("default"))) int openssl_get_keypair_public(const keym
                                                                       const size_t key_blob_length,
                                                                       uint8_t** x509_data,
                                                                       size_t* x509_data_length) {
-    if (x509_data == NULL || x509_data_length == NULL) {
+    if (x509_data == nullptr || x509_data_length == nullptr) {
         ALOGW("output public key buffer == NULL");
         return -1;
     }
 
     Unique_EVP_PKEY pkey(unwrap_key(key_blob, key_blob_length));
-    if (pkey.get() == NULL) {
+    if (pkey.get() == nullptr) {
         return -1;
     }
 
-    int len = i2d_PUBKEY(pkey.get(), NULL);
+    int len = i2d_PUBKEY(pkey.get(), nullptr);
     if (len <= 0) {
         logOpenSSLError("openssl_get_keypair_public");
         return -1;
     }
 
     std::unique_ptr<uint8_t, Malloc_Free> key(static_cast<uint8_t*>(malloc(len)));
-    if (key.get() == NULL) {
+    if (key.get() == nullptr) {
         ALOGE("Could not allocate memory for public key data");
         return -1;
     }
@@ -473,14 +473,14 @@ static int sign_dsa(EVP_PKEY* pkey, keymaster_dsa_sign_params_t* sign_params, co
     }
 
     Unique_DSA dsa(EVP_PKEY_get1_DSA(pkey));
-    if (dsa.get() == NULL) {
+    if (dsa.get() == nullptr) {
         logOpenSSLError("openssl_sign_dsa");
         return -1;
     }
 
     unsigned int dsaSize = DSA_size(dsa.get());
     std::unique_ptr<uint8_t, Malloc_Free> signedDataPtr(reinterpret_cast<uint8_t*>(malloc(dsaSize)));
-    if (signedDataPtr.get() == NULL) {
+    if (signedDataPtr.get() == nullptr) {
         logOpenSSLError("openssl_sign_dsa");
         return -1;
     }
@@ -505,14 +505,14 @@ static int sign_ec(EVP_PKEY* pkey, keymaster_ec_sign_params_t* sign_params, cons
     }
 
     Unique_EC_KEY eckey(EVP_PKEY_get1_EC_KEY(pkey));
-    if (eckey.get() == NULL) {
+    if (eckey.get() == nullptr) {
         logOpenSSLError("openssl_sign_ec");
         return -1;
     }
 
     unsigned int ecdsaSize = ECDSA_size(eckey.get());
     std::unique_ptr<uint8_t, Malloc_Free> signedDataPtr(reinterpret_cast<uint8_t*>(malloc(ecdsaSize)));
-    if (signedDataPtr.get() == NULL) {
+    if (signedDataPtr.get() == nullptr) {
         logOpenSSLError("openssl_sign_ec");
         return -1;
     }
@@ -540,13 +540,13 @@ static int sign_rsa(EVP_PKEY* pkey, keymaster_rsa_sign_params_t* sign_params, co
     }
 
     Unique_RSA rsa(EVP_PKEY_get1_RSA(pkey));
-    if (rsa.get() == NULL) {
+    if (rsa.get() == nullptr) {
         logOpenSSLError("openssl_sign_rsa");
         return -1;
     }
 
     std::unique_ptr<uint8_t, Malloc_Free> signedDataPtr(reinterpret_cast<uint8_t*>(malloc(dataLength)));
-    if (signedDataPtr.get() == NULL) {
+    if (signedDataPtr.get() == nullptr) {
         logOpenSSLError("openssl_sign_rsa");
         return -1;
     }
@@ -567,16 +567,16 @@ __attribute__((visibility("default"))) int openssl_sign_data(
     const keymaster0_device_t*, const void* params, const uint8_t* keyBlob,
     const size_t keyBlobLength, const uint8_t* data, const size_t dataLength, uint8_t** signedData,
     size_t* signedDataLength) {
-    if (data == NULL) {
+    if (data == nullptr) {
         ALOGW("input data to sign == NULL");
         return -1;
-    } else if (signedData == NULL || signedDataLength == NULL) {
+    } else if (signedData == nullptr || signedDataLength == nullptr) {
         ALOGW("output signature buffer == NULL");
         return -1;
     }
 
     Unique_EVP_PKEY pkey(unwrap_key(keyBlob, keyBlobLength));
-    if (pkey.get() == NULL) {
+    if (pkey.get() == nullptr) {
         return -1;
     }
 
@@ -611,7 +611,7 @@ static int verify_dsa(EVP_PKEY* pkey, keymaster_dsa_sign_params_t* sign_params,
     }
 
     Unique_DSA dsa(EVP_PKEY_get1_DSA(pkey));
-    if (dsa.get() == NULL) {
+    if (dsa.get() == nullptr) {
         logOpenSSLError("openssl_verify_dsa");
         return -1;
     }
@@ -633,7 +633,7 @@ static int verify_ec(EVP_PKEY* pkey, keymaster_ec_sign_params_t* sign_params,
     }
 
     Unique_EC_KEY eckey(EVP_PKEY_get1_EC_KEY(pkey));
-    if (eckey.get() == NULL) {
+    if (eckey.get() == nullptr) {
         logOpenSSLError("openssl_verify_ec");
         return -1;
     }
@@ -662,13 +662,13 @@ static int verify_rsa(EVP_PKEY* pkey, keymaster_rsa_sign_params_t* sign_params,
     }
 
     Unique_RSA rsa(EVP_PKEY_get1_RSA(pkey));
-    if (rsa.get() == NULL) {
+    if (rsa.get() == nullptr) {
         logOpenSSLError("openssl_verify_data");
         return -1;
     }
 
     std::unique_ptr<uint8_t[]> dataPtr(new uint8_t[signedDataLength]);
-    if (dataPtr.get() == NULL) {
+    if (dataPtr.get() == nullptr) {
         logOpenSSLError("openssl_verify_data");
         return -1;
     }
@@ -691,13 +691,13 @@ __attribute__((visibility("default"))) int openssl_verify_data(
     const keymaster0_device_t*, const void* params, const uint8_t* keyBlob,
     const size_t keyBlobLength, const uint8_t* signedData, const size_t signedDataLength,
     const uint8_t* signature, const size_t signatureLength) {
-    if (signedData == NULL || signature == NULL) {
+    if (signedData == nullptr || signature == nullptr) {
         ALOGW("data or signature buffers == NULL");
         return -1;
     }
 
     Unique_EVP_PKEY pkey(unwrap_key(keyBlob, keyBlobLength));
-    if (pkey.get() == NULL) {
+    if (pkey.get() == nullptr) {
         return -1;
     }
 
@@ -738,7 +738,7 @@ __attribute__((visibility("default"))) int openssl_open(const hw_module_t* modul
         return -EINVAL;
 
     Unique_keymaster_device_t dev(new keymaster0_device_t);
-    if (dev.get() == NULL)
+    if (dev.get() == nullptr)
         return -ENOMEM;
 
     dev->common.tag = HARDWARE_DEVICE_TAG;
@@ -752,8 +752,8 @@ __attribute__((visibility("default"))) int openssl_open(const hw_module_t* modul
     dev->generate_keypair = openssl_generate_keypair;
     dev->import_keypair = openssl_import_keypair;
     dev->get_keypair_public = openssl_get_keypair_public;
-    dev->delete_keypair = NULL;
-    dev->delete_all = NULL;
+    dev->delete_keypair = nullptr;
+    dev->delete_all = nullptr;
     dev->sign_data = openssl_sign_data;
     dev->verify_data = openssl_verify_data;
 
@@ -779,7 +779,7 @@ struct keystore_module softkeymaster_module __attribute__((visibility("default")
          .name = "Keymaster OpenSSL HAL",
          .author = "The Android Open Source Project",
          .methods = &keystore_module_methods,
-         .dso = 0,
+         .dso = nullptr,
          .reserved = {},
         },
 };

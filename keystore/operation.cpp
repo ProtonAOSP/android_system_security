@@ -111,7 +111,7 @@ size_t OperationMap::getPruneableOperationCount() const {
 
 sp<IBinder> OperationMap::getOldestPruneableOperation() {
     if (!hasPruneableOperation()) {
-        return sp<IBinder>(NULL);
+        return sp<IBinder>(nullptr);
     }
     return mLru[0];
 }
