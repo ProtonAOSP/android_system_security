@@ -17,15 +17,14 @@
 #include <memory>
 #include <vector>
 
-#include <hardware/hw_auth_token.h>
-#include <keystore/authorization_set.h>
+#include <keystore/keymaster_types.h>
 
 #ifndef KEYSTORE_AUTH_TOKEN_TABLE_H_
 #define KEYSTORE_AUTH_TOKEN_TABLE_H_
 
 namespace keystore {
 
-using android::hardware::keymaster::V3_0::HardwareAuthToken;
+using keymaster::HardwareAuthToken;
 
 namespace test {
 class AuthTokenTableTest;
@@ -59,9 +58,9 @@ class AuthTokenTable {
     };
 
     /**
-     * Add an authorization token to the table.  The table takes ownership of the argument.
+     * Add an authorization token to the table.
      */
-    void AddAuthenticationToken(const HardwareAuthToken* token);
+    void AddAuthenticationToken(HardwareAuthToken&& auth_token);
 
     /**
      * Find an authorization token that authorizes the operation specified by \p operation_handle on
@@ -97,7 +96,7 @@ class AuthTokenTable {
 
     class Entry {
       public:
-        Entry(const HardwareAuthToken* token, time_t current_time);
+        Entry(HardwareAuthToken&& token, time_t current_time);
         Entry(Entry&& entry) { *this = std::move(entry); }
 
         void operator=(Entry&& rhs) {
@@ -114,21 +113,30 @@ class AuthTokenTable {
         bool Supersedes(const Entry& entry) const;
         bool SatisfiesAuth(const std::vector<uint64_t>& sids, HardwareAuthenticatorType auth_type);
 
-        bool is_newer_than(const Entry* entry) {
+        bool is_newer_than(const Entry* entry) const {
             if (!entry) return true;
-            return timestamp_host_order() > entry->timestamp_host_order();
+            uint64_t ts = token_.timestamp;
+            uint64_t other_ts = entry->token_.timestamp;
+            // Normally comparing timestamp_host_order alone is sufficient, but here is an
+            // additional hack to compare time_received value for some devices where their auth
+            // tokens contain fixed timestamp (due to the a stuck secure RTC on them)
+            return (ts > other_ts) ||
+                   ((ts == other_ts) && (time_received_ > entry->time_received_));
         }
 
         void mark_completed() { operation_completed_ = true; }
 
-        const HardwareAuthToken* token() { return token_.get(); }
+        const HardwareAuthToken& token() const & { return token_; }
         time_t time_received() const { return time_received_; }
         bool completed() const { return operation_completed_; }
-        uint64_t timestamp_host_order() const;
-        HardwareAuthenticatorType authenticator_type() const;
 
       private:
-        std::unique_ptr<const HardwareAuthToken> token_;
+        bool SatisfiesAuth(uint64_t sid, HardwareAuthenticatorType auth_type) const {
+            return (sid == token_.userId || sid == token_.authenticatorId) &&
+                   (auth_type & token_.authenticatorType) != 0;
+        }
+
+        HardwareAuthToken token_;
         time_t time_received_;
         time_t last_use_;
         bool operation_completed_;
@@ -150,6 +158,6 @@ class AuthTokenTable {
     time_t (*clock_function_)();
 };
 
-}  // namespace keymaster
+}  // namespace keystore
 
 #endif  // KEYSTORE_AUTH_TOKEN_TABLE_H_

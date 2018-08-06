@@ -17,18 +17,25 @@
 #ifndef KEYSTORE_OPERATION_H_
 #define KEYSTORE_OPERATION_H_
 
+#include <map>
+#include <vector>
+
 #include <binder/Binder.h>
 #include <binder/IBinder.h>
-#include <keystore/keymaster_tags.h>
-#include <map>
-#include <utils/LruCache.h>
+#include <keymasterV4_0/Keymaster.h>
 #include <utils/StrongPointer.h>
-#include <vector>
+
+#include <keystore/keymaster_types.h>
+#include <keystore/keystore_hidl_support.h>
+
+#include "operation_proto_handler.h"
+#include "operation_struct.h"
 
 namespace keystore {
 
 using ::android::IBinder;
 using ::android::sp;
+using keymaster::support::Keymaster;
 
 /**
  * OperationMap handles the translation of uint64_t's and keymaster2_device_t's to opaque binder
@@ -38,51 +45,29 @@ using ::android::sp;
  */
 
 class OperationMap {
-    typedef ::android::sp<::android::hardware::keymaster::V3_0::IKeymasterDevice> km_device_t;
-
   public:
     explicit OperationMap(IBinder::DeathRecipient* deathRecipient);
-    android::sp<android::IBinder> addOperation(uint64_t handle, uint64_t keyid, KeyPurpose purpose,
-                                               const km_device_t& dev,
-                                               const android::sp<android::IBinder>& appToken,
-                                               KeyCharacteristics&& characteristics,
-                                               bool pruneable);
-    bool getOperation(const android::sp<android::IBinder>& token, uint64_t* outHandle,
-                      uint64_t* outKeyid, KeyPurpose* outPurpose, km_device_t* outDev,
-                      const KeyCharacteristics** outCharacteristics);
-    bool removeOperation(const android::sp<android::IBinder>& token);
+    sp<IBinder> addOperation(uint64_t handle, uint64_t keyid, KeyPurpose purpose,
+                             const sp<Keymaster>& dev, const sp<IBinder>& appToken,
+                             KeyCharacteristics&& characteristics,
+                             const hidl_vec<KeyParameter>& params, bool pruneable);
+    NullOr<const Operation&> getOperation(const sp<IBinder>& token);
+    NullOr<Operation> removeOperation(const sp<IBinder>& token, bool wasSuccessful);
     bool hasPruneableOperation() const;
     size_t getOperationCount() const { return mMap.size(); }
     size_t getPruneableOperationCount() const;
-    bool getOperationAuthToken(const android::sp<android::IBinder>& token,
-                               const HardwareAuthToken** outToken);
-    bool setOperationAuthToken(const android::sp<android::IBinder>& token,
-                               const HardwareAuthToken* authToken);
-    android::sp<android::IBinder> getOldestPruneableOperation();
-    std::vector<android::sp<android::IBinder>>
-    getOperationsForToken(const android::sp<android::IBinder>& appToken);
+    void setOperationAuthToken(const sp<IBinder>& token, HardwareAuthToken authToken);
+    void setOperationVerificationToken(const sp<IBinder>& token, VerificationToken authToken);
+    sp<IBinder> getOldestPruneableOperation();
+    std::vector<sp<IBinder>> getOperationsForToken(const sp<IBinder>& appToken);
 
   private:
-    void updateLru(const android::sp<android::IBinder>& token);
-    void removeOperationTracking(const android::sp<android::IBinder>& token,
-                                 const android::sp<android::IBinder>& appToken);
-    struct Operation {
-        Operation();
-        Operation(uint64_t handle, uint64_t keyid, KeyPurpose purpose, const km_device_t& device,
-                  KeyCharacteristics&& characteristics, android::sp<android::IBinder> appToken);
-        uint64_t handle;
-        uint64_t keyid;
-        KeyPurpose purpose;
-        km_device_t device;
-        KeyCharacteristics characteristics;
-        android::sp<android::IBinder> appToken;
-        std::unique_ptr<HardwareAuthToken> authToken;
-    };
-    std::map<android::sp<android::IBinder>, Operation> mMap;
-    std::vector<android::sp<android::IBinder>> mLru;
-    std::map<android::sp<android::IBinder>, std::vector<android::sp<android::IBinder>>>
-        mAppTokenMap;
-    android::IBinder::DeathRecipient* mDeathRecipient;
+    void updateLru(const sp<IBinder>& token);
+    void removeOperationTracking(const sp<IBinder>& token, const sp<IBinder>& appToken);
+    std::map<sp<IBinder>, Operation> mMap;
+    std::vector<sp<IBinder>> mLru;
+    std::map<sp<IBinder>, std::vector<sp<IBinder>>> mAppTokenMap;
+    IBinder::DeathRecipient* mDeathRecipient;
 };
 
 }  // namespace keystore

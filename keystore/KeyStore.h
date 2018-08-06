@@ -17,43 +17,57 @@
 #ifndef KEYSTORE_KEYSTORE_H_
 #define KEYSTORE_KEYSTORE_H_
 
-#include "user_state.h"
-
 #include <android/hardware/keymaster/3.0/IKeymasterDevice.h>
-
+#include <keymasterV4_0/Keymaster.h>
 #include <utils/Vector.h>
 
-#include "blob.h"
-#include "include/keystore/keymaster_tags.h"
-#include "grant_store.h"
+#include <keystore/keymaster_types.h>
 
-using ::keystore::NullOr;
+#include "blob.h"
+#include "grant_store.h"
+#include "user_state.h"
+
+namespace keystore {
+
+using ::android::sp;
+using keymaster::support::Keymaster;
+
+class KeymasterDevices : public std::array<sp<Keymaster>, 3> {
+  public:
+    sp<Keymaster>& operator[](SecurityLevel secLevel);
+    sp<Keymaster> operator[](SecurityLevel secLevel) const;
+};
 
 class KeyStore {
-    typedef ::android::sp<::android::hardware::keymaster::V3_0::IKeymasterDevice> km_device_t;
-
   public:
-    KeyStore(Entropy* entropy, const km_device_t& device, const km_device_t& fallback,
-             bool allowNewFallback);
+    KeyStore(Entropy* entropy, const KeymasterDevices& kmDevices,
+             SecurityLevel minimalAllowedSecurityLevelForNewKeys);
     ~KeyStore();
 
-    km_device_t& getDevice() { return mDevice; }
+    sp<Keymaster> getDevice(SecurityLevel securityLevel) const { return mKmDevices[securityLevel]; }
 
-    NullOr<km_device_t&> getFallbackDevice() {
+    std::pair<sp<Keymaster>, SecurityLevel> getMostSecureDevice() const {
+        SecurityLevel level = SecurityLevel::STRONGBOX;
+        do {
+            if (mKmDevices[level].get()) {
+                return {mKmDevices[level], level};
+            }
+            level = static_cast<SecurityLevel>(static_cast<uint32_t>(level) - 1);
+        } while (level != SecurityLevel::SOFTWARE);
+        return {nullptr, SecurityLevel::SOFTWARE};
+    }
+
+    sp<Keymaster> getFallbackDevice() const {
         // we only return the fallback device if the creation of new fallback key blobs is
         // allowed. (also see getDevice below)
         if (mAllowNewFallback) {
-            return mFallbackDevice;
+            return mKmDevices[SecurityLevel::SOFTWARE];
         } else {
-            return {};
+            return nullptr;
         }
     }
 
-    km_device_t& getDevice(const Blob& blob) {
-        // We return a device, based on the nature of the blob to provide backward
-        // compatibility with old key blobs generated using the fallback device.
-        return blob.isFallback() ? mFallbackDevice : mDevice;
-    }
+    sp<Keymaster> getDevice(const Blob& blob) { return mKmDevices[blob.getSecurityLevel()]; }
 
     ResponseCode initialize();
 
@@ -71,7 +85,7 @@ class KeyStore {
     android::String8 getKeyNameForUidWithDir(const android::String8& keyName, uid_t uid,
                                              const BlobType type);
     NullOr<android::String8> getBlobFileNameIfExists(const android::String8& alias, uid_t uid,
-                                                    const BlobType type);
+                                                     const BlobType type);
 
     /*
      * Delete entries owned by userId. If keepUnencryptedEntries is true
@@ -122,13 +136,13 @@ class KeyStore {
     const UserState* getUserStateByUid(uid_t uid) const;
 
   private:
-    static const char* sOldMasterKey;
-    static const char* sMetaDataFile;
-    static const android::String16 sRSAKeyType;
+    static const char* kOldMasterKey;
+    static const char* kMetaDataFile;
+    static const android::String16 kRsaKeyType;
+    static const android::String16 kEcKeyType;
     Entropy* mEntropy;
 
-    km_device_t mDevice;
-    km_device_t mFallbackDevice;
+    KeymasterDevices mKmDevices;
     bool mAllowNewFallback;
 
     android::Vector<UserState*> mMasterKeys;
@@ -157,5 +171,7 @@ class KeyStore {
 
     bool upgradeKeystore();
 };
+
+}  // namespace keystore
 
 #endif  // KEYSTORE_KEYSTORE_H_

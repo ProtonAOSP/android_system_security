@@ -30,6 +30,7 @@ LOCAL_SHARED_LIBRARIES += \
 	libcrypto \
 	libcutils \
 	libhidlbase \
+	libkeystore_aidl \
 	libkeystore_binder \
 	liblog \
 	libutils

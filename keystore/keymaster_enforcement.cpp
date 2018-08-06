@@ -29,6 +29,8 @@
 #include <hardware/hw_auth_token.h>
 #include <list>
 
+#include <keystore/keystore_hidl_support.h>
+
 namespace keystore {
 
 class AccessTimeMap {
@@ -115,6 +117,7 @@ KeymasterEnforcement::~KeymasterEnforcement() {
 ErrorCode KeymasterEnforcement::AuthorizeOperation(const KeyPurpose purpose, const km_id_t keyid,
                                                    const AuthorizationSet& auth_set,
                                                    const AuthorizationSet& operation_params,
+                                                   const HardwareAuthToken& auth_token,
                                                    uint64_t op_handle, bool is_begin_operation) {
     if (is_public_key_algorithm(auth_set)) {
         switch (purpose) {
@@ -125,23 +128,23 @@ ErrorCode KeymasterEnforcement::AuthorizeOperation(const KeyPurpose purpose, con
 
         case KeyPurpose::DECRYPT:
         case KeyPurpose::SIGN:
-        case KeyPurpose::DERIVE_KEY:
             break;
+
         case KeyPurpose::WRAP_KEY:
             return ErrorCode::INCOMPATIBLE_PURPOSE;
         };
     };
 
     if (is_begin_operation)
-        return AuthorizeBegin(purpose, keyid, auth_set, operation_params);
+        return AuthorizeBegin(purpose, keyid, auth_set, operation_params, auth_token);
     else
-        return AuthorizeUpdateOrFinish(auth_set, operation_params, op_handle);
+        return AuthorizeUpdateOrFinish(auth_set, auth_token, op_handle);
 }
 
 // For update and finish the only thing to check is user authentication, and then only if it's not
 // timeout-based.
 ErrorCode KeymasterEnforcement::AuthorizeUpdateOrFinish(const AuthorizationSet& auth_set,
-                                                        const AuthorizationSet& operation_params,
+                                                        const HardwareAuthToken& auth_token,
                                                         uint64_t op_handle) {
     int auth_type_index = -1;
     for (size_t pos = 0; pos < auth_set.size(); ++pos) {
@@ -174,9 +177,9 @@ ErrorCode KeymasterEnforcement::AuthorizeUpdateOrFinish(const AuthorizationSet& 
         if (user_secure_id.isOk()) {
             authentication_required = true;
             int auth_timeout_index = -1;
-            if (AuthTokenMatches(auth_set, operation_params, user_secure_id.value(),
-                                 auth_type_index, auth_timeout_index, op_handle,
-                                 false /* is_begin_operation */))
+            if (auth_token.mac.size() &&
+                AuthTokenMatches(auth_set, auth_token, user_secure_id.value(), auth_type_index,
+                                 auth_timeout_index, op_handle, false /* is_begin_operation */))
                 return ErrorCode::OK;
         }
     }
@@ -188,7 +191,8 @@ ErrorCode KeymasterEnforcement::AuthorizeUpdateOrFinish(const AuthorizationSet& 
 
 ErrorCode KeymasterEnforcement::AuthorizeBegin(const KeyPurpose purpose, const km_id_t keyid,
                                                const AuthorizationSet& auth_set,
-                                               const AuthorizationSet& operation_params) {
+                                               const AuthorizationSet& operation_params,
+                                               NullOr<const HardwareAuthToken&> auth_token) {
     // Find some entries that may be needed to handle KM_TAG_USER_SECURE_ID
     int auth_timeout_index = -1;
     int auth_type_index = -1;
@@ -219,6 +223,8 @@ ErrorCode KeymasterEnforcement::AuthorizeBegin(const KeyPurpose purpose, const k
     bool caller_nonce_authorized_by_key = false;
     bool authentication_required = false;
     bool auth_token_matched = false;
+    bool unlocked_device_required = false;
+    int32_t user_id = -1;
 
     for (auto& param : auth_set) {
 
@@ -270,21 +276,28 @@ ErrorCode KeymasterEnforcement::AuthorizeBegin(const KeyPurpose purpose, const k
             if (auth_timeout_index != -1) {
                 auto secure_id = authorizationValue(TAG_USER_SECURE_ID, param);
                 authentication_required = true;
-                if (secure_id.isOk() &&
-                    AuthTokenMatches(auth_set, operation_params, secure_id.value(), auth_type_index,
-                                     auth_timeout_index, 0 /* op_handle */,
+                if (secure_id.isOk() && auth_token.isOk() &&
+                    AuthTokenMatches(auth_set, auth_token.value(), secure_id.value(),
+                                     auth_type_index, auth_timeout_index, 0 /* op_handle */,
                                      true /* is_begin_operation */))
                     auth_token_matched = true;
             }
+            break;
+
+        case Tag::USER_ID:
+            user_id = authorizationValue(TAG_USER_ID, param).value();
             break;
 
         case Tag::CALLER_NONCE:
             caller_nonce_authorized_by_key = true;
             break;
 
+        case Tag::UNLOCKED_DEVICE_REQUIRED:
+            unlocked_device_required = true;
+            break;
+
         /* Tags should never be in key auths. */
         case Tag::INVALID:
-        case Tag::AUTH_TOKEN:
         case Tag::ROOT_OF_TRUST:
         case Tag::APPLICATION_DATA:
         case Tag::ATTESTATION_CHALLENGE:
@@ -309,21 +322,18 @@ ErrorCode KeymasterEnforcement::AuthorizeBegin(const KeyPurpose purpose, const k
         case Tag::PADDING:
         case Tag::NONCE:
         case Tag::MIN_MAC_LENGTH:
-        case Tag::KDF:
         case Tag::EC_CURVE:
 
         /* Tags not used for operations. */
         case Tag::BLOB_USAGE_REQUIREMENTS:
-        case Tag::EXPORTABLE:
 
         /* Algorithm specific parameters not used for access control. */
         case Tag::RSA_PUBLIC_EXPONENT:
-        case Tag::ECIES_SINGLE_HASH_MODE:
 
         /* Informational tags. */
         case Tag::CREATION_DATETIME:
         case Tag::ORIGIN:
-        case Tag::ROLLBACK_RESISTANT:
+        case Tag::ROLLBACK_RESISTANCE:
 
         /* Tags handled when KM_TAG_USER_SECURE_ID is handled */
         case Tag::NO_AUTH_REQUIRED:
@@ -334,25 +344,39 @@ ErrorCode KeymasterEnforcement::AuthorizeBegin(const KeyPurpose purpose, const k
         case Tag::ASSOCIATED_DATA:
 
         /* Tags that are implicitly verified by secure side */
-        case Tag::ALL_APPLICATIONS:
         case Tag::APPLICATION_ID:
-        case Tag::OS_VERSION:
+        case Tag::BOOT_PATCHLEVEL:
         case Tag::OS_PATCHLEVEL:
-
-        /* Ignored pending removal */
-        case Tag::USER_ID:
-        case Tag::ALL_USERS:
+        case Tag::OS_VERSION:
+        case Tag::TRUSTED_USER_PRESENCE_REQUIRED:
+        case Tag::VENDOR_PATCHLEVEL:
 
         /* TODO(swillden): Handle these */
         case Tag::INCLUDE_UNIQUE_ID:
         case Tag::UNIQUE_ID:
         case Tag::RESET_SINCE_ID_ROTATION:
         case Tag::ALLOW_WHILE_ON_BODY:
+        case Tag::HARDWARE_TYPE:
+        case Tag::TRUSTED_CONFIRMATION_REQUIRED:
+        case Tag::CONFIRMATION_TOKEN:
             break;
 
         case Tag::BOOTLOADER_ONLY:
             return ErrorCode::INVALID_KEY_BLOB;
         }
+    }
+
+    if (unlocked_device_required && is_device_locked(user_id)) {
+        switch (purpose) {
+        case KeyPurpose::ENCRYPT:
+        case KeyPurpose::VERIFY:
+            /* These are okay */
+            break;
+        case KeyPurpose::DECRYPT:
+        case KeyPurpose::SIGN:
+        case KeyPurpose::WRAP_KEY:
+            return ErrorCode::DEVICE_LOCKED;
+        };
     }
 
     if (authentication_required && !auth_token_matched) {
@@ -463,33 +487,13 @@ template <typename IntType> inline IntType ntoh(const IntType& value) {
 }
 
 bool KeymasterEnforcement::AuthTokenMatches(const AuthorizationSet& auth_set,
-                                            const AuthorizationSet& operation_params,
+                                            const HardwareAuthToken& auth_token,
                                             const uint64_t user_secure_id,
                                             const int auth_type_index, const int auth_timeout_index,
                                             const uint64_t op_handle,
                                             bool is_begin_operation) const {
     assert(auth_type_index < static_cast<int>(auth_set.size()));
     assert(auth_timeout_index < static_cast<int>(auth_set.size()));
-
-    auto auth_token_blob = operation_params.GetTagValue(TAG_AUTH_TOKEN);
-    if (!auth_token_blob.isOk()) {
-        ALOGE("Authentication required, but auth token not provided");
-        return false;
-    }
-
-    if (auth_token_blob.value().size() != sizeof(hw_auth_token_t)) {
-        ALOGE("Bug: Auth token is the wrong size (%zu expected, %zu found)",
-              sizeof(hw_auth_token_t), auth_token_blob.value().size());
-        return false;
-    }
-
-    hw_auth_token_t auth_token;
-    memcpy(&auth_token, &auth_token_blob.value()[0], sizeof(hw_auth_token_t));
-    if (auth_token.version != HW_AUTH_TOKEN_VERSION) {
-        ALOGE("Bug: Auth token is the version %hhu (or is not an auth token). Expected %d",
-              auth_token.version, HW_AUTH_TOKEN_VERSION);
-        return false;
-    }
 
     if (!ValidateTokenSignature(auth_token)) {
         ALOGE("Auth token signature invalid");
@@ -502,9 +506,9 @@ bool KeymasterEnforcement::AuthTokenMatches(const AuthorizationSet& auth_set,
         return false;
     }
 
-    if (user_secure_id != auth_token.user_id && user_secure_id != auth_token.authenticator_id) {
+    if (user_secure_id != auth_token.userId && user_secure_id != auth_token.authenticatorId) {
         ALOGI("Auth token SIDs %" PRIu64 " and %" PRIu64 " do not match key SID %" PRIu64,
-              auth_token.user_id, auth_token.authenticator_id, user_secure_id);
+              auth_token.userId, auth_token.authenticatorId, user_secure_id);
         return false;
     }
 
@@ -513,19 +517,18 @@ bool KeymasterEnforcement::AuthTokenMatches(const AuthorizationSet& auth_set,
         return false;
     }
 
-    assert(auth_set[auth_type_index].tag == KM_TAG_USER_AUTH_TYPE);
+    assert(auth_set[auth_type_index].tag == TAG_USER_AUTH_TYPE);
     auto key_auth_type_mask = authorizationValue(TAG_USER_AUTH_TYPE, auth_set[auth_type_index]);
     if (!key_auth_type_mask.isOk()) return false;
 
-    uint32_t token_auth_type = ntoh(auth_token.authenticator_type);
-    if ((uint32_t(key_auth_type_mask.value()) & token_auth_type) == 0) {
+    if ((uint32_t(key_auth_type_mask.value()) & auth_token.authenticatorType) == 0) {
         ALOGE("Key requires match of auth type mask 0%uo, but token contained 0%uo",
-              key_auth_type_mask.value(), token_auth_type);
+              key_auth_type_mask.value(), auth_token.authenticatorType);
         return false;
     }
 
     if (auth_timeout_index != -1 && is_begin_operation) {
-        assert(auth_set[auth_timeout_index].tag == KM_TAG_AUTH_TIMEOUT);
+        assert(auth_set[auth_timeout_index].tag == TAG_AUTH_TIMEOUT);
         auto auth_token_timeout =
             authorizationValue(TAG_AUTH_TIMEOUT, auth_set[auth_timeout_index]);
         if (!auth_token_timeout.isOk()) return false;

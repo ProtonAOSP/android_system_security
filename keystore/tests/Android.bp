@@ -1,20 +1,30 @@
 // Unit test for AuthTokenTable
-// TODO: enable after fixing b/68149839
-/*
+
 cc_test {
     cflags: [
         "-Wall",
         "-Werror",
         "-Wextra",
+        "-O0",
     ],
-    srcs: ["auth_token_table_test.cpp"],
+    srcs: [
+        "auth_token_table_test.cpp",
+        "auth_token_formatting_test.cpp",
+        "confirmationui_rate_limiting_test.cpp",
+        "gtest_main.cpp",
+    ],
     name: "keystore_unit_tests",
-    tags: ["test"],
     static_libs: [
+        "android.hardware.confirmationui@1.0",
+        "libbase",
         "libgtest_main",
+        "libhidlbase",
+        "libkeymaster4support",
         "libkeystore_test",
         "liblog",
     ],
     shared_libs: ["libkeymaster_messages"],
+   sanitize: {
+     cfi: false,
+   }
 }
-*/

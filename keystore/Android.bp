@@ -21,39 +21,49 @@ cc_binary {
 
     srcs: [
         ":IKeyAttestationApplicationIdProvider.aidl",
+        "KeyStore.cpp",
         "auth_token_table.cpp",
         "blob.cpp",
+        "confirmation_manager.cpp",
         "entropy.cpp",
         "grant_store.cpp",
+        "key_config.proto",
+        "key_proto_handler.cpp",
         "key_store_service.cpp",
         "keyblob_utils.cpp",
         "keymaster_enforcement.cpp",
-        "keystore.cpp",
         "keystore_attestation_id.cpp",
         "keystore_main.cpp",
         "keystore_utils.cpp",
         "legacy_keymaster_device_wrapper.cpp",
         "operation.cpp",
+        "operation_config.proto",
+        "operation_proto_handler.cpp",
         "permissions.cpp",
         "user_state.cpp",
     ],
     shared_libs: [
+        "android.hardware.confirmationui@1.0",
         "android.hardware.keymaster@3.0",
+        "android.hardware.keymaster@4.0",
         "android.system.wifi.keystore@1.0",
+        "libbase",
         "libbinder",
         "libcrypto",
-        "libcutils",
         "libhardware",
         "libhidlbase",
         "libhidltransport",
         "libhwbinder",
+        "libkeymaster4support",
         "libkeymaster_messages",
         "libkeymaster_portable",
-        "libkeymaster_staging",
+        "libkeystore_aidl",
         "libkeystore_binder",
+        "libkeystore_parcelables",
         "liblog",
+        "libprotobuf-cpp-lite",
         "libselinux",
-        "libsoftkeymaster",
+        "libservices",
         "libsoftkeymasterdevice",
         "libutils",
         "libwifikeystorehal",
@@ -68,6 +78,8 @@ cc_binary {
             enabled: false,
         },
     },
+
+    required: ["keystore_cli_v2"],
 }
 
 cc_binary {
@@ -76,13 +88,15 @@ cc_binary {
 
     srcs: ["keystore_cli.cpp"],
     shared_libs: [
-        "android.hardware.keymaster@3.0",
+        "android.hardware.keymaster@4.0",
         "libbinder",
         "libcrypto",
         "libcutils",
         "libhidlbase",
         "libhwbinder",
+        "libkeystore_aidl", // for IKeyStoreService.asInterface()
         "libkeystore_binder",
+        "libkeystore_parcelables",
         "liblog",
         "libutils",
     ],
@@ -98,39 +112,73 @@ cc_binary {
     ],
     srcs: ["keystore_cli_v2.cpp"],
     shared_libs: [
-        "android.hardware.keymaster@3.0",
+        "android.hardware.confirmationui@1.0",
+        "libbinder",
+        "android.hardware.keymaster@4.0",
         "libchrome",
+        "libutils",
         "libhidlbase",
         "libhwbinder",
+        "libkeymaster4support",
+        "libkeystore_aidl",
         "libkeystore_binder",
+        "libkeystore_parcelables",
     ],
 
     local_include_dirs: ["include"],
 }
 
+cc_library_shared {
+    name: "libkeystore_parcelables",
+    defaults: ["keystore_defaults"],
+    export_include_dirs: ["include"],
+    srcs: [
+        "KeyAttestationApplicationId.cpp",
+        "KeyAttestationPackageInfo.cpp",
+        "KeymasterArguments.cpp",
+        "KeystoreArguments.cpp",
+        "OperationResult.cpp",
+        "Signature.cpp",
+        "keystore_aidl_hidl_marshalling_utils.cpp",
+    ],
+    shared_libs: [
+        "android.hardware.keymaster@4.0",
+        "libbinder",
+        "libhardware",
+        "libhidlbase",
+        "libhwbinder",
+        "libkeymaster4support",
+        "liblog",
+        "libprotobuf-cpp-lite",
+        "libutils",
+    ],
+    export_shared_lib_headers: [
+        "android.hardware.keymaster@4.0",
+        "libbinder",
+        "libhidlbase",
+        "libhwbinder",
+        "libkeymaster4support",
+    ],
+}
 // Library for keystore clients
 cc_library_shared {
     name: "libkeystore_binder",
     defaults: ["keystore_defaults"],
 
     srcs: [
-        "IKeystoreService.cpp",
-        "KeyAttestationApplicationId.cpp",
-        "KeyAttestationPackageInfo.cpp",
-        "Signature.cpp",
-        "authorization_set.cpp",
         "keyblob_utils.cpp",
-        "keystore_aidl_hidl_marshalling_utils.cpp",
         "keystore_client.proto",
         "keystore_client_impl.cpp",
         "keystore_get.cpp",
-        "keystore_tags_utils.cpp",
     ],
     shared_libs: [
-        "android.hardware.keymaster@3.0",
+        "android.hardware.keymaster@4.0",
         "libbinder",
         "libhidlbase",
         "libhwbinder",
+        "libkeymaster4support",
+        "libkeystore_aidl",
+        "libkeystore_parcelables",
         "liblog",
         "libprotobuf-cpp-lite",
         "libutils",
@@ -140,12 +188,18 @@ cc_library_shared {
         type: "lite",
         export_proto_headers: true,
     },
+    aidl: {
+        export_aidl_headers: true,
+        include_dirs: ["frameworks/base/core/java/"],
+    },
     export_include_dirs: ["include"],
     export_shared_lib_headers: [
-        "android.hardware.keymaster@3.0",
+        "android.hardware.keymaster@4.0",
         "libbinder",
         "libhidlbase",
         "libhwbinder",
+        "libkeystore_aidl",
+        "libkeystore_parcelables",
     ],
 }
 
@@ -174,22 +228,61 @@ cc_library_static {
     name: "libkeystore_test",
     defaults: ["keystore_defaults"],
 
-    srcs: ["auth_token_table.cpp"],
+    srcs: [
+        "auth_token_table.cpp",
+    ],
+    cflags: [ "-O0", ],
     static_libs: ["libgtest_main"],
     shared_libs: [
-        "android.hardware.keymaster@3.0",
+        "android.hardware.keymaster@4.0",
         "libhidlbase",
         "libhwbinder",
-        "libkeymaster_messages",
+        "libkeymaster4support",
         "libutils",
     ],
     export_shared_lib_headers: [
-        "android.hardware.keymaster@3.0",
+        "android.hardware.keymaster@4.0",
         "libhidlbase",
         "libhwbinder",
+        "libkeymaster4support",
     ],
 
     export_include_dirs: ["include"],
+}
+
+filegroup {
+    name: "keystore_aidl",
+    srcs: [
+        "binder/android/security/IConfirmationPromptCallback.aidl",
+        "binder/android/security/IKeystoreService.aidl",
+    ],
+}
+
+cc_library_shared {
+    name: "libkeystore_aidl",
+    srcs: [":keystore_aidl"],
+    aidl: {
+        export_aidl_headers: true,
+        include_dirs: [
+            "system/security/keystore/binder",
+        ],
+    },
+    shared_libs: [
+        "libbinder",
+        "libcutils",
+        "libhardware",
+        "libhidlbase",
+        "libhidltransport",
+        "libhwbinder",
+        "libkeystore_parcelables",
+        "liblog",
+        "libselinux",
+        "libutils",
+    ],
+    export_shared_lib_headers: [
+        "libbinder",
+        "libkeystore_parcelables",
+    ],
 }
 
 subdirs = ["tests"]
