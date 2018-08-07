@@ -26,6 +26,7 @@ enum State {
     STATE_UNINITIALIZED = 3,
 };
 
+// must be in sync with KeyStore.java,
 enum class ResponseCode: int32_t {
     NO_ERROR          =  STATE_NO_ERROR, // 1
     LOCKED            =  STATE_LOCKED, // 2
@@ -62,25 +63,7 @@ enum KeyStoreFlag : uint8_t {
     // encrypted, and it will be stored separately under an unique UID instead. This flag should
     // only be available to system uid.
     KEYSTORE_FLAG_CRITICAL_TO_DEVICE_ENCRYPTION = 1 << 3,
+    KEYSTORE_FLAG_STRONGBOX = 1 << 4,
 };
-
-/**
- * Returns the size of the softkey magic header value for measuring
- * and allocating purposes.
- */
-size_t get_softkey_header_size();
-
-/**
- * Adds the magic softkey header to a key blob.
- *
- * Returns NULL if the destination array is too small. Otherwise it
- * returns the offset directly after the magic value.
- */
-uint8_t* add_softkey_header(uint8_t* key_blob, size_t key_blob_length);
-
-/**
- * Returns true if the key blob has a magic softkey header at the beginning.
- */
-bool is_softkey(const uint8_t* key_blob, const size_t key_blob_length);
 
 #endif

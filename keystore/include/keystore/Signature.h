@@ -15,9 +15,9 @@
 #ifndef KEYSTORE_INCLUDE_KEYSTORE_SIGNATURE_H_
 #define KEYSTORE_INCLUDE_KEYSTORE_SIGNATURE_H_
 
-#include <binder/Parcelable.h>
-#include <stdint.h>
 #include <vector>
+
+#include <binder/Parcelable.h>
 
 namespace android {
 namespace content {

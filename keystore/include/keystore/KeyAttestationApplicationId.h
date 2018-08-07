@@ -15,11 +15,12 @@
 #ifndef KEYSTORE_INCLUDE_KEYSTORE_KEYATTESTATIONAPPLICATIONID_H_
 #define KEYSTORE_INCLUDE_KEYSTORE_KEYATTESTATIONAPPLICATIONID_H_
 
-#include "KeyAttestationPackageInfo.h"
-#include "utils.h"
-#include <binder/Parcelable.h>
 #include <memory>
 #include <vector>
+
+#include <binder/Parcelable.h>
+
+#include "KeyAttestationPackageInfo.h"
 
 namespace android {
 namespace security {
@@ -29,6 +30,8 @@ class KeyAttestationApplicationId : public Parcelable {
   public:
     typedef SharedNullableIterator<const KeyAttestationPackageInfo, std::vector>
         ConstKeyAttestationPackageInfoIterator;
+    KeyAttestationApplicationId();
+    KeyAttestationApplicationId(std::unique_ptr<KeyAttestationPackageInfo> package);
 
     status_t writeToParcel(Parcel*) const override;
     status_t readFromParcel(const Parcel* parcel) override;
@@ -46,6 +49,6 @@ class KeyAttestationApplicationId : public Parcelable {
 
 }  // namespace keymaster
 }  // namespace security
-}  // namsepace android
+}  // namespace android
 
 #endif  // KEYSTORE_INCLUDE_KEYSTORE_KEYATTESTATIONAPPLICATIONID_H_

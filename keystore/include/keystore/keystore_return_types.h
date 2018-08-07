@@ -18,12 +18,12 @@
 #ifndef KEYSTORE_INCLUDE_KEYSTORE_KEYSTORE_RETURN_TYPES_H_
 #define KEYSTORE_INCLUDE_KEYSTORE_KEYSTORE_RETURN_TYPES_H_
 
+#include "keymaster_types.h"
 #include "keystore.h"
-#include <android/hardware/keymaster/3.0/IHwKeymasterDevice.h>
 
 namespace keystore {
 
-using ::android::hardware::keymaster::V3_0::ErrorCode;
+using keymaster::ErrorCode;
 
 class KeyStoreServiceReturnCode;
 class KeyStoreNativeReturnCode;
@@ -46,6 +46,7 @@ class KeyStoreServiceReturnCode {
     KeyStoreServiceReturnCode(const KeyStoreServiceReturnCode& errorCode)
         : errorCode_(errorCode.errorCode_) {}
     KeyStoreServiceReturnCode(const KeyStoreNativeReturnCode& errorCode);
+    explicit inline KeyStoreServiceReturnCode(const int32_t& errorCode) : errorCode_(errorCode) {}
     inline KeyStoreServiceReturnCode& operator=(const ErrorCode& errorCode) {
         errorCode_ = int32_t(errorCode);
         return *this;
@@ -62,8 +63,9 @@ class KeyStoreServiceReturnCode {
         return errorCode_ == static_cast<int32_t>(ResponseCode::NO_ERROR) ||
                errorCode_ == static_cast<int32_t>(ErrorCode::OK);
     }
+
     inline operator int32_t() const {
-        if (!errorCode_) return static_cast<int32_t>(ResponseCode::NO_ERROR);
+        if (!errorCode_) return static_cast<int32_t>(ResponseCode::NO_ERROR /* 1 */);
         return errorCode_;
     }
     inline bool operator==(const ResponseCode& rhs) const {
@@ -117,6 +119,7 @@ class KeyStoreNativeReturnCode {
     KeyStoreNativeReturnCode(const ResponseCode& errorCode) : errorCode_(int32_t(errorCode)) {}
     KeyStoreNativeReturnCode(const KeyStoreNativeReturnCode& errorCode)
         : errorCode_(errorCode.errorCode_) {}
+    explicit inline KeyStoreNativeReturnCode(const int32_t& errorCode) : errorCode_(errorCode) {}
     KeyStoreNativeReturnCode(const KeyStoreServiceReturnCode& errorcode);
     inline KeyStoreNativeReturnCode& operator=(const ErrorCode& errorCode) {
         errorCode_ = int32_t(errorCode);
@@ -135,8 +138,8 @@ class KeyStoreNativeReturnCode {
                errorCode_ == static_cast<int32_t>(ErrorCode::OK);
     }
     inline operator int32_t() const {
-        if (errorCode_ == static_cast<int32_t>(ResponseCode::NO_ERROR)) {
-            return static_cast<int32_t>(ErrorCode::OK);
+        if (errorCode_ == static_cast<int32_t>(ResponseCode::NO_ERROR) /* 1 */) {
+            return static_cast<int32_t>(ErrorCode::OK) /* 0 */;
         }
         return errorCode_;
     }

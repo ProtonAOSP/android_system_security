@@ -15,12 +15,15 @@
 #ifndef KEYSTORE_INCLUDE_KEYSTORE_KEYATTESTATIONPACKAGEINFO_H_
 #define KEYSTORE_INCLUDE_KEYSTORE_KEYATTESTATIONPACKAGEINFO_H_
 
+#include <stdint.h>
+
+#include <memory>
+#include <vector>
+
+#include <binder/Parcelable.h>
+
 #include "Signature.h"
 #include "utils.h"
-#include <binder/Parcelable.h>
-#include <memory>
-#include <stdint.h>
-#include <vector>
 
 namespace android {
 namespace security {
@@ -30,20 +33,27 @@ class KeyAttestationPackageInfo : public Parcelable {
   public:
     typedef SharedNullableIterator<const content::pm::Signature, std::vector>
         ConstSignatureIterator;
+    typedef std::vector<std::unique_ptr<content::pm::Signature>>
+        SignaturesVector;
+    typedef std::shared_ptr<SignaturesVector> SharedSignaturesVector;
+
+    KeyAttestationPackageInfo(const String16& packageName, int64_t versionCode,
+                              SharedSignaturesVector signatures);
+    KeyAttestationPackageInfo();
 
     status_t writeToParcel(Parcel*) const override;
     status_t readFromParcel(const Parcel* parcel) override;
 
     const std::unique_ptr<String16>& package_name() const { return packageName_; }
-    int32_t version_code() const { return versionCode_; }
+    int64_t version_code() const { return versionCode_; }
 
     ConstSignatureIterator sigs_begin() const { return ConstSignatureIterator(signatures_); }
     ConstSignatureIterator sigs_end() const { return ConstSignatureIterator(); }
 
   private:
     std::unique_ptr<String16> packageName_;
-    int32_t versionCode_;
-    std::shared_ptr<std::vector<std::unique_ptr<content::pm::Signature>>> signatures_;
+    int64_t versionCode_;
+    SharedSignaturesVector signatures_;
 };
 
 }  // namespace keymaster

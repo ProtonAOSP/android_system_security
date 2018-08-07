@@ -21,13 +21,11 @@
 
 #include <android-base/macros.h>
 
-#include "authorization_set.h"
+#include "keymaster_types.h"
 #include "keystore.h"
 #include "keystore_return_types.h"
 
 namespace keystore {
-
-
 
 // An abstract class providing a convenient interface to keystore services. This
 // interface is designed to:
@@ -64,7 +62,7 @@ class KeystoreClient {
     // Note: implementations may generate more than one key but they will always
     // have |key_name| as a prefix.
     virtual bool encryptWithAuthentication(const std::string& key_name, const std::string& data,
-                                           std::string* encrypted_data) = 0;
+                                           int32_t flags, std::string* encrypted_data) = 0;
 
     // Decrypts and authenticates |encrypted_data| as output by
     // EncryptWithAuthentication using the key(s) identified by |key_name|. On
@@ -87,17 +85,18 @@ class KeystoreClient {
 
     // Adds |entropy| to the random number generator. Returns KM_ERROR_OK on
     // success and a Keystore ResponseCode or keymaster_error_t on failure.
-    virtual KeyStoreNativeReturnCode addRandomNumberGeneratorEntropy(const std::string& entropy) = 0;
+    virtual KeyStoreNativeReturnCode addRandomNumberGeneratorEntropy(const std::string& entropy,
+                                                                     int32_t flags) = 0;
 
     // Generates a key according to the given |key_parameters| and stores it with
     // the given |key_name|. The [hardware|software]_enforced_characteristics of
     // the key are provided on success. Returns KM_ERROR_OK on success. Returns
     // KM_ERROR_OK on success and a Keystore ResponseCode or keymaster_error_t on
     // failure.
-    virtual KeyStoreNativeReturnCode generateKey(const std::string& key_name,
-                                const keystore::AuthorizationSet& key_parameters,
-                                keystore::AuthorizationSet* hardware_enforced_characteristics,
-                                keystore::AuthorizationSet* software_enforced_characteristics) = 0;
+    virtual KeyStoreNativeReturnCode
+    generateKey(const std::string& key_name, const keystore::AuthorizationSet& key_parameters,
+                int32_t flags, keystore::AuthorizationSet* hardware_enforced_characteristics,
+                keystore::AuthorizationSet* software_enforced_characteristics) = 0;
 
     // Provides the [hardware|software]_enforced_characteristics of a key
     // identified by |key_name|. Returns KM_ERROR_OK on success and a Keystore
@@ -112,17 +111,17 @@ class KeystoreClient {
     // [hardware|software]_enforced_characteristics of the key are provided on
     // success. Returns KM_ERROR_OK on success and a Keystore ResponseCode or
     // keymaster_error_t on failure.
-    virtual KeyStoreNativeReturnCode importKey(const std::string& key_name,
-                              const keystore::AuthorizationSet& key_parameters,
-                              KeyFormat key_format, const std::string& key_data,
-                              keystore::AuthorizationSet* hardware_enforced_characteristics,
-                              keystore::AuthorizationSet* software_enforced_characteristics) = 0;
+    virtual KeyStoreNativeReturnCode
+    importKey(const std::string& key_name, const keystore::AuthorizationSet& key_parameters,
+              KeyFormat key_format, const std::string& key_data,
+              keystore::AuthorizationSet* hardware_enforced_characteristics,
+              keystore::AuthorizationSet* software_enforced_characteristics) = 0;
 
     // Exports the public key identified by |key_name| to |export_data| using
     // |export_format|. Returns KM_ERROR_OK on success and a Keystore ResponseCode
     // or keymaster_error_t on failure.
     virtual KeyStoreNativeReturnCode exportKey(KeyFormat export_format, const std::string& key_name,
-                              std::string* export_data) = 0;
+                                               std::string* export_data) = 0;
 
     // Deletes the key identified by |key_name|. Returns KM_ERROR_OK on success
     // and a Keystore ResponseCode or keymaster_error_t on failure.
@@ -137,32 +136,30 @@ class KeystoreClient {
     // |input_parameters|. On success, any |output_parameters| and an operation
     // |handle| are populated. Returns KM_ERROR_OK on success and a Keystore
     // ResponseCode or keymaster_error_t on failure.
-    virtual KeyStoreNativeReturnCode beginOperation(KeyPurpose purpose, const std::string& key_name,
-                                   const keystore::AuthorizationSet& input_parameters,
-                                   keystore::AuthorizationSet* output_parameters,
-                                   uint64_t* handle) = 0;
+    virtual KeyStoreNativeReturnCode
+    beginOperation(KeyPurpose purpose, const std::string& key_name,
+                   const keystore::AuthorizationSet& input_parameters,
+                   keystore::AuthorizationSet* output_parameters, uint64_t* handle) = 0;
 
     // Continues the operation associated with |handle| using the given
     // |input_parameters| and |input_data|. On success, the
     // |num_input_bytes_consumed| and any |output_parameters| are populated. Any
     // |output_data| will be appended. Returns KM_ERROR_OK on success and a
     // Keystore ResponseCode or keymaster_error_t on failure.
-    virtual KeyStoreNativeReturnCode updateOperation(uint64_t handle,
-                                    const keystore::AuthorizationSet& input_parameters,
-                                    const std::string& input_data, size_t* num_input_bytes_consumed,
-                                    keystore::AuthorizationSet* output_parameters,
-                                    std::string* output_data) = 0;
+    virtual KeyStoreNativeReturnCode
+    updateOperation(uint64_t handle, const keystore::AuthorizationSet& input_parameters,
+                    const std::string& input_data, size_t* num_input_bytes_consumed,
+                    keystore::AuthorizationSet* output_parameters, std::string* output_data) = 0;
 
     // Finishes the operation associated with |handle| using the given
     // |input_parameters| and, if necessary, a |signature_to_verify|. On success,
     // any |output_parameters| are populated and |output_data| is appended.
     // Returns KM_ERROR_OK on success and a Keystore ResponseCode or
     // keymaster_error_t on failure.
-    virtual KeyStoreNativeReturnCode finishOperation(uint64_t handle,
-                                    const keystore::AuthorizationSet& input_parameters,
-                                    const std::string& signature_to_verify,
-                                    keystore::AuthorizationSet* output_parameters,
-                                    std::string* output_data) = 0;
+    virtual KeyStoreNativeReturnCode
+    finishOperation(uint64_t handle, const keystore::AuthorizationSet& input_parameters,
+                    const std::string& signature_to_verify,
+                    keystore::AuthorizationSet* output_parameters, std::string* output_data) = 0;
 
     // Aborts the operation associated with |handle|. Returns KM_ERROR_OK on
     // success and a Keystore ResponseCode or keymaster_error_t on failure.

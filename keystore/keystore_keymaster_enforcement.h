@@ -73,17 +73,30 @@ class KeystoreKeymasterEnforcement : public KeymasterEnforcement {
         return now_date > expiration_date;
     }
 
-    bool auth_token_timed_out(const hw_auth_token_t&, uint32_t) const {
+    bool auth_token_timed_out(const HardwareAuthToken&, uint32_t) const {
         // Assume the token has not timed out, because AuthTokenTable would not have returned it if
         // the timeout were past.  Secure hardware will also check timeouts if it supports them.
         return false;
     }
 
-    bool ValidateTokenSignature(const hw_auth_token_t&) const override {
+    bool ValidateTokenSignature(const HardwareAuthToken&) const override {
         // Non-secure world cannot validate token signatures because it doesn't have access to the
         // signing key. Assume the token is good.
         return true;
     }
+
+    bool is_device_locked(int32_t userId) const override {
+        // If we haven't had a set call for this user yet, assume the device is locked.
+        if (mIsDeviceLockedForUser.count(userId) == 0) return true;
+        return mIsDeviceLockedForUser.find(userId)->second;
+    }
+
+    void set_device_locked(bool isLocked, int32_t userId) {
+        mIsDeviceLockedForUser[userId] = isLocked;
+    }
+
+  private:
+    std::map<int32_t, bool> mIsDeviceLockedForUser;
 };
 
 } // namespace keystore
