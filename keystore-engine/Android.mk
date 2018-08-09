@@ -32,7 +32,9 @@ LOCAL_SHARED_LIBRARIES += \
 	libhidlbase \
 	libkeystore_aidl \
 	libkeystore_binder \
+	libkeystore_parcelables \
 	liblog \
+	libbase \
 	libutils
 
 LOCAL_ADDITIONAL_DEPENDENCIES := $(LOCAL_PATH)/Android.mk
