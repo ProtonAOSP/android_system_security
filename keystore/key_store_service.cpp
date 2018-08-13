@@ -1324,23 +1324,34 @@ Status KeyStoreService::begin(const sp<IBinder>& appToken, const String16& name,
         result->outParams = outParams;
     };
 
-    ErrorCode rc =
+    KeyStoreServiceReturnCode rc =
         KS_HANDLE_HIDL_ERROR(dev->begin(keyPurpose, key, opParams.hidl_data(), authToken, hidlCb));
-    if (rc != ErrorCode::OK) {
-        ALOGW("Got error %d from begin()", rc);
+    if (!rc.isOk()) {
+        LOG(ERROR) << "Got error " << rc << " from begin()";
+        result->resultCode = ResponseCode::SYSTEM_ERROR;
+        return Status::ok();
     }
+
+    rc = result->resultCode;
 
     // If there are too many operations abort the oldest operation that was
     // started as pruneable and try again.
+    LOG(INFO) << rc << " " << mOperationMap.hasPruneableOperation();
     while (rc == ErrorCode::TOO_MANY_OPERATIONS && mOperationMap.hasPruneableOperation()) {
-        ALOGW("Ran out of operation handles");
+        LOG(INFO) << "Ran out of operation handles";
         if (!pruneOperation()) {
             break;
         }
         rc = KS_HANDLE_HIDL_ERROR(
             dev->begin(keyPurpose, key, opParams.hidl_data(), authToken, hidlCb));
+        if (!rc.isOk()) {
+            LOG(ERROR) << "Got error " << rc << " from begin()";
+            result->resultCode = ResponseCode::SYSTEM_ERROR;
+            return Status::ok();
+        }
+        rc = result->resultCode;
     }
-    if (rc != ErrorCode::OK) {
+    if (!rc.isOk()) {
         result->resultCode = rc;
         return Status::ok();
     }
@@ -1359,8 +1370,8 @@ Status KeyStoreService::begin(const sp<IBinder>& appToken, const String16& name,
                                                                 verificationToken = token;
                                                             }));
 
-        if (rc != ErrorCode::OK) result->resultCode = rc;
-        if (result->resultCode != ErrorCode::OK) return Status::ok();
+        if (!rc.isOk()) result->resultCode = rc;
+        if (!result->resultCode.isOk()) return Status::ok();
     }
 
     // Note: The operation map takes possession of the contents of "characteristics".
@@ -1697,11 +1708,9 @@ KeyStoreService::attestDeviceIds(const KeymasterArguments& params,
     }
 
     // Generate temporary key.
-    sp<Keymaster> dev;
-    SecurityLevel securityLevel;
-    std::tie(dev, securityLevel) = mKeyStore->getMostSecureDevice();
+    sp<Keymaster> dev = mKeyStore->getDevice(SecurityLevel::TRUSTED_ENVIRONMENT);
 
-    if (securityLevel == SecurityLevel::SOFTWARE) {
+    if (!dev) {
         *aidl_return = static_cast<int32_t>(ResponseCode::SYSTEM_ERROR);
         return Status::ok();
     }
