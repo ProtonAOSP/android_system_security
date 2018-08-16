@@ -229,16 +229,25 @@ cc_library_static {
     defaults: ["keystore_defaults"],
 
     srcs: [
+        ":IKeyAttestationApplicationIdProvider.aidl",
         "auth_token_table.cpp",
+        "keystore_attestation_id.cpp",
+        "KeyAttestationApplicationId.cpp",
+        "KeyAttestationPackageInfo.cpp",
+        "Signature.cpp",
     ],
     cflags: [ "-O0", ],
     static_libs: ["libgtest_main"],
     shared_libs: [
         "android.hardware.keymaster@4.0",
+        "libbinder",
+        "libcrypto",
         "libhidlbase",
         "libhwbinder",
         "libkeymaster4support",
         "libutils",
+        "libkeystore_aidl",
+        "libkeystore_parcelables",
     ],
     export_shared_lib_headers: [
         "android.hardware.keymaster@4.0",
@@ -247,6 +256,9 @@ cc_library_static {
         "libkeymaster4support",
     ],
 
+    aidl: {
+        include_dirs: ["frameworks/base/core/java/"],
+    },
     export_include_dirs: ["include"],
 }
 
