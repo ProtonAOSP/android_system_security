@@ -23,6 +23,14 @@
 namespace android {
 namespace security {
 
+constexpr size_t KEY_ATTESTATION_APPLICATION_ID_MAX_SIZE = 1024;
+
+namespace keymaster {
+
+class KeyAttestationApplicationId;
+
+}  // namespace keymaster
+
 template <typename T> class StatusOr {
   public:
     StatusOr(const status_t error) : _status(error), _value() {}
@@ -56,6 +64,14 @@ template <typename T> class StatusOr {
  *          .isOk() before accessing.
  */
 StatusOr<std::vector<uint8_t>> gather_attestation_application_id(uid_t uid);
+
+/**
+ * Generates a DER-encoded vector containing information from KeyAttestationApplicationId.
+ * The size of the returned vector will not exceed KEY_ATTESTATION_APPLICATION_ID_MAX_SIZE.
+ */
+
+StatusOr<std::vector<uint8_t>> build_attestation_application_id(
+    const ::android::security::keymaster::KeyAttestationApplicationId& key_attestation_id);
 
 }  // namespace security
 }  // namespace android
