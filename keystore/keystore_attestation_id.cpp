@@ -47,6 +47,7 @@ namespace android {
 namespace {
 
 constexpr const char* kAttestationSystemPackageName = "AndroidSystem";
+constexpr const char* kUnknownPackageName = "UnknownPackage";
 
 std::vector<uint8_t> signature2SHA256(const content::pm::Signature& sig) {
     std::vector<uint8_t> digest_buffer(SHA256_DIGEST_LENGTH);
@@ -82,6 +83,10 @@ typedef struct km_attestation_package_info {
     ASN1_INTEGER* version;
 } KM_ATTESTATION_PACKAGE_INFO;
 
+// Estimated size:
+// 4 bytes for the package name + package_name length
+// 11 bytes for the version (2 bytes header and up to 9 bytes of data).
+constexpr size_t AAID_PKG_INFO_OVERHEAD = 15;
 ASN1_SEQUENCE(KM_ATTESTATION_PACKAGE_INFO) = {
     ASN1_SIMPLE(KM_ATTESTATION_PACKAGE_INFO, package_name, ASN1_OCTET_STRING),
     ASN1_SIMPLE(KM_ATTESTATION_PACKAGE_INFO, version, ASN1_INTEGER),
@@ -90,11 +95,21 @@ IMPLEMENT_ASN1_FUNCTIONS(KM_ATTESTATION_PACKAGE_INFO);
 
 DECLARE_STACK_OF(KM_ATTESTATION_PACKAGE_INFO);
 
+// Estimated size:
+// See estimate above for the stack of package infos.
+// 34 (32 + 2) bytes for each signature digest.
+constexpr size_t AAID_SIGNATURE_SIZE = 34;
 typedef struct km_attestation_application_id {
     STACK_OF(KM_ATTESTATION_PACKAGE_INFO) * package_infos;
     STACK_OF(ASN1_OCTET_STRING) * signature_digests;
 } KM_ATTESTATION_APPLICATION_ID;
 
+// Estimated overhead:
+// 4 for the header of the octet string containing the fully-encoded data.
+// 4 for the sequence header.
+// 4 for the header of the package info set.
+// 4 for the header of the signature set.
+constexpr size_t AAID_GENERAL_OVERHEAD = 16;
 ASN1_SEQUENCE(KM_ATTESTATION_APPLICATION_ID) = {
     ASN1_SET_OF(KM_ATTESTATION_APPLICATION_ID, package_infos, KM_ATTESTATION_PACKAGE_INFO),
     ASN1_SET_OF(KM_ATTESTATION_APPLICATION_ID, signature_digests, ASN1_OCTET_STRING),
@@ -165,10 +180,23 @@ status_t build_attestation_package_info(const KeyAttestationPackageInfo& pinfo,
     return retval;
 }
 
+/* The following function are not used. They are mentioned here to silence
+ * warnings about them not being used.
+ */
+void unused_functions_silencer() __attribute__((unused));
+void unused_functions_silencer() {
+    i2d_KM_ATTESTATION_PACKAGE_INFO(nullptr, nullptr);
+    d2i_KM_ATTESTATION_APPLICATION_ID(nullptr, nullptr, 0);
+    d2i_KM_ATTESTATION_PACKAGE_INFO(nullptr, nullptr, 0);
+}
+
+}  // namespace
+
 StatusOr<std::vector<uint8_t>>
 build_attestation_application_id(const KeyAttestationApplicationId& key_attestation_id) {
     auto attestation_id =
         std::unique_ptr<KM_ATTESTATION_APPLICATION_ID>(KM_ATTESTATION_APPLICATION_ID_new());
+    size_t estimated_encoded_size = AAID_GENERAL_OVERHEAD;
 
     auto attestation_pinfo_stack = reinterpret_cast<_STACK*>(attestation_id->package_infos);
 
@@ -186,6 +214,10 @@ build_attestation_application_id(const KeyAttestationApplicationId& key_attestat
         if (rc != NO_ERROR) {
             ALOGE("Building DER attestation package info failed %d", rc);
             return rc;
+        }
+        estimated_encoded_size += AAID_PKG_INFO_OVERHEAD + package_name.size();
+        if (estimated_encoded_size > KEY_ATTESTATION_APPLICATION_ID_MAX_SIZE) {
+            break;
         }
         if (!sk_push(attestation_pinfo_stack, attestation_package_info.get())) {
             return NO_MEMORY;
@@ -207,6 +239,10 @@ build_attestation_application_id(const KeyAttestationApplicationId& key_attestat
 
     auto signature_digest_stack = reinterpret_cast<_STACK*>(attestation_id->signature_digests);
     for (auto si : signature_digests) {
+        estimated_encoded_size += AAID_SIGNATURE_SIZE;
+        if (estimated_encoded_size > KEY_ATTESTATION_APPLICATION_ID_MAX_SIZE) {
+            break;
+        }
         auto asn1_item = std::unique_ptr<ASN1_OCTET_STRING>(ASN1_OCTET_STRING_new());
         if (!asn1_item) return NO_MEMORY;
         if (!ASN1_OCTET_STRING_set(asn1_item.get(), si.data(), si.size())) {
@@ -229,18 +265,6 @@ build_attestation_application_id(const KeyAttestationApplicationId& key_attestat
     return result;
 }
 
-/* The following function are not used. They are mentioned here to silence
- * warnings about them not being used.
- */
-void unused_functions_silencer() __attribute__((unused));
-void unused_functions_silencer() {
-    i2d_KM_ATTESTATION_PACKAGE_INFO(nullptr, nullptr);
-    d2i_KM_ATTESTATION_APPLICATION_ID(nullptr, nullptr, 0);
-    d2i_KM_ATTESTATION_PACKAGE_INFO(nullptr, nullptr, 0);
-}
-
-}  // namespace
-
 StatusOr<std::vector<uint8_t>> gather_attestation_application_id(uid_t uid) {
     KeyAttestationApplicationId key_attestation_id;
 
@@ -254,10 +278,15 @@ StatusOr<std::vector<uint8_t>> gather_attestation_application_id(uid_t uid) {
         /* Get the attestation application ID from package manager */
         auto& pm = KeyAttestationApplicationIdProvider::get();
         auto status = pm.getKeyAttestationApplicationId(uid, &key_attestation_id);
+        // Package Manager call has failed, perform attestation but indicate that the
+        // caller is unknown.
         if (!status.isOk()) {
-            ALOGE("package manager request for key attestation ID failed with: %s %d",
+            ALOGW("package manager request for key attestation ID failed with: %s %d",
                   status.exceptionMessage().string(), status.exceptionCode());
-            return FAILED_TRANSACTION;
+            auto pinfo = std::make_unique<KeyAttestationPackageInfo>(
+                String16(kUnknownPackageName), 1 /* version code */,
+                std::make_shared<KeyAttestationPackageInfo::SignaturesVector>());
+            key_attestation_id = KeyAttestationApplicationId(std::move(pinfo));
         }
     }
 

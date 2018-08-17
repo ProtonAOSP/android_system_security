@@ -107,7 +107,7 @@ std::pair<KeyStoreServiceReturnCode, bool> hadFactoryResetSinceIdRotation() {
     return {ResponseCode::NO_ERROR, true};
 }
 
-constexpr size_t KEY_ATTESTATION_APPLICATION_ID_MAX_SIZE = 1024;
+using ::android::security::KEY_ATTESTATION_APPLICATION_ID_MAX_SIZE;
 
 KeyStoreServiceReturnCode updateParamsForAttestation(uid_t callingUid, AuthorizationSet* params) {
     KeyStoreServiceReturnCode responseCode;
@@ -125,11 +125,14 @@ KeyStoreServiceReturnCode updateParamsForAttestation(uid_t callingUid, Authoriza
     std::vector<uint8_t>& asn1_attestation_id = asn1_attestation_id_result;
 
     /*
-     * The attestation application ID cannot be longer than
-     * KEY_ATTESTATION_APPLICATION_ID_MAX_SIZE, so we truncate if too long.
+     * The attestation application ID must not be longer than
+     * KEY_ATTESTATION_APPLICATION_ID_MAX_SIZE, error out if gather_attestation_application_id
+     * returned such an invalid vector.
      */
     if (asn1_attestation_id.size() > KEY_ATTESTATION_APPLICATION_ID_MAX_SIZE) {
-        asn1_attestation_id.resize(KEY_ATTESTATION_APPLICATION_ID_MAX_SIZE);
+        ALOGE("BUG: Gathered Attestation Application ID is too big (%d)",
+              static_cast<int32_t>(asn1_attestation_id.size()));
+        return ErrorCode::CANNOT_ATTEST_IDS;
     }
 
     params->push_back(TAG_ATTESTATION_APPLICATION_ID, asn1_attestation_id);
