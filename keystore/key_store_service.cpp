@@ -30,6 +30,7 @@
 #include <binder/IPCThreadState.h>
 #include <binder/IPermissionController.h>
 #include <binder/IServiceManager.h>
+#include <cutils/multiuser.h>
 #include <log/log_event_list.h>
 
 #include <private/android_filesystem_config.h>
@@ -862,7 +863,7 @@ KeyStoreService::generateKey(const String16& name, const KeymasterArguments& par
         // Most Java processes don't have access to this tag
         KeyParameter user_id;
         user_id.tag = Tag::USER_ID;
-        user_id.f.integer = mActiveUserId;
+        user_id.f.integer = multiuser_get_user_id(uid);
         keyCharacteristics.push_back(user_id);
     }
 
@@ -995,7 +996,6 @@ KeyStoreService::importKey(const String16& name, const KeymasterArguments& param
                            const ::std::vector<uint8_t>& keyData, int uid, int flags,
                            ::android::security::keymaster::KeyCharacteristics* outCharacteristics,
                            int32_t* aidl_return) {
-
     uid = getEffectiveUid(uid);
     auto logOnScopeExit = android::base::make_scope_guard([&] {
         if (__android_log_security()) {
@@ -1103,7 +1103,7 @@ KeyStoreService::importKey(const String16& name, const KeymasterArguments& param
         // Most Java processes don't have access to this tag
         KeyParameter user_id;
         user_id.tag = Tag::USER_ID;
-        user_id.f.integer = mActiveUserId;
+        user_id.f.integer = multiuser_get_user_id(uid);
         opParams.push_back(user_id);
     }
 
@@ -2303,9 +2303,6 @@ KeyStoreServiceReturnCode KeyStoreService::upgradeKeyBlob(const String16& name, 
 Status KeyStoreService::onKeyguardVisibilityChanged(bool isShowing, int32_t userId,
                                                     int32_t* aidl_return) {
     enforcement_policy.set_device_locked(isShowing, userId);
-    if (!isShowing) {
-        mActiveUserId = userId;
-    }
     *aidl_return = static_cast<int32_t>(ResponseCode::NO_ERROR);
 
     return Status::ok();
