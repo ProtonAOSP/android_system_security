@@ -269,6 +269,7 @@ filegroup {
         "binder/android/security/IConfirmationPromptCallback.aidl",
         "binder/android/security/IKeystoreService.aidl",
     ],
+    path: "binder",
 }
 
 cc_library_shared {
@@ -297,5 +298,3 @@ cc_library_shared {
         "libkeystore_parcelables",
     ],
 }
-
-subdirs = ["tests"]
