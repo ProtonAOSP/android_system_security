@@ -1360,7 +1360,14 @@ Status KeyStoreService::begin(const sp<IBinder>& appToken, const String16& name,
                                                             }));
 
         if (rc != ErrorCode::OK) result->resultCode = rc;
-        if (result->resultCode != ErrorCode::OK) return Status::ok();
+        if (result->resultCode != ErrorCode::OK) {
+            ALOGW("Failed to verify authorization %d from begin()", rc);
+            rc = KS_HANDLE_HIDL_ERROR(dev->abort(result->handle));
+            if (rc != ErrorCode::OK) {
+                ALOGW("Failed to abort operation %d from begin()", rc);
+            }
+            return Status::ok();
+        }
     }
 
     // Note: The operation map takes possession of the contents of "characteristics".
@@ -1451,7 +1458,12 @@ Status KeyStoreService::update(const sp<IBinder>& token, const KeymasterArgument
 
     // just a reminder: on success result->resultCode was set in the callback. So we only overwrite
     // it if there was a communication error indicated by the ErrorCode.
-    if (!rc.isOk()) result->resultCode = rc;
+    if (!rc.isOk()) {
+        result->resultCode = rc;
+        // removeOperation() will free the memory 'op' used, so the order is important
+        mAuthTokenTable.MarkCompleted(op.handle);
+        mOperationMap.removeOperation(token, /* wasOpSuccessful */ false);
+    }
 
     return Status::ok();
 }
