@@ -231,11 +231,10 @@ ResponseCode Blob::writeBlob(const std::string& filename, const uint8_t* aes_key
 
     size_t fileLength = offsetof(blobv3, value) + dataLength + mBlob.info;
 
-    const char* tmpFileName = ".tmp";
-    int out =
-        TEMP_FAILURE_RETRY(open(tmpFileName, O_WRONLY | O_TRUNC | O_CREAT, S_IRUSR | S_IWUSR));
+    char tmpFileName[] = ".tmpXXXXXX";
+    int out = TEMP_FAILURE_RETRY(mkstemp(tmpFileName));
     if (out < 0) {
-        ALOGW("could not open file: %s: %s", tmpFileName, strerror(errno));
+        ALOGW("could not open temporary file: %s: %s", tmpFileName, strerror(errno));
         return ResponseCode::SYSTEM_ERROR;
     }
 
