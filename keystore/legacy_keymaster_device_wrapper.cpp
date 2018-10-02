@@ -19,7 +19,7 @@
 
 #include "legacy_keymaster_device_wrapper.h"
 
-#include <cutils/log.h>
+#include <log/log.h>
 
 #include <hardware/keymaster2.h>
 #include <hardware/keymaster_defs.h>

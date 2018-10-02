@@ -26,7 +26,7 @@
 
 #include <openssl/evp.h>
 
-#include <cutils/log.h>
+#include <log/log.h>
 
 #include "blob.h"
 #include "keystore_utils.h"

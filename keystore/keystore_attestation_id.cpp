@@ -17,7 +17,7 @@
 
 #define LOG_TAG "keystore_att_id"
 
-#include <cutils/log.h>
+#include <log/log.h>
 
 #include <memory>
 #include <string>
