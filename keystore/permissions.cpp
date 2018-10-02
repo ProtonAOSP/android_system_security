@@ -18,8 +18,8 @@
 
 #include "permissions.h"
 
-#include <cutils/log.h>
 #include <cutils/sockets.h>
+#include <log/log.h>
 #include <private/android_filesystem_config.h>
 
 #include <selinux/android.h>
