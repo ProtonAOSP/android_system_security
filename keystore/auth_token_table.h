@@ -97,9 +97,9 @@ class AuthTokenTable {
     class Entry {
       public:
         Entry(HardwareAuthToken&& token, time_t current_time);
-        Entry(Entry&& entry) { *this = std::move(entry); }
+        Entry(Entry&& entry) noexcept { *this = std::move(entry); }
 
-        void operator=(Entry&& rhs) {
+        void operator=(Entry&& rhs) noexcept {
             token_ = std::move(rhs.token_);
             time_received_ = rhs.time_received_;
             last_use_ = rhs.last_use_;

@@ -34,7 +34,7 @@ class SharedNullableIterator {
 
     SharedNullableIterator(const SharedNullableIterator& other)
         : coll_(other.coll_), cur_(other.cur_) {}
-    SharedNullableIterator(SharedNullableIterator&& other)
+    SharedNullableIterator(SharedNullableIterator&& other) noexcept
         : coll_(std::move(other.coll_)), cur_(std::move(other.cur_)) {}
 
     SharedNullableIterator& operator++() {
@@ -56,7 +56,7 @@ class SharedNullableIterator {
     bool operator!=(const SharedNullableIterator& other) const { return !(*this == other); }
 
     SharedNullableIterator& operator=(const SharedNullableIterator&) = default;
-    SharedNullableIterator& operator=(SharedNullableIterator&&) = default;
+    SharedNullableIterator& operator=(SharedNullableIterator&&) noexcept = default;
 
   private:
     inline bool is_end() const { return !coll_ || cur_ == coll_->end(); }
