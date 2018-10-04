@@ -29,7 +29,7 @@
 
 #include <android/hardware/confirmationui/1.0/types.h>
 #include <android/security/BnConfirmationPromptCallback.h>
-#include <android/security/IKeystoreService.h>
+#include <android/security/keystore/IKeystoreService.h>
 
 #include <binder/IPCThreadState.h>
 #include <binder/IServiceManager.h>
@@ -41,7 +41,7 @@ using keystore::KeystoreClient;
 
 using android::sp;
 using android::String16;
-using android::security::IKeystoreService;
+using android::security::keystore::IKeystoreService;
 using base::CommandLine;
 using ConfirmationResponseCode = android::hardware::confirmationui::V1_0::ResponseCode;
 

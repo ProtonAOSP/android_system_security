@@ -26,16 +26,18 @@ namespace keymaster {
 // struct for serializing/deserializing a list of KeyParameters
 struct KeymasterArguments : public Parcelable {
     KeymasterArguments(){};
-    KeymasterArguments(hardware::hidl_vec<keystore::KeyParameter>&& other);
-    explicit KeymasterArguments(const hardware::hidl_vec<keystore::KeyParameter>& other);
+    KeymasterArguments(hardware::hidl_vec<::keystore::KeyParameter>&& other);
+    explicit KeymasterArguments(const hardware::hidl_vec<::keystore::KeyParameter>& other);
 
     status_t readFromParcel(const Parcel* in) override;
     status_t writeToParcel(Parcel* out) const override;
 
-    const inline hardware::hidl_vec<keystore::KeyParameter>& getParameters() const { return data_; }
+    const inline hardware::hidl_vec<::keystore::KeyParameter>& getParameters() const {
+        return data_;
+    }
 
   private:
-    hardware::hidl_vec<keystore::KeyParameter> data_;
+    hardware::hidl_vec<::keystore::KeyParameter> data_;
 };
 
 }  // namespace keymaster
