@@ -84,6 +84,7 @@ void AuthTokenTable::AddAuthenticationToken(HardwareAuthToken&& auth_token) {
           static_cast<unsigned long long>(new_entry.token().timestamp),
           static_cast<long long>(new_entry.time_received()));
 
+    std::lock_guard<std::mutex> lock(entries_mutex_);
     RemoveEntriesSupersededBy(new_entry);
     if (entries_.size() >= max_entries_) {
         ALOGW("Auth token table filled up; replacing oldest entry");
@@ -110,10 +111,13 @@ inline bool KeyRequiresAuthPerOperation(const AuthorizationSet& key_info, KeyPur
     return is_secret_key_operation(algorithm, purpose) && key_info.find(Tag::AUTH_TIMEOUT) == -1;
 }
 
-AuthTokenTable::Error AuthTokenTable::FindAuthorization(const AuthorizationSet& key_info,
-                                                        KeyPurpose purpose, uint64_t op_handle,
-                                                        const HardwareAuthToken** found) {
-    if (!KeyRequiresAuthentication(key_info, purpose)) return AUTH_NOT_REQUIRED;
+std::tuple<AuthTokenTable::Error, HardwareAuthToken>
+AuthTokenTable::FindAuthorization(const AuthorizationSet& key_info, KeyPurpose purpose,
+                                  uint64_t op_handle) {
+
+    std::lock_guard<std::mutex> lock(entries_mutex_);
+
+    if (!KeyRequiresAuthentication(key_info, purpose)) return {AUTH_NOT_REQUIRED, {}};
 
     auto auth_type =
         defaultOr(key_info.GetTagValue(TAG_USER_AUTH_TYPE), HardwareAuthenticatorType::NONE);
@@ -122,55 +126,51 @@ AuthTokenTable::Error AuthTokenTable::FindAuthorization(const AuthorizationSet& 
     ExtractSids(key_info, &key_sids);
 
     if (KeyRequiresAuthPerOperation(key_info, purpose))
-        return FindAuthPerOpAuthorization(key_sids, auth_type, op_handle, found);
+        return FindAuthPerOpAuthorization(key_sids, auth_type, op_handle);
     else
-        return FindTimedAuthorization(key_sids, auth_type, key_info, found);
+        return FindTimedAuthorization(key_sids, auth_type, key_info);
 }
 
-AuthTokenTable::Error
-AuthTokenTable::FindAuthPerOpAuthorization(const std::vector<uint64_t>& sids,
-                                           HardwareAuthenticatorType auth_type, uint64_t op_handle,
-                                           const HardwareAuthToken** found) {
-    if (op_handle == 0) return OP_HANDLE_REQUIRED;
+std::tuple<AuthTokenTable::Error, HardwareAuthToken> AuthTokenTable::FindAuthPerOpAuthorization(
+    const std::vector<uint64_t>& sids, HardwareAuthenticatorType auth_type, uint64_t op_handle) {
+    if (op_handle == 0) return {OP_HANDLE_REQUIRED, {}};
 
     auto matching_op = find_if(
         entries_, [&](Entry& e) { return e.token().challenge == op_handle && !e.completed(); });
 
-    if (matching_op == entries_.end()) return AUTH_TOKEN_NOT_FOUND;
+    if (matching_op == entries_.end()) return {AUTH_TOKEN_NOT_FOUND, {}};
 
-    if (!matching_op->SatisfiesAuth(sids, auth_type)) return AUTH_TOKEN_WRONG_SID;
+    if (!matching_op->SatisfiesAuth(sids, auth_type)) return {AUTH_TOKEN_WRONG_SID, {}};
 
-    *found = &matching_op->token();
-    return OK;
+    return {OK, matching_op->token()};
 }
 
-AuthTokenTable::Error AuthTokenTable::FindTimedAuthorization(const std::vector<uint64_t>& sids,
-                                                             HardwareAuthenticatorType auth_type,
-                                                             const AuthorizationSet& key_info,
-                                                             const HardwareAuthToken** found) {
+std::tuple<AuthTokenTable::Error, HardwareAuthToken>
+AuthTokenTable::FindTimedAuthorization(const std::vector<uint64_t>& sids,
+                                       HardwareAuthenticatorType auth_type,
+                                       const AuthorizationSet& key_info) {
     Entry* newest_match = nullptr;
     for (auto& entry : entries_)
         if (entry.SatisfiesAuth(sids, auth_type) && entry.is_newer_than(newest_match))
             newest_match = &entry;
 
-    if (!newest_match) return AUTH_TOKEN_NOT_FOUND;
+    if (!newest_match) return {AUTH_TOKEN_NOT_FOUND, {}};
 
     auto timeout = defaultOr(key_info.GetTagValue(TAG_AUTH_TIMEOUT), 0);
 
     time_t now = clock_function_();
     if (static_cast<int64_t>(newest_match->time_received()) + timeout < static_cast<int64_t>(now))
-        return AUTH_TOKEN_EXPIRED;
+        return {AUTH_TOKEN_EXPIRED, {}};
 
     if (key_info.GetTagValue(TAG_ALLOW_WHILE_ON_BODY).isOk()) {
         if (static_cast<int64_t>(newest_match->time_received()) <
             static_cast<int64_t>(last_off_body_)) {
-            return AUTH_TOKEN_EXPIRED;
+            return {AUTH_TOKEN_EXPIRED, {}};
         }
     }
 
     newest_match->UpdateLastUse(now);
-    *found = &newest_match->token();
-    return OK;
+    return {OK, newest_match->token()};
 }
 
 void AuthTokenTable::ExtractSids(const AuthorizationSet& key_info, std::vector<uint64_t>* sids) {
@@ -190,7 +190,14 @@ void AuthTokenTable::onDeviceOffBody() {
 }
 
 void AuthTokenTable::Clear() {
+    std::lock_guard<std::mutex> lock(entries_mutex_);
+
     entries_.clear();
+}
+
+size_t AuthTokenTable::size() const {
+    std::lock_guard<std::mutex> lock(entries_mutex_);
+    return entries_.size();
 }
 
 bool AuthTokenTable::IsSupersededBySomeEntry(const Entry& entry) {
@@ -199,6 +206,8 @@ bool AuthTokenTable::IsSupersededBySomeEntry(const Entry& entry) {
 }
 
 void AuthTokenTable::MarkCompleted(const uint64_t op_handle) {
+    std::lock_guard<std::mutex> lock(entries_mutex_);
+
     auto found = find_if(entries_, [&](Entry& e) { return e.token().challenge == op_handle; });
     if (found == entries_.end()) return;
 

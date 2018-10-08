@@ -27,22 +27,23 @@ enum State {
 };
 
 // must be in sync with KeyStore.java,
-enum class ResponseCode: int32_t {
-    NO_ERROR          =  STATE_NO_ERROR, // 1
-    LOCKED            =  STATE_LOCKED, // 2
-    UNINITIALIZED     =  STATE_UNINITIALIZED, // 3
-    SYSTEM_ERROR      =  4,
-    PROTOCOL_ERROR    =  5,
-    PERMISSION_DENIED =  6,
-    KEY_NOT_FOUND     =  7,
-    VALUE_CORRUPTED   =  8,
-    UNDEFINED_ACTION  =  9,
-    WRONG_PASSWORD_0  = 10,
-    WRONG_PASSWORD_1  = 11,
-    WRONG_PASSWORD_2  = 12,
-    WRONG_PASSWORD_3  = 13, // MAX_RETRY = 4
+enum class ResponseCode : int32_t {
+    NO_ERROR = STATE_NO_ERROR,            // 1
+    LOCKED = STATE_LOCKED,                // 2
+    UNINITIALIZED = STATE_UNINITIALIZED,  // 3
+    SYSTEM_ERROR = 4,
+    PROTOCOL_ERROR = 5,
+    PERMISSION_DENIED = 6,
+    KEY_NOT_FOUND = 7,
+    VALUE_CORRUPTED = 8,
+    UNDEFINED_ACTION = 9,
+    WRONG_PASSWORD_0 = 10,
+    WRONG_PASSWORD_1 = 11,
+    WRONG_PASSWORD_2 = 12,
+    WRONG_PASSWORD_3 = 13,  // MAX_RETRY = 4
     SIGNATURE_INVALID = 14,
-    OP_AUTH_NEEDED    = 15, // Auth is needed for this operation before it can be used.
+    OP_AUTH_NEEDED = 15,  // Auth is needed for this operation before it can be used.
+    KEY_ALREADY_EXISTS = 16,
 };
 
 /*

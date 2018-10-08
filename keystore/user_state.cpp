@@ -31,25 +31,32 @@
 #include "blob.h"
 #include "keystore_utils.h"
 
+namespace keystore {
 
-UserState::UserState(uid_t userId) :
-        mUserId(userId), mState(STATE_UNINITIALIZED), mRetry(MAX_RETRY) {
-    asprintf(&mUserDir, "user_%u", mUserId);
-    asprintf(&mMasterKeyFile, "%s/.masterkey", mUserDir);
+UserState::UserState(uid_t userId)
+    : mMasterKeyEntry(".masterkey", "user_" + std::to_string(userId), userId, /* masterkey */ true),
+      mUserId(userId), mState(STATE_UNINITIALIZED), mRetry(MAX_RETRY) {}
+
+bool UserState::operator<(const UserState& rhs) const {
+    return getUserId() < rhs.getUserId();
 }
 
-UserState::~UserState() {
-    free(mUserDir);
-    free(mMasterKeyFile);
+bool UserState::operator<(uid_t userId) const {
+    return getUserId() < userId;
+}
+
+bool operator<(uid_t userId, const UserState& rhs) {
+    return userId < rhs.getUserId();
 }
 
 bool UserState::initialize() {
-    if ((mkdir(mUserDir, S_IRUSR | S_IWUSR | S_IXUSR) < 0) && (errno != EEXIST)) {
-        ALOGE("Could not create directory '%s'", mUserDir);
+    if ((mkdir(mMasterKeyEntry.user_dir().c_str(), S_IRUSR | S_IWUSR | S_IXUSR) < 0) &&
+        (errno != EEXIST)) {
+        ALOGE("Could not create directory '%s'", mMasterKeyEntry.user_dir().c_str());
         return false;
     }
 
-    if (access(mMasterKeyFile, R_OK) == 0) {
+    if (mMasterKeyEntry.hasKeyBlob()) {
         setState(STATE_LOCKED);
     } else {
         setState(STATE_UNINITIALIZED);
@@ -73,7 +80,7 @@ void UserState::zeroizeMasterKeysInMemory() {
 bool UserState::deleteMasterKey() {
     setState(STATE_UNINITIALIZED);
     zeroizeMasterKeysInMemory();
-    return unlink(mMasterKeyFile) == 0 || errno == ENOENT;
+    return unlink(mMasterKeyEntry.getKeyBlobPath().c_str()) == 0 || errno == ENOENT;
 }
 
 ResponseCode UserState::initialize(const android::String8& pw, Entropy* entropy) {
@@ -88,23 +95,23 @@ ResponseCode UserState::initialize(const android::String8& pw, Entropy* entropy)
     return ResponseCode::NO_ERROR;
 }
 
-ResponseCode UserState::copyMasterKey(UserState* src) {
+ResponseCode UserState::copyMasterKey(LockedUserState<UserState>* src) {
     if (mState != STATE_UNINITIALIZED) {
         return ResponseCode::SYSTEM_ERROR;
     }
-    if (src->getState() != STATE_NO_ERROR) {
+    if ((*src)->getState() != STATE_NO_ERROR) {
         return ResponseCode::SYSTEM_ERROR;
     }
-    memcpy(mMasterKey, src->mMasterKey, MASTER_KEY_SIZE_BYTES);
+    memcpy(mMasterKey, (*src)->mMasterKey, MASTER_KEY_SIZE_BYTES);
     setupMasterKeys();
     return copyMasterKeyFile(src);
 }
 
-ResponseCode UserState::copyMasterKeyFile(UserState* src) {
+ResponseCode UserState::copyMasterKeyFile(LockedUserState<UserState>* src) {
     /* Copy the master key file to the new user.  Unfortunately we don't have the src user's
      * password so we cannot generate a new file with a new salt.
      */
-    int in = TEMP_FAILURE_RETRY(open(src->getMasterKeyFileName(), O_RDONLY));
+    int in = TEMP_FAILURE_RETRY(open((*src)->getMasterKeyFileName().c_str(), O_RDONLY));
     if (in < 0) {
         return ResponseCode::SYSTEM_ERROR;
     }
@@ -113,8 +120,8 @@ ResponseCode UserState::copyMasterKeyFile(UserState* src) {
     if (close(in) != 0) {
         return ResponseCode::SYSTEM_ERROR;
     }
-    int out =
-        TEMP_FAILURE_RETRY(open(mMasterKeyFile, O_WRONLY | O_TRUNC | O_CREAT, S_IRUSR | S_IWUSR));
+    int out = TEMP_FAILURE_RETRY(open(mMasterKeyEntry.getKeyBlobPath().c_str(),
+                                      O_WRONLY | O_TRUNC | O_CREAT, S_IRUSR | S_IWUSR));
     if (out < 0) {
         return ResponseCode::SYSTEM_ERROR;
     }
@@ -124,7 +131,7 @@ ResponseCode UserState::copyMasterKeyFile(UserState* src) {
     }
     if (outLength != length) {
         ALOGW("blob not fully written %zu != %zu", outLength, length);
-        unlink(mMasterKeyFile);
+        unlink(mMasterKeyEntry.getKeyBlobPath().c_str());
         return ResponseCode::SYSTEM_ERROR;
     }
     return ResponseCode::NO_ERROR;
@@ -134,11 +141,15 @@ ResponseCode UserState::writeMasterKey(const android::String8& pw, Entropy* entr
     uint8_t passwordKey[MASTER_KEY_SIZE_BYTES];
     generateKeyFromPassword(passwordKey, MASTER_KEY_SIZE_BYTES, pw, mSalt);
     Blob masterKeyBlob(mMasterKey, sizeof(mMasterKey), mSalt, sizeof(mSalt), TYPE_MASTER_KEY);
-    return masterKeyBlob.writeBlob(mMasterKeyFile, passwordKey, STATE_NO_ERROR, entropy);
+    auto lockedEntry = LockedKeyBlobEntry::get(mMasterKeyEntry);
+    return lockedEntry.writeBlobs(masterKeyBlob, {}, passwordKey, STATE_NO_ERROR, entropy);
 }
 
 ResponseCode UserState::readMasterKey(const android::String8& pw, Entropy* entropy) {
-    int in = TEMP_FAILURE_RETRY(open(mMasterKeyFile, O_RDONLY));
+
+    auto lockedEntry = LockedKeyBlobEntry::get(mMasterKeyEntry);
+
+    int in = TEMP_FAILURE_RETRY(open(mMasterKeyEntry.getKeyBlobPath().c_str(), O_RDONLY));
     if (in < 0) {
         return ResponseCode::SYSTEM_ERROR;
     }
@@ -159,8 +170,10 @@ ResponseCode UserState::readMasterKey(const android::String8& pw, Entropy* entro
     }
     uint8_t passwordKey[MASTER_KEY_SIZE_BYTES];
     generateKeyFromPassword(passwordKey, MASTER_KEY_SIZE_BYTES, pw, salt);
-    Blob masterKeyBlob(rawBlob);
-    ResponseCode response = masterKeyBlob.readBlob(mMasterKeyFile, passwordKey, STATE_NO_ERROR);
+    Blob masterKeyBlob, dummyBlob;
+    ResponseCode response;
+    std::tie(response, masterKeyBlob, dummyBlob) =
+        lockedEntry.readBlobs(passwordKey, STATE_NO_ERROR);
     if (response == ResponseCode::SYSTEM_ERROR) {
         return response;
     }
@@ -198,7 +211,7 @@ ResponseCode UserState::readMasterKey(const android::String8& pw, Entropy* entro
 }
 
 bool UserState::reset() {
-    DIR* dir = opendir(getUserDirName());
+    DIR* dir = opendir(mMasterKeyEntry.user_dir().c_str());
     if (!dir) {
         // If the directory doesn't exist then nothing to do.
         if (errno == ENOENT) {
@@ -254,3 +267,37 @@ bool UserState::generateMasterKey(Entropy* entropy) {
 void UserState::setupMasterKeys() {
     setState(STATE_NO_ERROR);
 }
+
+LockedUserState<UserState> UserStateDB::getUserState(uid_t userId) {
+    std::unique_lock<std::mutex> lock(locked_state_mutex_);
+    decltype(mMasterKeys.begin()) it;
+    bool inserted;
+    std::tie(it, inserted) = mMasterKeys.emplace(userId, userId);
+    if (inserted) {
+        if (!it->second.initialize()) {
+            /* There's not much we can do if initialization fails. Trying to
+             * unlock the keystore for that user will fail as well, so any
+             * subsequent request for this user will just return SYSTEM_ERROR.
+             */
+            ALOGE("User initialization failed for %u; subsequent operations will fail", userId);
+        }
+    }
+    return get(std::move(lock), &it->second);
+}
+
+LockedUserState<UserState> UserStateDB::getUserStateByUid(uid_t uid) {
+    return getUserState(get_user_id(uid));
+}
+
+LockedUserState<const UserState> UserStateDB::getUserState(uid_t userId) const {
+    std::unique_lock<std::mutex> lock(locked_state_mutex_);
+    auto it = mMasterKeys.find(userId);
+    if (it == mMasterKeys.end()) return {};
+    return get(std::move(lock), &it->second);
+}
+
+LockedUserState<const UserState> UserStateDB::getUserStateByUid(uid_t uid) const {
+    return getUserState(get_user_id(uid));
+}
+
+}  // namespace keystore
