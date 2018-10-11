@@ -22,6 +22,7 @@
 #include <keymasterV4_0/Keymaster.h>
 #include <keystore/keymaster_types.h>
 #include <utils/String16.h>
+#include <utils/StrongPointer.h>
 
 #include "key_config.pb.h"
 
@@ -74,7 +75,7 @@ void uploadKeyCharacteristicsAsProto(const hidl_vec<KeyParameter>& keyParams,
                                      bool wasCreationSuccessful) {
     KeyConfig keyConfig;
     checkEnforcedCharacteristics(keyParams, &keyConfig);
-    auto dropbox = std::make_unique<android::os::DropBoxManager>();
+    android::sp<android::os::DropBoxManager> dropbox(new android::os::DropBoxManager());
     keyConfig.set_was_creation_successful(wasCreationSuccessful);
 
     size_t size = keyConfig.ByteSize();
