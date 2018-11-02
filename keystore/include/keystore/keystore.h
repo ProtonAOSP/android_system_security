@@ -44,6 +44,7 @@ enum class ResponseCode : int32_t {
     SIGNATURE_INVALID = 14,
     OP_AUTH_NEEDED = 15,  // Auth is needed for this operation before it can be used.
     KEY_ALREADY_EXISTS = 16,
+    KEY_PERMANENTLY_INVALIDATED = 17,
 };
 
 /*
