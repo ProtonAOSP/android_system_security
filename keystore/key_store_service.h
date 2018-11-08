@@ -64,33 +64,6 @@ class KeyStoreService : public android::security::BnKeystoreService,
     ::android::binder::Status unlock(int32_t userId, const ::android::String16& userPassword,
                                      int32_t* _aidl_return) override;
     ::android::binder::Status isEmpty(int32_t userId, int32_t* _aidl_return) override;
-    ::android::binder::Status generate(const ::android::String16& name, int32_t uid,
-                                       int32_t keyType, int32_t keySize, int32_t flags,
-                                       const ::android::security::KeystoreArguments& args,
-                                       int32_t* _aidl_return) override;
-    ::android::binder::Status import_key(const ::android::String16& name,
-                                         const ::std::vector<uint8_t>& data, int32_t uid,
-                                         int32_t flags, int32_t* _aidl_return) override;
-    ::android::binder::Status sign(const ::android::String16& name,
-                                   const ::std::vector<uint8_t>& data,
-                                   ::std::vector<uint8_t>* _aidl_return) override;
-    ::android::binder::Status verify(const ::android::String16& name,
-                                     const ::std::vector<uint8_t>& data,
-                                     const ::std::vector<uint8_t>& signature,
-                                     int32_t* _aidl_return) override;
-    /*
-     * TODO: The abstraction between things stored in hardware and regular blobs
-     * of data stored on the filesystem should be moved down to keystore itself.
-     * Unfortunately the Java code that calls this has naming conventions that it
-     * knows about. Ideally keystore shouldn't be used to store random blobs of
-     * data.
-     *
-     * Until that happens, it's necessary to have a separate "get_pubkey" and
-     * "del_key" since the Java code doesn't really communicate what it's
-     * intentions are.
-     */
-    ::android::binder::Status get_pubkey(const ::android::String16& name,
-                                         ::std::vector<uint8_t>* _aidl_return) override;
     ::android::binder::Status grant(const ::android::String16& name, int32_t granteeUid,
                                     ::android::String16* _aidl_return) override;
     ::android::binder::Status ungrant(const ::android::String16& name, int32_t granteeUid,
@@ -143,8 +116,6 @@ class KeyStoreService : public android::security::BnKeystoreService,
            ::android::security::keymaster::OperationResult* _aidl_return) override;
     ::android::binder::Status abort(const ::android::sp<::android::IBinder>& handle,
                                     int32_t* _aidl_return) override;
-    ::android::binder::Status isOperationAuthorized(const ::android::sp<::android::IBinder>& token,
-                                                    bool* _aidl_return) override;
     ::android::binder::Status addAuthToken(const ::std::vector<uint8_t>& authToken,
                                            int32_t* _aidl_return) override;
     ::android::binder::Status onUserAdded(int32_t userId, int32_t parentId,
