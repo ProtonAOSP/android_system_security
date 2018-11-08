@@ -39,6 +39,8 @@ struct OperationResult : public ::android::Parcelable {
     ::keystore::hidl_vec<::keystore::KeyParameter> outParams;
 };
 
+OperationResult operationFailed(const ::keystore::KeyStoreServiceReturnCode& error);
+
 }  // namespace keymaster
 }  // namespace security
 }  // namespace android

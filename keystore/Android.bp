@@ -13,6 +13,7 @@ cc_defaults {
     },
 
     clang: true,
+    cpp_std: "c++17",
 }
 
 cc_binary {
@@ -32,6 +33,7 @@ cc_binary {
         "key_store_service.cpp",
         "keyblob_utils.cpp",
         "keymaster_enforcement.cpp",
+        "keymaster_worker.cpp",
         "keystore_attestation_id.cpp",
         "keystore_main.cpp",
         "keystore_utils.cpp",

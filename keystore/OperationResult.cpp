@@ -55,6 +55,12 @@ status_t OperationResult::writeToParcel(Parcel* out) const {
     return OK;
 }
 
+OperationResult operationFailed(const ::keystore::KeyStoreServiceReturnCode& error) {
+    OperationResult opResult = {};
+    opResult.resultCode = error;
+    return opResult;
+}
+
 }  // namespace keymaster
 }  // namespace security
 }  // namespace android
