@@ -27,6 +27,14 @@
 #include "operation.h"
 #include "permissions.h"
 
+#include <keystore/ExportResult.h>
+#include <keystore/KeyCharacteristics.h>
+#include <keystore/KeymasterArguments.h>
+#include <keystore/KeymasterBlob.h>
+#include <keystore/KeymasterCertificateChain.h>
+#include <keystore/OperationResult.h>
+#include <keystore/keystore_return_types.h>
+
 namespace keystore {
 
 // Class provides implementation for generated BnKeystoreService.h based on
@@ -34,12 +42,9 @@ namespace keystore {
 // java/android/security/IKeystoreService.aidl Note that all generated methods return binder::Status
 // and use last arguments to send actual result to the caller. Private methods don't need to handle
 // binder::Status. Input parameters cannot be null unless annotated with @nullable in .aidl file.
-class KeyStoreService : public android::security::BnKeystoreService,
-                        android::IBinder::DeathRecipient {
+class KeyStoreService : public android::security::BnKeystoreService {
   public:
-    explicit KeyStoreService(KeyStore* keyStore)
-        : mKeyStore(keyStore), mOperationMap(this),
-          mConfirmationManager(new ConfirmationManager(this)) {}
+    explicit KeyStoreService(sp<KeyStore> keyStore) : mKeyStore(keyStore) {}
     virtual ~KeyStoreService() = default;
 
     void binderDied(const android::wp<android::IBinder>& who);
@@ -64,33 +69,6 @@ class KeyStoreService : public android::security::BnKeystoreService,
     ::android::binder::Status unlock(int32_t userId, const ::android::String16& userPassword,
                                      int32_t* _aidl_return) override;
     ::android::binder::Status isEmpty(int32_t userId, int32_t* _aidl_return) override;
-    ::android::binder::Status generate(const ::android::String16& name, int32_t uid,
-                                       int32_t keyType, int32_t keySize, int32_t flags,
-                                       const ::android::security::KeystoreArguments& args,
-                                       int32_t* _aidl_return) override;
-    ::android::binder::Status import_key(const ::android::String16& name,
-                                         const ::std::vector<uint8_t>& data, int32_t uid,
-                                         int32_t flags, int32_t* _aidl_return) override;
-    ::android::binder::Status sign(const ::android::String16& name,
-                                   const ::std::vector<uint8_t>& data,
-                                   ::std::vector<uint8_t>* _aidl_return) override;
-    ::android::binder::Status verify(const ::android::String16& name,
-                                     const ::std::vector<uint8_t>& data,
-                                     const ::std::vector<uint8_t>& signature,
-                                     int32_t* _aidl_return) override;
-    /*
-     * TODO: The abstraction between things stored in hardware and regular blobs
-     * of data stored on the filesystem should be moved down to keystore itself.
-     * Unfortunately the Java code that calls this has naming conventions that it
-     * knows about. Ideally keystore shouldn't be used to store random blobs of
-     * data.
-     *
-     * Until that happens, it's necessary to have a separate "get_pubkey" and
-     * "del_key" since the Java code doesn't really communicate what it's
-     * intentions are.
-     */
-    ::android::binder::Status get_pubkey(const ::android::String16& name,
-                                         ::std::vector<uint8_t>* _aidl_return) override;
     ::android::binder::Status grant(const ::android::String16& name, int32_t granteeUid,
                                     ::android::String16* _aidl_return) override;
     ::android::binder::Status ungrant(const ::android::String16& name, int32_t granteeUid,
@@ -143,8 +121,6 @@ class KeyStoreService : public android::security::BnKeystoreService,
            ::android::security::keymaster::OperationResult* _aidl_return) override;
     ::android::binder::Status abort(const ::android::sp<::android::IBinder>& handle,
                                     int32_t* _aidl_return) override;
-    ::android::binder::Status isOperationAuthorized(const ::android::sp<::android::IBinder>& token,
-                                                    bool* _aidl_return) override;
     ::android::binder::Status addAuthToken(const ::std::vector<uint8_t>& authToken,
                                            int32_t* _aidl_return) override;
     ::android::binder::Status onUserAdded(int32_t userId, int32_t parentId,
@@ -178,15 +154,10 @@ class KeyStoreService : public android::security::BnKeystoreService,
     ::android::binder::Status isConfirmationPromptSupported(bool* _aidl_return) override;
 
     ::android::binder::Status onKeyguardVisibilityChanged(bool isShowing, int32_t userId,
-                                                          int32_t* _aidl_return);
+                                                          int32_t* _aidl_return) override;
 
   private:
     static const int32_t UID_SELF = -1;
-
-    /**
-     * Prune the oldest pruneable operation.
-     */
-    bool pruneOperation();
 
     /**
      * Get the effective target uid for a binder operation that takes an
@@ -235,41 +206,6 @@ class KeyStoreService : public android::security::BnKeystoreService,
      */
     bool checkAllowedOperationParams(const hidl_vec<KeyParameter>& params);
 
-    ErrorCode getOperationCharacteristics(const hidl_vec<uint8_t>& key, sp<Keymaster>* dev,
-                                          const AuthorizationSet& params, KeyCharacteristics* out);
-
-    /**
-     * Get the auth token for this operation from the auth token table.
-     *
-     * Returns NO_ERROR if the auth token was found or none was required.  If not needed, the
-     *             token will be empty (which keymaster interprets as no auth token).
-     *         OP_AUTH_NEEDED if it is a per op authorization, no authorization token exists for
-     *             that operation and  failOnTokenMissing is false.
-     *         KM_ERROR_KEY_USER_NOT_AUTHENTICATED if there is no valid auth token for the operation
-     */
-    std::pair<KeyStoreServiceReturnCode, HardwareAuthToken>
-    getAuthToken(const KeyCharacteristics& characteristics, uint64_t handle, KeyPurpose purpose,
-                 bool failOnTokenMissing = true);
-
-    /**
-     * Get the auth token for the operation if the operation requires authorization. Uses the cached
-     * result in the OperationMap if available otherwise gets the token from the AuthTokenTable and
-     * caches the result.
-     *
-     * Returns NO_ERROR if the auth token was found or not needed.  If not needed, the token will
-     *             be empty (which keymaster interprets as no auth token).
-     *         KM_ERROR_KEY_USER_NOT_AUTHENTICATED if the operation is not authenticated.
-     *         KM_ERROR_INVALID_OPERATION_HANDLE if token is not a valid operation token.
-     */
-    std::pair<KeyStoreServiceReturnCode, const HardwareAuthToken&>
-    getOperationAuthTokenIfNeeded(const sp<android::IBinder>& token);
-
-    /**
-     * Translate a result value to a legacy return value. All keystore errors are
-     * preserved and keymaster errors become SYSTEM_ERRORs
-     */
-    KeyStoreServiceReturnCode translateResultToLegacyResult(int32_t result);
-
     void addLegacyBeginParams(const android::String16& name, AuthorizationSet* params);
 
     KeyStoreServiceReturnCode doLegacySignVerify(const android::String16& name,
@@ -279,27 +215,32 @@ class KeyStoreService : public android::security::BnKeystoreService,
                                                  KeyPurpose purpose);
 
     /**
-     * Upgrade a key blob under alias "name", returning the new blob in "blob".  If "blob"
-     * previously contained data, it will be overwritten.
-     *
-     * Returns ::NO_ERROR if the key was upgraded successfully.
-     *         KM_ERROR_VERSION_MISMATCH if called on a key whose patch level is greater than or
-     *         equal to the current system patch level.
-     */
-    KeyStoreServiceReturnCode upgradeKeyBlob(const android::String16& name, uid_t targetUid,
-                                             const AuthorizationSet& params, Blob* blob);
-
-    /**
      * Adds a Confirmation Token to the key parameters if needed.
      */
     void appendConfirmationTokenIfNeeded(const KeyCharacteristics& keyCharacteristics,
                                          std::vector<KeyParameter>* params);
 
-    KeyStore* mKeyStore;
-    OperationMap mOperationMap;
-    android::sp<ConfirmationManager> mConfirmationManager;
-    keystore::AuthTokenTable mAuthTokenTable;
-    KeystoreKeymasterEnforcement enforcement_policy;
+    sp<KeyStore> mKeyStore;
+
+    std::mutex operationDeviceMapMutex_;
+    std::map<sp<IBinder>, std::shared_ptr<KeymasterWorker>> operationDeviceMap_;
+
+    void addOperationDevice(sp<IBinder> token, std::shared_ptr<KeymasterWorker> dev) {
+        std::lock_guard<std::mutex> lock(operationDeviceMapMutex_);
+        operationDeviceMap_.emplace(std::move(token), std::move(dev));
+    }
+    std::shared_ptr<KeymasterWorker> getOperationDevice(const sp<IBinder>& token) {
+        std::lock_guard<std::mutex> lock(operationDeviceMapMutex_);
+        auto it = operationDeviceMap_.find(token);
+        if (it != operationDeviceMap_.end()) {
+            return it->second;
+        }
+        return {};
+    }
+    void removeOperationDevice(const sp<IBinder>& token) {
+        std::lock_guard<std::mutex> lock(operationDeviceMapMutex_);
+        operationDeviceMap_.erase(token);
+    }
 };
 
 };  // namespace keystore

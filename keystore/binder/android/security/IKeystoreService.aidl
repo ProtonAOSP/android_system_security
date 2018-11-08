@@ -42,12 +42,6 @@ interface IKeystoreService {
     int lock(int userId);
     int unlock(int userId, String userPassword);
     int isEmpty(int userId);
-    int generate(String name, int uid, int keyType, int keySize, int flags,
-        in KeystoreArguments args);
-    int import_key(String name, in byte[] data, int uid, int flags);
-    byte[] sign(String name, in byte[] data);
-    int verify(String name, in byte[] data, in byte[] signature);
-    byte[] get_pubkey(String name);
     String grant(String name, int granteeUid);
     int ungrant(String name, int granteeUid);
     long getmtime(String name, int uid);
@@ -70,7 +64,6 @@ interface IKeystoreService {
     OperationResult finish(IBinder token, in KeymasterArguments params, in byte[] signature,
         in byte[] entropy);
     int abort(IBinder handle);
-    boolean isOperationAuthorized(IBinder token);
     int addAuthToken(in byte[] authToken);
     int onUserAdded(int userId, int parentId);
     int onUserRemoved(int userId);

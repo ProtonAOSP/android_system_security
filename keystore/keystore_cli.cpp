@@ -254,8 +254,6 @@ int main(int argc, char* argv[])
 
     // TODO: generate
 
-    SINGLE_ARG_DATA_RETURN(get_pubkey);
-
     // TODO: grant
 
     // TODO: ungrant

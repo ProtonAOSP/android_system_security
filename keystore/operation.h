@@ -17,7 +17,11 @@
 #ifndef KEYSTORE_OPERATION_H_
 #define KEYSTORE_OPERATION_H_
 
+#include <list>
 #include <map>
+#include <memory>
+#include <mutex>
+#include <optional>
 #include <vector>
 
 #include <binder/Binder.h>
@@ -26,6 +30,7 @@
 #include <utils/StrongPointer.h>
 
 #include <keystore/keymaster_types.h>
+#include <keystore/keystore_concurrency.h>
 #include <keystore/keystore_hidl_support.h>
 
 #include "operation_proto_handler.h"
@@ -51,21 +56,18 @@ class OperationMap {
                              const sp<Keymaster>& dev, const sp<IBinder>& appToken,
                              KeyCharacteristics&& characteristics,
                              const hidl_vec<KeyParameter>& params, bool pruneable);
-    NullOr<const Operation&> getOperation(const sp<IBinder>& token);
-    NullOr<Operation> removeOperation(const sp<IBinder>& token, bool wasSuccessful);
-    bool hasPruneableOperation() const;
+    std::shared_ptr<Operation> getOperation(const sp<IBinder>& token);
+    std::shared_ptr<Operation> removeOperation(const sp<IBinder>& token, bool wasSuccessful);
     size_t getOperationCount() const { return mMap.size(); }
-    size_t getPruneableOperationCount() const;
-    void setOperationAuthToken(const sp<IBinder>& token, HardwareAuthToken authToken);
-    void setOperationVerificationToken(const sp<IBinder>& token, VerificationToken authToken);
     sp<IBinder> getOldestPruneableOperation();
     std::vector<sp<IBinder>> getOperationsForToken(const sp<IBinder>& appToken);
 
   private:
     void updateLru(const sp<IBinder>& token);
     void removeOperationTracking(const sp<IBinder>& token, const sp<IBinder>& appToken);
-    std::map<sp<IBinder>, Operation> mMap;
-    std::vector<sp<IBinder>> mLru;
+
+    std::map<sp<IBinder>, std::shared_ptr<Operation>> mMap;
+    std::list<sp<IBinder>> mLru;
     std::map<sp<IBinder>, std::vector<sp<IBinder>>> mAppTokenMap;
     IBinder::DeathRecipient* mDeathRecipient;
 };

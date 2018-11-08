@@ -155,10 +155,11 @@ int main(int argc, char* argv[]) {
     SecurityLevel minimalAllowedSecurityLevelForNewKeys =
         halVersion.majorVersion >= 2 ? SecurityLevel::TRUSTED_ENVIRONMENT : SecurityLevel::SOFTWARE;
 
-    keystore::KeyStore keyStore(&entropy, kmDevices, minimalAllowedSecurityLevelForNewKeys);
-    keyStore.initialize();
+    android::sp<keystore::KeyStore> keyStore(
+        new keystore::KeyStore(&entropy, kmDevices, minimalAllowedSecurityLevelForNewKeys));
+    keyStore->initialize();
     android::sp<android::IServiceManager> sm = android::defaultServiceManager();
-    android::sp<keystore::KeyStoreService> service = new keystore::KeyStoreService(&keyStore);
+    android::sp<keystore::KeyStoreService> service = new keystore::KeyStoreService(keyStore);
     android::status_t ret = sm->addService(android::String16("android.security.keystore"), service);
     CHECK(ret == android::OK) << "Couldn't register binder service!";
 
