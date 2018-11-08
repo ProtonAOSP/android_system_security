@@ -184,7 +184,7 @@ Return<void> ConfirmationManager::result(ConfirmationResponseCode responseCode,
     return Return<void>();
 }
 
-// Called by keystore main thread.
+// Called by keystore main thread or keymaster worker
 hidl_vec<uint8_t> ConfirmationManager::getLatestConfirmationToken() {
     lock_guard<mutex> lock(mMutex);
     return mLatestConfirmationToken;

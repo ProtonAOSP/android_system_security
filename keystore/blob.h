@@ -22,8 +22,14 @@
 #include <openssl/aes.h>
 #include <openssl/md5.h>
 
+#include <condition_variable>
+#include <functional>
 #include <keystore/keymaster_types.h>
 #include <keystore/keystore.h>
+#include <list>
+#include <mutex>
+#include <set>
+#include <sstream>
 
 constexpr size_t kValueSize = 32768;
 constexpr size_t kAesKeySize = 128 / 8;
@@ -80,27 +86,45 @@ typedef enum {
     TYPE_KEY_PAIR = 3,
     TYPE_KEYMASTER_10 = 4,
     TYPE_KEY_CHARACTERISTICS = 5,
+    TYPE_KEY_CHARACTERISTICS_CACHE = 6,
 } BlobType;
 
 class Entropy;
+class LockedKeyBlobEntry;
 
+/**
+ * The Blob represents the content of a KeyBlobEntry.
+ *
+ * BEWARE: It is only save to call any member function of a Blob b if bool(b) yields true.
+ *         Exceptions are putKeyCharacteristics(), the assignment operators and operator bool.
+ */
 class Blob {
+    friend LockedKeyBlobEntry;
+
   public:
     Blob(const uint8_t* value, size_t valueLength, const uint8_t* info, uint8_t infoLength,
          BlobType type);
     explicit Blob(blobv3 b);
     Blob();
+    Blob(const Blob& rhs);
+    Blob(Blob&& rhs);
 
-    ~Blob() { mBlob = {}; }
+    ~Blob() {
+        if (mBlob) *mBlob = {};
+    }
 
-    const uint8_t* getValue() const { return mBlob.value; }
+    Blob& operator=(const Blob& rhs);
+    Blob& operator=(Blob&& rhs);
+    operator bool() const { return bool(mBlob); }
 
-    int32_t getLength() const { return mBlob.length; }
+    const uint8_t* getValue() const { return mBlob->value; }
 
-    const uint8_t* getInfo() const { return mBlob.value + mBlob.length; }
-    uint8_t getInfoLength() const { return mBlob.info; }
+    int32_t getLength() const { return mBlob->length; }
 
-    uint8_t getVersion() const { return mBlob.version; }
+    const uint8_t* getInfo() const { return mBlob->value + mBlob->length; }
+    uint8_t getInfoLength() const { return mBlob->info; }
+
+    uint8_t getVersion() const { return mBlob->version; }
 
     bool isEncrypted() const;
     void setEncrypted(bool encrypted);
@@ -111,22 +135,141 @@ class Blob {
     bool isCriticalToDeviceEncryption() const;
     void setCriticalToDeviceEncryption(bool critical);
 
-    bool isFallback() const { return mBlob.flags & KEYSTORE_FLAG_FALLBACK; }
+    bool isFallback() const { return mBlob->flags & KEYSTORE_FLAG_FALLBACK; }
     void setFallback(bool fallback);
 
-    void setVersion(uint8_t version) { mBlob.version = version; }
-    BlobType getType() const { return BlobType(mBlob.type); }
-    void setType(BlobType type) { mBlob.type = uint8_t(type); }
+    void setVersion(uint8_t version) { mBlob->version = version; }
+    BlobType getType() const { return BlobType(mBlob->type); }
+    void setType(BlobType type) { mBlob->type = uint8_t(type); }
 
     keystore::SecurityLevel getSecurityLevel() const;
     void setSecurityLevel(keystore::SecurityLevel);
 
-    ResponseCode writeBlob(const std::string& filename, const uint8_t* aes_key, State state,
-                           Entropy* entropy);
-    ResponseCode readBlob(const std::string& filename, const uint8_t* aes_key, State state);
+    std::tuple<bool, keystore::AuthorizationSet, keystore::AuthorizationSet>
+    getKeyCharacteristics() const;
+
+    bool putKeyCharacteristics(const keystore::AuthorizationSet& hwEnforced,
+                               const keystore::AuthorizationSet& swEnforced);
 
   private:
-    blobv3 mBlob;
+    std::unique_ptr<blobv3> mBlob;
+
+    ResponseCode readBlob(const std::string& filename, const uint8_t* aes_key, State state);
+};
+
+/**
+ * A KeyBlobEntry represents a full qualified key blob as known by Keystore. The key blob
+ * is given by the uid of the owning app and the alias used by the app to refer to this key.
+ * The user_dir_ is technically implied by the uid, but computation of the user directory is
+ * done in the user state database. Which is why we also cache it here.
+ *
+ * The KeyBlobEntry knows the location of the key blob files (which may include a characteristics
+ * cache file) but does not allow read or write access to the content. It also does not imply
+ * the existence of the files.
+ *
+ * KeyBlobEntry abstracts, to some extent, from the the file system based storage of key blobs.
+ * An evolution of KeyBlobEntry may be used for key blob storage based on a back end other than
+ * file system, e.g., SQL database or other.
+ *
+ * For access to the key blob content the programmer has to acquire a LockedKeyBlobEntry (see
+ * below).
+ */
+class KeyBlobEntry {
+  private:
+    std::string alias_;
+    std::string user_dir_;
+    uid_t uid_;
+    bool masterkey_;
+
+  public:
+    KeyBlobEntry(std::string alias, std::string user_dir, uid_t uid, bool masterkey = false)
+        : alias_(std::move(alias)), user_dir_(std::move(user_dir)), uid_(uid),
+          masterkey_(masterkey) {}
+
+    std::string getKeyBlobBaseName() const;
+    std::string getKeyBlobPath() const;
+
+    std::string getCharacteristicsBlobBaseName() const;
+    std::string getCharacteristicsBlobPath() const;
+
+    bool hasKeyBlob() const;
+    bool hasCharacteristicsBlob() const;
+
+    bool operator<(const KeyBlobEntry& rhs) const {
+        return std::tie(alias_, user_dir_, uid_) < std::tie(rhs.alias_, rhs.user_dir_, uid_);
+    }
+    bool operator==(const KeyBlobEntry& rhs) const {
+        return std::tie(alias_, user_dir_, uid_) == std::tie(rhs.alias_, rhs.user_dir_, uid_);
+    }
+    bool operator!=(const KeyBlobEntry& rhs) const { return !(*this == rhs); }
+
+    inline const std::string& alias() const { return alias_; }
+    inline const std::string& user_dir() const { return user_dir_; }
+    inline uid_t uid() const { return uid_; }
+};
+
+/**
+ * The LockedKeyBlobEntry is a proxy object to KeyBlobEntry that expresses exclusive ownership
+ * of a KeyBlobEntry. LockedKeyBlobEntries can be acquired by calling
+ * LockedKeyBlobEntry::get() or LockedKeyBlobEntry::list().
+ *
+ * LockedKeyBlobEntries are movable but not copyable. By convention they can only
+ * be taken by the dispatcher thread of keystore, but not by any keymaster worker thread.
+ * The dispatcher thread may transfer ownership of a locked entry to a keymaster worker thread.
+ *
+ * Locked entries are tracked on the stack or as members of movable functor objects passed to the
+ * keymaster worker request queues. Locks are relinquished as the locked entry gets destroyed, e.g.,
+ * when it goes out of scope or when the owning request functor gets destroyed.
+ *
+ * LockedKeyBlobEntry::list(), which must only be called by the dispatcher, blocks until all
+ * LockedKeyBlobEntries have been destroyed. Thereby list acts as a fence to make sure it gets a
+ * consistent view of the key blob database. Under the assumption that keymaster worker requests
+ * cannot run or block indefinitely and cannot grab new locked entries, progress is guaranteed.
+ * It then grabs locked entries in accordance with the given filter rule.
+ *
+ * LockedKeyBlobEntry allow access to the proxied KeyBlobEntry interface through the operator->.
+ * They add additional functionality to access and modify the key blob's content on disk.
+ * LockedKeyBlobEntry ensures atomic operations on the persistently stored key blobs on a per
+ * entry granularity.
+ */
+class LockedKeyBlobEntry {
+  private:
+    static std::set<KeyBlobEntry> locked_blobs_;
+    static std::mutex locked_blobs_mutex_;
+    static std::condition_variable locked_blobs_mutex_cond_var_;
+
+    const KeyBlobEntry* entry_;
+    LockedKeyBlobEntry(const KeyBlobEntry& entry) : entry_(&entry) {}
+
+    static void put(const KeyBlobEntry& entry);
+    LockedKeyBlobEntry(const LockedKeyBlobEntry&) = delete;
+    LockedKeyBlobEntry& operator=(const LockedKeyBlobEntry&) = delete;
+
+  public:
+    LockedKeyBlobEntry() : entry_(nullptr){};
+    ~LockedKeyBlobEntry();
+    LockedKeyBlobEntry(LockedKeyBlobEntry&& rhs) : entry_(rhs.entry_) { rhs.entry_ = nullptr; }
+    LockedKeyBlobEntry& operator=(LockedKeyBlobEntry&& rhs) {
+        // as dummy goes out of scope it relinquishes the lock on this
+        LockedKeyBlobEntry dummy(std::move(*this));
+        entry_ = rhs.entry_;
+        rhs.entry_ = nullptr;
+        return *this;
+    }
+    static LockedKeyBlobEntry get(KeyBlobEntry entry);
+    static std::tuple<ResponseCode, std::list<LockedKeyBlobEntry>>
+    list(const std::string& user_dir,
+         std::function<bool(uid_t, const std::string&)> filter =
+             [](uid_t, const std::string&) -> bool { return true; });
+
+    ResponseCode writeBlobs(Blob keyBlob, Blob characteristicsBlob, const uint8_t* aes_key,
+                            State state, Entropy* entorpy) const;
+    std::tuple<ResponseCode, Blob, Blob> readBlobs(const uint8_t* aes_key, State state) const;
+    ResponseCode deleteBlobs() const;
+
+    inline operator bool() const { return entry_ != nullptr; }
+    inline const KeyBlobEntry& operator*() const { return *entry_; }
+    inline const KeyBlobEntry* operator->() const { return entry_; }
 };
 
 #endif  // KEYSTORE_BLOB_H_

@@ -37,6 +37,8 @@
 #include "permissions.h"
 #include <keystore/keystore_hidl_support.h>
 
+#include "keymaster_worker.h"
+
 namespace keystore {
 
 const char* KeyStore::kOldMasterKey = ".masterkey";
@@ -47,35 +49,25 @@ const android::String16 KeyStore::kEcKeyType("EC");
 
 using android::String8;
 
-sp<Keymaster>& KeymasterDevices::operator[](SecurityLevel secLevel) {
-    static_assert(uint32_t(SecurityLevel::SOFTWARE) == 0 &&
-                      uint32_t(SecurityLevel::TRUSTED_ENVIRONMENT) == 1 &&
-                      uint32_t(SecurityLevel::STRONGBOX) == 2,
-                  "Numeric values of security levels have changed");
-    return at(static_cast<uint32_t>(secLevel));
-}
-
-sp<Keymaster> KeymasterDevices::operator[](SecurityLevel secLevel) const {
-    if (static_cast<uint32_t>(secLevel) > static_cast<uint32_t>(SecurityLevel::STRONGBOX)) {
-        LOG(ERROR) << "Invalid security level requested";
-        return nullptr;
-    }
-    return (*const_cast<KeymasterDevices*>(this))[secLevel];
-}
-
 KeyStore::KeyStore(Entropy* entropy, const KeymasterDevices& kmDevices,
                    SecurityLevel minimalAllowedSecurityLevelForNewKeys)
-    : mEntropy(entropy), mKmDevices(kmDevices),
-      mAllowNewFallback(minimalAllowedSecurityLevelForNewKeys == SecurityLevel::SOFTWARE) {
+    : mEntropy(entropy),
+      mAllowNewFallback(minimalAllowedSecurityLevelForNewKeys == SecurityLevel::SOFTWARE),
+      mConfirmationManager(new ConfirmationManager(this)) {
     memset(&mMetaData, '\0', sizeof(mMetaData));
+
+    static_assert(std::tuple_size<std::decay_t<decltype(kmDevices)>>::value ==
+                      std::tuple_size<decltype(mKmDevices)>::value,
+                  "KmasterDevices and KeymasterWorkers must have the same size");
+    for (size_t i = 0; i < kmDevices.size(); ++i) {
+        if (kmDevices[SecurityLevel(i)]) {
+            mKmDevices[SecurityLevel(i)] =
+                std::make_shared<KeymasterWorker>(kmDevices[SecurityLevel(i)], this);
+        }
+    }
 }
 
 KeyStore::~KeyStore() {
-    for (android::Vector<UserState*>::iterator it(mMasterKeys.begin()); it != mMasterKeys.end();
-         it++) {
-        delete *it;
-    }
-    mMasterKeys.clear();
 }
 
 ResponseCode KeyStore::initialize() {
@@ -88,134 +80,100 @@ ResponseCode KeyStore::initialize() {
 }
 
 ResponseCode KeyStore::initializeUser(const android::String8& pw, uid_t userId) {
-    UserState* userState = getUserState(userId);
+    auto userState = mUserStateDB.getUserState(userId);
     return userState->initialize(pw, mEntropy);
 }
 
 ResponseCode KeyStore::copyMasterKey(uid_t srcUser, uid_t dstUser) {
-    UserState* userState = getUserState(dstUser);
-    UserState* initState = getUserState(srcUser);
-    return userState->copyMasterKey(initState);
+    auto userState = mUserStateDB.getUserState(dstUser);
+    auto initState = mUserStateDB.getUserState(srcUser);
+    return userState->copyMasterKey(&initState);
 }
 
 ResponseCode KeyStore::writeMasterKey(const android::String8& pw, uid_t userId) {
-    UserState* userState = getUserState(userId);
+    auto userState = mUserStateDB.getUserState(userId);
     return userState->writeMasterKey(pw, mEntropy);
 }
 
 ResponseCode KeyStore::readMasterKey(const android::String8& pw, uid_t userId) {
-    UserState* userState = getUserState(userId);
+    auto userState = mUserStateDB.getUserState(userId);
     return userState->readMasterKey(pw, mEntropy);
 }
 
-/* Here is the encoding of keys. This is necessary in order to allow arbitrary
- * characters in keys. Characters in [0-~] are not encoded. Others are encoded
- * into two bytes. The first byte is one of [+-.] which represents the first
- * two bits of the character. The second byte encodes the rest of the bits into
- * [0-o]. Therefore in the worst case the length of a key gets doubled. Note
- * that Base64 cannot be used here due to the need of prefix match on keys. */
-
-static size_t encode_key_length(const android::String8& keyName) {
-    const uint8_t* in = reinterpret_cast<const uint8_t*>(keyName.string());
-    size_t length = keyName.length();
-    for (int i = length; i > 0; --i, ++in) {
-        if (*in < '0' || *in > '~') {
-            ++length;
-        }
-    }
-    return length;
+LockedKeyBlobEntry KeyStore::getLockedBlobEntryIfNotExists(const std::string& alias, uid_t uid) {
+    KeyBlobEntry kbe(alias, mUserStateDB.getUserStateByUid(uid)->getUserDirName(), uid);
+    auto result = LockedKeyBlobEntry::get(std::move(kbe));
+    if (result->hasKeyBlob()) return {};
+    return result;
 }
 
-static int encode_key(char* out, const android::String8& keyName) {
-    const uint8_t* in = reinterpret_cast<const uint8_t*>(keyName.string());
-    size_t length = keyName.length();
-    for (int i = length; i > 0; --i, ++in, ++out) {
-        if (*in < '0' || *in > '~') {
-            *out = '+' + (*in >> 6);
-            *++out = '0' + (*in & 0x3F);
-            ++length;
-        } else {
-            *out = *in;
-        }
-    }
-    *out = '\0';
-    return length;
-}
-
-android::String8 KeyStore::getKeyName(const android::String8& keyName, const BlobType type) {
-    std::vector<char> encoded(encode_key_length(keyName) + 1);  // add 1 for null char
-    encode_key(encoded.data(), keyName);
-    if (type == TYPE_KEY_CHARACTERISTICS) {
-        return android::String8::format(".chr_%s", encoded.data());
-    } else {
-        return android::String8(encoded.data());
-    }
-}
-
-android::String8 KeyStore::getKeyNameForUid(const android::String8& keyName, uid_t uid,
-                                            const BlobType type) {
-    std::vector<char> encoded(encode_key_length(keyName) + 1);  // add 1 for null char
-    encode_key(encoded.data(), keyName);
-    if (type == TYPE_KEY_CHARACTERISTICS) {
-        return android::String8::format(".%u_chr_%s", uid, encoded.data());
-    } else {
-        return android::String8::format("%u_%s", uid, encoded.data());
-    }
-}
-
-android::String8 KeyStore::getKeyNameForUidWithDir(const android::String8& keyName, uid_t uid,
-                                                   const BlobType type) {
-    std::vector<char> encoded(encode_key_length(keyName) + 1);  // add 1 for null char
-    encode_key(encoded.data(), keyName);
-
-    if (type == TYPE_KEY_CHARACTERISTICS) {
-        return android::String8::format("%s/.%u_chr_%s", getUserStateByUid(uid)->getUserDirName(),
-                                        uid, encoded.data());
-    } else {
-        return android::String8::format("%s/%u_%s", getUserStateByUid(uid)->getUserDirName(), uid,
-                                        encoded.data());
-    }
-}
-
-NullOr<android::String8> KeyStore::getBlobFileNameIfExists(const android::String8& alias, uid_t uid,
-                                                           const BlobType type) {
-    android::String8 filepath8(getKeyNameForUidWithDir(alias, uid, type));
-
-    if (!access(filepath8.string(), R_OK | W_OK)) return filepath8;
+std::optional<KeyBlobEntry> KeyStore::getBlobEntryIfExists(const std::string& alias, uid_t uid) {
+    KeyBlobEntry kbe(alias, mUserStateDB.getUserStateByUid(uid)->getUserDirName(), uid);
+    if (kbe.hasKeyBlob()) return kbe;
 
     // If this is one of the legacy UID->UID mappings, use it.
     uid_t euid = get_keystore_euid(uid);
     if (euid != uid) {
-        filepath8 = getKeyNameForUidWithDir(alias, euid, type);
-        if (!access(filepath8.string(), R_OK | W_OK)) return filepath8;
+        kbe = KeyBlobEntry(alias, mUserStateDB.getUserStateByUid(euid)->getUserDirName(), euid);
+        if (kbe.hasKeyBlob()) return kbe;
     }
 
     // They might be using a granted key.
-    auto grant = mGrants.get(uid, alias.string());
+    auto grant = mGrants.get(uid, alias);
     if (grant) {
-        filepath8 = String8::format(
-            "%s/%s", grant->owner_dir_name_.c_str(),
-            getKeyNameForUid(String8(grant->alias_.c_str()), grant->owner_uid_, type).c_str());
-        if (!access(filepath8.string(), R_OK | W_OK)) return filepath8;
+        kbe = grant->entry_;
+        if (kbe.hasKeyBlob()) return kbe;
     }
     return {};
+}
+LockedKeyBlobEntry KeyStore::getLockedBlobEntryIfExists(const std::string& alias, uid_t uid) {
+    auto blobentry = getBlobEntryIfExists(alias, uid);
+    if (!blobentry) return {};
+    LockedKeyBlobEntry lockedentry = LockedKeyBlobEntry::get(std::move(*blobentry));
+    if (!lockedentry || !lockedentry->hasKeyBlob()) return {};
+    return lockedentry;
 }
 
 void KeyStore::resetUser(uid_t userId, bool keepUnenryptedEntries) {
     android::String8 prefix("");
     android::Vector<android::String16> aliases;
-    UserState* userState = getUserState(userId);
-    if (list(prefix, &aliases, userId) != ResponseCode::NO_ERROR) {
+
+    // DO NOT
+    // move
+    // auto userState = userStateDB_.getUserState(userId);
+    // here, in an attempt to replace userStateDB_.getUserState(userId) with userState.
+    // userState is a proxy that holds a lock which may required by a worker.
+    // LockedKeyBlobEntry::list has a fence that waits until all workers have finished which may
+    // not happen if a user state lock is held. The following line only briefly grabs the lock.
+    // Grabbing the user state lock after the list call is also save since workers cannot grab
+    // blob entry locks.
+
+    auto userState = mUserStateDB.getUserState(userId);
+    std::string userDirName = userState->getUserDirName();
+    auto encryptionKey = userState->getEncryptionKey();
+    auto state = userState->getState();
+    // unlock the user state
+    userState = {};
+
+    ResponseCode rc;
+    std::list<LockedKeyBlobEntry> matches;
+
+    // must not be called by a keymaster worker. List waits for workers to relinquish all access
+    // to blob entries
+    std::tie(rc, matches) = LockedKeyBlobEntry::list(userDirName);
+    if (rc != ResponseCode::NO_ERROR) {
         return;
     }
-    for (uint32_t i = 0; i < aliases.size(); i++) {
-        android::String8 filename(aliases[i]);
-        filename = android::String8::format("%s/%s", userState->getUserDirName(),
-                                            getKeyName(filename, TYPE_ANY).string());
+
+    for (LockedKeyBlobEntry& lockedEntry : matches) {
         bool shouldDelete = true;
+
         if (keepUnenryptedEntries) {
             Blob blob;
-            ResponseCode rc = get(filename, &blob, ::TYPE_ANY, userId);
+            Blob charBlob;
+            ResponseCode rc;
+
+            std::tie(rc, blob, charBlob) = lockedEntry.readBlobs(encryptionKey, state);
 
             switch (rc) {
             case ResponseCode::SYSTEM_ERROR:
@@ -234,23 +192,18 @@ void KeyStore::resetUser(uid_t userId, bool keepUnenryptedEntries) {
                 break;
 
             default:
-                ALOGE("Got unexpected return code %d from KeyStore::get()", rc);
+                ALOGE("Got unexpected return code %d from readBlobs", rc);
                 // This shouldn't happen.  To be on the safe side, delete it.
                 shouldDelete = true;
                 break;
             }
         }
         if (shouldDelete) {
-            del(filename, ::TYPE_ANY, userId);
-
-            // del() will fail silently if no cached characteristics are present for this alias.
-            android::String8 chr_filename(aliases[i]);
-            chr_filename = android::String8::format(
-                "%s/%s", userState->getUserDirName(),
-                getKeyName(chr_filename, TYPE_KEY_CHARACTERISTICS).string());
-            del(chr_filename, ::TYPE_KEY_CHARACTERISTICS, userId);
+            del(lockedEntry);
         }
     }
+
+    userState = mUserStateDB.getUserState(userId);
     if (!userState->deleteMasterKey()) {
         ALOGE("Failed to delete user %d's master key", userId);
     }
@@ -262,334 +215,136 @@ void KeyStore::resetUser(uid_t userId, bool keepUnenryptedEntries) {
 }
 
 bool KeyStore::isEmpty(uid_t userId) const {
-    const UserState* userState = getUserState(userId);
-    if (userState == nullptr) {
-        return true;
-    }
-
-    DIR* dir = opendir(userState->getUserDirName());
-    if (!dir) {
-        return true;
-    }
-
-    bool result = true;
-    struct dirent* file;
-    while ((file = readdir(dir)) != nullptr) {
-        // We only care about files.
-        if (file->d_type != DT_REG) {
-            continue;
+    std::string userDirName;
+    {
+        // userState hold a lock which must be relinqhished before list is called. This scope
+        // prevents deadlocks.
+        auto userState = mUserStateDB.getUserState(userId);
+        if (!userState) {
+            return true;
         }
-
-        // Skip anything that starts with a "."
-        if (file->d_name[0] == '.') {
-            continue;
-        }
-
-        result = false;
-        break;
+        userDirName = userState->getUserDirName();
     }
-    closedir(dir);
-    return result;
+
+    ResponseCode rc;
+    std::list<LockedKeyBlobEntry> matches;
+
+    // must not be called by a keymaster worker. List waits for workers to relinquish all access
+    // to blob entries
+    std::tie(rc, matches) = LockedKeyBlobEntry::list(userDirName);
+
+    return rc == ResponseCode::SYSTEM_ERROR || matches.size() == 0;
 }
 
 void KeyStore::lock(uid_t userId) {
-    UserState* userState = getUserState(userId);
+    auto userState = mUserStateDB.getUserState(userId);
     userState->zeroizeMasterKeysInMemory();
     userState->setState(STATE_LOCKED);
 }
 
-static void maybeLogKeyIntegrityViolation(const char* filename, const BlobType type);
+static void maybeLogKeyIntegrityViolation(const LockedKeyBlobEntry& lockedEntry,
+                                          const BlobType type) {
+    if (!__android_log_security() || (type != TYPE_KEY_PAIR && type != TYPE_KEYMASTER_10)) return;
+    log_key_integrity_violation(lockedEntry->alias().c_str(), lockedEntry->uid());
+}
 
-ResponseCode KeyStore::get(const char* filename, Blob* keyBlob, const BlobType type, uid_t userId) {
-    UserState* userState = getUserState(userId);
-    ResponseCode rc;
+std::tuple<ResponseCode, Blob, Blob> KeyStore::get(const LockedKeyBlobEntry& blobfile) {
+    std::tuple<ResponseCode, Blob, Blob> result;
 
+    uid_t userId = get_user_id(blobfile->uid());
+    Blob& keyBlob = std::get<1>(result);
+    ResponseCode& rc = std::get<0>(result);
+
+    auto userState = mUserStateDB.getUserState(userId);
+    BlobType type = BlobType::TYPE_ANY;
     auto logOnScopeExit = android::base::make_scope_guard([&] {
         if (rc == ResponseCode::VALUE_CORRUPTED) {
-            maybeLogKeyIntegrityViolation(filename, type);
+            maybeLogKeyIntegrityViolation(blobfile, type);
         }
     });
 
-    rc = keyBlob->readBlob(filename, userState->getEncryptionKey(), userState->getState());
+    result = blobfile.readBlobs(userState->getEncryptionKey(), userState->getState());
     if (rc != ResponseCode::NO_ERROR) {
-        return rc;
+        return result;
     }
 
-    const uint8_t version = keyBlob->getVersion();
+    // update the type for logging (see scope_guard above)
+    type = keyBlob.getType();
+
+    const uint8_t version = keyBlob.getVersion();
     if (version < CURRENT_BLOB_VERSION) {
         /* If we upgrade the key, we need to write it to disk again. Then
          * it must be read it again since the blob is encrypted each time
          * it's written.
          */
-        if (upgradeBlob(filename, keyBlob, version, type, userId)) {
-            if ((rc = this->put(filename, keyBlob, userId)) != ResponseCode::NO_ERROR ||
-                (rc = keyBlob->readBlob(filename, userState->getEncryptionKey(),
-                                        userState->getState())) != ResponseCode::NO_ERROR) {
-                return rc;
+        if (upgradeBlob(&keyBlob, version)) {
+            if ((rc = this->put(blobfile, keyBlob, {})) != ResponseCode::NO_ERROR ||
+                (result = blobfile.readBlobs(userState->getEncryptionKey(), userState->getState()),
+                 rc) != ResponseCode::NO_ERROR) {
+                return result;
             }
         }
     }
 
-    /*
-     * This will upgrade software-backed keys to hardware-backed keys.
-     */
-    if (rc == ResponseCode::NO_ERROR && type == TYPE_KEY_PAIR && keyBlob->isFallback()) {
-        ResponseCode imported =
-            importKey(keyBlob->getValue(), keyBlob->getLength(), filename, userId,
-                      keyBlob->isEncrypted() ? KEYSTORE_FLAG_ENCRYPTED : KEYSTORE_FLAG_NONE);
-
-        // The HAL allowed the import, reget the key to have the "fresh" version.
-        if (imported == ResponseCode::NO_ERROR) {
-            rc = get(filename, keyBlob, TYPE_KEY_PAIR, userId);
-        }
-    }
-
-    // Keymaster 0.3 keys are valid keymaster 1.0 keys, so silently upgrade.
-    if (keyBlob->getType() == TYPE_KEY_PAIR) {
-        keyBlob->setType(TYPE_KEYMASTER_10);
-        rc = this->put(filename, keyBlob, userId);
-    }
-
-    if (type != TYPE_ANY && keyBlob->getType() != type) {
-        ALOGW("key found but type doesn't match: %d vs %d", keyBlob->getType(), type);
-        return ResponseCode::KEY_NOT_FOUND;
-    }
-
-    return rc;
+    return result;
 }
 
-ResponseCode KeyStore::put(const char* filename, Blob* keyBlob, uid_t userId) {
-    UserState* userState = getUserState(userId);
-    return keyBlob->writeBlob(filename, userState->getEncryptionKey(), userState->getState(),
-                              mEntropy);
+ResponseCode KeyStore::put(const LockedKeyBlobEntry& blobfile, Blob keyBlob,
+                           Blob characteristicsBlob) {
+    auto userState = mUserStateDB.getUserStateByUid(blobfile->uid());
+    return blobfile.writeBlobs(std::move(keyBlob), std::move(characteristicsBlob),
+                               userState->getEncryptionKey(), userState->getState(), mEntropy);
 }
 
-static NullOr<std::tuple<uid_t, std::string>> filename2UidAlias(const std::string& filename);
-
-ResponseCode KeyStore::del(const char* filename, const BlobType type, uid_t userId) {
+ResponseCode KeyStore::del(const LockedKeyBlobEntry& blobfile) {
     Blob keyBlob;
-    auto uidAlias = filename2UidAlias(filename);
-    uid_t uid;
-    std::string alias;
-    if (uidAlias.isOk()) {
-        std::tie(uid, alias) = std::move(uidAlias).value();
-    }
-    ResponseCode rc = get(filename, &keyBlob, type, userId);
-    if (rc == ResponseCode::VALUE_CORRUPTED) {
-        // The file is corrupt, the best we can do is rm it.
-        if (uidAlias.isOk()) {
-            // remove possible grants
-            mGrants.removeAllGrantsToKey(uid, alias);
-        }
-        return (unlink(filename) && errno != ENOENT) ? ResponseCode::SYSTEM_ERROR
-                                                     : ResponseCode::NO_ERROR;
-    }
+    Blob charactaristicsBlob;
+    ResponseCode rc;
+    uid_t uid = blobfile->uid();
+    std::string alias = blobfile->alias();
+
+    std::tie(rc, keyBlob, charactaristicsBlob) = get(blobfile);
+
+    // after getting the blob from the file system we scrub the filesystem.
+    mGrants.removeAllGrantsToKey(uid, alias);
+    auto result = blobfile.deleteBlobs();
+
     if (rc != ResponseCode::NO_ERROR) {
+        LOG(ERROR) << "get keyblob failed " << int(rc);
         return rc;
     }
 
+    // if we got the blob successfully, we try and delete it from the keymaster device
     auto dev = getDevice(keyBlob);
 
-    if (keyBlob.getType() == ::TYPE_KEY_PAIR || keyBlob.getType() == ::TYPE_KEYMASTER_10) {
-        auto ret = KS_HANDLE_HIDL_ERROR(dev->deleteKey(blob2hidlVec(keyBlob)));
-
-        // A device doesn't have to implement delete_key.
-        bool success = ret == ErrorCode::OK || ret == ErrorCode::UNIMPLEMENTED;
-        if (__android_log_security() && uidAlias.isOk()) {
-            android_log_event_list(SEC_TAG_KEY_DESTROYED)
-                << int32_t(success) << alias << int32_t(uid) << LOG_ID_SECURITY;
-        }
-        if (!success) return ResponseCode::SYSTEM_ERROR;
-    }
-
-    rc =
-        (unlink(filename) && errno != ENOENT) ? ResponseCode::SYSTEM_ERROR : ResponseCode::NO_ERROR;
-
-    if (rc == ResponseCode::NO_ERROR && keyBlob.getType() != ::TYPE_KEY_CHARACTERISTICS) {
-        // now that we have successfully deleted a key, let's make sure there are no stale grants
-        if (uidAlias.isOk()) {
-            mGrants.removeAllGrantsToKey(uid, alias);
-        }
-    }
-    return rc;
-}
-
-/*
- * Converts from the "escaped" format on disk to actual name.
- * This will be smaller than the input string.
- *
- * Characters that should combine with the next at the end will be truncated.
- */
-static size_t decode_key_length(const char* in, size_t length) {
-    size_t outLength = 0;
-
-    for (const char* end = in + length; in < end; in++) {
-        /* This combines with the next character. */
-        if (*in < '0' || *in > '~') {
-            continue;
-        }
-
-        outLength++;
-    }
-    return outLength;
-}
-
-static void decode_key(char* out, const char* in, size_t length) {
-    for (const char* end = in + length; in < end; in++) {
-        if (*in < '0' || *in > '~') {
-            /* Truncate combining characters at the end. */
-            if (in + 1 >= end) {
-                break;
+    if (keyBlob.getType() == ::TYPE_KEYMASTER_10) {
+        dev->deleteKey(blob2hidlVec(keyBlob), [alias, uid](Return<ErrorCode> rc) {
+            auto ret = KS_HANDLE_HIDL_ERROR(rc);
+            // A device doesn't have to implement delete_key.
+            bool success = ret == ErrorCode::OK || ret == ErrorCode::UNIMPLEMENTED;
+            if (__android_log_security()) {
+                android_log_event_list(SEC_TAG_KEY_DESTROYED)
+                    << int32_t(success) << alias << int32_t(uid) << LOG_ID_SECURITY;
             }
-
-            *out = (*in++ - '+') << 6;
-            *out++ |= (*in - '0') & 0x3F;
-        } else {
-            *out++ = *in;
-        }
-    }
-    *out = '\0';
-}
-
-static NullOr<std::tuple<uid_t, std::string>> filename2UidAlias(const std::string& filepath) {
-    auto filenamebase = filepath.find_last_of('/');
-    std::string filename =
-        filenamebase == std::string::npos ? filepath : filepath.substr(filenamebase + 1);
-
-    if (filename[0] == '.') return {};
-
-    auto sep = filename.find('_');
-    if (sep == std::string::npos) return {};
-
-    std::stringstream s(filename.substr(0, sep));
-    uid_t uid;
-    s >> uid;
-    if (!s) return {};
-
-    auto alias = filename.substr(sep + 1);
-
-    std::vector<char> alias_buffer(decode_key_length(alias.c_str(), alias.size()) + 1);
-
-    decode_key(alias_buffer.data(), alias.c_str(), alias.size());
-    return std::tuple<uid_t, std::string>(uid, alias_buffer.data());
-}
-
-ResponseCode KeyStore::list(const android::String8& prefix,
-                            android::Vector<android::String16>* matches, uid_t userId) {
-
-    UserState* userState = getUserState(userId);
-    size_t n = prefix.length();
-
-    DIR* dir = opendir(userState->getUserDirName());
-    if (!dir) {
-        ALOGW("can't open directory for user: %s", strerror(errno));
-        return ResponseCode::SYSTEM_ERROR;
-    }
-
-    struct dirent* file;
-    while ((file = readdir(dir)) != nullptr) {
-        // We only care about files.
-        if (file->d_type != DT_REG) {
-            continue;
-        }
-
-        // Skip anything that starts with a "."
-        if (file->d_name[0] == '.') {
-            continue;
-        }
-
-        if (!strncmp(prefix.string(), file->d_name, n)) {
-            const char* p = &file->d_name[n];
-            size_t plen = strlen(p);
-
-            size_t extra = decode_key_length(p, plen);
-            char* match = (char*)malloc(extra + 1);
-            if (match != nullptr) {
-                decode_key(match, p, plen);
-                matches->push(android::String16(match, extra));
-                free(match);
-            } else {
-                ALOGW("could not allocate match of size %zd", extra);
+            if (!success) {
+                LOG(ERROR) << "Keymaster delete for key " << alias << " of uid " << uid
+                           << " failed";
             }
-        }
+        });
     }
-    closedir(dir);
-    return ResponseCode::NO_ERROR;
+
+    return result;
 }
 
-std::string KeyStore::addGrant(const char* alias, uid_t granterUid, uid_t granteeUid) {
-    return mGrants.put(granteeUid, alias, getUserStateByUid(granterUid)->getUserDirName(),
-                       granterUid);
+std::string KeyStore::addGrant(const LockedKeyBlobEntry& blobfile, uid_t granteeUid) {
+    return mGrants.put(granteeUid, blobfile);
 }
 
-bool KeyStore::removeGrant(const char* alias, const uid_t granterUid, const uid_t granteeUid) {
-    return mGrants.removeByFileAlias(granteeUid, granterUid, alias);
+bool KeyStore::removeGrant(const LockedKeyBlobEntry& blobfile, const uid_t granteeUid) {
+    return mGrants.removeByFileAlias(granteeUid, blobfile);
 }
 void KeyStore::removeAllGrantsToUid(const uid_t granteeUid) {
     mGrants.removeAllGrantsToUid(granteeUid);
-}
-
-ResponseCode KeyStore::importKey(const uint8_t* key, size_t keyLen, const char* filename,
-                                 uid_t userId, int32_t flags) {
-    Unique_PKCS8_PRIV_KEY_INFO pkcs8(d2i_PKCS8_PRIV_KEY_INFO(nullptr, &key, keyLen));
-    if (!pkcs8.get()) {
-        return ResponseCode::SYSTEM_ERROR;
-    }
-    Unique_EVP_PKEY pkey(EVP_PKCS82PKEY(pkcs8.get()));
-    if (!pkey.get()) {
-        return ResponseCode::SYSTEM_ERROR;
-    }
-    int type = EVP_PKEY_type(pkey->type);
-    AuthorizationSet params;
-    add_legacy_key_authorizations(type, &params);
-    switch (type) {
-    case EVP_PKEY_RSA:
-        params.push_back(TAG_ALGORITHM, Algorithm::RSA);
-        break;
-    case EVP_PKEY_EC:
-        params.push_back(TAG_ALGORITHM, Algorithm::EC);
-        break;
-    default:
-        ALOGW("Unsupported key type %d", type);
-        return ResponseCode::SYSTEM_ERROR;
-    }
-
-    AuthorizationSet opParams(params);
-    hidl_vec<uint8_t> blob;
-
-    ErrorCode error;
-    auto hidlCb = [&](ErrorCode ret, const hidl_vec<uint8_t>& keyBlob,
-                      const KeyCharacteristics& /* ignored */) {
-        error = ret;
-        if (error != ErrorCode::OK) return;
-        blob = keyBlob;
-    };
-    auto input = blob2hidlVec(key, keyLen);
-
-    SecurityLevel securityLevel = flagsToSecurityLevel(flags);
-    auto kmDevice = getDevice(securityLevel);
-    if (!kmDevice) {
-        // As of this writing the only caller is KeyStore::get in an attempt to import legacy
-        // software keys. It only ever requests TEE as target which must always be present.
-        // If we see this error, we probably have a new and unanticipated caller.
-        ALOGE("No implementation for security level %d. Cannot import key.", securityLevel);
-        return ResponseCode::SYSTEM_ERROR;
-    }
-
-    ErrorCode rc = KS_HANDLE_HIDL_ERROR(
-        kmDevice->importKey(params.hidl_data(), KeyFormat::PKCS8, input, hidlCb));
-    if (rc != ErrorCode::OK) return ResponseCode::SYSTEM_ERROR;
-    if (error != ErrorCode::OK) {
-        ALOGE("Keymaster error %d importing key pair", error);
-        return ResponseCode::SYSTEM_ERROR;
-    }
-
-    Blob keyBlob(&blob[0], blob.size(), nullptr, 0, TYPE_KEYMASTER_10);
-
-    keyBlob.setEncrypted(flags & KEYSTORE_FLAG_ENCRYPTED);
-    keyBlob.setSecurityLevel(securityLevel);
-
-    return put(filename, &keyBlob, userId);
 }
 
 bool KeyStore::isHardwareBacked(const android::String16& keyType) const {
@@ -606,74 +361,34 @@ bool KeyStore::isHardwareBacked(const android::String16& keyType) const {
     return keyType == kEcKeyType && version.supportsEc;
 }
 
-ResponseCode KeyStore::getKeyForName(Blob* keyBlob, const android::String8& keyName,
-                                     const uid_t uid, const BlobType type) {
-    auto filepath8 = getBlobFileNameIfExists(keyName, uid, type);
-    uid_t userId = get_user_id(uid);
+std::tuple<ResponseCode, Blob, Blob, LockedKeyBlobEntry>
+KeyStore::getKeyForName(const android::String8& keyName, const uid_t uid, const BlobType type) {
+    std::tuple<ResponseCode, Blob, Blob, LockedKeyBlobEntry> result;
+    auto& [rc, keyBlob, charBlob, lockedEntry] = result;
 
-    if (filepath8.isOk()) return get(filepath8.value().string(), keyBlob, type, userId);
+    lockedEntry = getLockedBlobEntryIfExists(keyName.string(), uid);
 
-    return ResponseCode::KEY_NOT_FOUND;
-}
+    if (!lockedEntry) return rc = ResponseCode::KEY_NOT_FOUND, std::move(result);
 
-UserState* KeyStore::getUserState(uid_t userId) {
-    for (android::Vector<UserState*>::iterator it(mMasterKeys.begin()); it != mMasterKeys.end();
-         it++) {
-        UserState* state = *it;
-        if (state->getUserId() == userId) {
-            return state;
-        }
+    std::tie(rc, keyBlob, charBlob) = get(lockedEntry);
+
+    if (rc == ResponseCode::NO_ERROR) {
+        if (keyBlob.getType() != type) return rc = ResponseCode::KEY_NOT_FOUND, std::move(result);
     }
-
-    UserState* userState = new UserState(userId);
-    if (!userState->initialize()) {
-        /* There's not much we can do if initialization fails. Trying to
-         * unlock the keystore for that user will fail as well, so any
-         * subsequent request for this user will just return SYSTEM_ERROR.
-         */
-        ALOGE("User initialization failed for %u; subsuquent operations will fail", userId);
-    }
-    mMasterKeys.add(userState);
-    return userState;
+    return result;
 }
 
-UserState* KeyStore::getUserStateByUid(uid_t uid) {
-    uid_t userId = get_user_id(uid);
-    return getUserState(userId);
-}
-
-const UserState* KeyStore::getUserState(uid_t userId) const {
-    for (android::Vector<UserState*>::const_iterator it(mMasterKeys.begin());
-         it != mMasterKeys.end(); it++) {
-        UserState* state = *it;
-        if (state->getUserId() == userId) {
-            return state;
-        }
-    }
-
-    return nullptr;
-}
-
-const UserState* KeyStore::getUserStateByUid(uid_t uid) const {
-    uid_t userId = get_user_id(uid);
-    return getUserState(userId);
-}
-
-bool KeyStore::upgradeBlob(const char* filename, Blob* blob, const uint8_t oldVersion,
-                           const BlobType type, uid_t userId) {
+bool KeyStore::upgradeBlob(Blob* blob, const uint8_t oldVersion) {
     bool updated = false;
     uint8_t version = oldVersion;
 
+    if (!blob || !(*blob)) return false;
+
     /* From V0 -> V1: All old types were unknown */
     if (version == 0) {
-        ALOGV("upgrading to version 1 and setting type %d", type);
+        ALOGE("Failed to upgrade key blob. Ancient blob version 0 is no longer supported");
 
-        blob->setType(type);
-        if (type == TYPE_KEY_PAIR) {
-            importBlobAsKey(blob, filename, userId);
-        }
-        version = 1;
-        updated = true;
+        return false;
     }
 
     /* From V1 -> V2: All old keys were encrypted */
@@ -690,7 +405,6 @@ bool KeyStore::upgradeBlob(const char* filename, Blob* blob, const uint8_t oldVe
      * and write it.
      */
     if (updated) {
-        ALOGV("updated and writing file %s", filename);
         blob->setVersion(version);
     }
 
@@ -701,43 +415,6 @@ struct BIO_Delete {
     void operator()(BIO* p) const { BIO_free(p); }
 };
 typedef std::unique_ptr<BIO, BIO_Delete> Unique_BIO;
-
-ResponseCode KeyStore::importBlobAsKey(Blob* blob, const char* filename, uid_t userId) {
-    // We won't even write to the blob directly with this BIO, so const_cast is okay.
-    Unique_BIO b(BIO_new_mem_buf(const_cast<uint8_t*>(blob->getValue()), blob->getLength()));
-    if (b.get() == nullptr) {
-        ALOGE("Problem instantiating BIO");
-        return ResponseCode::SYSTEM_ERROR;
-    }
-
-    Unique_EVP_PKEY pkey(PEM_read_bio_PrivateKey(b.get(), nullptr, nullptr, nullptr));
-    if (pkey.get() == nullptr) {
-        ALOGE("Couldn't read old PEM file");
-        return ResponseCode::SYSTEM_ERROR;
-    }
-
-    Unique_PKCS8_PRIV_KEY_INFO pkcs8(EVP_PKEY2PKCS8(pkey.get()));
-    int len = i2d_PKCS8_PRIV_KEY_INFO(pkcs8.get(), nullptr);
-    if (len < 0) {
-        ALOGE("Couldn't measure PKCS#8 length");
-        return ResponseCode::SYSTEM_ERROR;
-    }
-
-    std::unique_ptr<unsigned char[]> pkcs8key(new unsigned char[len]);
-    uint8_t* tmp = pkcs8key.get();
-    if (i2d_PKCS8_PRIV_KEY_INFO(pkcs8.get(), &tmp) != len) {
-        ALOGE("Couldn't convert to PKCS#8");
-        return ResponseCode::SYSTEM_ERROR;
-    }
-
-    ResponseCode rc = importKey(pkcs8key.get(), len, filename, userId,
-                                blob->isEncrypted() ? KEYSTORE_FLAG_ENCRYPTED : KEYSTORE_FLAG_NONE);
-    if (rc != ResponseCode::NO_ERROR) {
-        return rc;
-    }
-
-    return get(filename, blob, TYPE_KEY_PAIR, userId);
-}
 
 void KeyStore::readMetaData() {
     int in = TEMP_FAILURE_RETRY(open(kMetaDataFile, O_RDONLY));
@@ -772,14 +449,14 @@ bool KeyStore::upgradeKeystore() {
     bool upgraded = false;
 
     if (mMetaData.version == 0) {
-        UserState* userState = getUserStateByUid(0);
+        auto userState = getUserStateDB().getUserStateByUid(0);
 
         // Initialize first so the directory is made.
         userState->initialize();
 
         // Migrate the old .masterkey file to user 0.
         if (access(kOldMasterKey, R_OK) == 0) {
-            if (rename(kOldMasterKey, userState->getMasterKeyFileName()) < 0) {
+            if (rename(kOldMasterKey, userState->getMasterKeyFileName().c_str()) < 0) {
                 ALOGE("couldn't migrate old masterkey: %s", strerror(errno));
                 return false;
             }
@@ -814,13 +491,13 @@ bool KeyStore::upgradeKeystore() {
             if (end[0] != '_' || end[1] == 0) {
                 continue;
             }
-            UserState* otherUser = getUserStateByUid(thisUid);
+            auto otherUser = getUserStateDB().getUserStateByUid(thisUid);
             if (otherUser->getUserId() != 0) {
                 unlinkat(dirfd(dir), file->d_name, 0);
             }
 
             // Rename the file into user directory.
-            DIR* otherdir = opendir(otherUser->getUserDirName());
+            DIR* otherdir = opendir(otherUser->getUserDirName().c_str());
             if (otherdir == nullptr) {
                 ALOGW("couldn't open user directory for rename");
                 continue;
@@ -839,16 +516,11 @@ bool KeyStore::upgradeKeystore() {
     return upgraded;
 }
 
-static void maybeLogKeyIntegrityViolation(const char* filename, const BlobType type) {
-    if (!__android_log_security() || (type != TYPE_KEY_PAIR && type != TYPE_KEYMASTER_10)) return;
-
-    auto uidAlias = filename2UidAlias(filename);
-    uid_t uid = -1;
-    std::string alias;
-
-    if (uidAlias.isOk()) std::tie(uid, alias) = std::move(uidAlias).value();
-
-    log_key_integrity_violation(alias.c_str(), uid);
+void KeyStore::binderDied(const ::android::wp<IBinder>& who) {
+    for (unsigned i = 0; i < mKmDevices.size(); ++i) {
+        if (mKmDevices[SecurityLevel(i)]) mKmDevices[SecurityLevel(i)]->binderDied(who);
+    }
+    getConfirmationManager().binderDied(who);
 }
 
 }  // namespace keystore
