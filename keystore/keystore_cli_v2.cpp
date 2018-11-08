@@ -66,6 +66,7 @@ void PrintUsageAndExit() {
            "          delete-all\n"
            "          exists --name=<key_name>\n"
            "          list [--prefix=<key_name_prefix>]\n"
+           "          list-apps-with-keys\n"
            "          sign-verify --name=<key_name>\n"
            "          [en|de]crypt --name=<key_name> --in=<file> --out=<file>\n"
            "                       [--seclevel=software|strongbox|tee(default)]\n"
@@ -285,7 +286,8 @@ int AddEntropy(const std::string& input, int32_t flags) {
     return result;
 }
 
-int GenerateKey(const std::string& name, int32_t flags) {
+// Note: auth_bound keys created with this tool will not be usable.
+int GenerateKey(const std::string& name, int32_t flags, bool auth_bound) {
     std::unique_ptr<KeystoreClient> keystore = CreateKeystoreInstance();
     AuthorizationSetBuilder params;
     params.RsaSigningKey(2048, 65537)
@@ -294,8 +296,14 @@ int GenerateKey(const std::string& name, int32_t flags) {
         .Digest(Digest::SHA_2_384)
         .Digest(Digest::SHA_2_512)
         .Padding(PaddingMode::RSA_PKCS1_1_5_SIGN)
-        .Padding(PaddingMode::RSA_PSS)
-        .Authorization(TAG_NO_AUTH_REQUIRED);
+        .Padding(PaddingMode::RSA_PSS);
+    if (auth_bound) {
+        // Gatekeeper normally generates the secure user id.
+        // Using zero allows the key to be created, but it will not be usuable.
+        params.Authorization(TAG_USER_SECURE_ID, 0);
+    } else {
+        params.Authorization(TAG_NO_AUTH_REQUIRED);
+    }
     AuthorizationSet hardware_enforced_characteristics;
     AuthorizationSet software_enforced_characteristics;
     auto result = keystore->generateKey(name, params, flags, &hardware_enforced_characteristics,
@@ -360,6 +368,35 @@ int List(const std::string& prefix) {
     printf("Keys:\n");
     for (const auto& key_name : key_list) {
         printf("  %s\n", key_name.c_str());
+    }
+    return 0;
+}
+
+int ListAppsWithKeys() {
+
+    sp<android::IServiceManager> sm = android::defaultServiceManager();
+    sp<android::IBinder> binder = sm->getService(String16("android.security.keystore"));
+    sp<IKeystoreService> service = android::interface_cast<IKeystoreService>(binder);
+    if (service == nullptr) {
+        fprintf(stderr, "Error connecting to keystore service.\n");
+        return 1;
+    }
+    int32_t aidl_return;
+    ::std::vector<int32_t> uids(100);
+    android::binder::Status status = service->listUidsOfAuthBoundKeys(&uids, &aidl_return);
+    if (!status.isOk()) {
+        fprintf(stderr, "Requesting uids of auth bound keys failed with error %s.\n",
+                status.toString8().c_str());
+        return 1;
+    }
+    if (!KeyStoreNativeReturnCode(aidl_return).isOk()) {
+        fprintf(stderr, "Requesting uids of auth bound keys failed with code %d.\n", aidl_return);
+        return 1;
+    }
+    printf("Apps with auth bound keys:\n");
+    for (auto i = uids.begin(); i != uids.end(); ++i) {
+        if (*i == 0) break;
+        printf("%d\n", *i);
     }
     return 0;
 }
@@ -591,7 +628,8 @@ int main(int argc, char** argv) {
                           securityLevelOption2Flags(*command_line));
     } else if (args[0] == "generate") {
         return GenerateKey(command_line->GetSwitchValueASCII("name"),
-                           securityLevelOption2Flags(*command_line));
+                           securityLevelOption2Flags(*command_line),
+                           command_line->HasSwitch("auth_bound"));
     } else if (args[0] == "get-chars") {
         return GetCharacteristics(command_line->GetSwitchValueASCII("name"));
     } else if (args[0] == "export") {
@@ -604,6 +642,8 @@ int main(int argc, char** argv) {
         return DoesKeyExist(command_line->GetSwitchValueASCII("name"));
     } else if (args[0] == "list") {
         return List(command_line->GetSwitchValueASCII("prefix"));
+    } else if (args[0] == "list-apps-with-keys") {
+        return ListAppsWithKeys();
     } else if (args[0] == "sign-verify") {
         return SignAndVerify(command_line->GetSwitchValueASCII("name"));
     } else if (args[0] == "encrypt") {
