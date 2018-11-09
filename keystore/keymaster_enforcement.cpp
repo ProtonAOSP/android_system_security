@@ -34,49 +34,6 @@
 
 namespace keystore {
 
-class AccessTimeMap {
-  public:
-    explicit AccessTimeMap(uint32_t max_size) : max_size_(max_size) {}
-
-    /* If the key is found, returns true and fills \p last_access_time.  If not found returns
-     * false. */
-    bool LastKeyAccessTime(km_id_t keyid, uint32_t* last_access_time) const;
-
-    /* Updates the last key access time with the currentTime parameter.  Adds the key if
-     * needed, returning false if key cannot be added because list is full. */
-    bool UpdateKeyAccessTime(km_id_t keyid, uint32_t current_time, uint32_t timeout);
-
-  private:
-    struct AccessTime {
-        km_id_t keyid;
-        uint32_t access_time;
-        uint32_t timeout;
-    };
-    std::list<AccessTime> last_access_list_;
-    const uint32_t max_size_;
-};
-
-class AccessCountMap {
-  public:
-    explicit AccessCountMap(uint32_t max_size) : max_size_(max_size) {}
-
-    /* If the key is found, returns true and fills \p count.  If not found returns
-     * false. */
-    bool KeyAccessCount(km_id_t keyid, uint32_t* count) const;
-
-    /* Increments key access count, adding an entry if the key has never been used.  Returns
-     * false if the list has reached maximum size. */
-    bool IncrementKeyAccessCount(km_id_t keyid);
-
-  private:
-    struct AccessCount {
-        km_id_t keyid;
-        uint64_t access_count;
-    };
-    std::list<AccessCount> access_count_list_;
-    const uint32_t max_size_;
-};
-
 bool is_public_key_algorithm(const AuthorizationSet& auth_set) {
     auto algorithm = auth_set.GetTagValue(TAG_ALGORITHM);
     return algorithm.isOk() &&
@@ -107,12 +64,9 @@ inline bool is_usage_purpose(KeyPurpose purpose) {
 
 KeymasterEnforcement::KeymasterEnforcement(uint32_t max_access_time_map_size,
                                            uint32_t max_access_count_map_size)
-    : access_time_map_(new (std::nothrow) AccessTimeMap(max_access_time_map_size)),
-      access_count_map_(new (std::nothrow) AccessCountMap(max_access_count_map_size)) {}
+    : access_time_map_(max_access_time_map_size), access_count_map_(max_access_count_map_size) {}
 
 KeymasterEnforcement::~KeymasterEnforcement() {
-    delete access_time_map_;
-    delete access_count_map_;
 }
 
 ErrorCode KeymasterEnforcement::AuthorizeOperation(const KeyPurpose purpose, const km_id_t keyid,
@@ -390,24 +344,14 @@ ErrorCode KeymasterEnforcement::AuthorizeBegin(const KeyPurpose purpose, const k
         return ErrorCode::CALLER_NONCE_PROHIBITED;
 
     if (min_ops_timeout != UINT32_MAX) {
-        if (!access_time_map_) {
-            ALOGE("Rate-limited keys table not allocated.  Rate-limited keys disabled");
-            return ErrorCode::MEMORY_ALLOCATION_FAILED;
-        }
-
-        if (!access_time_map_->UpdateKeyAccessTime(keyid, get_current_time(), min_ops_timeout)) {
+        if (!access_time_map_.UpdateKeyAccessTime(keyid, get_current_time(), min_ops_timeout)) {
             ALOGE("Rate-limited keys table full.  Entries will time out.");
             return ErrorCode::TOO_MANY_OPERATIONS;
         }
     }
 
     if (update_access_count) {
-        if (!access_count_map_) {
-            ALOGE("Usage-count limited keys tabel not allocated.  Count-limited keys disabled");
-            return ErrorCode::MEMORY_ALLOCATION_FAILED;
-        }
-
-        if (!access_count_map_->IncrementKeyAccessCount(keyid)) {
+        if (!access_count_map_.IncrementKeyAccessCount(keyid)) {
             ALOGE("Usage count-limited keys table full, until reboot.");
             return ErrorCode::TOO_MANY_OPERATIONS;
         }
@@ -428,35 +372,32 @@ class EvpMdCtx {
 };
 
 /* static */
-bool KeymasterEnforcement::CreateKeyId(const hidl_vec<uint8_t>& key_blob, km_id_t* keyid) {
+std::optional<km_id_t> KeymasterEnforcement::CreateKeyId(const hidl_vec<uint8_t>& key_blob) {
     EvpMdCtx ctx;
+    km_id_t keyid;
 
     uint8_t hash[EVP_MAX_MD_SIZE];
     unsigned int hash_len;
     if (EVP_DigestInit_ex(ctx.get(), EVP_sha256(), nullptr /* ENGINE */) &&
         EVP_DigestUpdate(ctx.get(), &key_blob[0], key_blob.size()) &&
         EVP_DigestFinal_ex(ctx.get(), hash, &hash_len)) {
-        assert(hash_len >= sizeof(*keyid));
-        memcpy(keyid, hash, sizeof(*keyid));
-        return true;
+        assert(hash_len >= sizeof(keyid));
+        memcpy(&keyid, hash, sizeof(keyid));
+        return keyid;
     }
 
-    return false;
+    return {};
 }
 
 bool KeymasterEnforcement::MinTimeBetweenOpsPassed(uint32_t min_time_between, const km_id_t keyid) {
-    if (!access_time_map_) return false;
-
     uint32_t last_access_time;
-    if (!access_time_map_->LastKeyAccessTime(keyid, &last_access_time)) return true;
+    if (!access_time_map_.LastKeyAccessTime(keyid, &last_access_time)) return true;
     return min_time_between <= static_cast<int64_t>(get_current_time()) - last_access_time;
 }
 
 bool KeymasterEnforcement::MaxUsesPerBootNotExceeded(const km_id_t keyid, uint32_t max_uses) {
-    if (!access_count_map_) return false;
-
     uint32_t key_access_count;
-    if (!access_count_map_->KeyAccessCount(keyid, &key_access_count)) return true;
+    if (!access_count_map_.KeyAccessCount(keyid, &key_access_count)) return true;
     return key_access_count < max_uses;
 }
 
@@ -545,6 +486,7 @@ bool KeymasterEnforcement::AuthTokenMatches(const AuthorizationSet& auth_set,
 }
 
 bool AccessTimeMap::LastKeyAccessTime(km_id_t keyid, uint32_t* last_access_time) const {
+    std::lock_guard<std::mutex> lock(list_lock_);
     for (auto& entry : last_access_list_)
         if (entry.keyid == keyid) {
             *last_access_time = entry.access_time;
@@ -554,6 +496,7 @@ bool AccessTimeMap::LastKeyAccessTime(km_id_t keyid, uint32_t* last_access_time)
 }
 
 bool AccessTimeMap::UpdateKeyAccessTime(km_id_t keyid, uint32_t current_time, uint32_t timeout) {
+    std::lock_guard<std::mutex> lock(list_lock_);
     for (auto iter = last_access_list_.begin(); iter != last_access_list_.end();) {
         if (iter->keyid == keyid) {
             iter->access_time = current_time;
@@ -579,6 +522,7 @@ bool AccessTimeMap::UpdateKeyAccessTime(km_id_t keyid, uint32_t current_time, ui
 }
 
 bool AccessCountMap::KeyAccessCount(km_id_t keyid, uint32_t* count) const {
+    std::lock_guard<std::mutex> lock(list_lock_);
     for (auto& entry : access_count_list_)
         if (entry.keyid == keyid) {
             *count = entry.access_count;
@@ -588,6 +532,7 @@ bool AccessCountMap::KeyAccessCount(km_id_t keyid, uint32_t* count) const {
 }
 
 bool AccessCountMap::IncrementKeyAccessCount(km_id_t keyid) {
+    std::lock_guard<std::mutex> lock(list_lock_);
     for (auto& entry : access_count_list_)
         if (entry.keyid == keyid) {
             // Note that the 'if' below will always be true because KM_TAG_MAX_USES_PER_BOOT is a

@@ -17,11 +17,22 @@
 #ifndef KEYSTORE_GRANT_STORE_H_
 #define KEYSTORE_GRANT_STORE_H_
 
+#include <mutex>
 #include <set>
+#include <shared_mutex>
 #include <string>
 #include <unordered_map>
 
+#include <keystore/keystore_concurrency.h>
+
+#include "blob.h"
+
 namespace keystore {
+
+class Grant;
+
+using ReadLockedGrant =
+    ProxyLock<MutexProxyLockHelper<const Grant, std::shared_mutex, std::shared_lock>>;
 
 /**
  * Grant represents a mapping from an alias to a key file.
@@ -32,16 +43,12 @@ namespace keystore {
  */
 class Grant {
 public:
-    Grant(const std::string& alias, const std::string& owner_dir_name, const uid_t owner_uid,
-          const uint64_t grant_no);
-    // the following three field are used to recover the key filename that the grant refers to
-    std::string alias_;            ///< original/wrapped key alias
-    std::string owner_dir_name_;   ///< key owner key directory
-    uid_t owner_uid_;              ///< key owner uid
+  Grant(const KeyBlobEntry& entry, const uint64_t grant_no);
+  KeyBlobEntry entry_;
 
-    uint64_t grant_no_;            ///< numeric grant identifier - randomly assigned
+  uint64_t grant_no_;  ///< numeric grant identifier - randomly assigned
 
-    operator const uint64_t&() const { return grant_no_; }
+  operator const uint64_t&() const { return grant_no_; }
 };
 
 /**
@@ -56,10 +63,9 @@ public:
 class GrantStore {
 public:
     GrantStore() : grants_() {}
-    std::string put(const uid_t uid, const std::string& alias, const std::string& owner_dir_name,
-                    const uid_t owner_uid);
-    const Grant* get(const uid_t uid, const std::string& alias) const;
-    bool removeByFileAlias(const uid_t granteeUid, const uid_t granterUid, const std::string& alias);
+    std::string put(const uid_t uid, const LockedKeyBlobEntry& blobfile);
+    ReadLockedGrant get(const uid_t uid, const std::string& alias) const;
+    bool removeByFileAlias(const uid_t granteeUid, const LockedKeyBlobEntry& lockedEntry);
     void removeAllGrantsToKey(const uid_t granterUid, const std::string& alias);
     void removeAllGrantsToUid(const uid_t granteeUid);
 
@@ -68,6 +74,7 @@ public:
     GrantStore& operator=(const GrantStore&) = delete;
 private:
     std::unordered_map<uid_t, std::set<Grant, std::less<>>> grants_;
+    mutable std::shared_mutex mutex_;
 };
 
 }  // namespace keystore
