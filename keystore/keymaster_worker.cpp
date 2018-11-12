@@ -37,34 +37,31 @@ using android::security::keymaster::ExportResult;
 using android::security::keymaster::operationFailed;
 using android::security::keymaster::OperationResult;
 
-Worker::Worker() {
-    worker_ = std::thread([this] {
-        std::unique_lock<std::mutex> lock(pending_requests_mutex_);
-        running_ = true;
-        while (running_) {
-            pending_requests_cond_var_.wait(
-                lock, [this]() { return !pending_requests_.empty() || !running_; });
-            if (!running_) break;
-            auto request = std::move(pending_requests_.front());
-            pending_requests_.pop();
-            lock.unlock();
-            request();
-            lock.lock();
-        }
-    });
-}
+Worker::Worker() {}
 Worker::~Worker() {
-    if (worker_.joinable()) {
-        running_ = false;
-        pending_requests_cond_var_.notify_all();
-        worker_.join();
-    }
+    std::unique_lock<std::mutex> lock(pending_requests_mutex_);
+    pending_requests_cond_var_.wait(lock, [this] { return pending_requests_.empty(); });
 }
 void Worker::addRequest(WorkerTask request) {
     std::unique_lock<std::mutex> lock(pending_requests_mutex_);
+    bool start_thread = pending_requests_.empty();
     pending_requests_.push(std::move(request));
     lock.unlock();
-    pending_requests_cond_var_.notify_all();
+    if (start_thread) {
+        auto worker = std::thread([this] {
+            std::unique_lock<std::mutex> lock(pending_requests_mutex_);
+            running_ = true;
+            while (!pending_requests_.empty()) {
+                auto request = std::move(pending_requests_.front());
+                lock.unlock();
+                request();
+                lock.lock();
+                pending_requests_.pop();
+                pending_requests_cond_var_.notify_all();
+            }
+        });
+        worker.detach();
+    }
 }
 
 KeymasterWorker::KeymasterWorker(sp<Keymaster> keymasterDevice, KeyStore* keyStore)
