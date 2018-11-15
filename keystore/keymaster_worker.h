@@ -113,7 +113,6 @@ class Worker {
     std::queue<WorkerTask> pending_requests_;
     std::mutex pending_requests_mutex_;
     std::condition_variable pending_requests_cond_var_;
-    std::thread worker_;
     bool running_ = false;
 
   public:
