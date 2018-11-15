@@ -25,6 +25,7 @@
 #include <android-base/logging.h>
 #include <android/security/keystore/IKeystoreService.h>
 #include <binder/IServiceManager.h>
+#include <binder/ProcessState.h>
 #include <keystore/KeyCharacteristics.h>
 #include <keystore/KeymasterArguments.h>
 #include <keystore/KeymasterBlob.h>
@@ -37,6 +38,7 @@
 #include <keystore/keystore_return_types.h>
 
 #include <future>
+#include <thread>
 
 using android::security::keystore::IKeystoreService;
 using namespace android;
@@ -85,6 +87,10 @@ static NullOr<const Algorithm&> getKeyAlgoritmFromKeyCharacteristics(
         if (algo.isOk()) return algo;
     }
     return {};
+}
+
+KeystoreBackendBinder::KeystoreBackendBinder() {
+    android::ProcessState::self()->startThreadPool();
 }
 
 int32_t KeystoreBackendBinder::sign(const char* key_id, const uint8_t* in, size_t len,
