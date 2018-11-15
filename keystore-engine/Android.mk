@@ -24,6 +24,7 @@ LOCAL_SRC_FILES := \
 
 LOCAL_MODULE_TAGS := optional
 LOCAL_CFLAGS := -fvisibility=hidden -Wall -Werror
+LOCAL_CPPFLAGS += -std=c++17
 
 LOCAL_SHARED_LIBRARIES += \
 	libbinder \
@@ -53,6 +54,7 @@ LOCAL_SRC_FILES := \
 
 LOCAL_MODULE_TAGS := optional
 LOCAL_CFLAGS := -fvisibility=hidden -Wall -Werror -DBACKEND_WIFI_HIDL
+LOCAL_CPPFLAGS += -std=c++17
 
 LOCAL_SHARED_LIBRARIES += \
 	android.system.wifi.keystore@1.0 \

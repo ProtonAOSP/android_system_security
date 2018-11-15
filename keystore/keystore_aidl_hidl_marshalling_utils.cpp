@@ -21,14 +21,13 @@
 #include <keystore/KeyCharacteristics.h>
 #include <keystore/KeymasterBlob.h>
 #include <keystore/KeymasterCertificateChain.h>
-#include <keystore/KeystoreArg.h>
 #include <keystore/keymaster_types.h>
 #include <keystore/keystore_hidl_support.h>
 
 namespace keystore {
 
 // reads byte[]
-hidl_vec<uint8_t> readKeymasterBlob(const android::Parcel& in, bool inPlace) {
+hidl_vec<uint8_t> readKeymasterBlob(const android::Parcel& in) {
 
     ssize_t length = in.readInt32();
     if (length <= 0) {
@@ -38,7 +37,7 @@ hidl_vec<uint8_t> readKeymasterBlob(const android::Parcel& in, bool inPlace) {
     const void* buf = in.readInplace(length);
     if (!buf) return {};
 
-    return blob2hidlVec(reinterpret_cast<const uint8_t*>(buf), size_t(length), inPlace);
+    return blob2hidlVec(reinterpret_cast<const uint8_t*>(buf), size_t(length));
 }
 
 android::status_t writeKeymasterBlob(const hidl_vec<uint8_t>& blob, android::Parcel* out) {
@@ -235,7 +234,7 @@ status_t KeyCharacteristics::writeToParcel(Parcel* out) const {
 }
 
 status_t KeymasterBlob::readFromParcel(const Parcel* in) {
-    data_ = keystore::readKeymasterBlob(*in, true /* in place */);
+    data_ = keystore::readKeymasterBlob(*in);
     return OK;
 }
 

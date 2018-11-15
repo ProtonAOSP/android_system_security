@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2015, The Android Open Source Project
+ * Copyright (c) 2018, The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,20 +14,18 @@
  * limitations under the License.
  */
 
-package android.security;
+package android.security.keystore;
 
-import android.security.keymaster.ExportResult;
-import android.security.keymaster.KeyCharacteristics;
 import android.security.keymaster.KeymasterArguments;
-import android.security.keymaster.KeymasterCertificateChain;
 import android.security.keymaster.KeymasterBlob;
 import android.security.keymaster.OperationResult;
-import android.security.KeystoreArguments;
+import android.security.keystore.IKeystoreResponseCallback;
+import android.security.keystore.IKeystoreKeyCharacteristicsCallback;
+import android.security.keystore.IKeystoreExportKeyCallback;
+import android.security.keystore.IKeystoreOperationResultCallback;
+import android.security.keystore.IKeystoreCertificateChainCallback;
 
 /**
- * This must be kept manually in sync with system/security/keystore until AIDL
- * can generate both Java and C++ bindings.
- *
  * @hide
  */
 interface IKeystoreService {
@@ -48,32 +46,30 @@ interface IKeystoreService {
     int is_hardware_backed(String string);
     int clear_uid(long uid);
 
-    // Keymaster 0.4 methods
-    int addRngEntropy(in byte[] data, int flags);
-    int generateKey(String alias, in KeymasterArguments arguments, in byte[] entropy, int uid,
-        int flags, out KeyCharacteristics characteristics);
-    int getKeyCharacteristics(String alias, in KeymasterBlob clientId, in KeymasterBlob appData,
-        int uid, out KeyCharacteristics characteristics);
-    int importKey(String alias, in KeymasterArguments arguments, int format,
-        in byte[] keyData, int uid, int flags, out KeyCharacteristics characteristics);
-    ExportResult exportKey(String alias, int format, in KeymasterBlob clientId,
+    int addRngEntropy(IKeystoreResponseCallback cb, in byte[] data, int flags);
+    int generateKey(IKeystoreKeyCharacteristicsCallback cb, String alias, in KeymasterArguments arguments, in byte[] entropy, int uid,
+        int flags);
+    int getKeyCharacteristics (IKeystoreKeyCharacteristicsCallback cb, String alias, in KeymasterBlob clientId, in KeymasterBlob appData,
+        int uid);
+    int importKey(IKeystoreKeyCharacteristicsCallback cb, String alias, in KeymasterArguments arguments, int format,
+        in byte[] keyData, int uid, int flags);
+    int exportKey(IKeystoreExportKeyCallback cb, String alias, int format, in KeymasterBlob clientId,
         in KeymasterBlob appData, int uid);
-    OperationResult begin(IBinder appToken, String alias, int purpose, boolean pruneable,
+    int begin(in IKeystoreOperationResultCallback cb, IBinder appToken, String alias, int purpose, boolean pruneable,
         in KeymasterArguments params, in byte[] entropy, int uid);
-    OperationResult update(IBinder token, in KeymasterArguments params, in byte[] input);
-    OperationResult finish(IBinder token, in KeymasterArguments params, in byte[] signature,
+    int update(in IKeystoreOperationResultCallback cb, IBinder token, in KeymasterArguments params, in byte[] input);
+    int finish(in IKeystoreOperationResultCallback cb, IBinder token, in KeymasterArguments params, in byte[] signature,
         in byte[] entropy);
-    int abort(IBinder handle);
+    int abort(in IKeystoreResponseCallback cb, IBinder token);
     int addAuthToken(in byte[] authToken);
     int onUserAdded(int userId, int parentId);
     int onUserRemoved(int userId);
-    int attestKey(String alias, in KeymasterArguments params, out KeymasterCertificateChain chain);
-    int attestDeviceIds(in KeymasterArguments params, out KeymasterCertificateChain chain);
+    int attestKey(in IKeystoreCertificateChainCallback cb, String alias, in KeymasterArguments params);
+    int attestDeviceIds(in IKeystoreCertificateChainCallback cb, in KeymasterArguments params);
     int onDeviceOffBody();
-    int importWrappedKey(in String wrappedKeyAlias, in byte[] wrappedKey,
+    int importWrappedKey(in IKeystoreKeyCharacteristicsCallback cb, String wrappedKeyAlias, in byte[] wrappedKey,
         in String wrappingKeyAlias, in byte[] maskingKey, in KeymasterArguments arguments,
-        in long rootSid, in long fingerprintSid,
-        out KeyCharacteristics characteristics);
+        in long rootSid, in long fingerprintSid);
     int presentConfirmationPrompt(IBinder listener, String promptText, in byte[] extraData,
         in String locale, in int uiOptionsAsFlags);
     int cancelConfirmationPrompt(IBinder listener);

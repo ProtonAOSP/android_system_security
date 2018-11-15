@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2015, The Android Open Source Project
+ * Copyright (c) 2018, The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,7 +14,14 @@
  * limitations under the License.
  */
 
-package android.security;
+package android.security.keystore;
 
-/* @hide */
-parcelable KeystoreArguments cpp_header "keystore/KeystoreArguments.h";
+import android.security.keystore.KeystoreResponse;
+import android.security.keymaster.OperationResult;
+
+/**
+ * @hide
+ */
+oneway interface IKeystoreOperationResultCallback {
+    void onFinished(in OperationResult result);
+}
