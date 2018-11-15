@@ -17,11 +17,12 @@
 
 #include "keystore_client.h"
 
+#include <future>
 #include <map>
 #include <string>
 #include <vector>
 
-#include <android/security/IKeystoreService.h>
+#include <android/security/keystore/IKeystoreService.h>
 #include <binder/IBinder.h>
 #include <binder/IServiceManager.h>
 #include <utils/StrongPointer.h>
@@ -109,7 +110,7 @@ class KeystoreClientImpl : public KeystoreClient {
 
     android::sp<android::IServiceManager> service_manager_;
     android::sp<android::IBinder> keystore_binder_;
-    android::sp<android::security::IKeystoreService> keystore_;
+    android::sp<android::security::keystore::IKeystoreService> keystore_;
     uint64_t next_virtual_handle_ = 1;
     std::map<uint64_t, android::sp<android::IBinder>> active_operations_;
 

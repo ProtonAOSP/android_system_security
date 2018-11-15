@@ -107,8 +107,7 @@ void log_key_integrity_violation(const char* name, uid_t uid) {
 namespace keystore {
 
 hidl_vec<uint8_t> blob2hidlVec(const Blob& blob) {
-    hidl_vec<uint8_t> result;
-    result.setToExternal(const_cast<uint8_t*>(blob.getValue()), blob.getLength());
+    hidl_vec<uint8_t> result(blob.getValue(), blob.getValue() + blob.getLength());
     return result;
 }
 

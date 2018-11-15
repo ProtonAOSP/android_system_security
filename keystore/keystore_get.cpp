@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include <android/security/IKeystoreService.h>
+#include <android/security/keystore/IKeystoreService.h>
 #include <binder/IServiceManager.h>
 
 #include <keystore/keystore_get.h>
@@ -26,8 +26,8 @@ using namespace keystore;
 ssize_t keystore_get(const char* key, size_t keyLength, uint8_t** value) {
     sp<IServiceManager> sm = defaultServiceManager();
     sp<IBinder> binder = sm->getService(String16("android.security.keystore"));
-    sp<android::security::IKeystoreService> service =
-        interface_cast<android::security::IKeystoreService>(binder);
+    sp<android::security::keystore::IKeystoreService> service =
+        interface_cast<android::security::keystore::IKeystoreService>(binder);
 
     if (service == nullptr) {
         return -1;

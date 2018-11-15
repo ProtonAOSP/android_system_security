@@ -139,10 +139,10 @@ cc_library_shared {
         "KeyAttestationApplicationId.cpp",
         "KeyAttestationPackageInfo.cpp",
         "KeymasterArguments.cpp",
-        "KeystoreArguments.cpp",
+        "keystore_aidl_hidl_marshalling_utils.cpp",
+        "KeystoreResponse.cpp",
         "OperationResult.cpp",
         "Signature.cpp",
-        "keystore_aidl_hidl_marshalling_utils.cpp",
     ],
     shared_libs: [
         "android.hardware.keymaster@4.0",
@@ -269,7 +269,12 @@ filegroup {
     name: "keystore_aidl",
     srcs: [
         "binder/android/security/IConfirmationPromptCallback.aidl",
-        "binder/android/security/IKeystoreService.aidl",
+        "binder/android/security/keystore/IKeystoreCertificateChainCallback.aidl",
+        "binder/android/security/keystore/IKeystoreExportKeyCallback.aidl",
+        "binder/android/security/keystore/IKeystoreKeyCharacteristicsCallback.aidl",
+        "binder/android/security/keystore/IKeystoreOperationResultCallback.aidl",
+        "binder/android/security/keystore/IKeystoreResponseCallback.aidl",
+        "binder/android/security/keystore/IKeystoreService.aidl",
     ],
     path: "binder",
 }
