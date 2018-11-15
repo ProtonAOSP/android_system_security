@@ -60,7 +60,7 @@ inline android::status_t nullable(android::Parcel* out) {
 /**
  * makes a copy only if inPlace is false
  */
-hidl_vec<uint8_t> readKeymasterBlob(const android::Parcel& in, bool inPlace = true);
+hidl_vec<uint8_t> readKeymasterBlob(const android::Parcel& in);
 android::status_t writeKeymasterBlob(const hidl_vec<uint8_t>& blob, android::Parcel* out);
 
 NullOr<hidl_vec<uint8_t>> readBlobAsByteArray(const android::Parcel& in, bool inPlace = true);

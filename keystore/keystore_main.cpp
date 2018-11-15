@@ -18,7 +18,7 @@
 
 #include <android-base/logging.h>
 #include <android/hidl/manager/1.1/IServiceManager.h>
-#include <android/security/IKeystoreService.h>
+#include <android/security/keystore/IKeystoreService.h>
 #include <android/system/wifi/keystore/1.0/IKeystore.h>
 #include <binder/IPCThreadState.h>
 #include <binder/IServiceManager.h>

@@ -16,6 +16,7 @@
 #define KEYSTORE_INCLUDE_KEYSTORE_KEYMASTERCERTIFICATECHAIN_H_
 
 #include <binder/Parcelable.h>
+#include <keystore/keymaster_types.h>
 
 namespace android {
 namespace security {
