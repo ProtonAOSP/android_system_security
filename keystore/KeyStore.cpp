@@ -28,7 +28,7 @@
 
 #include <android-base/scopeguard.h>
 #include <android/hardware/keymaster/3.0/IKeymasterDevice.h>
-#include <android/security/IKeystoreService.h>
+#include <android/security/keystore/IKeystoreService.h>
 #include <log/log_event_list.h>
 
 #include <private/android_logger.h>

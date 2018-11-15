@@ -17,7 +17,7 @@
 #ifndef KEYSTORE_KEYSTORE_SERVICE_H_
 #define KEYSTORE_KEYSTORE_SERVICE_H_
 
-#include <android/security/BnKeystoreService.h>
+#include <android/security/keystore/BnKeystoreService.h>
 
 #include "auth_token_table.h"
 #include "confirmation_manager.h"
@@ -42,7 +42,7 @@ namespace keystore {
 // java/android/security/IKeystoreService.aidl Note that all generated methods return binder::Status
 // and use last arguments to send actual result to the caller. Private methods don't need to handle
 // binder::Status. Input parameters cannot be null unless annotated with @nullable in .aidl file.
-class KeyStoreService : public android::security::BnKeystoreService {
+class KeyStoreService : public android::security::keystore::BnKeystoreService {
   public:
     explicit KeyStoreService(sp<KeyStore> keyStore) : mKeyStore(keyStore) {}
     virtual ~KeyStoreService() = default;
@@ -78,71 +78,76 @@ class KeyStoreService : public android::security::BnKeystoreService {
     ::android::binder::Status is_hardware_backed(const ::android::String16& string,
                                                  int32_t* _aidl_return) override;
     ::android::binder::Status clear_uid(int64_t uid, int32_t* _aidl_return) override;
-    ::android::binder::Status addRngEntropy(const ::std::vector<uint8_t>& data, int32_t flags,
-                                            int32_t* _aidl_return) override;
     ::android::binder::Status
-    generateKey(const ::android::String16& alias,
-                const ::android::security::keymaster::KeymasterArguments& arguments,
-                const ::std::vector<uint8_t>& entropy, int32_t uid, int32_t flags,
-                ::android::security::keymaster::KeyCharacteristics* characteristics,
-                int32_t* _aidl_return) override;
+    addRngEntropy(const ::android::sp<::android::security::keystore::IKeystoreResponseCallback>& cb,
+                  const ::std::vector<uint8_t>& data, int32_t flags,
+                  int32_t* _aidl_return) override;
+    ::android::binder::Status generateKey(
+        const ::android::sp<::android::security::keystore::IKeystoreKeyCharacteristicsCallback>& cb,
+        const ::android::String16& alias,
+        const ::android::security::keymaster::KeymasterArguments& arguments,
+        const ::std::vector<uint8_t>& entropy, int32_t uid, int32_t flags,
+        int32_t* _aidl_return) override;
+    ::android::binder::Status getKeyCharacteristics(
+        const ::android::sp<::android::security::keystore::IKeystoreKeyCharacteristicsCallback>& cb,
+        const ::android::String16& alias,
+        const ::android::security::keymaster::KeymasterBlob& clientId,
+        const ::android::security::keymaster::KeymasterBlob& appId, int32_t uid,
+        int32_t* _aidl_return) override;
+    ::android::binder::Status importKey(
+        const ::android::sp<::android::security::keystore::IKeystoreKeyCharacteristicsCallback>& cb,
+        const ::android::String16& alias,
+        const ::android::security::keymaster::KeymasterArguments& arguments, int32_t format,
+        const ::std::vector<uint8_t>& keyData, int32_t uid, int32_t flags,
+        int32_t* _aidl_return) override;
     ::android::binder::Status
-    getKeyCharacteristics(const ::android::String16& alias,
-                          const ::android::security::keymaster::KeymasterBlob& clientId,
-                          const ::android::security::keymaster::KeymasterBlob& appId, int32_t uid,
-                          ::android::security::keymaster::KeyCharacteristics* characteristics,
-                          int32_t* _aidl_return) override;
-    ::android::binder::Status
-    importKey(const ::android::String16& alias,
-              const ::android::security::keymaster::KeymasterArguments& arguments, int32_t format,
-              const ::std::vector<uint8_t>& keyData, int32_t uid, int32_t flags,
-              ::android::security::keymaster::KeyCharacteristics* characteristics,
-              int32_t* _aidl_return) override;
-    ::android::binder::Status
-    exportKey(const ::android::String16& alias, int32_t format,
+    exportKey(const ::android::sp<::android::security::keystore::IKeystoreExportKeyCallback>& cb,
+              const ::android::String16& alias, int32_t format,
               const ::android::security::keymaster::KeymasterBlob& clientId,
               const ::android::security::keymaster::KeymasterBlob& appId, int32_t uid,
-              ::android::security::keymaster::ExportResult* _aidl_return) override;
+              int32_t* _aidl_return) override;
     ::android::binder::Status
-    begin(const ::android::sp<::android::IBinder>& appToken, const ::android::String16& alias,
+    begin(const ::android::sp<::android::security::keystore::IKeystoreOperationResultCallback>& cb,
+          const ::android::sp<::android::IBinder>& appToken, const ::android::String16& alias,
           int32_t purpose, bool pruneable,
           const ::android::security::keymaster::KeymasterArguments& params,
-          const ::std::vector<uint8_t>& entropy, int32_t uid,
-          ::android::security::keymaster::OperationResult* _aidl_return) override;
+          const ::std::vector<uint8_t>& entropy, int32_t uid, int32_t* _aidl_return) override;
     ::android::binder::Status
-    update(const ::android::sp<::android::IBinder>& token,
+    update(const ::android::sp<::android::security::keystore::IKeystoreOperationResultCallback>& cb,
+           const ::android::sp<::android::IBinder>& token,
            const ::android::security::keymaster::KeymasterArguments& params,
-           const ::std::vector<uint8_t>& input,
-           ::android::security::keymaster::OperationResult* _aidl_return) override;
+           const ::std::vector<uint8_t>& input, int32_t* _aidl_return) override;
     ::android::binder::Status
-    finish(const ::android::sp<::android::IBinder>& token,
+    finish(const ::android::sp<::android::security::keystore::IKeystoreOperationResultCallback>& cb,
+           const ::android::sp<::android::IBinder>& token,
            const ::android::security::keymaster::KeymasterArguments& params,
            const ::std::vector<uint8_t>& signature, const ::std::vector<uint8_t>& entropy,
-           ::android::security::keymaster::OperationResult* _aidl_return) override;
-    ::android::binder::Status abort(const ::android::sp<::android::IBinder>& handle,
-                                    int32_t* _aidl_return) override;
+           int32_t* _aidl_return) override;
+    ::android::binder::Status
+    abort(const ::android::sp<::android::security::keystore::IKeystoreResponseCallback>& cb,
+          const ::android::sp<::android::IBinder>& token, int32_t* _aidl_return) override;
     ::android::binder::Status addAuthToken(const ::std::vector<uint8_t>& authToken,
                                            int32_t* _aidl_return) override;
     ::android::binder::Status onUserAdded(int32_t userId, int32_t parentId,
                                           int32_t* _aidl_return) override;
     ::android::binder::Status onUserRemoved(int32_t userId, int32_t* _aidl_return) override;
-    ::android::binder::Status
-    attestKey(const ::android::String16& alias,
-              const ::android::security::keymaster::KeymasterArguments& params,
-              ::android::security::keymaster::KeymasterCertificateChain* chain,
-              int32_t* _aidl_return) override;
-    ::android::binder::Status
-    attestDeviceIds(const ::android::security::keymaster::KeymasterArguments& params,
-                    ::android::security::keymaster::KeymasterCertificateChain* chain,
-                    int32_t* _aidl_return) override;
+    ::android::binder::Status attestKey(
+        const ::android::sp<::android::security::keystore::IKeystoreCertificateChainCallback>& cb,
+        const ::android::String16& alias,
+        const ::android::security::keymaster::KeymasterArguments& params,
+        int32_t* _aidl_return) override;
+    ::android::binder::Status attestDeviceIds(
+        const ::android::sp<::android::security::keystore::IKeystoreCertificateChainCallback>& cb,
+        const ::android::security::keymaster::KeymasterArguments& params,
+        int32_t* _aidl_return) override;
     ::android::binder::Status onDeviceOffBody(int32_t* _aidl_return) override;
 
     ::android::binder::Status importWrappedKey(
+        const ::android::sp<::android::security::keystore::IKeystoreKeyCharacteristicsCallback>& cb,
         const ::android::String16& wrappedKeyAlias, const ::std::vector<uint8_t>& wrappedKey,
         const ::android::String16& wrappingKeyAlias, const ::std::vector<uint8_t>& maskingKey,
         const ::android::security::keymaster::KeymasterArguments& params, int64_t rootSid,
-        int64_t fingerprintSid, ::android::security::keymaster::KeyCharacteristics* characteristics,
-        int32_t* _aidl_return) override;
+        int64_t fingerprintSid, int32_t* _aidl_return) override;
 
     ::android::binder::Status presentConfirmationPrompt(
         const ::android::sp<::android::IBinder>& listener, const ::android::String16& promptText,

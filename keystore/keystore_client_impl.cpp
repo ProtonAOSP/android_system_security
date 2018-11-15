@@ -16,10 +16,11 @@
 
 #include "keystore/keystore_client_impl.h"
 
+#include <future>
 #include <string>
 #include <vector>
 
-#include <android/security/IKeystoreService.h>
+#include <android/security/keystore/IKeystoreService.h>
 #include <binder/IBinder.h>
 #include <binder/IInterface.h>
 #include <binder/IServiceManager.h>
@@ -30,6 +31,7 @@
 
 #include <keystore/keymaster_types.h>
 #include <keystore/keystore_hidl_support.h>
+#include <keystore/keystore_promises.h>
 
 #include "keystore_client.pb.h"
 
@@ -46,6 +48,7 @@ constexpr uint32_t kHMACOutputSize = 256;  // bits
 using android::String16;
 using android::security::keymaster::ExportResult;
 using android::security::keymaster::OperationResult;
+using android::security::keystore::KeystoreResponse;
 using keystore::AuthorizationSet;
 using keystore::AuthorizationSetBuilder;
 using keystore::KeyCharacteristics;
@@ -57,7 +60,8 @@ namespace keystore {
 KeystoreClientImpl::KeystoreClientImpl() {
     service_manager_ = android::defaultServiceManager();
     keystore_binder_ = service_manager_->getService(String16("android.security.keystore"));
-    keystore_ = android::interface_cast<android::security::IKeystoreService>(keystore_binder_);
+    keystore_ =
+        android::interface_cast<android::security::keystore::IKeystoreService>(keystore_binder_);
 }
 
 bool KeystoreClientImpl::encryptWithAuthentication(const std::string& key_name,
@@ -180,10 +184,21 @@ bool KeystoreClientImpl::oneShotOperation(KeyPurpose purpose, const std::string&
 
 KeyStoreNativeReturnCode
 KeystoreClientImpl::addRandomNumberGeneratorEntropy(const std::string& entropy, int32_t flags) {
-    int32_t result;
-    auto binder_result = keystore_->addRngEntropy(blob2hidlVec(entropy), flags, &result);
+    int32_t error_code;
+
+    android::sp<KeystoreResponsePromise> promise(new KeystoreResponsePromise());
+    auto future = promise->get_future();
+
+    auto binder_result =
+        keystore_->addRngEntropy(promise, blob2hidlVec(entropy), flags, &error_code);
     if (!binder_result.isOk()) return ResponseCode::SYSTEM_ERROR;
-    return KeyStoreNativeReturnCode(result);
+
+    KeyStoreNativeReturnCode rc(error_code);
+    if (!rc.isOk()) return rc;
+
+    auto result = future.get();
+
+    return KeyStoreNativeReturnCode(result.response_code());
 }
 
 KeyStoreNativeReturnCode
@@ -191,19 +206,26 @@ KeystoreClientImpl::generateKey(const std::string& key_name, const Authorization
                                 int32_t flags, AuthorizationSet* hardware_enforced_characteristics,
                                 AuthorizationSet* software_enforced_characteristics) {
     String16 key_name16(key_name.data(), key_name.size());
-    ::android::security::keymaster::KeyCharacteristics characteristics;
-    int32_t result;
+    int32_t error_code;
+    android::sp<KeyCharacteristicsPromise> promise(new KeyCharacteristicsPromise);
+    auto future = promise->get_future();
     auto binder_result = keystore_->generateKey(
-        key_name16, ::android::security::keymaster::KeymasterArguments(key_parameters.hidl_data()),
-        hidl_vec<uint8_t>() /* entropy */, kDefaultUID, flags, &characteristics, &result);
+        promise, key_name16,
+        ::android::security::keymaster::KeymasterArguments(key_parameters.hidl_data()),
+        hidl_vec<uint8_t>() /* entropy */, kDefaultUID, flags, &error_code);
     if (!binder_result.isOk()) return ResponseCode::SYSTEM_ERROR;
+
+    KeyStoreNativeReturnCode rc(error_code);
+    if (!rc.isOk()) return rc;
+
+    auto [km_response, characteristics] = future.get();
 
     /* assignment (hidl_vec<KeyParameter> -> AuthorizationSet) makes a deep copy.
      * There are no references to Parcel memory after that, and ownership of the newly acquired
      * memory is with the AuthorizationSet objects. */
     *hardware_enforced_characteristics = characteristics.hardwareEnforced.getParameters();
     *software_enforced_characteristics = characteristics.softwareEnforced.getParameters();
-    return KeyStoreNativeReturnCode(result);
+    return KeyStoreNativeReturnCode(km_response.response_code());
 }
 
 KeyStoreNativeReturnCode
@@ -211,18 +233,25 @@ KeystoreClientImpl::getKeyCharacteristics(const std::string& key_name,
                                           AuthorizationSet* hardware_enforced_characteristics,
                                           AuthorizationSet* software_enforced_characteristics) {
     String16 key_name16(key_name.data(), key_name.size());
-    ::android::security::keymaster::KeyCharacteristics characteristics;
-    int32_t result;
+    int32_t error_code;
+    android::sp<KeyCharacteristicsPromise> promise(new KeyCharacteristicsPromise);
+    auto future = promise->get_future();
     auto binder_result = keystore_->getKeyCharacteristics(
-        key_name16, android::security::keymaster::KeymasterBlob(),
-        android::security::keymaster::KeymasterBlob(), kDefaultUID, &characteristics, &result);
+        promise, key_name16, android::security::keymaster::KeymasterBlob(),
+        android::security::keymaster::KeymasterBlob(), kDefaultUID, &error_code);
+    if (!binder_result.isOk()) return ResponseCode::SYSTEM_ERROR;
+
+    KeyStoreNativeReturnCode rc(error_code);
+    if (!rc.isOk()) return rc;
+
+    auto [km_response, characteristics] = future.get();
 
     /* assignment (hidl_vec<KeyParameter> -> AuthorizationSet) makes a deep copy.
      * There are no references to Parcel memory after that, and ownership of the newly acquired
      * memory is with the AuthorizationSet objects. */
     *hardware_enforced_characteristics = characteristics.hardwareEnforced.getParameters();
     *software_enforced_characteristics = characteristics.softwareEnforced.getParameters();
-    return KeyStoreNativeReturnCode(result);
+    return KeyStoreNativeReturnCode(km_response.response_code());
 }
 
 KeyStoreNativeReturnCode
@@ -232,29 +261,48 @@ KeystoreClientImpl::importKey(const std::string& key_name, const AuthorizationSe
                               AuthorizationSet* software_enforced_characteristics) {
     String16 key_name16(key_name.data(), key_name.size());
     auto hidlKeyData = blob2hidlVec(key_data);
-    ::android::security::keymaster::KeyCharacteristics characteristics;
-    int32_t result;
+    int32_t error_code;
+    android::sp<KeyCharacteristicsPromise> promise(new KeyCharacteristicsPromise);
+    auto future = promise->get_future();
     auto binder_result = keystore_->importKey(
-        key_name16, ::android::security::keymaster::KeymasterArguments(key_parameters.hidl_data()),
-        (int)key_format, hidlKeyData, kDefaultUID, KEYSTORE_FLAG_NONE, &characteristics, &result);
+        promise, key_name16,
+        ::android::security::keymaster::KeymasterArguments(key_parameters.hidl_data()),
+        (int)key_format, hidlKeyData, kDefaultUID, KEYSTORE_FLAG_NONE, &error_code);
+    if (!binder_result.isOk()) return ResponseCode::SYSTEM_ERROR;
+
+    KeyStoreNativeReturnCode rc(error_code);
+    if (!rc.isOk()) return rc;
+
+    auto [km_response, characteristics] = future.get();
+
     /* assignment (hidl_vec<KeyParameter> -> AuthorizationSet) makes a deep copy.
      * There are no references to Parcel memory after that, and ownership of the newly acquired
      * memory is with the AuthorizationSet objects. */
     *hardware_enforced_characteristics = characteristics.hardwareEnforced.getParameters();
     *software_enforced_characteristics = characteristics.softwareEnforced.getParameters();
-    return KeyStoreNativeReturnCode(result);
+    return KeyStoreNativeReturnCode(km_response.response_code());
 }
 
 KeyStoreNativeReturnCode KeystoreClientImpl::exportKey(KeyFormat export_format,
                                                        const std::string& key_name,
                                                        std::string* export_data) {
     String16 key_name16(key_name.data(), key_name.size());
-    ExportResult export_result;
+    int32_t error_code;
+    android::sp<KeystoreExportPromise> promise(new KeystoreExportPromise);
+    auto future = promise->get_future();
     auto binder_result = keystore_->exportKey(
-        key_name16, (int)export_format, android::security::keymaster::KeymasterBlob(),
-        android::security::keymaster::KeymasterBlob(), kDefaultUID, &export_result);
+        promise, key_name16, (int)export_format, android::security::keymaster::KeymasterBlob(),
+        android::security::keymaster::KeymasterBlob(), kDefaultUID, &error_code);
     if (!binder_result.isOk()) return ResponseCode::SYSTEM_ERROR;
+
+    KeyStoreNativeReturnCode rc(error_code);
+    if (!rc.isOk()) return rc;
+
+    auto export_result = future.get();
+    if (!export_result.resultCode.isOk()) return export_result.resultCode;
+
     *export_data = hidlVec2String(export_result.exportData);
+
     return export_result.resultCode;
 }
 
@@ -279,12 +327,18 @@ KeystoreClientImpl::beginOperation(KeyPurpose purpose, const std::string& key_na
                                    AuthorizationSet* output_parameters, uint64_t* handle) {
     android::sp<android::IBinder> token(new android::BBinder);
     String16 key_name16(key_name.data(), key_name.size());
-    OperationResult result;
+    int32_t error_code;
+    android::sp<OperationResultPromise> promise(new OperationResultPromise{});
+    auto future = promise->get_future();
     auto binder_result = keystore_->begin(
-        token, key_name16, (int)purpose, true /*pruneable*/,
+        promise, token, key_name16, (int)purpose, true /*pruneable*/,
         android::security::keymaster::KeymasterArguments(input_parameters.hidl_data()),
-        hidl_vec<uint8_t>() /* entropy */, kDefaultUID, &result);
+        hidl_vec<uint8_t>() /* entropy */, kDefaultUID, &error_code);
     if (!binder_result.isOk()) return ResponseCode::SYSTEM_ERROR;
+    KeyStoreNativeReturnCode rc(error_code);
+    if (!rc.isOk()) return rc;
+
+    OperationResult result = future.get();
     if (result.resultCode.isOk()) {
         *handle = getNextVirtualHandle();
         active_operations_[*handle] = result.token;
@@ -302,13 +356,19 @@ KeystoreClientImpl::updateOperation(uint64_t handle, const AuthorizationSet& inp
     if (active_operations_.count(handle) == 0) {
         return ErrorCode::INVALID_OPERATION_HANDLE;
     }
-    OperationResult result;
     auto hidlInputData = blob2hidlVec(input_data);
+    int32_t error_code;
+    android::sp<OperationResultPromise> promise(new OperationResultPromise{});
+    auto future = promise->get_future();
     auto binder_result = keystore_->update(
-        active_operations_[handle],
+        promise, active_operations_[handle],
         android::security::keymaster::KeymasterArguments(input_parameters.hidl_data()),
-        hidlInputData, &result);
+        hidlInputData, &error_code);
     if (!binder_result.isOk()) return ResponseCode::SYSTEM_ERROR;
+    KeyStoreNativeReturnCode rc(error_code);
+    if (!rc.isOk()) return rc;
+
+    OperationResult result = future.get();
 
     if (result.resultCode.isOk()) {
         *num_input_bytes_consumed = result.inputConsumed;
@@ -328,14 +388,19 @@ KeystoreClientImpl::finishOperation(uint64_t handle, const AuthorizationSet& inp
     if (active_operations_.count(handle) == 0) {
         return ErrorCode::INVALID_OPERATION_HANDLE;
     }
-    OperationResult result;
+    int32_t error_code;
     auto hidlSignature = blob2hidlVec(signature_to_verify);
+    android::sp<OperationResultPromise> promise(new OperationResultPromise{});
+    auto future = promise->get_future();
     auto binder_result = keystore_->finish(
-        active_operations_[handle],
+        promise, active_operations_[handle],
         android::security::keymaster::KeymasterArguments(input_parameters.hidl_data()),
-        (std::vector<uint8_t>)hidlSignature, hidl_vec<uint8_t>(), &result);
+        (std::vector<uint8_t>)hidlSignature, hidl_vec<uint8_t>(), &error_code);
     if (!binder_result.isOk()) return ResponseCode::SYSTEM_ERROR;
+    KeyStoreNativeReturnCode rc(error_code);
+    if (!rc.isOk()) return rc;
 
+    OperationResult result = future.get();
     if (result.resultCode.isOk()) {
         if (result.outParams.size()) {
             *output_parameters = result.outParams;
@@ -352,13 +417,18 @@ KeyStoreNativeReturnCode KeystoreClientImpl::abortOperation(uint64_t handle) {
         return ErrorCode::INVALID_OPERATION_HANDLE;
     }
     int32_t result;
+    android::sp<KeystoreResponsePromise> promise(new KeystoreResponsePromise{});
+    auto future = promise->get_future();
     // Current implementation does not return exceptions in android::binder::Status
-    auto binder_result = keystore_->abort(active_operations_[handle], &result);
+    auto binder_result = keystore_->abort(promise, active_operations_[handle], &result);
     if (!binder_result.isOk()) return ResponseCode::SYSTEM_ERROR;
-    if (KeyStoreNativeReturnCode(result).isOk()) {
+    KeyStoreNativeReturnCode rc(result);
+    if (!rc.isOk()) return rc;
+    rc = KeyStoreNativeReturnCode(future.get().response_code());
+    if (rc.isOk()) {
         active_operations_.erase(handle);
     }
-    return KeyStoreNativeReturnCode(result);
+    return rc;
 }
 
 bool KeystoreClientImpl::doesKeyExist(const std::string& key_name) {
