@@ -276,6 +276,79 @@ Status KeyStoreService::list(const String16& prefix, int32_t targetUid,
     return Status::ok();
 }
 
+/*
+ * This method will return the uids of all auth bound keys for the calling user.
+ * This is intended to be used for alerting the user about which apps will be affected
+ * if the password/pin is removed. Only allowed to be called by system.
+ * The output is bound by the initial size of uidsOut to be compatible with Java.
+ */
+Status KeyStoreService::listUidsOfAuthBoundKeys(::std::vector<int32_t>* uidsOut,
+                                                int32_t* aidl_return) {
+    const int32_t callingUid = IPCThreadState::self()->getCallingUid();
+    const int32_t userId = get_user_id(callingUid);
+    const int32_t appId = get_app_id(callingUid);
+    if (appId != AID_SYSTEM) {
+        ALOGE("Permission listUidsOfAuthBoundKeys denied for aid %d", appId);
+        *aidl_return = static_cast<int32_t>(ResponseCode::PERMISSION_DENIED);
+        return Status::ok();
+    }
+
+    const String8 prefix8("");
+    auto userState = mKeyStore->getUserStateDB().getUserState(userId);
+    const std::string userDirName = userState->getUserDirName();
+    auto encryptionKey = userState->getEncryptionKey();
+    auto state = userState->getState();
+    // unlock the user state
+    userState = {};
+
+    ResponseCode rc;
+    std::list<LockedKeyBlobEntry> internal_matches;
+    std::tie(rc, internal_matches) =
+        LockedKeyBlobEntry::list(userDirName, [&](uid_t, const std::string&) {
+            // Need to filter on auth bound state, so just return true.
+            return true;
+        });
+    if (rc != ResponseCode::NO_ERROR) {
+        ALOGE("Error listing blob entries for user %d", userId);
+        return Status::fromServiceSpecificError(static_cast<int32_t>(rc));
+    }
+
+    auto it = uidsOut->begin();
+    for (LockedKeyBlobEntry& entry : internal_matches) {
+        if (it == uidsOut->end()) {
+            ALOGW("Maximum number (%d) of auth bound uids found, truncating remainder",
+                  static_cast<int32_t>(uidsOut->capacity()));
+            break;
+        }
+        if (std::find(uidsOut->begin(), it, entry->uid()) != it) {
+            // uid already in list, skip
+            continue;
+        }
+
+        auto [rc, blob, charBlob] = entry.readBlobs(encryptionKey, state);
+        if (rc != ResponseCode::NO_ERROR && rc != ResponseCode::LOCKED) {
+            ALOGE("Error reading blob for key %s", entry->alias().c_str());
+            continue;
+        }
+
+        if (blob && blob.isEncrypted()) {
+            *it++ = entry->uid();
+        } else if (charBlob) {
+            auto [success, hwEnforced, swEnforced] = charBlob.getKeyCharacteristics();
+            if (!success) {
+                ALOGE("Error reading blob characteristics for key %s", entry->alias().c_str());
+                continue;
+            }
+            if (hwEnforced.Contains(TAG_USER_SECURE_ID) ||
+                swEnforced.Contains(TAG_USER_SECURE_ID)) {
+                *it++ = entry->uid();
+            }
+        }
+    }
+    *aidl_return = static_cast<int32_t>(ResponseCode::NO_ERROR);
+    return Status::ok();
+}
+
 Status KeyStoreService::reset(int32_t* aidl_return) {
     if (!checkBinderPermission(P_RESET)) {
         *aidl_return = static_cast<int32_t>(ResponseCode::PERMISSION_DENIED);
