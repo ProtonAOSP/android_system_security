@@ -27,7 +27,7 @@
 
 class KeystoreBackendBinder : public KeystoreBackend {
   public:
-    KeystoreBackendBinder() {}
+    KeystoreBackendBinder();
     virtual ~KeystoreBackendBinder() {}
     int32_t sign(const char *key_id, const uint8_t* in, size_t len,
                  uint8_t** reply, size_t* reply_len) override;
