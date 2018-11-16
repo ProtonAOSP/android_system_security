@@ -630,8 +630,7 @@ int main(int argc, char** argv) {
     CommandLine* command_line = CommandLine::ForCurrentProcess();
     CommandLine::StringVector args = command_line->GetArgs();
 
-    std::thread thread_pool([] { android::IPCThreadState::self()->joinThreadPool(false); });
-    thread_pool.detach();
+    android::ProcessState::self()->startThreadPool();
 
     if (args.empty()) {
         PrintUsageAndExit();
