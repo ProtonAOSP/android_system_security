@@ -196,10 +196,10 @@ class KeyBlobEntry {
     bool hasCharacteristicsBlob() const;
 
     bool operator<(const KeyBlobEntry& rhs) const {
-        return std::tie(alias_, user_dir_, uid_) < std::tie(rhs.alias_, rhs.user_dir_, uid_);
+        return std::tie(uid_, alias_, user_dir_) < std::tie(rhs.uid_, rhs.alias_, rhs.user_dir_);
     }
     bool operator==(const KeyBlobEntry& rhs) const {
-        return std::tie(alias_, user_dir_, uid_) == std::tie(rhs.alias_, rhs.user_dir_, uid_);
+        return std::tie(uid_, alias_, user_dir_) == std::tie(rhs.uid_, rhs.alias_, rhs.user_dir_);
     }
     bool operator!=(const KeyBlobEntry& rhs) const { return !(*this == rhs); }
 
