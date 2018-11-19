@@ -818,7 +818,7 @@ Status KeyStoreService::exportKey(
 
     std::tie(rc, keyBlob, charBlob, lockedEntry) =
         mKeyStore->getKeyForName(name8, targetUid, TYPE_KEYMASTER_10);
-    if (!rc) {
+    if (!rc.isOk()) {
         return AIDL_RETURN(rc);
     }
 
