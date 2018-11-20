@@ -46,7 +46,7 @@ status_t OperationResult::readFromParcel(const Parcel* inn) {
 }
 
 status_t OperationResult::writeToParcel(Parcel* out) const {
-    out->writeInt32(resultCode);
+    out->writeInt32(resultCode.getErrorCode());
     out->writeStrongBinder(token);
     out->writeInt64(handle);
     out->writeInt32(inputConsumed);

@@ -108,7 +108,7 @@ KeymasterWorker::upgradeKeyBlob(const LockedKeyBlobEntry& lockedEntry,
 
         error = keyStore_->del(lockedEntry);
         if (!error.isOk()) {
-            ALOGI("upgradeKeyBlob keystore->del failed %d", (int)error);
+            ALOGI("upgradeKeyBlob keystore->del failed %d", error.getErrorCode());
             return;
         }
 
@@ -121,7 +121,7 @@ KeymasterWorker::upgradeKeyBlob(const LockedKeyBlobEntry& lockedEntry,
 
         error = keyStore_->put(lockedEntry, newBlob, charBlob);
         if (!error.isOk()) {
-            ALOGI("upgradeKeyBlob keystore->put failed %d", (int)error);
+            ALOGI("upgradeKeyBlob keystore->put failed %d", error.getErrorCode());
             return;
         }
         blob = std::move(newBlob);
@@ -316,7 +316,7 @@ bool KeymasterWorker::pruneOperation() {
     // one operation has been removed.
     auto rc = abort(oldest);
     if (operationMap_.getOperationCount() >= op_count_before_abort) {
-        ALOGE("Failed to abort pruneable operation %p, error: %d", oldest.get(), int32_t(rc));
+        ALOGE("Failed to abort pruneable operation %p, error: %d", oldest.get(), rc.getErrorCode());
         return false;
     }
     return true;

@@ -83,8 +83,7 @@ bool containsTag(const hidl_vec<KeyParameter>& params, Tag tag) {
                         [&](const KeyParameter& param) { return param.tag == tag; });
 }
 
-#define AIDL_RETURN(rc)                                                                            \
-    (*_aidl_return = static_cast<int32_t>(KeyStoreServiceReturnCode(rc)), Status::ok())
+#define AIDL_RETURN(rc) (*_aidl_return = KeyStoreServiceReturnCode(rc).getErrorCode(), Status::ok())
 
 std::pair<KeyStoreServiceReturnCode, bool> hadFactoryResetSinceIdRotation() {
     struct stat sbuf;
@@ -190,7 +189,7 @@ Status KeyStoreService::insert(const String16& name, const ::std::vector<uint8_t
     KeyStoreServiceReturnCode result =
         checkBinderPermissionAndKeystoreState(P_INSERT, targetUid, flags & KEYSTORE_FLAG_ENCRYPTED);
     if (!result.isOk()) {
-        *aidl_return = static_cast<int32_t>(result);
+        *aidl_return = result.getErrorCode();
         return Status::ok();
     }
 
@@ -524,7 +523,7 @@ Status KeyStoreService::ungrant(const String16& name, int32_t granteeUid, int32_
     KeyStoreServiceReturnCode result =
         checkBinderPermissionAndKeystoreState(P_GRANT, /*targetUid=*/-1, /*checkUnlocked=*/false);
     if (!result.isOk()) {
-        *aidl_return = static_cast<int32_t>(result);
+        *aidl_return = result.getErrorCode();
         return Status::ok();
     }
 
@@ -953,14 +952,14 @@ Status KeyStoreService::addAuthToken(const ::std::vector<uint8_t>& authTokenAsVe
         return Status::ok();
     }
     if (authTokenAsVector.size() != sizeof(hw_auth_token_t)) {
-        *aidl_return = static_cast<int32_t>(KeyStoreServiceReturnCode(ErrorCode::INVALID_ARGUMENT));
+        *aidl_return = KeyStoreServiceReturnCode(ErrorCode::INVALID_ARGUMENT).getErrorCode();
         return Status::ok();
     }
 
     hw_auth_token_t authToken;
     memcpy(reinterpret_cast<void*>(&authToken), authTokenAsVector.data(), sizeof(hw_auth_token_t));
     if (authToken.version != 0) {
-        *aidl_return = static_cast<int32_t>(KeyStoreServiceReturnCode(ErrorCode::INVALID_ARGUMENT));
+        *aidl_return = KeyStoreServiceReturnCode(ErrorCode::INVALID_ARGUMENT).getErrorCode();
         return Status::ok();
     }
 
