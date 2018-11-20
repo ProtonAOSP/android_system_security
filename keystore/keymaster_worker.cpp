@@ -88,6 +88,8 @@ KeymasterWorker::upgradeKeyBlob(const LockedKeyBlobEntry& lockedEntry,
     std::tie(rc, blob, charBlob) =
         lockedEntry.readBlobs(userState->getEncryptionKey(), userState->getState());
 
+    userState = {};
+
     if (rc != ResponseCode::NO_ERROR) {
         return error = rc, result;
     }
