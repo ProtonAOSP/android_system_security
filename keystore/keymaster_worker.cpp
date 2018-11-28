@@ -339,7 +339,6 @@ void KeymasterWorker::begin(LockedKeyBlobEntry lockedEntry, sp<IBinder> appToken
                         CAPTURE_MOVE(worker_cb)]() mutable {
         // Concurrently executed
 
-        auto key = blob2hidlVec(keyBlob);
         auto& dev = keymasterDevice_;
 
         KeyCharacteristics characteristics;
@@ -384,7 +383,7 @@ void KeymasterWorker::begin(LockedKeyBlobEntry lockedEntry, sp<IBinder> appToken
         }
 
         // Create a keyid for this key.
-        auto keyid = KeymasterEnforcement::CreateKeyId(key);
+        auto keyid = KeymasterEnforcement::CreateKeyId(blob2hidlVec(keyBlob));
         if (!keyid) {
             ALOGE("Failed to create a key ID for authorization checking.");
             return worker_cb(operationFailed(ErrorCode::UNKNOWN_ERROR));
@@ -427,11 +426,25 @@ void KeymasterWorker::begin(LockedKeyBlobEntry lockedEntry, sp<IBinder> appToken
         };
 
         do {
-            rc = KS_HANDLE_HIDL_ERROR(
-                dev->begin(purpose, key, opParams.hidl_data(), authToken, hidlCb));
+            rc = KS_HANDLE_HIDL_ERROR(dev->begin(purpose, blob2hidlVec(keyBlob),
+                                                 opParams.hidl_data(), authToken, hidlCb));
             if (!rc.isOk()) {
                 LOG(ERROR) << "Got error " << rc << " from begin()";
                 return worker_cb(operationFailed(ResponseCode::SYSTEM_ERROR));
+            }
+
+            if (result.resultCode == ErrorCode::KEY_REQUIRES_UPGRADE) {
+                std::tie(rc, keyBlob) = upgradeKeyBlob(lockedEntry, opParams);
+                if (!rc.isOk()) {
+                    return worker_cb(operationFailed(rc));
+                }
+
+                rc = KS_HANDLE_HIDL_ERROR(dev->begin(purpose, blob2hidlVec(keyBlob),
+                                                     opParams.hidl_data(), authToken, hidlCb));
+                if (!rc.isOk()) {
+                    LOG(ERROR) << "Got error " << rc << " from begin()";
+                    return worker_cb(operationFailed(ResponseCode::SYSTEM_ERROR));
+                }
             }
             // If there are too many operations abort the oldest operation that was
             // started as pruneable and try again.
