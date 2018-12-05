@@ -272,4 +272,8 @@ class LockedKeyBlobEntry {
     inline const KeyBlobEntry* operator->() const { return entry_; }
 };
 
+// Visible for testing
+std::string encodeKeyName(const std::string& keyName);
+std::string decodeKeyName(const std::string& encodedName);
+
 #endif  // KEYSTORE_BLOB_H_
