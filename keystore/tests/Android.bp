@@ -11,6 +11,7 @@ cc_test {
         "aaid_truncation_test.cpp",
         "auth_token_table_test.cpp",
         "auth_token_formatting_test.cpp",
+        "blob_test.cpp",
         "confirmationui_rate_limiting_test.cpp",
         "gtest_main.cpp",
     ],
