@@ -219,7 +219,7 @@ status_t ExportResult::readFromParcel(const Parcel* inn) {
 }
 
 status_t ExportResult::writeToParcel(Parcel* out) const {
-    out->writeInt32(resultCode);
+    out->writeInt32(resultCode.getErrorCode());
     return keystore::writeKeymasterBlob(exportData, out);
 }
 
