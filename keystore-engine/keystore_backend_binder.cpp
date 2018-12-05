@@ -156,7 +156,7 @@ int32_t KeystoreBackendBinder::sign(const char* key_id, const uint8_t* in, size_
     OperationResult result = future.get();
 
     if (!result.resultCode.isOk()) {
-        LOG(ERROR) << AT << "begin failed: " << int32_t(result.resultCode);
+        LOG(ERROR) << AT << "begin failed: " << result.resultCode;
         return -1;
     }
     auto handle = std::move(result.token);
@@ -180,7 +180,7 @@ int32_t KeystoreBackendBinder::sign(const char* key_id, const uint8_t* in, size_
         result = future.get();
 
         if (!result.resultCode.isOk()) {
-            LOG(ERROR) << AT << "update failed: " << int32_t(result.resultCode);
+            LOG(ERROR) << AT << "update failed: " << result.resultCode;
             return -1;
         }
 
@@ -199,7 +199,7 @@ int32_t KeystoreBackendBinder::sign(const char* key_id, const uint8_t* in, size_
             if (!KSReturn(error_code).isOk()) {
                 LOG(ERROR) << AT << "abort failed: " << error_code;
             } else if (!(rc = KSReturn(abortFuture.get().response_code())).isOk()) {
-                LOG(ERROR) << AT << "abort failed: " << int32_t(rc);
+                LOG(ERROR) << AT << "abort failed: " << rc;
             }
             return -1;
         }
@@ -228,7 +228,7 @@ int32_t KeystoreBackendBinder::sign(const char* key_id, const uint8_t* in, size_
     result = future.get();
 
     if (!result.resultCode.isOk()) {
-        LOG(ERROR) << AT << "finish failed: " << int32_t(result.resultCode);
+        LOG(ERROR) << AT << "finish failed: " << result.resultCode;
         return -1;
     }
 
@@ -272,7 +272,7 @@ int32_t KeystoreBackendBinder::get_pubkey(const char* key_id, uint8_t** pubkey,
 
     auto export_result = future.get();
     if (!export_result.resultCode.isOk()) {
-        LOG(ERROR) << AT << "exportKey failed: " << int32_t(export_result.resultCode);
+        LOG(ERROR) << AT << "exportKey failed: " << export_result.resultCode;
         return -1;
     }
 
