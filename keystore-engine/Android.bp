@@ -25,7 +25,6 @@ cc_library_shared {
         "-Wall",
         "-Werror",
     ],
-    cpp_std: "c++17",
 
     shared_libs: [
         "libbinder",
@@ -58,7 +57,6 @@ cc_library_shared {
         "-Werror",
         "-DBACKEND_WIFI_HIDL",
     ],
-    cpp_std: "c++17",
 
     shared_libs: [
         "android.system.wifi.keystore@1.0",
