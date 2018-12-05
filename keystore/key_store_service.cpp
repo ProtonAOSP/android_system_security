@@ -1162,7 +1162,7 @@ Status KeyStoreService::importWrappedKey(
 
     std::tie(rc, wrappingKeyBlob, wrappingCharBlob, wrappingLockedEntry) =
         mKeyStore->getKeyForName(wrappingKeyName8, callingUid, TYPE_KEYMASTER_10);
-    if (!rc) {
+    if (!rc.isOk()) {
         return AIDL_RETURN(rc);
     }
 
