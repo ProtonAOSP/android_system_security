@@ -20,6 +20,7 @@ package keystore;
 
 option optimize_for = LITE_RUNTIME;
 
+// A single operation config
 message OperationConfig {
   // What type of encryption algorithm is the key being used in the op for.
   optional string algorithm = 1;
@@ -61,3 +62,16 @@ message OperationConfig {
   // Standalone or is a file system required
   optional string key_blob_usage_reqs = 12;
 }
+
+message OperationConfigEvent {
+  optional OperationConfig op_config = 1;
+
+  // counts corresponds to the number of times each op_config in the above array
+  // was recorded during the collection period.
+  optional uint32 count = 2;
+}
+
+message OperationConfigEvents {
+    repeated OperationConfigEvent op_config_events = 1;
+}
+
