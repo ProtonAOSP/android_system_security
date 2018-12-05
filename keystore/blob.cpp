@@ -559,15 +559,23 @@ std::condition_variable LockedKeyBlobEntry::locked_blobs_mutex_cond_var_;
  * [0-o]. Therefore in the worst case the length of a key gets doubled. Note
  * that Base64 cannot be used here due to the need of prefix match on keys. */
 
-static std::string encodeKeyName(const std::string& keyName) {
+std::string encodeKeyName(const std::string& keyName) {
     std::string encodedName;
     encodedName.reserve(keyName.size() * 2);
     auto in = keyName.begin();
     while (in != keyName.end()) {
+        // Input character needs to be encoded.
         if (*in < '0' || *in > '~') {
+            // Encode the two most-significant bits of the input char in the first
+            // output character, by counting up from 43 ('+').
             encodedName.append(1, '+' + (uint8_t(*in) >> 6));
+            // Encode the six least-significant bits of the input char in the second
+            // output character, by counting up from 48 ('0').
+            // This is safe because the maximum value is 112, which is the
+            // character 'p'.
             encodedName.append(1, '0' + (*in & 0x3F));
         } else {
+            // No need to encode input char - append as-is.
             encodedName.append(1, *in);
         }
         ++in;
@@ -575,7 +583,7 @@ static std::string encodeKeyName(const std::string& keyName) {
     return encodedName;
 }
 
-static std::string decodeKeyName(const std::string& encodedName) {
+std::string decodeKeyName(const std::string& encodedName) {
     std::string decodedName;
     decodedName.reserve(encodedName.size());
     auto in = encodedName.begin();
@@ -583,12 +591,19 @@ static std::string decodeKeyName(const std::string& encodedName) {
     char c;
     while (in != encodedName.end()) {
         if (multichar) {
+            // Second part of a multi-character encoding. Turn off the multichar
+            // flag and set the six least-significant bits of c to the value originally
+            // encoded by counting up from '0'.
             multichar = false;
-            decodedName.append(1, c | *in);
+            decodedName.append(1, c | (uint8_t(*in) - '0'));
         } else if (*in >= '+' && *in <= '.') {
+            // First part of a multi-character encoding. Set the multichar flag
+            // and set the two most-significant bits of c to be the two bits originally
+            // encoded by counting up from '+'.
             multichar = true;
             c = (*in - '+') << 6;
         } else {
+            // Regular character, append as-is.
             decodedName.append(1, *in);
         }
         ++in;
