@@ -346,7 +346,7 @@ void KeymasterWorker::begin(LockedKeyBlobEntry lockedEntry, sp<IBinder> appToken
         {
             hidl_vec<uint8_t> clientId;
             hidl_vec<uint8_t> appData;
-            for (auto param : opParams) {
+            for (const auto& param : opParams) {
                 if (param.tag == Tag::APPLICATION_ID) {
                     clientId = authorizationValue(TAG_APPLICATION_ID, param).value();
                 } else if (param.tag == Tag::APPLICATION_DATA) {
