@@ -75,5 +75,5 @@ interface IKeystoreService {
     int cancelConfirmationPrompt(IBinder listener);
     boolean isConfirmationPromptSupported();
     int onKeyguardVisibilityChanged(in boolean isShowing, in int userId);
-    int listUidsOfAuthBoundKeys(out int[] uids);
+    int listUidsOfAuthBoundKeys(out @utf8InCpp List<String> uids);
 }
