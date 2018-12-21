@@ -279,7 +279,7 @@ Status KeyStoreService::list(const String16& prefix, int32_t targetUid,
  * if the password/pin is removed. Only allowed to be called by system.
  * The output is bound by the initial size of uidsOut to be compatible with Java.
  */
-Status KeyStoreService::listUidsOfAuthBoundKeys(::std::vector<int32_t>* uidsOut,
+Status KeyStoreService::listUidsOfAuthBoundKeys(std::vector<std::string>* uidsOut,
                                                 int32_t* aidl_return) {
     const int32_t callingUid = IPCThreadState::self()->getCallingUid();
     const int32_t userId = get_user_id(callingUid);
@@ -310,14 +310,11 @@ Status KeyStoreService::listUidsOfAuthBoundKeys(::std::vector<int32_t>* uidsOut,
         return Status::fromServiceSpecificError(static_cast<int32_t>(rc));
     }
 
-    auto it = uidsOut->begin();
     for (LockedKeyBlobEntry& entry : internal_matches) {
-        if (it == uidsOut->end()) {
-            ALOGW("Maximum number (%d) of auth bound uids found, truncating remainder",
-                  static_cast<int32_t>(uidsOut->capacity()));
-            break;
-        }
-        if (std::find(uidsOut->begin(), it, entry->uid()) != it) {
+        // Need to store uids as a list of strings because integer list output
+        // parameters is not supported in aidl-cpp.
+        std::string entryUid = std::to_string(entry->uid());
+        if (std::find(uidsOut->begin(), uidsOut->end(), entryUid) != uidsOut->end()) {
             // uid already in list, skip
             continue;
         }
@@ -329,7 +326,7 @@ Status KeyStoreService::listUidsOfAuthBoundKeys(::std::vector<int32_t>* uidsOut,
         }
 
         if (blob && blob.isEncrypted()) {
-            *it++ = entry->uid();
+            uidsOut->push_back(entryUid);
         } else if (charBlob) {
             auto [success, hwEnforced, swEnforced] = charBlob.getKeyCharacteristics();
             if (!success) {
@@ -338,7 +335,7 @@ Status KeyStoreService::listUidsOfAuthBoundKeys(::std::vector<int32_t>* uidsOut,
             }
             if (hwEnforced.Contains(TAG_USER_SECURE_ID) ||
                 swEnforced.Contains(TAG_USER_SECURE_ID)) {
-                *it++ = entry->uid();
+                uidsOut->push_back(entryUid);
             }
         }
     }
