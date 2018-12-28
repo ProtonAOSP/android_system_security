@@ -82,7 +82,6 @@ typedef enum {
     TYPE_KEY_CHARACTERISTICS = 5,
 } BlobType;
 
-class Entropy;
 
 class Blob {
   public:
@@ -121,8 +120,7 @@ class Blob {
     keystore::SecurityLevel getSecurityLevel() const;
     void setSecurityLevel(keystore::SecurityLevel);
 
-    ResponseCode writeBlob(const std::string& filename, const uint8_t* aes_key, State state,
-                           Entropy* entropy);
+    ResponseCode writeBlob(const std::string& filename, const uint8_t* aes_key, State state);
     ResponseCode readBlob(const std::string& filename, const uint8_t* aes_key, State state);
 
   private:

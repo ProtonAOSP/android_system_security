@@ -25,7 +25,6 @@
 
 #include <keystore/keystore.h>
 
-#include "entropy.h"
 
 class UserState {
   public:
@@ -47,12 +46,12 @@ class UserState {
     void zeroizeMasterKeysInMemory();
     bool deleteMasterKey();
 
-    ResponseCode initialize(const android::String8& pw, Entropy* entropy);
+    ResponseCode initialize(const android::String8& pw);
 
     ResponseCode copyMasterKey(UserState* src);
     ResponseCode copyMasterKeyFile(UserState* src);
-    ResponseCode writeMasterKey(const android::String8& pw, Entropy* entropy);
-    ResponseCode readMasterKey(const android::String8& pw, Entropy* entropy);
+    ResponseCode writeMasterKey(const android::String8& pw);
+    ResponseCode readMasterKey(const android::String8& pw);
 
     auto& getEncryptionKey() const { return mMasterKey; }
 
@@ -67,8 +66,8 @@ class UserState {
 
     void generateKeyFromPassword(uint8_t* key, ssize_t keySize, const android::String8& pw,
                                  uint8_t* salt);
-    bool generateSalt(Entropy* entropy);
-    bool generateMasterKey(Entropy* entropy);
+    bool generateSalt();
+    bool generateMasterKey();
     void setupMasterKeys();
 
     uid_t mUserId;

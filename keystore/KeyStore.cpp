@@ -63,9 +63,9 @@ sp<Keymaster> KeymasterDevices::operator[](SecurityLevel secLevel) const {
     return (*const_cast<KeymasterDevices*>(this))[secLevel];
 }
 
-KeyStore::KeyStore(Entropy* entropy, const KeymasterDevices& kmDevices,
+KeyStore::KeyStore(const KeymasterDevices& kmDevices,
                    SecurityLevel minimalAllowedSecurityLevelForNewKeys)
-    : mEntropy(entropy), mKmDevices(kmDevices),
+    : mKmDevices(kmDevices),
       mAllowNewFallback(minimalAllowedSecurityLevelForNewKeys == SecurityLevel::SOFTWARE) {
     memset(&mMetaData, '\0', sizeof(mMetaData));
 }
@@ -89,7 +89,7 @@ ResponseCode KeyStore::initialize() {
 
 ResponseCode KeyStore::initializeUser(const android::String8& pw, uid_t userId) {
     UserState* userState = getUserState(userId);
-    return userState->initialize(pw, mEntropy);
+    return userState->initialize(pw);
 }
 
 ResponseCode KeyStore::copyMasterKey(uid_t srcUser, uid_t dstUser) {
@@ -100,12 +100,12 @@ ResponseCode KeyStore::copyMasterKey(uid_t srcUser, uid_t dstUser) {
 
 ResponseCode KeyStore::writeMasterKey(const android::String8& pw, uid_t userId) {
     UserState* userState = getUserState(userId);
-    return userState->writeMasterKey(pw, mEntropy);
+    return userState->writeMasterKey(pw);
 }
 
 ResponseCode KeyStore::readMasterKey(const android::String8& pw, uid_t userId) {
     UserState* userState = getUserState(userId);
-    return userState->readMasterKey(pw, mEntropy);
+    return userState->readMasterKey(pw);
 }
 
 /* Here is the encoding of keys. This is necessary in order to allow arbitrary
@@ -360,8 +360,7 @@ ResponseCode KeyStore::get(const char* filename, Blob* keyBlob, const BlobType t
 
 ResponseCode KeyStore::put(const char* filename, Blob* keyBlob, uid_t userId) {
     UserState* userState = getUserState(userId);
-    return keyBlob->writeBlob(filename, userState->getEncryptionKey(), userState->getState(),
-                              mEntropy);
+    return keyBlob->writeBlob(filename, userState->getEncryptionKey(), userState->getState());
 }
 
 static NullOr<std::tuple<uid_t, std::string>> filename2UidAlias(const std::string& filename);

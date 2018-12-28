@@ -19,12 +19,12 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <openssl/rand.h>
 #include <string.h>
 
 #include <cutils/log.h>
 
 #include "blob.h"
-#include "entropy.h"
 
 #include "keystore_utils.h"
 
@@ -205,8 +205,7 @@ void Blob::setFallback(bool fallback) {
     }
 }
 
-ResponseCode Blob::writeBlob(const std::string& filename, const uint8_t* aes_key, State state,
-                             Entropy* entropy) {
+ResponseCode Blob::writeBlob(const std::string& filename, const uint8_t* aes_key, State state) {
     ALOGV("writing blob %s", filename.c_str());
 
     const size_t dataLength = mBlob.length;
@@ -219,7 +218,7 @@ ResponseCode Blob::writeBlob(const std::string& filename, const uint8_t* aes_key
         }
 
         memset(mBlob.initialization_vector, 0, AES_BLOCK_SIZE);
-        if (!entropy->generate_random_data(mBlob.initialization_vector, kGcmIvSizeBytes)) {
+        if (!RAND_bytes(mBlob.initialization_vector, kGcmIvSizeBytes)) {
             ALOGW("Could not read random data for: %s", filename.c_str());
             return ResponseCode::SYSTEM_ERROR;
         }
