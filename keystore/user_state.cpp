@@ -24,6 +24,7 @@
 #include <stdlib.h>
 #include <sys/stat.h>
 
+#include <openssl/digest.h>
 #include <openssl/evp.h>
 #include <openssl/rand.h>
 
@@ -247,8 +248,15 @@ void UserState::generateKeyFromPassword(uint8_t* key, ssize_t keySize, const and
         saltSize = sizeof("keystore");
     }
 
-    PKCS5_PBKDF2_HMAC_SHA1(reinterpret_cast<const char*>(pw.string()), pw.length(), salt, saltSize,
-                           8192, keySize, key);
+    const EVP_MD* digest = EVP_sha256();
+
+    // SHA1 was used prior to increasing the key size
+    if (keySize == SHA1_DIGEST_SIZE_BYTES) {
+        digest = EVP_sha1();
+    }
+
+    PKCS5_PBKDF2_HMAC(reinterpret_cast<const char*>(pw.string()), pw.length(), salt, saltSize, 8192,
+                      digest, keySize, key);
 }
 
 bool UserState::generateSalt() {
