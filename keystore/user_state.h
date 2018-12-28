@@ -58,7 +58,10 @@ class UserState {
     bool reset();
 
   private:
-    static const int MASTER_KEY_SIZE_BYTES = 16;
+    static const int SHA1_DIGEST_SIZE_BYTES = 16;
+    static const int SHA256_DIGEST_SIZE_BYTES = 32;
+
+    static const int MASTER_KEY_SIZE_BYTES = SHA1_DIGEST_SIZE_BYTES;
     static const int MASTER_KEY_SIZE_BITS = MASTER_KEY_SIZE_BYTES * 8;
 
     static const int MAX_RETRY = 4;
