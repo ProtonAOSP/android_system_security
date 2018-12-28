@@ -25,6 +25,7 @@
 #include <sys/stat.h>
 
 #include <openssl/evp.h>
+#include <openssl/rand.h>
 
 #include <log/log.h>
 
@@ -83,11 +84,11 @@ bool UserState::deleteMasterKey() {
     return unlink(mMasterKeyEntry.getKeyBlobPath().c_str()) == 0 || errno == ENOENT;
 }
 
-ResponseCode UserState::initialize(const android::String8& pw, Entropy* entropy) {
-    if (!generateMasterKey(entropy)) {
+ResponseCode UserState::initialize(const android::String8& pw) {
+    if (!generateMasterKey()) {
         return ResponseCode::SYSTEM_ERROR;
     }
-    ResponseCode response = writeMasterKey(pw, entropy);
+    ResponseCode response = writeMasterKey(pw);
     if (response != ResponseCode::NO_ERROR) {
         return response;
     }
@@ -137,15 +138,15 @@ ResponseCode UserState::copyMasterKeyFile(LockedUserState<UserState>* src) {
     return ResponseCode::NO_ERROR;
 }
 
-ResponseCode UserState::writeMasterKey(const android::String8& pw, Entropy* entropy) {
+ResponseCode UserState::writeMasterKey(const android::String8& pw) {
     uint8_t passwordKey[MASTER_KEY_SIZE_BYTES];
     generateKeyFromPassword(passwordKey, MASTER_KEY_SIZE_BYTES, pw, mSalt);
     Blob masterKeyBlob(mMasterKey, sizeof(mMasterKey), mSalt, sizeof(mSalt), TYPE_MASTER_KEY);
     auto lockedEntry = LockedKeyBlobEntry::get(mMasterKeyEntry);
-    return lockedEntry.writeBlobs(masterKeyBlob, {}, passwordKey, STATE_NO_ERROR, entropy);
+    return lockedEntry.writeBlobs(masterKeyBlob, {}, passwordKey, STATE_NO_ERROR);
 }
 
-ResponseCode UserState::readMasterKey(const android::String8& pw, Entropy* entropy) {
+ResponseCode UserState::readMasterKey(const android::String8& pw) {
 
     auto lockedEntry = LockedKeyBlobEntry::get(mMasterKeyEntry);
 
@@ -180,10 +181,10 @@ ResponseCode UserState::readMasterKey(const android::String8& pw, Entropy* entro
     if (response == ResponseCode::NO_ERROR && masterKeyBlob.getLength() == MASTER_KEY_SIZE_BYTES) {
         // If salt was missing, generate one and write a new master key file with the salt.
         if (salt == nullptr) {
-            if (!generateSalt(entropy)) {
+            if (!generateSalt()) {
                 return ResponseCode::SYSTEM_ERROR;
             }
-            response = writeMasterKey(pw, entropy);
+            response = writeMasterKey(pw);
         }
         if (response == ResponseCode::NO_ERROR) {
             memcpy(mMasterKey, masterKeyBlob.getValue(), MASTER_KEY_SIZE_BYTES);
@@ -250,15 +251,15 @@ void UserState::generateKeyFromPassword(uint8_t* key, ssize_t keySize, const and
                            8192, keySize, key);
 }
 
-bool UserState::generateSalt(Entropy* entropy) {
-    return entropy->generate_random_data(mSalt, sizeof(mSalt));
+bool UserState::generateSalt() {
+    return RAND_bytes(mSalt, sizeof(mSalt));
 }
 
-bool UserState::generateMasterKey(Entropy* entropy) {
-    if (!entropy->generate_random_data(mMasterKey, sizeof(mMasterKey))) {
+bool UserState::generateMasterKey() {
+    if (!RAND_bytes(mMasterKey, sizeof(mMasterKey))) {
         return false;
     }
-    if (!generateSalt(entropy)) {
+    if (!generateSalt()) {
         return false;
     }
     return true;

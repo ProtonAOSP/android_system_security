@@ -26,7 +26,6 @@
 #include <keystore/keystore.h>
 
 #include "blob.h"
-#include "entropy.h"
 #include "keystore_utils.h"
 
 #include <android-base/logging.h>
@@ -60,12 +59,12 @@ class UserState {
     void zeroizeMasterKeysInMemory();
     bool deleteMasterKey();
 
-    ResponseCode initialize(const android::String8& pw, Entropy* entropy);
+    ResponseCode initialize(const android::String8& pw);
 
     ResponseCode copyMasterKey(LockedUserState<UserState>* src);
     ResponseCode copyMasterKeyFile(LockedUserState<UserState>* src);
-    ResponseCode writeMasterKey(const android::String8& pw, Entropy* entropy);
-    ResponseCode readMasterKey(const android::String8& pw, Entropy* entropy);
+    ResponseCode writeMasterKey(const android::String8& pw);
+    ResponseCode readMasterKey(const android::String8& pw);
 
     const uint8_t* getEncryptionKey() const { return &mMasterKey[0]; }
 
@@ -83,8 +82,8 @@ class UserState {
 
     void generateKeyFromPassword(uint8_t* key, ssize_t keySize, const android::String8& pw,
                                  uint8_t* salt);
-    bool generateSalt(Entropy* entropy);
-    bool generateMasterKey(Entropy* entropy);
+    bool generateSalt();
+    bool generateMasterKey();
     void setupMasterKeys();
 
     KeyBlobEntry mMasterKeyEntry;

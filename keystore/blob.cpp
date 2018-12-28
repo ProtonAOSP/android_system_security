@@ -24,11 +24,11 @@
 #include <log/log.h>
 
 #include "blob.h"
-#include "entropy.h"
 
 #include "keystore_utils.h"
 
 #include <openssl/evp.h>
+#include <openssl/rand.h>
 
 #include <istream>
 #include <ostream>
@@ -296,7 +296,7 @@ void Blob::setFallback(bool fallback) {
 }
 
 static ResponseCode writeBlob(const std::string& filename, Blob blob, blobv3* rawBlob,
-                              const uint8_t* aes_key, State state, Entropy* entropy) {
+                              const uint8_t* aes_key, State state) {
     ALOGV("writing blob %s", filename.c_str());
 
     const size_t dataLength = rawBlob->length;
@@ -309,7 +309,7 @@ static ResponseCode writeBlob(const std::string& filename, Blob blob, blobv3* ra
         }
 
         memset(rawBlob->initialization_vector, 0, AES_BLOCK_SIZE);
-        if (!entropy->generate_random_data(rawBlob->initialization_vector, kGcmIvSizeBytes)) {
+        if (!RAND_bytes(rawBlob->initialization_vector, kGcmIvSizeBytes)) {
             ALOGW("Could not read random data for: %s", filename.c_str());
             return ResponseCode::SYSTEM_ERROR;
         }
@@ -341,16 +341,14 @@ static ResponseCode writeBlob(const std::string& filename, Blob blob, blobv3* ra
 }
 
 ResponseCode LockedKeyBlobEntry::writeBlobs(Blob keyBlob, Blob characteristicsBlob,
-                                            const uint8_t* aes_key, State state,
-                                            Entropy* entropy) const {
+                                            const uint8_t* aes_key, State state) const {
     if (entry_ == nullptr) {
         return ResponseCode::SYSTEM_ERROR;
     }
     ResponseCode rc;
     if (keyBlob) {
         blobv3* rawBlob = keyBlob.mBlob.get();
-        rc = writeBlob(entry_->getKeyBlobPath(), std::move(keyBlob), rawBlob, aes_key, state,
-                       entropy);
+        rc = writeBlob(entry_->getKeyBlobPath(), std::move(keyBlob), rawBlob, aes_key, state);
         if (rc != ResponseCode::NO_ERROR) {
             return rc;
         }
@@ -359,7 +357,7 @@ ResponseCode LockedKeyBlobEntry::writeBlobs(Blob keyBlob, Blob characteristicsBl
     if (characteristicsBlob) {
         blobv3* rawBlob = characteristicsBlob.mBlob.get();
         rc = writeBlob(entry_->getCharacteristicsBlobPath(), std::move(characteristicsBlob),
-                       rawBlob, aes_key, state, entropy);
+                       rawBlob, aes_key, state);
     }
     return rc;
 }

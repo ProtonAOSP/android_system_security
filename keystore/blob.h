@@ -89,7 +89,6 @@ typedef enum {
     TYPE_KEY_CHARACTERISTICS_CACHE = 6,
 } BlobType;
 
-class Entropy;
 class LockedKeyBlobEntry;
 
 /**
@@ -263,7 +262,7 @@ class LockedKeyBlobEntry {
              [](uid_t, const std::string&) -> bool { return true; });
 
     ResponseCode writeBlobs(Blob keyBlob, Blob characteristicsBlob, const uint8_t* aes_key,
-                            State state, Entropy* entorpy) const;
+                            State state) const;
     std::tuple<ResponseCode, Blob, Blob> readBlobs(const uint8_t* aes_key, State state) const;
     ResponseCode deleteBlobs() const;
 
