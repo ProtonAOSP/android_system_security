@@ -33,12 +33,18 @@ class KeyAttestationApplicationId;
 
 template <typename T> class StatusOr {
   public:
+    // NOLINTNEXTLINE(google-explicit-constructor)
     StatusOr(const status_t error) : _status(error), _value() {}
+    // NOLINTNEXTLINE(google-explicit-constructor)
     StatusOr(const T& value) : _status(NO_ERROR), _value(value) {}
+    // NOLINTNEXTLINE(google-explicit-constructor)
     StatusOr(T&& value) : _status(NO_ERROR), _value(value) {}
 
+    // NOLINTNEXTLINE(google-explicit-constructor)
     operator const T&() const { return _value; }
+    // NOLINTNEXTLINE(google-explicit-constructor)
     operator T&() { return _value; }
+    // NOLINTNEXTLINE(google-explicit-constructor)
     operator T &&() && { return std::move(_value); }
 
     bool isOk() const { return NO_ERROR == _status; }
