@@ -75,7 +75,7 @@ void UserState::setState(State state) {
 }
 
 void UserState::zeroizeMasterKeysInMemory() {
-    memset(mMasterKey, 0, sizeof(mMasterKey));
+    memset(mMasterKey.data(), 0, mMasterKey.size());
     memset(mSalt, 0, sizeof(mSalt));
 }
 
@@ -104,7 +104,7 @@ ResponseCode UserState::copyMasterKey(LockedUserState<UserState>* src) {
     if ((*src)->getState() != STATE_NO_ERROR) {
         return ResponseCode::SYSTEM_ERROR;
     }
-    memcpy(mMasterKey, (*src)->mMasterKey, MASTER_KEY_SIZE_BYTES);
+    mMasterKey = (*src)->mMasterKey;
     setupMasterKeys();
     return copyMasterKeyFile(src);
 }
@@ -140,9 +140,9 @@ ResponseCode UserState::copyMasterKeyFile(LockedUserState<UserState>* src) {
 }
 
 ResponseCode UserState::writeMasterKey(const android::String8& pw) {
-    uint8_t passwordKey[MASTER_KEY_SIZE_BYTES];
-    generateKeyFromPassword(passwordKey, MASTER_KEY_SIZE_BYTES, pw, mSalt);
-    Blob masterKeyBlob(mMasterKey, sizeof(mMasterKey), mSalt, sizeof(mSalt), TYPE_MASTER_KEY);
+    std::vector<uint8_t> passwordKey(MASTER_KEY_SIZE_BYTES);
+    generateKeyFromPassword(passwordKey, pw, mSalt);
+    Blob masterKeyBlob(mMasterKey.data(), mMasterKey.size(), mSalt, sizeof(mSalt), TYPE_MASTER_KEY);
     auto lockedEntry = LockedKeyBlobEntry::get(mMasterKeyEntry);
     return lockedEntry.writeBlobs(masterKeyBlob, {}, passwordKey, STATE_NO_ERROR);
 }
@@ -170,8 +170,9 @@ ResponseCode UserState::readMasterKey(const android::String8& pw) {
     } else {
         salt = nullptr;
     }
-    uint8_t passwordKey[MASTER_KEY_SIZE_BYTES];
-    generateKeyFromPassword(passwordKey, MASTER_KEY_SIZE_BYTES, pw, salt);
+
+    std::vector<uint8_t> passwordKey(MASTER_KEY_SIZE_BYTES);
+    generateKeyFromPassword(passwordKey, pw, salt);
     Blob masterKeyBlob, dummyBlob;
     ResponseCode response;
     std::tie(response, masterKeyBlob, dummyBlob) =
@@ -188,7 +189,9 @@ ResponseCode UserState::readMasterKey(const android::String8& pw) {
             response = writeMasterKey(pw);
         }
         if (response == ResponseCode::NO_ERROR) {
-            memcpy(mMasterKey, masterKeyBlob.getValue(), MASTER_KEY_SIZE_BYTES);
+            mMasterKey = std::vector<uint8_t>(masterKeyBlob.getValue(),
+                                              masterKeyBlob.getValue() + masterKeyBlob.getLength());
+
             setupMasterKeys();
         }
         return response;
@@ -236,7 +239,7 @@ bool UserState::reset() {
     return true;
 }
 
-void UserState::generateKeyFromPassword(uint8_t* key, ssize_t keySize, const android::String8& pw,
+void UserState::generateKeyFromPassword(std::vector<uint8_t>& key, const android::String8& pw,
                                         uint8_t* salt) {
     size_t saltSize;
     if (salt != nullptr) {
@@ -251,12 +254,12 @@ void UserState::generateKeyFromPassword(uint8_t* key, ssize_t keySize, const and
     const EVP_MD* digest = EVP_sha256();
 
     // SHA1 was used prior to increasing the key size
-    if (keySize == SHA1_DIGEST_SIZE_BYTES) {
+    if (key.size() == SHA1_DIGEST_SIZE_BYTES) {
         digest = EVP_sha1();
     }
 
     PKCS5_PBKDF2_HMAC(reinterpret_cast<const char*>(pw.string()), pw.length(), salt, saltSize, 8192,
-                      digest, keySize, key);
+                      digest, key.size(), key.data());
 }
 
 bool UserState::generateSalt() {
@@ -264,7 +267,8 @@ bool UserState::generateSalt() {
 }
 
 bool UserState::generateMasterKey() {
-    if (!RAND_bytes(mMasterKey, sizeof(mMasterKey))) {
+    mMasterKey.resize(MASTER_KEY_SIZE_BYTES);
+    if (!RAND_bytes(mMasterKey.data(), mMasterKey.size())) {
         return false;
     }
     if (!generateSalt()) {

@@ -30,6 +30,7 @@
 #include <mutex>
 #include <set>
 #include <sstream>
+#include <vector>
 
 constexpr size_t kValueSize = 32768;
 constexpr size_t kAesKeySize = 128 / 8;
@@ -153,7 +154,8 @@ class Blob {
   private:
     std::unique_ptr<blobv3> mBlob;
 
-    ResponseCode readBlob(const std::string& filename, const uint8_t* aes_key, State state);
+    ResponseCode readBlob(const std::string& filename, const std::vector<uint8_t>& aes_key,
+                          State state);
 };
 
 /**
@@ -261,9 +263,10 @@ class LockedKeyBlobEntry {
          std::function<bool(uid_t, const std::string&)> filter =
              [](uid_t, const std::string&) -> bool { return true; });
 
-    ResponseCode writeBlobs(Blob keyBlob, Blob characteristicsBlob, const uint8_t* aes_key,
-                            State state) const;
-    std::tuple<ResponseCode, Blob, Blob> readBlobs(const uint8_t* aes_key, State state) const;
+    ResponseCode writeBlobs(Blob keyBlob, Blob characteristicsBlob,
+                            const std::vector<uint8_t>& aes_key, State state) const;
+    std::tuple<ResponseCode, Blob, Blob> readBlobs(const std::vector<uint8_t>& aes_key,
+                                                   State state) const;
     ResponseCode deleteBlobs() const;
 
     inline operator bool() const { return entry_ != nullptr; }

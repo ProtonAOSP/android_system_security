@@ -33,6 +33,7 @@
 #include <keystore/keystore_concurrency.h>
 #include <mutex>
 #include <set>
+#include <vector>
 
 namespace keystore {
 
@@ -66,7 +67,7 @@ class UserState {
     ResponseCode writeMasterKey(const android::String8& pw);
     ResponseCode readMasterKey(const android::String8& pw);
 
-    const uint8_t* getEncryptionKey() const { return &mMasterKey[0]; }
+    const std::vector<uint8_t>& getEncryptionKey() const { return mMasterKey; }
 
     bool reset();
 
@@ -83,7 +84,7 @@ class UserState {
     static const int MAX_RETRY = 4;
     static const size_t SALT_SIZE = 16;
 
-    void generateKeyFromPassword(uint8_t* key, ssize_t keySize, const android::String8& pw,
+    void generateKeyFromPassword(std::vector<uint8_t>& key, const android::String8& pw,
                                  uint8_t* salt);
     bool generateSalt();
     bool generateMasterKey();
@@ -95,7 +96,7 @@ class UserState {
     State mState;
     int8_t mRetry;
 
-    uint8_t mMasterKey[MASTER_KEY_SIZE_BYTES];
+    std::vector<uint8_t> mMasterKey;
     uint8_t mSalt[SALT_SIZE];
 };
 
