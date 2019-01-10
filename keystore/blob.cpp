@@ -69,13 +69,28 @@ class ArrayEraser {
     size_t mSize;
 };
 
+/**
+ * Returns a EVP_CIPHER appropriate for the given key, based on the key's size.
+ */
+const EVP_CIPHER* getAesCipherForKey(const std::vector<uint8_t>& key) {
+    const EVP_CIPHER* cipher = EVP_aes_256_gcm();
+    if (key.size() == kAes128KeySizeBytes) {
+        cipher = EVP_aes_128_gcm();
+    }
+    return cipher;
+}
+
 /*
- * Encrypt 'len' data at 'in' with AES-GCM, using 128-bit key at 'key', 96-bit IV at 'iv' and write
- * output to 'out' (which may be the same location as 'in') and 128-bit tag to 'tag'.
+ * Encrypt 'len' data at 'in' with AES-GCM, using 128-bit or 256-bit key at 'key', 96-bit IV at
+ * 'iv' and write output to 'out' (which may be the same location as 'in') and 128-bit tag to
+ * 'tag'.
  */
 ResponseCode AES_gcm_encrypt(const uint8_t* in, uint8_t* out, size_t len,
                              const std::vector<uint8_t>& key, const uint8_t* iv, uint8_t* tag) {
-    const EVP_CIPHER* cipher = EVP_aes_128_gcm();
+
+    // There can be 128-bit and 256-bit keys
+    const EVP_CIPHER* cipher = getAesCipherForKey(key);
+
     EVP_CIPHER_CTX_Ptr ctx(EVP_CIPHER_CTX_new());
 
     EVP_EncryptInit_ex(ctx.get(), cipher, nullptr /* engine */, key.data(), iv);
@@ -102,13 +117,17 @@ ResponseCode AES_gcm_encrypt(const uint8_t* in, uint8_t* out, size_t len,
 }
 
 /*
- * Decrypt 'len' data at 'in' with AES-GCM, using 128-bit key at 'key', 96-bit IV at 'iv', checking
- * 128-bit tag at 'tag' and writing plaintext to 'out' (which may be the same location as 'in').
+ * Decrypt 'len' data at 'in' with AES-GCM, using 128-bit or 256-bit key at 'key', 96-bit IV at
+ * 'iv', checking 128-bit tag at 'tag' and writing plaintext to 'out'(which may be the same
+ * location as 'in').
  */
 ResponseCode AES_gcm_decrypt(const uint8_t* in, uint8_t* out, size_t len,
                              const std::vector<uint8_t> key, const uint8_t* iv,
                              const uint8_t* tag) {
-    const EVP_CIPHER* cipher = EVP_aes_128_gcm();
+
+    // There can be 128-bit and 256-bit keys
+    const EVP_CIPHER* cipher = getAesCipherForKey(key);
+
     EVP_CIPHER_CTX_Ptr ctx(EVP_CIPHER_CTX_new());
 
     EVP_DecryptInit_ex(ctx.get(), cipher, nullptr /* engine */, key.data(), iv);

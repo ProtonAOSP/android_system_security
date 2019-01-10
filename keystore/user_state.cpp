@@ -142,7 +142,8 @@ ResponseCode UserState::copyMasterKeyFile(LockedUserState<UserState>* src) {
 ResponseCode UserState::writeMasterKey(const android::String8& pw) {
     std::vector<uint8_t> passwordKey(MASTER_KEY_SIZE_BYTES);
     generateKeyFromPassword(passwordKey, pw, mSalt);
-    Blob masterKeyBlob(mMasterKey.data(), mMasterKey.size(), mSalt, sizeof(mSalt), TYPE_MASTER_KEY);
+    Blob masterKeyBlob(mMasterKey.data(), mMasterKey.size(), mSalt, sizeof(mSalt),
+                       TYPE_MASTER_KEY_AES256);
     auto lockedEntry = LockedKeyBlobEntry::get(mMasterKeyEntry);
     return lockedEntry.writeBlobs(masterKeyBlob, {}, passwordKey, STATE_NO_ERROR);
 }
@@ -171,7 +172,12 @@ ResponseCode UserState::readMasterKey(const android::String8& pw) {
         salt = nullptr;
     }
 
-    std::vector<uint8_t> passwordKey(MASTER_KEY_SIZE_BYTES);
+    size_t masterKeySize = MASTER_KEY_SIZE_BYTES;
+    if (rawBlob.type == TYPE_MASTER_KEY) {
+        masterKeySize = SHA1_DIGEST_SIZE_BYTES;
+    }
+
+    std::vector<uint8_t> passwordKey(masterKeySize);
     generateKeyFromPassword(passwordKey, pw, salt);
     Blob masterKeyBlob, dummyBlob;
     ResponseCode response;
@@ -180,7 +186,10 @@ ResponseCode UserState::readMasterKey(const android::String8& pw) {
     if (response == ResponseCode::SYSTEM_ERROR) {
         return response;
     }
-    if (response == ResponseCode::NO_ERROR && masterKeyBlob.getLength() == MASTER_KEY_SIZE_BYTES) {
+
+    size_t masterKeyBlobLength = static_cast<size_t>(masterKeyBlob.getLength());
+
+    if (response == ResponseCode::NO_ERROR && masterKeyBlobLength == masterKeySize) {
         // If salt was missing, generate one and write a new master key file with the salt.
         if (salt == nullptr) {
             if (!generateSalt()) {
