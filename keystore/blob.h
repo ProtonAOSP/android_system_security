@@ -30,6 +30,7 @@ constexpr size_t kValueSize = 32768;
 constexpr size_t kAesKeySize = 128 / 8;
 constexpr size_t kGcmTagLength = 128 / 8;
 constexpr size_t kGcmIvLength = 96 / 8;
+constexpr size_t kAes128KeySizeBytes = 128 / 8;
 
 /* Here is the file format. There are two parts in blob.value, the secret and
  * the description. The secret is stored in ciphertext, and its original size
@@ -81,8 +82,8 @@ typedef enum {
     TYPE_KEY_PAIR = 3,
     TYPE_KEYMASTER_10 = 4,
     TYPE_KEY_CHARACTERISTICS = 5,
+    TYPE_MASTER_KEY_AES256 = 7,
 } BlobType;
-
 
 class Blob {
   public:
