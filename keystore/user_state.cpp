@@ -24,7 +24,9 @@
 #include <stdlib.h>
 #include <sys/stat.h>
 
+#include <openssl/digest.h>
 #include <openssl/evp.h>
+#include <openssl/rand.h>
 
 #include <log/log.h>
 
@@ -73,7 +75,7 @@ void UserState::setState(State state) {
 }
 
 void UserState::zeroizeMasterKeysInMemory() {
-    memset(mMasterKey, 0, sizeof(mMasterKey));
+    memset(mMasterKey.data(), 0, mMasterKey.size());
     memset(mSalt, 0, sizeof(mSalt));
 }
 
@@ -83,11 +85,11 @@ bool UserState::deleteMasterKey() {
     return unlink(mMasterKeyEntry.getKeyBlobPath().c_str()) == 0 || errno == ENOENT;
 }
 
-ResponseCode UserState::initialize(const android::String8& pw, Entropy* entropy) {
-    if (!generateMasterKey(entropy)) {
+ResponseCode UserState::initialize(const android::String8& pw) {
+    if (!generateMasterKey()) {
         return ResponseCode::SYSTEM_ERROR;
     }
-    ResponseCode response = writeMasterKey(pw, entropy);
+    ResponseCode response = writeMasterKey(pw);
     if (response != ResponseCode::NO_ERROR) {
         return response;
     }
@@ -102,7 +104,7 @@ ResponseCode UserState::copyMasterKey(LockedUserState<UserState>* src) {
     if ((*src)->getState() != STATE_NO_ERROR) {
         return ResponseCode::SYSTEM_ERROR;
     }
-    memcpy(mMasterKey, (*src)->mMasterKey, MASTER_KEY_SIZE_BYTES);
+    mMasterKey = (*src)->mMasterKey;
     setupMasterKeys();
     return copyMasterKeyFile(src);
 }
@@ -137,15 +139,16 @@ ResponseCode UserState::copyMasterKeyFile(LockedUserState<UserState>* src) {
     return ResponseCode::NO_ERROR;
 }
 
-ResponseCode UserState::writeMasterKey(const android::String8& pw, Entropy* entropy) {
-    uint8_t passwordKey[MASTER_KEY_SIZE_BYTES];
-    generateKeyFromPassword(passwordKey, MASTER_KEY_SIZE_BYTES, pw, mSalt);
-    Blob masterKeyBlob(mMasterKey, sizeof(mMasterKey), mSalt, sizeof(mSalt), TYPE_MASTER_KEY);
+ResponseCode UserState::writeMasterKey(const android::String8& pw) {
+    std::vector<uint8_t> passwordKey(MASTER_KEY_SIZE_BYTES);
+    generateKeyFromPassword(passwordKey, pw, mSalt);
+    Blob masterKeyBlob(mMasterKey.data(), mMasterKey.size(), mSalt, sizeof(mSalt),
+                       TYPE_MASTER_KEY_AES256);
     auto lockedEntry = LockedKeyBlobEntry::get(mMasterKeyEntry);
-    return lockedEntry.writeBlobs(masterKeyBlob, {}, passwordKey, STATE_NO_ERROR, entropy);
+    return lockedEntry.writeBlobs(masterKeyBlob, {}, passwordKey, STATE_NO_ERROR);
 }
 
-ResponseCode UserState::readMasterKey(const android::String8& pw, Entropy* entropy) {
+ResponseCode UserState::readMasterKey(const android::String8& pw) {
 
     auto lockedEntry = LockedKeyBlobEntry::get(mMasterKeyEntry);
 
@@ -168,8 +171,14 @@ ResponseCode UserState::readMasterKey(const android::String8& pw, Entropy* entro
     } else {
         salt = nullptr;
     }
-    uint8_t passwordKey[MASTER_KEY_SIZE_BYTES];
-    generateKeyFromPassword(passwordKey, MASTER_KEY_SIZE_BYTES, pw, salt);
+
+    size_t masterKeySize = MASTER_KEY_SIZE_BYTES;
+    if (rawBlob.type == TYPE_MASTER_KEY) {
+        masterKeySize = SHA1_DIGEST_SIZE_BYTES;
+    }
+
+    std::vector<uint8_t> passwordKey(masterKeySize);
+    generateKeyFromPassword(passwordKey, pw, salt);
     Blob masterKeyBlob, dummyBlob;
     ResponseCode response;
     std::tie(response, masterKeyBlob, dummyBlob) =
@@ -177,16 +186,21 @@ ResponseCode UserState::readMasterKey(const android::String8& pw, Entropy* entro
     if (response == ResponseCode::SYSTEM_ERROR) {
         return response;
     }
-    if (response == ResponseCode::NO_ERROR && masterKeyBlob.getLength() == MASTER_KEY_SIZE_BYTES) {
+
+    size_t masterKeyBlobLength = static_cast<size_t>(masterKeyBlob.getLength());
+
+    if (response == ResponseCode::NO_ERROR && masterKeyBlobLength == masterKeySize) {
         // If salt was missing, generate one and write a new master key file with the salt.
         if (salt == nullptr) {
-            if (!generateSalt(entropy)) {
+            if (!generateSalt()) {
                 return ResponseCode::SYSTEM_ERROR;
             }
-            response = writeMasterKey(pw, entropy);
+            response = writeMasterKey(pw);
         }
         if (response == ResponseCode::NO_ERROR) {
-            memcpy(mMasterKey, masterKeyBlob.getValue(), MASTER_KEY_SIZE_BYTES);
+            mMasterKey = std::vector<uint8_t>(masterKeyBlob.getValue(),
+                                              masterKeyBlob.getValue() + masterKeyBlob.getLength());
+
             setupMasterKeys();
         }
         return response;
@@ -234,7 +248,7 @@ bool UserState::reset() {
     return true;
 }
 
-void UserState::generateKeyFromPassword(uint8_t* key, ssize_t keySize, const android::String8& pw,
+void UserState::generateKeyFromPassword(std::vector<uint8_t>& key, const android::String8& pw,
                                         uint8_t* salt) {
     size_t saltSize;
     if (salt != nullptr) {
@@ -246,19 +260,27 @@ void UserState::generateKeyFromPassword(uint8_t* key, ssize_t keySize, const and
         saltSize = sizeof("keystore");
     }
 
-    PKCS5_PBKDF2_HMAC_SHA1(reinterpret_cast<const char*>(pw.string()), pw.length(), salt, saltSize,
-                           8192, keySize, key);
+    const EVP_MD* digest = EVP_sha256();
+
+    // SHA1 was used prior to increasing the key size
+    if (key.size() == SHA1_DIGEST_SIZE_BYTES) {
+        digest = EVP_sha1();
+    }
+
+    PKCS5_PBKDF2_HMAC(reinterpret_cast<const char*>(pw.string()), pw.length(), salt, saltSize, 8192,
+                      digest, key.size(), key.data());
 }
 
-bool UserState::generateSalt(Entropy* entropy) {
-    return entropy->generate_random_data(mSalt, sizeof(mSalt));
+bool UserState::generateSalt() {
+    return RAND_bytes(mSalt, sizeof(mSalt));
 }
 
-bool UserState::generateMasterKey(Entropy* entropy) {
-    if (!entropy->generate_random_data(mMasterKey, sizeof(mMasterKey))) {
+bool UserState::generateMasterKey() {
+    mMasterKey.resize(MASTER_KEY_SIZE_BYTES);
+    if (!RAND_bytes(mMasterKey.data(), mMasterKey.size())) {
         return false;
     }
-    if (!generateSalt(entropy)) {
+    if (!generateSalt()) {
         return false;
     }
     return true;
