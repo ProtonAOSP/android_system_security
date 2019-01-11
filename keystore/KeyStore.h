@@ -75,7 +75,7 @@ using KeymasterDevices = Devices<sp<Keymaster>, 3>;
 
 class KeyStore : public ::android::IBinder::DeathRecipient {
   public:
-    KeyStore(Entropy* entropy, const KeymasterDevices& kmDevices,
+    KeyStore(const KeymasterDevices& kmDevices,
              SecurityLevel minimalAllowedSecurityLevelForNewKeys);
     ~KeyStore();
 
@@ -148,7 +148,6 @@ class KeyStore : public ::android::IBinder::DeathRecipient {
     static const char* kMetaDataFile;
     static const android::String16 kRsaKeyType;
     static const android::String16 kEcKeyType;
-    Entropy* mEntropy;
 
     KeymasterWorkers mKmDevices;
 
