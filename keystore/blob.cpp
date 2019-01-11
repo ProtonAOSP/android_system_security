@@ -159,7 +159,7 @@ ResponseCode AES_gcm_decrypt(const uint8_t* in, uint8_t* out, size_t len,
 
 class ArrayStreamBuffer : public std::streambuf {
   public:
-    template <typename T, size_t size> ArrayStreamBuffer(const T (&data)[size]) {
+    template <typename T, size_t size> explicit ArrayStreamBuffer(const T (&data)[size]) {
         static_assert(sizeof(T) == 1, "Array element size too large");
         std::streambuf::char_type* d = const_cast<std::streambuf::char_type*>(
             reinterpret_cast<const std::streambuf::char_type*>(&data[0]));
