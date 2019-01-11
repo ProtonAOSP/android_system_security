@@ -1222,7 +1222,8 @@ uid_t KeyStoreService::getEffectiveUid(int32_t targetUid) {
 bool KeyStoreService::checkBinderPermission(perm_t permission, int32_t targetUid) {
     uid_t callingUid = IPCThreadState::self()->getCallingUid();
     pid_t spid = IPCThreadState::self()->getCallingPid();
-    if (!has_permission(callingUid, permission, spid)) {
+    const char* ssid = IPCThreadState::self()->getCallingSid();
+    if (!has_permission(callingUid, permission, spid, ssid)) {
         ALOGW("permission %s denied for %d", get_perm_label(permission), callingUid);
         return false;
     }
@@ -1240,7 +1241,8 @@ bool KeyStoreService::checkBinderPermission(perm_t permission, int32_t targetUid
 bool KeyStoreService::checkBinderPermissionSelfOrSystem(perm_t permission, int32_t targetUid) {
     uid_t callingUid = IPCThreadState::self()->getCallingUid();
     pid_t spid = IPCThreadState::self()->getCallingPid();
-    if (!has_permission(callingUid, permission, spid)) {
+    const char* ssid = IPCThreadState::self()->getCallingSid();
+    if (!has_permission(callingUid, permission, spid, ssid)) {
         ALOGW("permission %s denied for %d", get_perm_label(permission), callingUid);
         return false;
     }
