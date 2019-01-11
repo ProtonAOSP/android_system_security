@@ -49,10 +49,9 @@ const android::String16 KeyStore::kEcKeyType("EC");
 
 using android::String8;
 
-KeyStore::KeyStore(Entropy* entropy, const KeymasterDevices& kmDevices,
+KeyStore::KeyStore(const KeymasterDevices& kmDevices,
                    SecurityLevel minimalAllowedSecurityLevelForNewKeys)
-    : mEntropy(entropy),
-      mAllowNewFallback(minimalAllowedSecurityLevelForNewKeys == SecurityLevel::SOFTWARE),
+    : mAllowNewFallback(minimalAllowedSecurityLevelForNewKeys == SecurityLevel::SOFTWARE),
       mConfirmationManager(new ConfirmationManager(this)) {
     memset(&mMetaData, '\0', sizeof(mMetaData));
 
@@ -81,7 +80,7 @@ ResponseCode KeyStore::initialize() {
 
 ResponseCode KeyStore::initializeUser(const android::String8& pw, uid_t userId) {
     auto userState = mUserStateDB.getUserState(userId);
-    return userState->initialize(pw, mEntropy);
+    return userState->initialize(pw);
 }
 
 ResponseCode KeyStore::copyMasterKey(uid_t srcUser, uid_t dstUser) {
@@ -92,12 +91,12 @@ ResponseCode KeyStore::copyMasterKey(uid_t srcUser, uid_t dstUser) {
 
 ResponseCode KeyStore::writeMasterKey(const android::String8& pw, uid_t userId) {
     auto userState = mUserStateDB.getUserState(userId);
-    return userState->writeMasterKey(pw, mEntropy);
+    return userState->writeMasterKey(pw);
 }
 
 ResponseCode KeyStore::readMasterKey(const android::String8& pw, uid_t userId) {
     auto userState = mUserStateDB.getUserState(userId);
-    return userState->readMasterKey(pw, mEntropy);
+    return userState->readMasterKey(pw);
 }
 
 LockedKeyBlobEntry KeyStore::getLockedBlobEntryIfNotExists(const std::string& alias, uid_t uid) {
@@ -285,7 +284,7 @@ ResponseCode KeyStore::put(const LockedKeyBlobEntry& blobfile, Blob keyBlob,
                            Blob characteristicsBlob) {
     auto userState = mUserStateDB.getUserStateByUid(blobfile->uid());
     return blobfile.writeBlobs(std::move(keyBlob), std::move(characteristicsBlob),
-                               userState->getEncryptionKey(), userState->getState(), mEntropy);
+                               userState->getEncryptionKey(), userState->getState());
 }
 
 ResponseCode KeyStore::del(const LockedKeyBlobEntry& blobfile) {

@@ -25,7 +25,6 @@ cc_binary {
         "auth_token_table.cpp",
         "blob.cpp",
         "confirmation_manager.cpp",
-        "entropy.cpp",
         "grant_store.cpp",
         "key_config.proto",
         "key_proto_handler.cpp",
