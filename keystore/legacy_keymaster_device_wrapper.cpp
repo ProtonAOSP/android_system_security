@@ -66,7 +66,7 @@ inline static ErrorCode legacy_enum_conversion(const keymaster_error_t value) {
 
 class KmParamSet : public keymaster_key_param_set_t {
   public:
-    KmParamSet(const hidl_vec<KeyParameter>& keyParams) {
+    explicit KmParamSet(const hidl_vec<KeyParameter>& keyParams) {
         params = new keymaster_key_param_t[keyParams.size()];
         length = keyParams.size();
         for (size_t i = 0; i < keyParams.size(); ++i) {

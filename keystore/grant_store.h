@@ -48,6 +48,7 @@ public:
 
   uint64_t grant_no_;  ///< numeric grant identifier - randomly assigned
 
+  // NOLINTNEXTLINE(google-explicit-constructor)
   operator const uint64_t&() const { return grant_no_; }
 };
 

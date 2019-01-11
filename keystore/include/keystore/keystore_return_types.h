@@ -41,10 +41,13 @@ class KeyStoreNativeReturnCode;
 class KeyStoreServiceReturnCode {
   public:
     KeyStoreServiceReturnCode() : errorCode_(0) {}
+    // NOLINTNEXTLINE(google-explicit-constructor)
     KeyStoreServiceReturnCode(const ErrorCode& errorCode) : errorCode_(int32_t(errorCode)) {}
+    // NOLINTNEXTLINE(google-explicit-constructor)
     KeyStoreServiceReturnCode(const ResponseCode& errorCode) : errorCode_(int32_t(errorCode)) {}
     KeyStoreServiceReturnCode(const KeyStoreServiceReturnCode& errorCode)
         : errorCode_(errorCode.errorCode_) {}
+    // NOLINTNEXTLINE(google-explicit-constructor)
     KeyStoreServiceReturnCode(const KeyStoreNativeReturnCode& errorCode);
     explicit inline KeyStoreServiceReturnCode(const int32_t& errorCode) : errorCode_(errorCode) {}
     inline KeyStoreServiceReturnCode& operator=(const ErrorCode& errorCode) {
@@ -115,11 +118,14 @@ inline std::ostream& operator<<(std::ostream& out, const KeyStoreServiceReturnCo
 class KeyStoreNativeReturnCode {
   public:
     KeyStoreNativeReturnCode() : errorCode_(0) {}
+    // NOLINTNEXTLINE(google-explicit-constructor)
     KeyStoreNativeReturnCode(const ErrorCode& errorCode) : errorCode_(int32_t(errorCode)) {}
+    // NOLINTNEXTLINE(google-explicit-constructor)
     KeyStoreNativeReturnCode(const ResponseCode& errorCode) : errorCode_(int32_t(errorCode)) {}
     KeyStoreNativeReturnCode(const KeyStoreNativeReturnCode& errorCode)
         : errorCode_(errorCode.errorCode_) {}
     explicit inline KeyStoreNativeReturnCode(const int32_t& errorCode) : errorCode_(errorCode) {}
+    // NOLINTNEXTLINE(google-explicit-constructor)
     KeyStoreNativeReturnCode(const KeyStoreServiceReturnCode& errorcode);
     inline KeyStoreNativeReturnCode& operator=(const ErrorCode& errorCode) {
         errorCode_ = int32_t(errorCode);
