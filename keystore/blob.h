@@ -117,7 +117,7 @@ class Blob {
 
     Blob& operator=(const Blob& rhs);
     Blob& operator=(Blob&& rhs);
-    operator bool() const { return bool(mBlob); }
+    explicit operator bool() const { return bool(mBlob); }
 
     const uint8_t* getValue() const { return mBlob->value; }
 
@@ -242,6 +242,7 @@ class LockedKeyBlobEntry {
     static std::condition_variable locked_blobs_mutex_cond_var_;
 
     const KeyBlobEntry* entry_;
+    // NOLINTNEXTLINE(google-explicit-constructor)
     LockedKeyBlobEntry(const KeyBlobEntry& entry) : entry_(&entry) {}
 
     static void put(const KeyBlobEntry& entry);
@@ -271,7 +272,7 @@ class LockedKeyBlobEntry {
                                                    State state) const;
     ResponseCode deleteBlobs() const;
 
-    inline operator bool() const { return entry_ != nullptr; }
+    inline explicit operator bool() const { return entry_ != nullptr; }
     inline const KeyBlobEntry& operator*() const { return *entry_; }
     inline const KeyBlobEntry* operator->() const { return entry_; }
 };
