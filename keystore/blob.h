@@ -30,11 +30,13 @@
 #include <mutex>
 #include <set>
 #include <sstream>
+#include <vector>
 
 constexpr size_t kValueSize = 32768;
 constexpr size_t kAesKeySize = 128 / 8;
 constexpr size_t kGcmTagLength = 128 / 8;
 constexpr size_t kGcmIvLength = 96 / 8;
+constexpr size_t kAes128KeySizeBytes = 128 / 8;
 
 /* Here is the file format. There are two parts in blob.value, the secret and
  * the description. The secret is stored in ciphertext, and its original size
@@ -87,9 +89,9 @@ typedef enum {
     TYPE_KEYMASTER_10 = 4,
     TYPE_KEY_CHARACTERISTICS = 5,
     TYPE_KEY_CHARACTERISTICS_CACHE = 6,
+    TYPE_MASTER_KEY_AES256 = 7,
 } BlobType;
 
-class Entropy;
 class LockedKeyBlobEntry;
 
 /**
@@ -154,7 +156,8 @@ class Blob {
   private:
     std::unique_ptr<blobv3> mBlob;
 
-    ResponseCode readBlob(const std::string& filename, const uint8_t* aes_key, State state);
+    ResponseCode readBlob(const std::string& filename, const std::vector<uint8_t>& aes_key,
+                          State state);
 };
 
 /**
@@ -262,9 +265,10 @@ class LockedKeyBlobEntry {
          std::function<bool(uid_t, const std::string&)> filter =
              [](uid_t, const std::string&) -> bool { return true; });
 
-    ResponseCode writeBlobs(Blob keyBlob, Blob characteristicsBlob, const uint8_t* aes_key,
-                            State state, Entropy* entorpy) const;
-    std::tuple<ResponseCode, Blob, Blob> readBlobs(const uint8_t* aes_key, State state) const;
+    ResponseCode writeBlobs(Blob keyBlob, Blob characteristicsBlob,
+                            const std::vector<uint8_t>& aes_key, State state) const;
+    std::tuple<ResponseCode, Blob, Blob> readBlobs(const std::vector<uint8_t>& aes_key,
+                                                   State state) const;
     ResponseCode deleteBlobs() const;
 
     inline operator bool() const { return entry_ != nullptr; }

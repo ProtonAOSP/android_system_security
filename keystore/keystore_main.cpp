@@ -32,7 +32,6 @@
 #include <keystore/keystore_return_types.h>
 
 #include "KeyStore.h"
-#include "entropy.h"
 #include "key_store_service.h"
 #include "legacy_keymaster_device_wrapper.h"
 #include "permissions.h"
@@ -136,9 +135,6 @@ int main(int argc, char* argv[]) {
     CHECK(argc >= 2) << "A directory must be specified!";
     CHECK(chdir(argv[1]) != -1) << "chdir: " << argv[1] << ": " << strerror(errno);
 
-    Entropy entropy;
-    CHECK(entropy.open()) << "Failed to open entropy source.";
-
     auto kmDevices = initializeKeymasters();
 
     CHECK(kmDevices[SecurityLevel::SOFTWARE]) << "Missing software Keymaster device";
@@ -156,7 +152,7 @@ int main(int argc, char* argv[]) {
         halVersion.majorVersion >= 2 ? SecurityLevel::TRUSTED_ENVIRONMENT : SecurityLevel::SOFTWARE;
 
     android::sp<keystore::KeyStore> keyStore(
-        new keystore::KeyStore(&entropy, kmDevices, minimalAllowedSecurityLevelForNewKeys));
+        new keystore::KeyStore(kmDevices, minimalAllowedSecurityLevelForNewKeys));
     keyStore->initialize();
     android::sp<android::IServiceManager> sm = android::defaultServiceManager();
     android::sp<keystore::KeyStoreService> service = new keystore::KeyStoreService(keyStore);
