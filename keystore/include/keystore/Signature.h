@@ -27,7 +27,7 @@ class Signature : public Parcelable {
   public:
     Signature() = default;
     // Intended for initializing instances containing test data.
-    Signature(std::vector<uint8_t> signature_data);
+    explicit Signature(std::vector<uint8_t> signature_data);
 
     status_t writeToParcel(Parcel*) const override;
     status_t readFromParcel(const Parcel* parcel) override;

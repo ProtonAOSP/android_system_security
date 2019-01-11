@@ -29,8 +29,12 @@ class SharedNullableIterator {
     typedef std::shared_ptr<CollectionType> CollectionPtr;
 
     SharedNullableIterator() {}
-    SharedNullableIterator(const std::shared_ptr<CollectionType>& coll) : coll_(coll) { init(); }
-    SharedNullableIterator(std::shared_ptr<CollectionType>&& coll) : coll_(coll) { init(); }
+    explicit SharedNullableIterator(const std::shared_ptr<CollectionType>& coll) : coll_(coll) {
+        init();
+    }
+    explicit SharedNullableIterator(std::shared_ptr<CollectionType>&& coll) : coll_(coll) {
+        init();
+    }
 
     SharedNullableIterator(const SharedNullableIterator& other)
         : coll_(other.coll_), cur_(other.cur_) {}
