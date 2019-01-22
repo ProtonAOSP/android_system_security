@@ -70,6 +70,7 @@ class OperationMap {
     std::list<sp<IBinder>> mLru;
     std::map<sp<IBinder>, std::vector<sp<IBinder>>> mAppTokenMap;
     IBinder::DeathRecipient* mDeathRecipient;
+    OperationProtoHandler operationUploader;
 };
 
 }  // namespace keystore
