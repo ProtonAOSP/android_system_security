@@ -63,7 +63,7 @@ std::shared_ptr<Operation> OperationMap::removeOperation(const sp<IBinder>& toke
     if (entry == mMap.end()) return {};
 
     auto op = entry->second;
-    uploadOpAsProto(*op, wasSuccessful);
+    operationUploader.uploadOpAsProto(*op, wasSuccessful);
     mMap.erase(entry);
 
     auto lruEntry = std::find(mLru.begin(), mLru.end(), token);
