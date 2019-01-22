@@ -25,9 +25,11 @@
 #include <utils/String16.h>
 #include <utils/StrongPointer.h>
 
-#include "operation_config.pb.h"
+using namespace std::chrono;
 
 namespace keystore {
+
+constexpr auto kCollectionTime = 1h;
 
 void determinePurpose(KeyPurpose purpose, OperationConfig* operationConfig) {
     switch (purpose) {
@@ -103,19 +105,42 @@ void checkOpCharacteristics(const hidl_vec<KeyParameter>& characteristics,
     }
 }
 
-void uploadOpAsProto(Operation& op, bool wasOpSuccessful) {
+void OperationProtoHandler::uploadOpAsProto(Operation& op, bool wasOpSuccessful) {
     OperationConfig operationConfig;
     determinePurpose(op.purpose, &operationConfig);
     checkKeyCharacteristics(op.characteristics.softwareEnforced, &operationConfig);
     checkKeyCharacteristics(op.characteristics.hardwareEnforced, &operationConfig);
     checkOpCharacteristics(op.params, &operationConfig);
-    android::sp<android::os::DropBoxManager> dropbox(new android::os::DropBoxManager);
     operationConfig.set_was_op_successful(wasOpSuccessful);
+    // Only bother with counting an hour out when an operation entry is actually
+    // added
+    if (protoMap.empty()) {
+        start_time = std::chrono::steady_clock::now();
+    }
+    auto cur_time = std::chrono::steady_clock::now();
 
-    size_t size = operationConfig.ByteSize();
-    auto data = std::make_unique<uint8_t[]>(size);
-    operationConfig.SerializeWithCachedSizesToArray(data.get());
-    dropbox->addData(android::String16("keymaster"), data.get(), size, 0);
+    // Add operations to a map within the time duration of an hour. Deduplicate
+    // repeated ops by incrementing the counter of the original one stored and
+    // discarding the new one.
+    protoMap[operationConfig.SerializeAsString()]++;
+
+    if (cur_time - start_time >= kCollectionTime) {
+        // Iterate through the unordered map and dump all the operation protos
+        // accumulated over the hour into the holding list proto after setting
+        // their counts.
+        OperationConfigEvents opConfigEvents;
+        for (auto elem : protoMap) {
+            OperationConfigEvent* event = opConfigEvents.add_op_config_events();
+            event->mutable_op_config()->ParseFromString(elem.first);
+            event->set_count(elem.second);
+        }
+        android::sp<android::os::DropBoxManager> dropbox(new android::os::DropBoxManager);
+        size_t size = opConfigEvents.ByteSize();
+        auto data = std::make_unique<uint8_t[]>(size);
+        opConfigEvents.SerializeWithCachedSizesToArray(data.get());
+        dropbox->addData(android::String16("keymaster"), data.get(), size, 0);
+        protoMap.clear();
+    }
 }
 
 }  // namespace keystore
