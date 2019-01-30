@@ -24,11 +24,13 @@
 
 #include <keystore/keymaster_types.h>
 #include <keystore/keystore.h>
+#include <vector>
 
 constexpr size_t kValueSize = 32768;
 constexpr size_t kAesKeySize = 128 / 8;
 constexpr size_t kGcmTagLength = 128 / 8;
 constexpr size_t kGcmIvLength = 96 / 8;
+constexpr size_t kAes128KeySizeBytes = 128 / 8;
 
 /* Here is the file format. There are two parts in blob.value, the secret and
  * the description. The secret is stored in ciphertext, and its original size
@@ -80,9 +82,8 @@ typedef enum {
     TYPE_KEY_PAIR = 3,
     TYPE_KEYMASTER_10 = 4,
     TYPE_KEY_CHARACTERISTICS = 5,
+    TYPE_MASTER_KEY_AES256 = 7,
 } BlobType;
-
-class Entropy;
 
 class Blob {
   public:
@@ -121,9 +122,10 @@ class Blob {
     keystore::SecurityLevel getSecurityLevel() const;
     void setSecurityLevel(keystore::SecurityLevel);
 
-    ResponseCode writeBlob(const std::string& filename, const uint8_t* aes_key, State state,
-                           Entropy* entropy);
-    ResponseCode readBlob(const std::string& filename, const uint8_t* aes_key, State state);
+    ResponseCode writeBlob(const std::string& filename, const std::vector<uint8_t>& aes_key,
+                           State state);
+    ResponseCode readBlob(const std::string& filename, const std::vector<uint8_t>& aes_key,
+                          State state);
 
   private:
     blobv3 mBlob;

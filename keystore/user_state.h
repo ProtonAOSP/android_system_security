@@ -24,8 +24,7 @@
 #include <utils/String8.h>
 
 #include <keystore/keystore.h>
-
-#include "entropy.h"
+#include <vector>
 
 class UserState {
   public:
@@ -47,28 +46,31 @@ class UserState {
     void zeroizeMasterKeysInMemory();
     bool deleteMasterKey();
 
-    ResponseCode initialize(const android::String8& pw, Entropy* entropy);
+    ResponseCode initialize(const android::String8& pw);
 
     ResponseCode copyMasterKey(UserState* src);
     ResponseCode copyMasterKeyFile(UserState* src);
-    ResponseCode writeMasterKey(const android::String8& pw, Entropy* entropy);
-    ResponseCode readMasterKey(const android::String8& pw, Entropy* entropy);
+    ResponseCode writeMasterKey(const android::String8& pw);
+    ResponseCode readMasterKey(const android::String8& pw);
 
-    auto& getEncryptionKey() const { return mMasterKey; }
+    const std::vector<uint8_t>& getEncryptionKey() const { return mMasterKey; }
 
     bool reset();
 
   private:
-    static const int MASTER_KEY_SIZE_BYTES = 16;
+    static const int SHA1_DIGEST_SIZE_BYTES = 16;
+    static const int SHA256_DIGEST_SIZE_BYTES = 32;
+
+    static const int MASTER_KEY_SIZE_BYTES = SHA256_DIGEST_SIZE_BYTES;
     static const int MASTER_KEY_SIZE_BITS = MASTER_KEY_SIZE_BYTES * 8;
 
     static const int MAX_RETRY = 4;
     static const size_t SALT_SIZE = 16;
 
-    void generateKeyFromPassword(uint8_t* key, ssize_t keySize, const android::String8& pw,
+    void generateKeyFromPassword(std::vector<uint8_t>& key, const android::String8& pw,
                                  uint8_t* salt);
-    bool generateSalt(Entropy* entropy);
-    bool generateMasterKey(Entropy* entropy);
+    bool generateSalt();
+    bool generateMasterKey();
     void setupMasterKeys();
 
     uid_t mUserId;
@@ -79,7 +81,7 @@ class UserState {
     State mState;
     int8_t mRetry;
 
-    uint8_t mMasterKey[MASTER_KEY_SIZE_BYTES];
+    std::vector<uint8_t> mMasterKey;
     uint8_t mSalt[SALT_SIZE];
 };
 
