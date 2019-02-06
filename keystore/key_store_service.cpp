@@ -362,17 +362,13 @@ Status KeyStoreService::onUserPasswordChanged(int32_t userId, const String16& pa
         return Status::ok();
     }
 
-    const String8 password8(password);
-    // Flush the auth token table to prevent stale tokens from sticking
-    // around.
-    mKeyStore->getAuthTokenTable().Clear();
-
     if (password.size() == 0) {
         ALOGI("Secure lockscreen for user %d removed, deleting encrypted entries", userId);
         mKeyStore->resetUser(userId, true);
         *aidl_return = static_cast<int32_t>(ResponseCode::NO_ERROR);
         return Status::ok();
     } else {
+        const String8 password8(password);
         switch (mKeyStore->getState(userId)) {
         case ::STATE_UNINITIALIZED: {
             // generate master key, encrypt with password, write to file,
