@@ -420,7 +420,16 @@ ResponseCode Blob::readBlob(const std::string& filename, const std::vector<uint8
         if (rawBlobIsEncrypted(*rawBlob)) {
             rc = AES_gcm_decrypt(rawBlob->value /* in */, rawBlob->value /* out */, encryptedLength,
                                  aes_key, rawBlob->initialization_vector, rawBlob->aead_tag);
-            if (rc != ResponseCode::NO_ERROR) return rc;
+            if (rc != ResponseCode::NO_ERROR) {
+                // If the blob was superencrypted and decryption failed, it is
+                // almost certain that decryption is failing due to a user's
+                // changed master key.
+                if ((rawBlob->flags & KEYSTORE_FLAG_SUPER_ENCRYPTED) &&
+                    (rc == ResponseCode::VALUE_CORRUPTED)) {
+                    return ResponseCode::KEY_PERMANENTLY_INVALIDATED;
+                }
+                return rc;
+            }
         }
     } else if (rawBlob->version < 3) {
         blobv2& v2blob = reinterpret_cast<blobv2&>(*rawBlob);
