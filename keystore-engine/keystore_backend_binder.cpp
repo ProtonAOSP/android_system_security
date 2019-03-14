@@ -114,14 +114,14 @@ int32_t KeystoreBackendBinder::sign(const char* key_id, const uint8_t* in, size_
         LOG(ERROR) << AT << "communication error while calling keystore";
         return -1;
     }
-    if (KSReturn(error_code).isOk()) {
+    if (!KSReturn(error_code).isOk()) {
         LOG(ERROR) << AT << "getKeyCharacteristics failed: " << error_code;
         return -1;
     }
 
     auto [km_response, characteristics] = kc_future.get();
 
-    if (KSReturn(km_response.response_code()).isOk()) {
+    if (!KSReturn(km_response.response_code()).isOk()) {
         LOG(ERROR) << AT << "getKeyCharacteristics failed: " << km_response.response_code();
         return -1;
     }
