@@ -676,10 +676,27 @@ std::string KeyBlobEntry::getCharacteristicsBlobPath() const {
 }
 
 bool KeyBlobEntry::hasKeyBlob() const {
-    return !access(getKeyBlobPath().c_str(), R_OK | W_OK);
+    int trys = 3;
+    while (trys--) {
+        if (!access(getKeyBlobPath().c_str(), R_OK | W_OK)) return true;
+        if (errno == ENOENT) return false;
+        LOG(WARNING) << "access encountered " << strerror(errno) << " (" << errno << ")"
+                     << " while checking for key blob";
+        if (errno != EAGAIN) break;
+    }
+    return false;
 }
+
 bool KeyBlobEntry::hasCharacteristicsBlob() const {
-    return !access(getCharacteristicsBlobPath().c_str(), R_OK | W_OK);
+    int trys = 3;
+    while (trys--) {
+        if (!access(getCharacteristicsBlobPath().c_str(), R_OK | W_OK)) return true;
+        if (errno == ENOENT) return false;
+        LOG(WARNING) << "access encountered " << strerror(errno) << " (" << errno << ")"
+                     << " while checking for key characteristics blob";
+        if (errno != EAGAIN) break;
+    }
+    return false;
 }
 
 static std::tuple<bool, uid_t, std::string> filename2UidAlias(const std::string& filepath) {
