@@ -207,6 +207,8 @@ class KeymasterWorker : protected Worker {
   public:
     KeymasterWorker(sp<Keymaster> keymasterDevice, KeyStore* keyStore);
 
+    void logIfKeymasterVendorError(ErrorCode ec) const;
+
     using worker_begin_cb = std::function<void(::android::security::keymaster::OperationResult)>;
     void begin(LockedKeyBlobEntry, sp<IBinder> appToken, Blob keyBlob, Blob charBlob,
                bool pruneable, KeyPurpose purpose, AuthorizationSet opParams,
@@ -279,18 +281,8 @@ class KeymasterWorker : protected Worker {
     void attestKey(hidl_vec<uint8_t> keyToAttest, hidl_vec<KeyParameter> attestParams,
                    attestKey_cb _hidl_cb);
 
-    using upgradeKey_cb = MakeKeymasterWorkerCB_t<Return<void>, Keymaster::upgradeKey_cb>;
-    void upgradeKey(hidl_vec<uint8_t> keyBlobToUpgrade, hidl_vec<KeyParameter> upgradeParams,
-                    upgradeKey_cb _hidl_cb);
-
     using deleteKey_cb = MakeKeymasterWorkerCB_t<Return<ErrorCode>>;
     void deleteKey(hidl_vec<uint8_t> keyBlob, deleteKey_cb _hidl_cb);
-
-    using deleteAllKeys_cb = MakeKeymasterWorkerCB_t<Return<ErrorCode>>;
-    void deleteAllKeys(deleteAllKeys_cb _hidl_cb);
-
-    using destroyAttestationIds_cb = MakeKeymasterWorkerCB_t<Return<ErrorCode>>;
-    void destroyAttestationIds(destroyAttestationIds_cb _hidl_cb);
 
     using begin_cb = MakeKeymasterWorkerCB_t<Return<void>, Keymaster::begin_cb>;
     void begin(KeyPurpose purpose, hidl_vec<uint8_t> key, hidl_vec<KeyParameter> inParams,

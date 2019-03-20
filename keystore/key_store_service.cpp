@@ -617,8 +617,8 @@ Status KeyStoreService::addRngEntropy(
         return AIDL_RETURN(ErrorCode::HARDWARE_TYPE_UNAVAILABLE);
     }
 
-    device->addRngEntropy(entropy, [cb](Return<ErrorCode> rc) {
-        cb->onFinished(KeyStoreServiceReturnCode(KS_HANDLE_HIDL_ERROR(rc)));
+    device->addRngEntropy(entropy, [device, cb](Return<ErrorCode> rc) {
+        cb->onFinished(KeyStoreServiceReturnCode(KS_HANDLE_HIDL_ERROR(device, rc)));
     });
 
     return AIDL_RETURN(ResponseCode::NO_ERROR);
@@ -1012,11 +1012,13 @@ Status KeyStoreService::attestKey(
     auto hidlKey = blob2hidlVec(keyBlob);
     dev->attestKey(
         std::move(hidlKey), mutableParams.hidl_data(),
-        [cb](Return<void> rc, std::tuple<ErrorCode, hidl_vec<hidl_vec<uint8_t>>>&& hidlResult) {
+        [dev, cb](Return<void> rc,
+                  std::tuple<ErrorCode, hidl_vec<hidl_vec<uint8_t>>>&& hidlResult) {
             auto& [ret, certChain] = hidlResult;
             if (!rc.isOk()) {
                 cb->onFinished(KeyStoreServiceReturnCode(ResponseCode::SYSTEM_ERROR), {});
             } else if (ret != ErrorCode::OK) {
+                dev->logIfKeymasterVendorError(ret);
                 cb->onFinished(KeyStoreServiceReturnCode(ret), {});
             } else {
                 cb->onFinished(KeyStoreServiceReturnCode(ret),
@@ -1094,6 +1096,7 @@ Status KeyStoreService::attestDeviceIds(
                 return;
             }
             if (ret != ErrorCode::OK) {
+                dev->logIfKeymasterVendorError(ret);
                 cb->onFinished(KeyStoreServiceReturnCode(ret), {});
                 return;
             }
@@ -1104,9 +1107,9 @@ Status KeyStoreService::attestDeviceIds(
                               std::tuple<ErrorCode, hidl_vec<hidl_vec<uint8_t>>>&& hidlResult) {
                     auto& [ret, certChain] = hidlResult;
                     // schedule temp key for deletion
-                    dev->deleteKey(std::move(hidlKeyBlob), [](Return<ErrorCode> rc) {
+                    dev->deleteKey(std::move(hidlKeyBlob), [dev](Return<ErrorCode> rc) {
                         // log error but don't return an error
-                        KS_HANDLE_HIDL_ERROR(rc);
+                        KS_HANDLE_HIDL_ERROR(dev, rc);
                     });
                     if (!rc.isOk()) {
                         cb->onFinished(KeyStoreServiceReturnCode(ResponseCode::SYSTEM_ERROR), {});
@@ -1117,6 +1120,7 @@ Status KeyStoreService::attestDeviceIds(
                             KeyStoreServiceReturnCode(ret),
                             ::android::security::keymaster::KeymasterCertificateChain(certChain));
                     } else {
+                        dev->logIfKeymasterVendorError(ret);
                         cb->onFinished(KeyStoreServiceReturnCode(ret), {});
                     }
                 });
