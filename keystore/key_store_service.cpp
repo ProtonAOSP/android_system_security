@@ -62,6 +62,8 @@ bool containsTag(const hidl_vec<KeyParameter>& params, Tag tag) {
 bool isAuthenticationBound(const hidl_vec<KeyParameter>& params) {
     return !containsTag(params, Tag::NO_AUTH_REQUIRED);
 }
+#define KEYSTORE_SERVICE_LOCK \
+	std::lock_guard<decltype(keystoreServiceMutex_)> keystore_lock(keystoreServiceMutex_)
 
 std::pair<KeyStoreServiceReturnCode, bool> hadFactoryResetSinceIdRotation() {
     struct stat sbuf;
@@ -129,6 +131,7 @@ void KeyStoreService::binderDied(const wp<IBinder>& who) {
 }
 
 KeyStoreServiceReturnCode KeyStoreService::getState(int32_t userId) {
+    KEYSTORE_SERVICE_LOCK;
     if (!checkBinderPermission(P_GET_STATE)) {
         return ResponseCode::PERMISSION_DENIED;
     }
@@ -138,6 +141,7 @@ KeyStoreServiceReturnCode KeyStoreService::getState(int32_t userId) {
 
 KeyStoreServiceReturnCode KeyStoreService::get(const String16& name, int32_t uid,
                                                hidl_vec<uint8_t>* item) {
+    KEYSTORE_SERVICE_LOCK;
     uid_t targetUid = getEffectiveUid(uid);
     if (!checkBinderPermission(P_GET, targetUid)) {
         return ResponseCode::PERMISSION_DENIED;
@@ -168,6 +172,7 @@ KeyStoreServiceReturnCode KeyStoreService::get(const String16& name, int32_t uid
 KeyStoreServiceReturnCode KeyStoreService::insert(const String16& name,
                                                   const hidl_vec<uint8_t>& item, int targetUid,
                                                   int32_t flags) {
+    KEYSTORE_SERVICE_LOCK;
     targetUid = getEffectiveUid(targetUid);
     auto result =
         checkBinderPermissionAndKeystoreState(P_INSERT, targetUid, flags & KEYSTORE_FLAG_ENCRYPTED);
@@ -185,6 +190,7 @@ KeyStoreServiceReturnCode KeyStoreService::insert(const String16& name,
 }
 
 KeyStoreServiceReturnCode KeyStoreService::del(const String16& name, int targetUid) {
+    KEYSTORE_SERVICE_LOCK;
     targetUid = getEffectiveUid(targetUid);
     if (!checkBinderPermission(P_DELETE, targetUid)) {
         return ResponseCode::PERMISSION_DENIED;
@@ -209,6 +215,7 @@ KeyStoreServiceReturnCode KeyStoreService::del(const String16& name, int targetU
 }
 
 KeyStoreServiceReturnCode KeyStoreService::exist(const String16& name, int targetUid) {
+    KEYSTORE_SERVICE_LOCK;
     targetUid = getEffectiveUid(targetUid);
     if (!checkBinderPermission(P_EXIST, targetUid)) {
         return ResponseCode::PERMISSION_DENIED;
@@ -220,6 +227,7 @@ KeyStoreServiceReturnCode KeyStoreService::exist(const String16& name, int targe
 
 KeyStoreServiceReturnCode KeyStoreService::list(const String16& prefix, int targetUid,
                                                 Vector<String16>* matches) {
+    KEYSTORE_SERVICE_LOCK;
     targetUid = getEffectiveUid(targetUid);
     if (!checkBinderPermission(P_LIST, targetUid)) {
         return ResponseCode::PERMISSION_DENIED;
@@ -234,6 +242,7 @@ KeyStoreServiceReturnCode KeyStoreService::list(const String16& prefix, int targ
 }
 
 KeyStoreServiceReturnCode KeyStoreService::reset() {
+    KEYSTORE_SERVICE_LOCK;
     if (!checkBinderPermission(P_RESET)) {
         return ResponseCode::PERMISSION_DENIED;
     }
@@ -245,6 +254,7 @@ KeyStoreServiceReturnCode KeyStoreService::reset() {
 
 KeyStoreServiceReturnCode KeyStoreService::onUserPasswordChanged(int32_t userId,
                                                                  const String16& password) {
+    KEYSTORE_SERVICE_LOCK;
     if (!checkBinderPermission(P_PASSWORD)) {
         return ResponseCode::PERMISSION_DENIED;
     }
@@ -280,6 +290,7 @@ KeyStoreServiceReturnCode KeyStoreService::onUserPasswordChanged(int32_t userId,
 }
 
 KeyStoreServiceReturnCode KeyStoreService::onUserAdded(int32_t userId, int32_t parentId) {
+    KEYSTORE_SERVICE_LOCK;
     if (!checkBinderPermission(P_USER_CHANGED)) {
         return ResponseCode::PERMISSION_DENIED;
     }
@@ -302,6 +313,7 @@ KeyStoreServiceReturnCode KeyStoreService::onUserAdded(int32_t userId, int32_t p
 }
 
 KeyStoreServiceReturnCode KeyStoreService::onUserRemoved(int32_t userId) {
+    KEYSTORE_SERVICE_LOCK;
     if (!checkBinderPermission(P_USER_CHANGED)) {
         return ResponseCode::PERMISSION_DENIED;
     }
@@ -311,6 +323,7 @@ KeyStoreServiceReturnCode KeyStoreService::onUserRemoved(int32_t userId) {
 }
 
 KeyStoreServiceReturnCode KeyStoreService::lock(int32_t userId) {
+    KEYSTORE_SERVICE_LOCK;
     if (!checkBinderPermission(P_LOCK)) {
         return ResponseCode::PERMISSION_DENIED;
     }
@@ -326,6 +339,7 @@ KeyStoreServiceReturnCode KeyStoreService::lock(int32_t userId) {
 }
 
 KeyStoreServiceReturnCode KeyStoreService::unlock(int32_t userId, const String16& pw) {
+    KEYSTORE_SERVICE_LOCK;
     if (!checkBinderPermission(P_UNLOCK)) {
         return ResponseCode::PERMISSION_DENIED;
     }
@@ -352,6 +366,7 @@ KeyStoreServiceReturnCode KeyStoreService::unlock(int32_t userId, const String16
 }
 
 bool KeyStoreService::isEmpty(int32_t userId) {
+    KEYSTORE_SERVICE_LOCK;
     if (!checkBinderPermission(P_IS_EMPTY)) {
         return false;
     }
@@ -362,6 +377,7 @@ bool KeyStoreService::isEmpty(int32_t userId) {
 KeyStoreServiceReturnCode KeyStoreService::generate(const String16& name, int32_t targetUid,
                                                     int32_t keyType, int32_t keySize, int32_t flags,
                                                     Vector<sp<KeystoreArg>>* args) {
+    KEYSTORE_SERVICE_LOCK;
     targetUid = getEffectiveUid(targetUid);
     auto result =
         checkBinderPermissionAndKeystoreState(P_INSERT, targetUid, flags & KEYSTORE_FLAG_ENCRYPTED);
@@ -437,6 +453,7 @@ KeyStoreServiceReturnCode KeyStoreService::import(const String16& name,
                                                   const hidl_vec<uint8_t>& data, int targetUid,
                                                   int32_t flags) {
 
+    KEYSTORE_SERVICE_LOCK;
     const uint8_t* ptr = &data[0];
 
     Unique_PKCS8_PRIV_KEY_INFO pkcs8(d2i_PKCS8_PRIV_KEY_INFO(NULL, &ptr, data.size()));
@@ -473,6 +490,7 @@ KeyStoreServiceReturnCode KeyStoreService::import(const String16& name,
 
 KeyStoreServiceReturnCode KeyStoreService::sign(const String16& name, const hidl_vec<uint8_t>& data,
                                                 hidl_vec<uint8_t>* out) {
+    KEYSTORE_SERVICE_LOCK;
     if (!checkBinderPermission(P_SIGN)) {
         return ResponseCode::PERMISSION_DENIED;
     }
@@ -482,6 +500,7 @@ KeyStoreServiceReturnCode KeyStoreService::sign(const String16& name, const hidl
 KeyStoreServiceReturnCode KeyStoreService::verify(const String16& name,
                                                   const hidl_vec<uint8_t>& data,
                                                   const hidl_vec<uint8_t>& signature) {
+    KEYSTORE_SERVICE_LOCK;
     if (!checkBinderPermission(P_VERIFY)) {
         return ResponseCode::PERMISSION_DENIED;
     }
@@ -501,6 +520,7 @@ KeyStoreServiceReturnCode KeyStoreService::verify(const String16& name,
  */
 KeyStoreServiceReturnCode KeyStoreService::get_pubkey(const String16& name,
                                                       hidl_vec<uint8_t>* pubKey) {
+    KEYSTORE_SERVICE_LOCK;
     ExportResult result;
     exportKey(name, KeyFormat::X509, hidl_vec<uint8_t>(), hidl_vec<uint8_t>(), UID_SELF, &result);
     if (!result.resultCode.isOk()) {
@@ -513,6 +533,7 @@ KeyStoreServiceReturnCode KeyStoreService::get_pubkey(const String16& name,
 }
 
 String16 KeyStoreService::grant(const String16& name, int32_t granteeUid) {
+    KEYSTORE_SERVICE_LOCK;
     uid_t callingUid = IPCThreadState::self()->getCallingUid();
     auto result = checkBinderPermissionAndKeystoreState(P_GRANT);
     if (!result.isOk()) {
@@ -530,6 +551,7 @@ String16 KeyStoreService::grant(const String16& name, int32_t granteeUid) {
 }
 
 KeyStoreServiceReturnCode KeyStoreService::ungrant(const String16& name, int32_t granteeUid) {
+    KEYSTORE_SERVICE_LOCK;
     uid_t callingUid = IPCThreadState::self()->getCallingUid();
     auto result = checkBinderPermissionAndKeystoreState(P_GRANT);
     if (!result.isOk()) {
@@ -548,6 +570,7 @@ KeyStoreServiceReturnCode KeyStoreService::ungrant(const String16& name, int32_t
 }
 
 int64_t KeyStoreService::getmtime(const String16& name, int32_t uid) {
+    KEYSTORE_SERVICE_LOCK;
     uid_t targetUid = getEffectiveUid(uid);
     if (!checkBinderPermission(P_GET, targetUid)) {
         ALOGW("permission denied for %d: getmtime", targetUid);
@@ -581,6 +604,7 @@ int64_t KeyStoreService::getmtime(const String16& name, int32_t uid) {
 // TODO(tuckeris): This is dead code, remove it.  Don't bother copying over key characteristics here
 KeyStoreServiceReturnCode KeyStoreService::duplicate(const String16& srcKey, int32_t srcUid,
                                                      const String16& destKey, int32_t destUid) {
+    KEYSTORE_SERVICE_LOCK;
     uid_t callingUid = IPCThreadState::self()->getCallingUid();
     pid_t spid = IPCThreadState::self()->getCallingPid();
     if (!has_permission(callingUid, P_DUPLICATE, spid)) {
@@ -641,10 +665,12 @@ KeyStoreServiceReturnCode KeyStoreService::duplicate(const String16& srcKey, int
 }
 
 int32_t KeyStoreService::is_hardware_backed(const String16& keyType) {
+    KEYSTORE_SERVICE_LOCK;
     return mKeyStore->isHardwareBacked(keyType) ? 1 : 0;
 }
 
 KeyStoreServiceReturnCode KeyStoreService::clear_uid(int64_t targetUid64) {
+    KEYSTORE_SERVICE_LOCK;
     uid_t targetUid = getEffectiveUid(targetUid64);
     if (!checkBinderPermissionSelfOrSystem(P_CLEAR_UID, targetUid)) {
         return ResponseCode::PERMISSION_DENIED;
@@ -684,6 +710,7 @@ KeyStoreServiceReturnCode KeyStoreService::clear_uid(int64_t targetUid64) {
 }
 
 KeyStoreServiceReturnCode KeyStoreService::addRngEntropy(const hidl_vec<uint8_t>& entropy) {
+    KEYSTORE_SERVICE_LOCK;
     const auto& device = mKeyStore->getDevice();
     return KS_HANDLE_HIDL_ERROR(device->addRngEntropy(entropy));
 }
@@ -693,6 +720,7 @@ KeyStoreServiceReturnCode KeyStoreService::generateKey(const String16& name,
                                                        const hidl_vec<uint8_t>& entropy, int uid,
                                                        int flags,
                                                        KeyCharacteristics* outCharacteristics) {
+    KEYSTORE_SERVICE_LOCK;
     // TODO(jbires): remove this getCallingUid call upon implementation of b/25646100
     uid_t originalUid = IPCThreadState::self()->getCallingUid();
     uid = getEffectiveUid(uid);
@@ -788,6 +816,7 @@ KeyStoreServiceReturnCode
 KeyStoreService::getKeyCharacteristics(const String16& name, const hidl_vec<uint8_t>& clientId,
                                        const hidl_vec<uint8_t>& appData, int32_t uid,
                                        KeyCharacteristics* outCharacteristics) {
+    KEYSTORE_SERVICE_LOCK;
     if (!outCharacteristics) {
         return ErrorCode::UNEXPECTED_NULL_POINTER;
     }
@@ -876,6 +905,7 @@ KeyStoreServiceReturnCode
 KeyStoreService::importKey(const String16& name, const hidl_vec<KeyParameter>& params,
                            KeyFormat format, const hidl_vec<uint8_t>& keyData, int uid, int flags,
                            KeyCharacteristics* outCharacteristics) {
+    KEYSTORE_SERVICE_LOCK;
     uid = getEffectiveUid(uid);
     KeyStoreServiceReturnCode rc =
         checkBinderPermissionAndKeystoreState(P_INSERT, uid, flags & KEYSTORE_FLAG_ENCRYPTED);
@@ -961,6 +991,7 @@ KeyStoreService::importKey(const String16& name, const hidl_vec<KeyParameter>& p
 void KeyStoreService::exportKey(const String16& name, KeyFormat format,
                                 const hidl_vec<uint8_t>& clientId, const hidl_vec<uint8_t>& appData,
                                 int32_t uid, ExportResult* result) {
+    KEYSTORE_SERVICE_LOCK;
 
     uid_t targetUid = getEffectiveUid(uid);
     uid_t callingUid = IPCThreadState::self()->getCallingUid();
@@ -1029,6 +1060,7 @@ void KeyStoreService::begin(const sp<IBinder>& appToken, const String16& name, K
                             bool pruneable, const hidl_vec<KeyParameter>& params,
                             const hidl_vec<uint8_t>& entropy, int32_t uid,
                             OperationResult* result) {
+    KEYSTORE_SERVICE_LOCK;
     uid_t callingUid = IPCThreadState::self()->getCallingUid();
     uid_t targetUid = getEffectiveUid(uid);
     if (!is_granted_to(callingUid, targetUid)) {
@@ -1199,6 +1231,7 @@ void KeyStoreService::begin(const sp<IBinder>& appToken, const String16& name, K
 
 void KeyStoreService::update(const sp<IBinder>& token, const hidl_vec<KeyParameter>& params,
                              const hidl_vec<uint8_t>& data, OperationResult* result) {
+    KEYSTORE_SERVICE_LOCK;
     if (!checkAllowedOperationParams(params)) {
         result->resultCode = ErrorCode::INVALID_ARGUMENT;
         return;
@@ -1251,6 +1284,7 @@ void KeyStoreService::update(const sp<IBinder>& token, const hidl_vec<KeyParamet
 void KeyStoreService::finish(const sp<IBinder>& token, const hidl_vec<KeyParameter>& params,
                              const hidl_vec<uint8_t>& signature, const hidl_vec<uint8_t>& entropy,
                              OperationResult* result) {
+    KEYSTORE_SERVICE_LOCK;
     if (!checkAllowedOperationParams(params)) {
         result->resultCode = ErrorCode::INVALID_ARGUMENT;
         return;
@@ -1310,6 +1344,7 @@ void KeyStoreService::finish(const sp<IBinder>& token, const hidl_vec<KeyParamet
 }
 
 KeyStoreServiceReturnCode KeyStoreService::abort(const sp<IBinder>& token) {
+    KEYSTORE_SERVICE_LOCK;
     km_device_t dev;
     uint64_t handle;
     KeyPurpose purpose;
@@ -1325,6 +1360,7 @@ KeyStoreServiceReturnCode KeyStoreService::abort(const sp<IBinder>& token) {
 }
 
 bool KeyStoreService::isOperationAuthorized(const sp<IBinder>& token) {
+    KEYSTORE_SERVICE_LOCK;
     km_device_t dev;
     uint64_t handle;
     const KeyCharacteristics* characteristics;
@@ -1341,6 +1377,7 @@ bool KeyStoreService::isOperationAuthorized(const sp<IBinder>& token) {
 }
 
 KeyStoreServiceReturnCode KeyStoreService::addAuthToken(const uint8_t* token, size_t length) {
+    KEYSTORE_SERVICE_LOCK;
     // TODO(swillden): When gatekeeper and fingerprint are ready, this should be updated to
     // receive a HardwareAuthToken, rather than an opaque byte array.
 
@@ -1397,6 +1434,7 @@ bool isDeviceIdAttestationRequested(const hidl_vec<KeyParameter>& params) {
 KeyStoreServiceReturnCode KeyStoreService::attestKey(const String16& name,
                                                      const hidl_vec<KeyParameter>& params,
                                                      hidl_vec<hidl_vec<uint8_t>>* outChain) {
+    KEYSTORE_SERVICE_LOCK;
     if (!outChain) {
         return ErrorCode::OUTPUT_PARAMETER_NULL;
     }
@@ -1445,6 +1483,7 @@ KeyStoreServiceReturnCode KeyStoreService::attestKey(const String16& name,
 
 KeyStoreServiceReturnCode KeyStoreService::attestDeviceIds(const hidl_vec<KeyParameter>& params,
                                                            hidl_vec<hidl_vec<uint8_t>>* outChain) {
+    KEYSTORE_SERVICE_LOCK;
     if (!outChain) {
         return ErrorCode::OUTPUT_PARAMETER_NULL;
     }
@@ -1527,6 +1566,7 @@ KeyStoreServiceReturnCode KeyStoreService::attestDeviceIds(const hidl_vec<KeyPar
 }
 
 KeyStoreServiceReturnCode KeyStoreService::onDeviceOffBody() {
+    KEYSTORE_SERVICE_LOCK;
     // TODO(tuckeris): add permission check.  This should be callable from ClockworkHome only.
     mAuthTokenTable.onDeviceOffBody();
     return ResponseCode::NO_ERROR;
