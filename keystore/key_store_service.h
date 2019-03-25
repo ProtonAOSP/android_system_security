@@ -249,6 +249,17 @@ class KeyStoreService : public android::BnKeystoreService, public android::IBind
                                              const AuthorizationSet& params, Blob* blob);
 
     ::KeyStore* mKeyStore;
+
+    /**
+     * This mutex locks keystore operations from concurrent execution.
+     * The keystore service has always been conceptually single threaded. Even with the introduction
+     * of keymaster workers, it was assumed that the dispatcher thread executes exclusively on
+     * certain code paths. With the introduction of wifi Keystore service in the keystore process
+     * this assumption no longer holds as the hwbinder thread servicing this interface makes
+     * functions (rather than IPC) calls into keystore. This mutex protects the keystore logic
+     * from concurrent execution.
+     */
+    std::recursive_mutex keystoreServiceMutex_;
     OperationMap mOperationMap;
     keystore::AuthTokenTable mAuthTokenTable;
     KeystoreKeymasterEnforcement enforcement_policy;
