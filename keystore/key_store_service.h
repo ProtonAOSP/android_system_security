@@ -35,6 +35,8 @@
 #include <keystore/OperationResult.h>
 #include <keystore/keystore_return_types.h>
 
+#include <mutex>
+
 namespace keystore {
 
 // Class provides implementation for generated BnKeystoreService.h based on
@@ -229,6 +231,17 @@ class KeyStoreService : public android::security::keystore::BnKeystoreService {
                                          std::vector<KeyParameter>* params);
 
     sp<KeyStore> mKeyStore;
+
+    /**
+     * This mutex locks keystore operations from concurrent execution.
+     * The keystore service has always been conceptually single threaded. Even with the introduction
+     * of keymaster workers, it was assumed that the dispatcher thread executes exclusively on
+     * certain code paths. With the introduction of wifi Keystore service in the keystore process
+     * this assumption no longer holds as the hwbinder thread servicing this interface makes
+     * functions (rather than IPC) calls into keystore. This mutex protects the keystore logic
+     * from concurrent execution.
+     */
+    std::mutex keystoreServiceMutex_;
 
     std::mutex operationDeviceMapMutex_;
     std::map<sp<IBinder>, std::shared_ptr<KeymasterWorker>> operationDeviceMap_;
