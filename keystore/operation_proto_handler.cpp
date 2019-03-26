@@ -106,6 +106,7 @@ void checkOpCharacteristics(const hidl_vec<KeyParameter>& characteristics,
 }
 
 void OperationProtoHandler::uploadOpAsProto(Operation& op, bool wasOpSuccessful) {
+    std::lock_guard<std::mutex> lock(op_upload_mutex);
     OperationConfig operationConfig;
     determinePurpose(op.purpose, &operationConfig);
     checkKeyCharacteristics(op.characteristics.softwareEnforced, &operationConfig);
