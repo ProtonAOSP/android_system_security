@@ -37,3 +37,33 @@ cc_test {
      cfi: false,
    }
 }
+
+cc_test {
+    cflags: [
+        "-Wall",
+        "-Werror",
+        "-Wextra",
+        "-O0",
+    ],
+    srcs: [
+        "confirmationui_invocation_test.cpp",
+        "gtest_main.cpp",
+    ],
+    name: "confirmationui_invocation_test",
+    static_libs: [
+        "android.hardware.confirmationui@1.0",
+        "libbase",
+        "libgtest_main",
+        "libutils",
+        "liblog",
+    ],
+    shared_libs: [
+        "libbinder",
+        "libkeystore_aidl", // for IKeyStoreService.asInterface()
+        "libkeystore_binder",
+        "libkeystore_parcelables",
+    ],
+   sanitize: {
+     cfi: false,
+   }
+}
