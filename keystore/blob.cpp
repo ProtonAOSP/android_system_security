@@ -36,6 +36,7 @@
 #include <string>
 
 #include <android-base/logging.h>
+#include <android-base/unique_fd.h>
 
 namespace {
 
@@ -341,22 +342,35 @@ static ResponseCode writeBlob(const std::string& filename, Blob blob, blobv3* ra
 
     size_t fileLength = offsetof(blobv3, value) + dataLength + rawBlob->info;
 
-    int out =
-        TEMP_FAILURE_RETRY(open(filename.c_str(), O_WRONLY | O_TRUNC | O_CREAT, S_IRUSR | S_IWUSR));
-    if (out < 0) {
-        ALOGW("could not open file: %s: %s", filename.c_str(), strerror(errno));
+    char tmpFileName[] = ".tmpXXXXXX";
+    {
+        android::base::unique_fd out(TEMP_FAILURE_RETRY(mkstemp(tmpFileName)));
+        if (out < 0) {
+            LOG(ERROR) << "could not open temp file: " << tmpFileName
+                       << " for writing blob file: " << filename.c_str()
+                       << " because: " << strerror(errno);
+            return ResponseCode::SYSTEM_ERROR;
+        }
+
+        const size_t writtenBytes =
+            writeFully(out, reinterpret_cast<uint8_t*>(rawBlob), fileLength);
+
+        if (writtenBytes != fileLength) {
+            LOG(ERROR) << "blob not fully written " << writtenBytes << " != " << fileLength;
+            unlink(tmpFileName);
+            return ResponseCode::SYSTEM_ERROR;
+        }
+    }
+
+    if (rename(tmpFileName, filename.c_str()) == -1) {
+        LOG(ERROR) << "could not rename blob file to " << filename
+                   << " because: " << strerror(errno);
+        unlink(tmpFileName);
         return ResponseCode::SYSTEM_ERROR;
     }
 
-    const size_t writtenBytes = writeFully(out, reinterpret_cast<uint8_t*>(rawBlob), fileLength);
-    if (close(out) != 0) {
-        return ResponseCode::SYSTEM_ERROR;
-    }
-    if (writtenBytes != fileLength) {
-        ALOGW("blob not fully written %zu != %zu", writtenBytes, fileLength);
-        unlink(filename.c_str());
-        return ResponseCode::SYSTEM_ERROR;
-    }
+    fsyncDirectory(getContainingDirectory(filename));
+
     return ResponseCode::NO_ERROR;
 }
 
