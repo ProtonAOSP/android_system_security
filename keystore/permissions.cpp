@@ -68,14 +68,7 @@ static user_perm user_perms[] = {
     {AID_SYSTEM, static_cast<perm_t>((uint32_t)(~0))},
     {AID_VPN, static_cast<perm_t>(P_GET | P_SIGN | P_VERIFY)},
     {AID_WIFI, static_cast<perm_t>(P_GET | P_SIGN | P_VERIFY)},
-    {AID_BLUETOOTH, static_cast<perm_t>(P_GET | P_INSERT | P_DELETE | P_EXIST | P_SIGN | P_VERIFY)},
-
-#ifdef GRANT_ROOT_ALL_PERMISSIONS
-    // Allow VTS tests running as root to perform all operations
-    {AID_ROOT, static_cast<perm_t>((uint32_t)(~0))},
-#else
     {AID_ROOT, static_cast<perm_t>(P_GET)},
-#endif
 };
 
 static const perm_t DEFAULT_PERMS = static_cast<perm_t>(
