@@ -309,8 +309,8 @@ ResponseCode KeyStore::del(const LockedKeyBlobEntry& blobfile) {
     auto dev = getDevice(keyBlob);
 
     if (keyBlob.getType() == ::TYPE_KEYMASTER_10) {
-        dev->deleteKey(blob2hidlVec(keyBlob), [alias, uid](Return<ErrorCode> rc) {
-            auto ret = KS_HANDLE_HIDL_ERROR(rc);
+        dev->deleteKey(blob2hidlVec(keyBlob), [dev, alias, uid](Return<ErrorCode> rc) {
+            auto ret = KS_HANDLE_HIDL_ERROR(dev, rc);
             // A device doesn't have to implement delete_key.
             bool success = ret == ErrorCode::OK || ret == ErrorCode::UNIMPLEMENTED;
             if (__android_log_security()) {
