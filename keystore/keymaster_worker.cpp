@@ -22,6 +22,10 @@
 
 #include <android-base/logging.h>
 
+#include <log/log_event_list.h>
+
+#include <private/android_logger.h>
+
 #include "KeyStore.h"
 #include "keymaster_enforcement.h"
 
@@ -74,6 +78,26 @@ void KeymasterWorker::logIfKeymasterVendorError(ErrorCode ec) const {
     keymasterDevice_->logIfKeymasterVendorError(ec);
 }
 
+void KeymasterWorker::deleteOldKeyOnUpgrade(const LockedKeyBlobEntry& blobfile, Blob keyBlob) {
+    // if we got the blob successfully, we try and delete it from the keymaster device
+    auto& dev = keymasterDevice_;
+    uid_t uid = blobfile->uid();
+    const auto& alias = blobfile->alias();
+
+    if (keyBlob.getType() == ::TYPE_KEYMASTER_10) {
+        auto ret = KS_HANDLE_HIDL_ERROR(dev, dev->deleteKey(blob2hidlVec(keyBlob)));
+        // A device doesn't have to implement delete_key.
+        bool success = ret == ErrorCode::OK || ret == ErrorCode::UNIMPLEMENTED;
+        if (__android_log_security()) {
+            android_log_event_list(SEC_TAG_KEY_DESTROYED)
+                << int32_t(success) << alias << int32_t(uid) << LOG_ID_SECURITY;
+        }
+        if (!success) {
+            LOG(ERROR) << "Keymaster delete for key " << alias << " of uid " << uid << " failed";
+        }
+    }
+}
+
 std::tuple<KeyStoreServiceReturnCode, Blob>
 KeymasterWorker::upgradeKeyBlob(const LockedKeyBlobEntry& lockedEntry,
                                 const AuthorizationSet& params) {
@@ -111,12 +135,6 @@ KeymasterWorker::upgradeKeyBlob(const LockedKeyBlobEntry& lockedEntry,
             return;
         }
 
-        error = keyStore_->del(lockedEntry);
-        if (!error.isOk()) {
-            ALOGI("upgradeKeyBlob keystore->del failed %d", error.getErrorCode());
-            return;
-        }
-
         Blob newBlob(&upgradedKeyBlob[0], upgradedKeyBlob.size(), nullptr /* info */,
                      0 /* infoLength */, ::TYPE_KEYMASTER_10);
         newBlob.setSecurityLevel(blob.getSecurityLevel());
@@ -129,6 +147,8 @@ KeymasterWorker::upgradeKeyBlob(const LockedKeyBlobEntry& lockedEntry,
             ALOGI("upgradeKeyBlob keystore->put failed %d", error.getErrorCode());
             return;
         }
+
+        deleteOldKeyOnUpgrade(lockedEntry, std::move(blob));
         blob = std::move(newBlob);
     };
 

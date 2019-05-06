@@ -31,6 +31,9 @@
 #include <keystore/keymaster_types.h>
 #include <keystore/keystore_client.h>
 
+#include <android-base/logging.h>
+#include <android-base/unique_fd.h>
+
 #include "blob.h"
 
 size_t readFully(int fd, uint8_t* data, size_t size) {
@@ -62,6 +65,44 @@ size_t writeFully(int fd, uint8_t* data, size_t size) {
         return -1;
     }
     return size;
+}
+
+std::string getContainingDirectory(const std::string& filename) {
+    std::string containing_dir;
+    size_t last_pos;
+    size_t pos = std::string::npos;
+
+    __builtin_add_overflow(filename.size(), -1, &last_pos);
+
+    // strip all trailing '/'
+    while ((pos = filename.find_last_of('/', last_pos)) == last_pos && pos != 0) {
+        --last_pos;
+    }
+
+    if (pos == 0) {
+        containing_dir = "/";
+    } else if (pos == std::string::npos) {
+        containing_dir = ".";
+    } else {
+        containing_dir = filename.substr(0, pos);
+    }
+
+    return containing_dir;
+}
+
+void fsyncDirectory(const std::string& path) {
+    android::base::unique_fd dir_fd(TEMP_FAILURE_RETRY(open(path.c_str(), O_DIRECTORY | O_RDONLY)));
+
+    if (dir_fd < 0) {
+        LOG(WARNING) << "Could not open dir: " << path << " error: " << strerror(errno);
+        return;
+    }
+
+    if (TEMP_FAILURE_RETRY(fsync(dir_fd)) == -1) {
+        LOG(WARNING) << "Failed to fsync the directory " << path << " error: " << strerror(errno);
+    }
+
+    return;
 }
 
 void add_legacy_key_authorizations(int keyType, keystore::AuthorizationSet* params) {
