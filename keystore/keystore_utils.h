@@ -18,6 +18,7 @@
 #define KEYSTORE_KEYSTORE_UTILS_H_
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 #include <openssl/evp.h>
@@ -29,6 +30,8 @@
 
 size_t readFully(int fd, uint8_t* data, size_t size);
 size_t writeFully(int fd, uint8_t* data, size_t size);
+std::string getContainingDirectory(const std::string& filename);
+void fsyncDirectory(const std::string& path);
 
 void add_legacy_key_authorizations(int keyType, keystore::AuthorizationSet* params);
 
