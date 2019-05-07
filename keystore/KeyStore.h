@@ -40,7 +40,7 @@ class KeymasterDevices : public std::array<sp<Keymaster>, 3> {
 
 class KeyStore {
   public:
-    KeyStore(Entropy* entropy, const KeymasterDevices& kmDevices,
+    KeyStore(const KeymasterDevices& kmDevices,
              SecurityLevel minimalAllowedSecurityLevelForNewKeys);
     ~KeyStore();
 
@@ -140,7 +140,6 @@ class KeyStore {
     static const char* kMetaDataFile;
     static const android::String16 kRsaKeyType;
     static const android::String16 kEcKeyType;
-    Entropy* mEntropy;
 
     KeymasterDevices mKmDevices;
     bool mAllowNewFallback;
