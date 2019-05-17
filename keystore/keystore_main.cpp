@@ -17,7 +17,7 @@
 #define LOG_TAG "keystore"
 
 #include <android-base/logging.h>
-#include <android/hidl/manager/1.1/IServiceManager.h>
+#include <android/hidl/manager/1.2/IServiceManager.h>
 #include <android/security/keystore/IKeystoreService.h>
 #include <android/system/wifi/keystore/1.0/IKeystore.h>
 #include <binder/IPCThreadState.h>
@@ -44,14 +44,14 @@
 
 using ::android::sp;
 using ::android::hardware::configureRpcThreadpool;
-using ::android::system::wifi::keystore::V1_0::IKeystore;
-using ::android::system::wifi::keystore::V1_0::implementation::Keystore;
-using ::android::hidl::manager::V1_1::IServiceManager;
 using ::android::hardware::hidl_string;
 using ::android::hardware::hidl_vec;
-using ::android::hardware::keymaster::V4_0::SecurityLevel;
-using ::android::hardware::keymaster::V4_0::HmacSharingParameters;
 using ::android::hardware::keymaster::V4_0::ErrorCode;
+using ::android::hardware::keymaster::V4_0::HmacSharingParameters;
+using ::android::hardware::keymaster::V4_0::SecurityLevel;
+using ::android::hidl::manager::V1_2::IServiceManager;
+using ::android::system::wifi::keystore::V1_0::IKeystore;
+using ::android::system::wifi::keystore::V1_0::implementation::Keystore;
 
 using ::keystore::keymaster::support::Keymaster;
 using ::keystore::keymaster::support::Keymaster3;
@@ -62,7 +62,7 @@ using keystore::KeymasterDevices;
 template <typename Wrapper>
 KeymasterDevices enumerateKeymasterDevices(IServiceManager* serviceManager) {
     KeymasterDevices result;
-    serviceManager->listByInterface(
+    serviceManager->listManifestByInterface(
         Wrapper::WrappedIKeymasterDevice::descriptor, [&](const hidl_vec<hidl_string>& names) {
             auto try_get_device = [&](const auto& name, bool fail_silent) {
                 auto device = Wrapper::WrappedIKeymasterDevice::getService(name);
@@ -108,7 +108,7 @@ KeymasterDevices enumerateKeymasterDevices(IServiceManager* serviceManager) {
 }
 
 KeymasterDevices initializeKeymasters() {
-    auto serviceManager = android::hidl::manager::V1_1::IServiceManager::getService();
+    auto serviceManager = IServiceManager::getService();
     CHECK(serviceManager.get()) << "Failed to get ServiceManager";
     auto result = enumerateKeymasterDevices<Keymaster4>(serviceManager.get());
     auto softKeymaster = result[SecurityLevel::SOFTWARE];
