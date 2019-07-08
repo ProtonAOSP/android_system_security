@@ -366,7 +366,7 @@ bool KeystoreClientImpl::doesKeyExist(const std::string& key_name) {
     int32_t result;
     auto binder_result = keystore_->exist(key_name16, kDefaultUID, &result);
     if (!binder_result.isOk()) return false;  // binder error
-    return result == static_cast<int32_t>(ResponseCode::NO_ERROR);
+    return result;
 }
 
 bool KeystoreClientImpl::listKeys(const std::string& prefix,

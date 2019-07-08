@@ -76,13 +76,6 @@ cc_binary {
         pdk: {
             enabled: false,
         },
-        debuggable: {
-            cflags: [
-                // Allow VTS tests running as root to have
-                // additional permissions.
-                "-DGRANT_ROOT_ALL_PERMISSIONS",
-            ],
-        },
     },
 
     required: ["keystore_cli_v2"],
