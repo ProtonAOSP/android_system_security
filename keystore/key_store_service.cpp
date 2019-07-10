@@ -1039,6 +1039,10 @@ Status KeyStoreService::attestKey(
     std::tie(rc, keyBlob, charBlob, lockedEntry) =
         mKeyStore->getKeyForName(name8, callingUid, TYPE_KEYMASTER_10);
 
+    if (!rc.isOk()) {
+        return AIDL_RETURN(rc);
+    }
+
     auto dev = mKeyStore->getDevice(keyBlob);
     auto hidlKey = blob2hidlVec(keyBlob);
     dev->attestKey(
