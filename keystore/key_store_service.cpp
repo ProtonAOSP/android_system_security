@@ -72,11 +72,6 @@ const char* kTimestampFilePath = "timestamp";
 const int ID_ATTESTATION_REQUEST_GENERIC_INFO = 1 << 0;
 const int ID_ATTESTATION_REQUEST_UNIQUE_DEVICE_ID = 1 << 1;
 
-struct BIGNUM_Delete {
-    void operator()(BIGNUM* p) const { BN_free(p); }
-};
-typedef std::unique_ptr<BIGNUM, BIGNUM_Delete> Unique_BIGNUM;
-
 bool containsTag(const hidl_vec<KeyParameter>& params, Tag tag) {
     return params.end() !=
            std::find_if(params.begin(), params.end(),
