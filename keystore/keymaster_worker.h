@@ -115,6 +115,7 @@ class Worker {
     std::mutex pending_requests_mutex_;
     std::condition_variable pending_requests_cond_var_;
     bool running_ = false;
+    bool terminate_ = false;
 
   public:
     Worker();
