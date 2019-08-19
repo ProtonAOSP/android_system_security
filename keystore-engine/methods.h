@@ -29,28 +29,6 @@ extern const char* kKeystoreEngineId;
 extern int dsa_key_handle;
 extern int rsa_key_handle;
 
-struct DSA_Delete {
-    void operator()(DSA* p) const {
-        DSA_free(p);
-    }
-};
-typedef std::unique_ptr<DSA, struct DSA_Delete> Unique_DSA;
-
-struct EC_KEY_Delete {
-    void operator()(EC_KEY* p) const {
-        EC_KEY_free(p);
-    }
-};
-typedef std::unique_ptr<EC_KEY, EC_KEY_Delete> Unique_EC_KEY;
-
-struct RSA_Delete {
-    void operator()(RSA* p) const {
-        RSA_free(p);
-    }
-};
-typedef std::unique_ptr<RSA, struct RSA_Delete> Unique_RSA;
-
-
 /* Keyhandles for ENGINE metadata */
 int keyhandle_new(void*, void*, CRYPTO_EX_DATA* ad, int idx, long, void*);
 void keyhandle_free(void *, void *ptr, CRYPTO_EX_DATA*, int, long, void*);

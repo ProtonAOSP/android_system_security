@@ -402,11 +402,6 @@ bool KeyStore::upgradeBlob(Blob* blob, const uint8_t oldVersion) {
     return updated;
 }
 
-struct BIO_Delete {
-    void operator()(BIO* p) const { BIO_free(p); }
-};
-typedef std::unique_ptr<BIO, BIO_Delete> Unique_BIO;
-
 void KeyStore::readMetaData() {
     int in = TEMP_FAILURE_RETRY(open(kMetaDataFile, O_RDONLY));
     if (in < 0) {
