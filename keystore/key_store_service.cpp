@@ -70,11 +70,6 @@ using ::android::security::keystore::KeystoreResponse;
 constexpr double kIdRotationPeriod = 30 * 24 * 60 * 60; /* Thirty days, in seconds */
 const char* kTimestampFilePath = "timestamp";
 
-struct BIGNUM_Delete {
-    void operator()(BIGNUM* p) const { BN_free(p); }
-};
-typedef std::unique_ptr<BIGNUM, BIGNUM_Delete> Unique_BIGNUM;
-
 bool containsTag(const hidl_vec<KeyParameter>& params, Tag tag) {
     return params.end() !=
            std::find_if(params.begin(), params.end(),
