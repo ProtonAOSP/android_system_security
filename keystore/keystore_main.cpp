@@ -168,7 +168,7 @@ int main(int argc, char* argv[]) {
     configureRpcThreadpool(1, false /* callerWillJoin */);
     android::sp<IKeystore> wifiKeystoreHalService = new Keystore();
     android::status_t err = wifiKeystoreHalService->registerAsService();
-    CHECK(ret == android::OK) << "Cannot register wifi keystore HAL service: " << err;
+    CHECK(err == android::OK) << "Cannot register wifi keystore HAL service: " << err;
 
     /*
      * This thread is just going to process Binder transactions.
