@@ -51,7 +51,12 @@ const char* get_perm_label(perm_t perm);
  */
 uid_t get_keystore_euid(uid_t uid);
 
-bool has_permission(uid_t uid, perm_t perm, pid_t spid);
+/**
+ * Returns true if the uid/pid/sid has a permission. Checks based on sid if available.
+ *
+ * sid may be null on older kernels
+ */
+bool has_permission(uid_t uid, perm_t perm, pid_t spid, const char* sid);
 
 /**
  * Returns true if the callingUid is allowed to interact in the targetUid's
