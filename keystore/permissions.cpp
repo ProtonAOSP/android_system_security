@@ -59,6 +59,8 @@ user_euid user_euids[] = {{AID_VPN, AID_SYSTEM},
                           {AID_ROOT, AID_SYSTEM},
                           {AID_WIFI, AID_KEYSTORE},
                           {AID_KEYSTORE, AID_WIFI},
+                          {AID_FSVERITY_CERT, AID_ROOT},
+                          {AID_FSVERITY_CERT, AID_SYSTEM},
 
 #ifdef GRANT_ROOT_ALL_PERMISSIONS
                           // Allow VTS tests to act on behalf of the wifi user
