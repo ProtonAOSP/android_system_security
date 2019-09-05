@@ -9,7 +9,16 @@ cc_defaults {
     ],
 
     sanitize: {
-        misc_undefined: ["integer"],
+        misc_undefined: [
+             "signed-integer-overflow",
+             "unsigned-integer-overflow",
+             "shift",
+             "integer-divide-by-zero",
+             "implicit-unsigned-integer-truncation",
+             // BUG: 123630767
+             //"implicit-signed-integer-truncation",
+             "implicit-integer-sign-change",
+        ],
     },
 
     clang: true,
