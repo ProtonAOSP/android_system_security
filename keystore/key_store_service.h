@@ -243,25 +243,6 @@ class KeyStoreService : public android::security::keystore::BnKeystoreService {
      */
     std::mutex keystoreServiceMutex_;
 
-    std::mutex operationDeviceMapMutex_;
-    std::map<sp<IBinder>, std::shared_ptr<KeymasterWorker>> operationDeviceMap_;
-
-    void addOperationDevice(sp<IBinder> token, std::shared_ptr<KeymasterWorker> dev) {
-        std::lock_guard<std::mutex> lock(operationDeviceMapMutex_);
-        operationDeviceMap_.emplace(std::move(token), std::move(dev));
-    }
-    std::shared_ptr<KeymasterWorker> getOperationDevice(const sp<IBinder>& token) {
-        std::lock_guard<std::mutex> lock(operationDeviceMapMutex_);
-        auto it = operationDeviceMap_.find(token);
-        if (it != operationDeviceMap_.end()) {
-            return it->second;
-        }
-        return {};
-    }
-    void removeOperationDevice(const sp<IBinder>& token) {
-        std::lock_guard<std::mutex> lock(operationDeviceMapMutex_);
-        operationDeviceMap_.erase(token);
-    }
 };
 
 };  // namespace keystore
