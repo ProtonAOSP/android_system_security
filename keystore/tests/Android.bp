@@ -19,7 +19,7 @@ cc_test {
     static_libs: [
         "android.hardware.confirmationui@1.0",
         "libbase",
-        "libcrypto",
+        "libcrypto_static",
         "libcutils",
         "libgtest_main",
         "libhidlbase",
