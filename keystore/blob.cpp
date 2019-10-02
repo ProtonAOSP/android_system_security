@@ -228,7 +228,7 @@ Blob::Blob(const uint8_t* value, size_t valueLength, const uint8_t* info, uint8_
     mBlob->version = CURRENT_BLOB_VERSION;
     mBlob->type = uint8_t(type);
 
-    if (type == TYPE_MASTER_KEY) {
+    if (type == TYPE_MASTER_KEY || type == TYPE_MASTER_KEY_AES256) {
         mBlob->flags = KEYSTORE_FLAG_ENCRYPTED;
     } else {
         mBlob->flags = KEYSTORE_FLAG_NONE;
