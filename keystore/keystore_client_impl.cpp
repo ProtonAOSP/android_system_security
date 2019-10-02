@@ -17,6 +17,7 @@
 #include "keystore/keystore_client_impl.h"
 
 #include <future>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -441,9 +442,14 @@ bool KeystoreClientImpl::doesKeyExist(const std::string& key_name) {
 
 bool KeystoreClientImpl::listKeys(const std::string& prefix,
                                   std::vector<std::string>* key_name_list) {
+    return listKeysOfUid(prefix, kDefaultUID, key_name_list);
+}
+
+bool KeystoreClientImpl::listKeysOfUid(const std::string& prefix, int uid,
+                                       std::vector<std::string>* key_name_list) {
     String16 prefix16(prefix.data(), prefix.size());
     std::vector<::android::String16> matches;
-    auto binder_result = keystore_->list(prefix16, kDefaultUID, &matches);
+    auto binder_result = keystore_->list(prefix16, uid, &matches);
     if (!binder_result.isOk()) return false;
 
     for (const auto& match : matches) {
@@ -451,6 +457,14 @@ bool KeystoreClientImpl::listKeys(const std::string& prefix,
         key_name_list->push_back(prefix + std::string(key_name.string(), key_name.size()));
     }
     return true;
+}
+
+std::optional<std::vector<uint8_t>> KeystoreClientImpl::getKey(const std::string& alias, int uid) {
+    String16 alias16(alias.data(), alias.size());
+    std::vector<uint8_t> output;
+    auto binder_result = keystore_->get(alias16, uid, &output);
+    if (!binder_result.isOk()) return std::nullopt;
+    return output;
 }
 
 uint64_t KeystoreClientImpl::getNextVirtualHandle() {
