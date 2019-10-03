@@ -37,6 +37,7 @@ constexpr size_t kAesKeySize = 128 / 8;
 constexpr size_t kGcmTagLength = 128 / 8;
 constexpr size_t kGcmIvLength = 96 / 8;
 constexpr size_t kAes128KeySizeBytes = 128 / 8;
+constexpr size_t kAes256KeySizeBytes = 256 / 8;
 
 /* Here is the file format. There are two parts in blob.value, the secret and
  * the description. The secret is stored in ciphertext, and its original size
