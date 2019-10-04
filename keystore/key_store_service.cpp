@@ -933,9 +933,7 @@ Status KeyStoreService::finish(const ::android::sp<IKeystoreOperationResultCallb
 
     dev->finish(token, params.getParameters(), {}, signature, entropy,
                 [this, cb, token](OperationResult result_) {
-                    if (!result_.resultCode.isOk()) {
-                        mKeyStore->removeOperationDevice(token);
-                    }
+                    mKeyStore->removeOperationDevice(token);
                     cb->onFinished(result_);
                 });
 
