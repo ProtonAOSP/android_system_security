@@ -55,7 +55,12 @@ struct user_euid {
 };
 
 user_euid user_euids[] = {{AID_VPN, AID_SYSTEM},
+                          // Wifi services will run in system_server on devices not using wifi
+                          // mainline module.
                           {AID_WIFI, AID_SYSTEM},
+                          // Wifi services will run in network_stack on devices using wifi mainline
+                          // module.
+                          {AID_WIFI, AID_NETWORK_STACK},
                           {AID_ROOT, AID_SYSTEM},
                           {AID_WIFI, AID_KEYSTORE},
                           {AID_KEYSTORE, AID_WIFI},
