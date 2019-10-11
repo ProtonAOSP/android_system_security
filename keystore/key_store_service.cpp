@@ -339,18 +339,6 @@ Status KeyStoreService::listUidsOfAuthBoundKeys(std::vector<std::string>* uidsOu
     return Status::ok();
 }
 
-Status KeyStoreService::reset(int32_t* aidl_return) {
-    if (!checkBinderPermission(P_RESET)) {
-        *aidl_return = static_cast<int32_t>(ResponseCode::PERMISSION_DENIED);
-        return Status::ok();
-    }
-
-    uid_t callingUid = IPCThreadState::self()->getCallingUid();
-    mKeyStore->resetUser(get_user_id(callingUid), false);
-    *aidl_return = static_cast<int32_t>(ResponseCode::NO_ERROR);
-    return Status::ok();
-}
-
 Status KeyStoreService::onUserPasswordChanged(int32_t userId, const String16& password,
                                               int32_t* aidl_return) {
     if (!checkBinderPermission(P_PASSWORD)) {
