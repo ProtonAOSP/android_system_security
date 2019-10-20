@@ -55,7 +55,6 @@ cc_binary {
         "android.hardware.confirmationui@1.0",
         "android.hardware.keymaster@3.0",
         "android.hardware.keymaster@4.0",
-        "android.system.wifi.keystore@1.0",
         "libbase",
         "libbinder",
         "libcrypto",
@@ -74,7 +73,6 @@ cc_binary {
         "libservices",
         "libsoftkeymasterdevice",
         "libutils",
-        "libwifikeystorehal",
     ],
     init_rc: ["keystore.rc"],
     aidl: {
