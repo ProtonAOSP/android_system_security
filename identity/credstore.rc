@@ -1,0 +1,5 @@
+service credstore /system/bin/credstore /data/misc/credstore
+    class main
+    user keystore
+    group keystore drmrpc readproc log
+    writepid /dev/cpuset/foreground/tasks
