@@ -29,21 +29,31 @@ import android.security.keystore.IKeystoreCertificateChainCallback;
  * @hide
  */
 interface IKeystoreService {
+    @UnsupportedAppUsage
     int getState(int userId);
+    @UnsupportedAppUsage
     byte[] get(String name, int uid);
+    @UnsupportedAppUsage
     int insert(String name, in byte[] item, int uid, int flags);
+    @UnsupportedAppUsage
     int del(String name, int uid);
+    @UnsupportedAppUsage
     int exist(String name, int uid);
+    @UnsupportedAppUsage
     String[] list(String namePrefix, int uid);
+    @UnsupportedAppUsage
     int reset();
     int onUserPasswordChanged(int userId, String newPassword);
     int lock(int userId);
     int unlock(int userId, String userPassword);
     int isEmpty(int userId);
     String grant(String name, int granteeUid);
+    @UnsupportedAppUsage
     int ungrant(String name, int granteeUid);
     long getmtime(String name, int uid);
+    @UnsupportedAppUsage
     int is_hardware_backed(String string);
+    @UnsupportedAppUsage
     int clear_uid(long uid);
 
     int addRngEntropy(IKeystoreResponseCallback cb, in byte[] data, int flags);
