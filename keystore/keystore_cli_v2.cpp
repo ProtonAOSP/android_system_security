@@ -416,16 +416,10 @@ int SignAndVerify(const std::string& name) {
         return result.getErrorCode();
     }
     AuthorizationSet empty_params;
-    size_t num_input_bytes_consumed;
     std::string output_data;
-    result = keystore->updateOperation(handle, empty_params, "data_to_sign",
-                                       &num_input_bytes_consumed, &output_params, &output_data);
-    if (!result.isOk()) {
-        printf("Sign: UpdateOperation failed: %d\n", result.getErrorCode());
-        return result.getErrorCode();
-    }
-    result = keystore->finishOperation(handle, empty_params, std::string() /*signature_to_verify*/,
-                                       &output_params, &output_data);
+    result = keystore->finishOperation(handle, empty_params, "data_to_sign",
+                                       std::string() /*signature_to_verify*/, &output_params,
+                                       &output_data);
     if (!result.isOk()) {
         printf("Sign: FinishOperation failed: %d\n", result.getErrorCode());
         return result.getErrorCode();
@@ -436,18 +430,8 @@ int SignAndVerify(const std::string& name) {
     output_data.clear();
     result =
         keystore->beginOperation(KeyPurpose::VERIFY, name, sign_params, &output_params, &handle);
-    if (!result.isOk()) {
-        printf("Verify: BeginOperation failed: %d\n", result.getErrorCode());
-        return result.getErrorCode();
-    }
-    result = keystore->updateOperation(handle, empty_params, "data_to_sign",
-                                       &num_input_bytes_consumed, &output_params, &output_data);
-    if (!result.isOk()) {
-        printf("Verify: UpdateOperation failed: %d\n", result.getErrorCode());
-        return result.getErrorCode();
-    }
-    result = keystore->finishOperation(handle, empty_params, signature_to_verify, &output_params,
-                                       &output_data);
+    result = keystore->finishOperation(handle, empty_params, "data_to_sign", signature_to_verify,
+                                       &output_params, &output_data);
     if (result == ErrorCode::VERIFICATION_FAILED) {
         printf("Verify: Failed to verify signature.\n");
         return result.getErrorCode();

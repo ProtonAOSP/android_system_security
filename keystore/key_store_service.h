@@ -126,8 +126,8 @@ class KeyStoreService : public android::security::keystore::BnKeystoreService {
     finish(const ::android::sp<::android::security::keystore::IKeystoreOperationResultCallback>& cb,
            const ::android::sp<::android::IBinder>& token,
            const ::android::security::keymaster::KeymasterArguments& params,
-           const ::std::vector<uint8_t>& signature, const ::std::vector<uint8_t>& entropy,
-           int32_t* _aidl_return) override;
+           const ::std::vector<uint8_t>& input, const ::std::vector<uint8_t>& signature,
+           const ::std::vector<uint8_t>& entropy, int32_t* _aidl_return) override;
     ::android::binder::Status
     abort(const ::android::sp<::android::security::keystore::IKeystoreResponseCallback>& cb,
           const ::android::sp<::android::IBinder>& token, int32_t* _aidl_return) override;

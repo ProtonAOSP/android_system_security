@@ -892,6 +892,7 @@ Status KeyStoreService::update(const ::android::sp<IKeystoreOperationResultCallb
 Status KeyStoreService::finish(const ::android::sp<IKeystoreOperationResultCallback>& cb,
                                const ::android::sp<::android::IBinder>& token,
                                const ::android::security::keymaster::KeymasterArguments& params,
+                               const ::std::vector<uint8_t>& input,
                                const ::std::vector<uint8_t>& signature,
                                const ::std::vector<uint8_t>& entropy, int32_t* _aidl_return) {
     if (!checkAllowedOperationParams(params.getParameters())) {
@@ -903,7 +904,7 @@ Status KeyStoreService::finish(const ::android::sp<IKeystoreOperationResultCallb
         return AIDL_RETURN(ErrorCode::INVALID_OPERATION_HANDLE);
     }
 
-    dev->finish(token, params.getParameters(), {}, signature, entropy,
+    dev->finish(token, params.getParameters(), input, signature, entropy,
                 [this, cb, token](OperationResult result_) {
                     mKeyStore->removeOperationDevice(token);
                     cb->onFinished(result_);
