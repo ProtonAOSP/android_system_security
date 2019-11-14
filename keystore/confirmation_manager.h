@@ -84,8 +84,12 @@ class ConfirmationManager : public android::hardware::hidl_death_recipient,
   private:
     friend class ConfirmationResultCallback;
 
+    // Set rate limiting to not decrement on next abort and aborts
+    // confirmationui.
+    void cancelPrompt();
+
     void finalizeTransaction(ConfirmationResponseCode responseCode,
-                             hidl_vec<uint8_t> dataThatWasConfirmed, bool callAbortOnHal);
+                             hidl_vec<uint8_t> dataThatWasConfirmed);
 
     // This mutex protects all data below it.
     std::mutex mMutex;
