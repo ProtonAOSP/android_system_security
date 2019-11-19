@@ -68,7 +68,7 @@ interface IKeystoreService {
     int begin(in IKeystoreOperationResultCallback cb, IBinder appToken, String alias, int purpose, boolean pruneable,
         in KeymasterArguments params, in byte[] entropy, int uid);
     int update(in IKeystoreOperationResultCallback cb, IBinder token, in KeymasterArguments params, in byte[] input);
-    int finish(in IKeystoreOperationResultCallback cb, IBinder token, in KeymasterArguments params, in byte[] signature,
+    int finish(in IKeystoreOperationResultCallback cb, IBinder token, in KeymasterArguments params, in byte[] input, in byte[] signature,
         in byte[] entropy);
     int abort(in IKeystoreResponseCallback cb, IBinder token);
     int addAuthToken(in byte[] authToken);

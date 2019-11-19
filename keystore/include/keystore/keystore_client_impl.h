@@ -76,6 +76,7 @@ class KeystoreClientImpl : public KeystoreClient {
                                              std::string* output_data) override;
     KeyStoreNativeReturnCode finishOperation(uint64_t handle,
                                              const keystore::AuthorizationSet& input_parameters,
+                                             const std::string& input_data,
                                              const std::string& signature_to_verify,
                                              keystore::AuthorizationSet* output_parameters,
                                              std::string* output_data) override;
