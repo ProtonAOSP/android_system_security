@@ -166,16 +166,9 @@ bool KeystoreClientImpl::oneShotOperation(KeyPurpose purpose, const std::string&
         return false;
     }
     AuthorizationSet empty_params;
-    size_t num_input_bytes_consumed;
     AuthorizationSet ignored_params;
-    result = updateOperation(handle, empty_params, input_data, &num_input_bytes_consumed,
-                             &ignored_params, output_data);
-    if (!result.isOk()) {
-        ALOGE("UpdateOperation failed: %d", result.getErrorCode());
-        return false;
-    }
-    result =
-        finishOperation(handle, empty_params, signature_to_verify, &ignored_params, output_data);
+    result = finishOperation(handle, empty_params, input_data, signature_to_verify, &ignored_params,
+                             output_data);
     if (!result.isOk()) {
         ALOGE("FinishOperation failed: %d", result.getErrorCode());
         return false;
@@ -384,6 +377,7 @@ KeystoreClientImpl::updateOperation(uint64_t handle, const AuthorizationSet& inp
 
 KeyStoreNativeReturnCode
 KeystoreClientImpl::finishOperation(uint64_t handle, const AuthorizationSet& input_parameters,
+                                    const std::string& input_data,
                                     const std::string& signature_to_verify,
                                     AuthorizationSet* output_parameters, std::string* output_data) {
     if (active_operations_.count(handle) == 0) {
@@ -391,12 +385,14 @@ KeystoreClientImpl::finishOperation(uint64_t handle, const AuthorizationSet& inp
     }
     int32_t error_code;
     auto hidlSignature = blob2hidlVec(signature_to_verify);
+    auto hidlInput = blob2hidlVec(input_data);
     android::sp<OperationResultPromise> promise(new OperationResultPromise{});
     auto future = promise->get_future();
     auto binder_result = keystore_->finish(
         promise, active_operations_[handle],
         android::security::keymaster::KeymasterArguments(input_parameters.hidl_data()),
-        (std::vector<uint8_t>)hidlSignature, hidl_vec<uint8_t>(), &error_code);
+        (std::vector<uint8_t>)hidlInput, (std::vector<uint8_t>)hidlSignature, hidl_vec<uint8_t>(),
+        &error_code);
     if (!binder_result.isOk()) return ResponseCode::SYSTEM_ERROR;
     KeyStoreNativeReturnCode rc(error_code);
     if (!rc.isOk()) return rc;
