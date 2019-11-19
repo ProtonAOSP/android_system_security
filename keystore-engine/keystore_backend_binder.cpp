@@ -211,9 +211,9 @@ int32_t KeystoreBackendBinder::sign(const char* key_id, const uint8_t* in, size_
     promise = new OperationResultPromise();
     future = promise->get_future();
 
-    binder_result = service->finish(promise, handle, KeymasterArguments(params),
-                                    std::vector<uint8_t>() /* signature */,
-                                    std::vector<uint8_t>() /* entropy */, &error_code);
+    binder_result = service->finish(
+        promise, handle, KeymasterArguments(params), std::vector<uint8_t>() /* input */,
+        std::vector<uint8_t>() /* signature */, std::vector<uint8_t>() /* entropy */, &error_code);
 
     if (!binder_result.isOk()) {
         LOG(ERROR) << AT << "communication error while calling keystore";

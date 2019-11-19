@@ -160,7 +160,7 @@ class KeystoreClient {
     // keymaster_error_t on failure.
     virtual KeyStoreNativeReturnCode
     finishOperation(uint64_t handle, const keystore::AuthorizationSet& input_parameters,
-                    const std::string& signature_to_verify,
+                    const std::string& input_data, const std::string& signature_to_verify,
                     keystore::AuthorizationSet* output_parameters, std::string* output_data) = 0;
 
     // Aborts the operation associated with |handle|. Returns KM_ERROR_OK on
