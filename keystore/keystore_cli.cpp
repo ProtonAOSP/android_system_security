@@ -47,21 +47,6 @@ static const char* responses[] = {
     /* [WRONG_PASSWORD + 3] = */ "Wrong password (4 tries left)",
 };
 
-#define NO_ARG_INT_RETURN(cmd) \
-    do { \
-        if (strcmp(argv[1], #cmd) == 0) { \
-            int32_t ret = -1; \
-            service->cmd(&ret); \
-            if (ret < 0) { \
-                fprintf(stderr, "%s: could not connect: %d\n", argv[0], ret); \
-                return 1; \
-            } else { \
-                printf(#cmd ": %s (%d)\n", responses[ret], ret); \
-                return 0; \
-            } \
-        } \
-    } while (0)
-
 #define SINGLE_ARG_INT_RETURN(cmd) \
     do { \
         if (strcmp(argv[1], #cmd) == 0) { \
@@ -241,8 +226,6 @@ int main(int argc, char* argv[])
         return list(service, argc < 3 ? String16("") : String16(argv[2]),
                 argc < 4 ? -1 : atoi(argv[3]));
     }
-
-    NO_ARG_INT_RETURN(reset);
 
     // TODO: notifyUserPasswordChanged
 
