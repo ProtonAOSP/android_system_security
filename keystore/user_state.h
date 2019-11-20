@@ -55,8 +55,6 @@ class UserState {
     void setState(State state);
     State getState() const { return mState; }
 
-    int8_t getRetry() const { return mRetry; }
-
     void zeroizeMasterKeysInMemory();
     bool deleteMasterKey();
 
@@ -81,7 +79,6 @@ class UserState {
     static constexpr int MASTER_KEY_SIZE_BYTES = kAes256KeySizeBytes;
     static constexpr int MASTER_KEY_SIZE_BITS = MASTER_KEY_SIZE_BYTES * 8;
 
-    static constexpr int MAX_RETRY = 4;
     static constexpr size_t SALT_SIZE = 16;
 
     void generateKeyFromPassword(std::vector<uint8_t>& key, const android::String8& pw,
@@ -94,7 +91,6 @@ class UserState {
 
     uid_t mUserId;
     State mState;
-    int8_t mRetry;
 
     std::vector<uint8_t> mMasterKey;
     uint8_t mSalt[SALT_SIZE];
