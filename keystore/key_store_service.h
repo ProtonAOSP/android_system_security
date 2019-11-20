@@ -66,7 +66,6 @@ class KeyStoreService : public android::security::keystore::BnKeystoreService {
     ::android::binder::Status listUidsOfAuthBoundKeys(std::vector<::std::string>* uids,
                                                       int32_t* _aidl_return) override;
 
-    ::android::binder::Status reset(int32_t* _aidl_return) override;
     ::android::binder::Status onUserPasswordChanged(int32_t userId,
                                                     const ::android::String16& newPassword,
                                                     int32_t* _aidl_return) override;
