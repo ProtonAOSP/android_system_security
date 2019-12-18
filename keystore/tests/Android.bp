@@ -27,11 +27,11 @@ cc_test {
         "libkeystore_test",
         "liblog",
         "libutils",
-        "libvndksupport",
     ],
     shared_libs: [
         "libbinder",
         "libkeymaster_messages",
+        "libvndksupport",
     ],
    sanitize: {
      cfi: false,
