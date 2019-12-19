@@ -32,7 +32,11 @@
 #include "key_proto_handler.h"
 #include "keystore_utils.h"
 
+#include <chrono>
+
 namespace keystore {
+
+using namespace std::chrono;
 
 constexpr size_t kMaxOperations = 15;
 
@@ -44,23 +48,34 @@ using android::security::keymaster::OperationResult;
 Worker::Worker() {}
 Worker::~Worker() {
     std::unique_lock<std::mutex> lock(pending_requests_mutex_);
-    pending_requests_cond_var_.wait(lock, [this] { return pending_requests_.empty(); });
+    terminate_ = true;
+    pending_requests_cond_var_.notify_all();
+    pending_requests_cond_var_.wait(lock, [this] { return !running_; });
 }
 void Worker::addRequest(WorkerTask request) {
     std::unique_lock<std::mutex> lock(pending_requests_mutex_);
-    bool start_thread = pending_requests_.empty();
+    bool start_thread = !running_;
+    running_ = true;
     pending_requests_.push(std::move(request));
     lock.unlock();
+    pending_requests_cond_var_.notify_all();
     if (start_thread) {
         auto worker = std::thread([this] {
             std::unique_lock<std::mutex> lock(pending_requests_mutex_);
-            running_ = true;
-            while (!pending_requests_.empty()) {
-                auto request = std::move(pending_requests_.front());
-                lock.unlock();
-                request();
-                lock.lock();
-                pending_requests_.pop();
+            while (running_) {
+                // Wait for 30s if the request queue is empty, then kill die.
+                // Die immediately if termiate_ was set which happens in the destructor.
+                auto status = pending_requests_cond_var_.wait_for(
+                    lock, 30s, [this]() { return !pending_requests_.empty() || terminate_; });
+                if (status && !terminate_) {
+                    auto request = std::move(pending_requests_.front());
+                    lock.unlock();
+                    request();
+                    lock.lock();
+                    pending_requests_.pop();
+                } else {
+                    running_ = false;
+                }
                 pending_requests_cond_var_.notify_all();
             }
         });
