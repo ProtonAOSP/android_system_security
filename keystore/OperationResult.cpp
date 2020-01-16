@@ -29,8 +29,8 @@ namespace android {
 namespace security {
 namespace keymaster {
 
-using keystore::keymaster::ErrorCode;
 using ::android::status_t;
+using ::keystore::ErrorCode;
 
 OperationResult::OperationResult() : resultCode(), token(), handle(0), inputConsumed(0), data() {}
 
