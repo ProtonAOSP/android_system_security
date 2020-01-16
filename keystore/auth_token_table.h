@@ -76,6 +76,10 @@ class AuthTokenTable {
     std::tuple<Error, HardwareAuthToken> FindAuthorization(const AuthorizationSet& key_info,
                                                            KeyPurpose purpose, uint64_t op_handle);
 
+    std::tuple<Error, HardwareAuthToken>
+    FindAuthorizationForCredstore(uint64_t challenge, uint64_t secureUserId,
+                                  int64_t authTokenMaxAgeMillis);
+
     /**
      * Mark operation completed.  This allows tokens associated with the specified operation to be
      * superseded by new tokens.

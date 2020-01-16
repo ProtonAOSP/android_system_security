@@ -84,4 +84,7 @@ interface IKeystoreService {
     boolean isConfirmationPromptSupported();
     int onKeyguardVisibilityChanged(in boolean isShowing, in int userId);
     int listUidsOfAuthBoundKeys(out @utf8InCpp List<String> uids);
+
+    // Called by credstore (and only credstore).
+    byte[] getAuthTokenForCredstore(in long challenge, in long secureUserId, in int authTokenMaxAgeMillis);
 }
