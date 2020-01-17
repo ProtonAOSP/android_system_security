@@ -1,0 +1,86 @@
+cc_defaults {
+    name: "identity_defaults",
+    cflags: [
+        "-Wall",
+        // "-Werror",
+        "-Wextra",
+        "-Wunused",
+    ],
+    sanitize: {
+        misc_undefined : ["integer"],
+    },
+    clang : true,
+}
+
+cc_binary {
+    name: "credstore",
+    defaults: ["identity_defaults"],
+
+    srcs: [
+        "main.cpp",
+        "CredentialStore.cpp",
+        "CredentialStoreFactory.cpp",
+        "WritableCredential.cpp",
+        "Credential.cpp",
+        "CredentialData.cpp",
+        "Util.cpp",
+    ],
+    init_rc: ["credstore.rc"],
+    shared_libs: [
+        "android.hardware.identity@1.0",
+        "android.hardware.keymaster@4.0",
+        "libbase",
+        "libbinder",
+        "libkeystore_aidl",
+        "libcredstore_aidl",
+        "libutils",
+        "libhidlbase",
+        "android.hardware.identity-support-lib",
+        "libkeymaster4support",
+    ],
+    static_libs: [
+        "libcppbor",
+    ]
+}
+
+filegroup {
+    name: "credstore_aidl",
+    srcs: [
+        "binder/android/security/identity/ICredential.aidl",
+        "binder/android/security/identity/IWritableCredential.aidl",
+        "binder/android/security/identity/ICredentialStore.aidl",
+        "binder/android/security/identity/AccessControlProfileParcel.aidl",
+        "binder/android/security/identity/EntryNamespaceParcel.aidl",
+        "binder/android/security/identity/EntryParcel.aidl",
+        "binder/android/security/identity/RequestNamespaceParcel.aidl",
+        "binder/android/security/identity/RequestEntryParcel.aidl",
+        "binder/android/security/identity/ResultNamespaceParcel.aidl",
+        "binder/android/security/identity/ResultEntryParcel.aidl",
+        "binder/android/security/identity/GetEntriesResultParcel.aidl",
+        "binder/android/security/identity/AuthKeyParcel.aidl",
+        "binder/android/security/identity/SecurityHardwareInfoParcel.aidl",
+        "binder/android/security/identity/ICredentialStoreFactory.aidl",
+    ],
+    path: "binder",
+}
+
+cc_library_shared {
+    name: "libcredstore_aidl",
+    srcs: [
+        ":credstore_aidl",
+        ],
+    aidl: {
+        export_aidl_headers: true,
+        include_dirs: [
+            "system/security/identity/binder",
+        ],
+    },
+    shared_libs: [
+        "libbinder",
+        "libutils",
+        "libkeymaster4support",
+    ],
+    export_shared_lib_headers: [
+        "libbinder",
+    ],
+}

@@ -173,6 +173,60 @@ AuthTokenTable::FindTimedAuthorization(const std::vector<uint64_t>& sids,
     return {OK, newest_match->token()};
 }
 
+std::tuple<AuthTokenTable::Error, HardwareAuthToken>
+AuthTokenTable::FindAuthorizationForCredstore(uint64_t challenge, uint64_t secureUserId,
+                                              int64_t authTokenMaxAgeMillis) {
+    std::vector<uint64_t> sids = {secureUserId};
+    HardwareAuthenticatorType auth_type = HardwareAuthenticatorType::ANY;
+
+    time_t now = clock_function_();
+
+    // challenge-based - the authToken has to contain the given challenge.
+    if (challenge != 0) {
+        auto matching_op = find_if(
+            entries_, [&](Entry& e) { return e.token().challenge == challenge && !e.completed(); });
+        if (matching_op == entries_.end()) {
+            return {AUTH_TOKEN_NOT_FOUND, {}};
+        }
+
+        if (!matching_op->SatisfiesAuth(sids, auth_type)) {
+            return {AUTH_TOKEN_WRONG_SID, {}};
+        }
+
+        if (authTokenMaxAgeMillis > 0) {
+            if (static_cast<int64_t>(matching_op->time_received()) + authTokenMaxAgeMillis <
+                static_cast<int64_t>(now)) {
+                return {AUTH_TOKEN_EXPIRED, {}};
+            }
+        }
+
+        return {OK, matching_op->token()};
+    }
+
+    // Otherwise, no challenge - any authToken younger than the specified maximum
+    // age will do.
+    Entry* newest_match = nullptr;
+    for (auto& entry : entries_) {
+        if (entry.SatisfiesAuth(sids, auth_type) && entry.is_newer_than(newest_match)) {
+            newest_match = &entry;
+        }
+    }
+
+    if (newest_match == nullptr) {
+        return {AUTH_TOKEN_NOT_FOUND, {}};
+    }
+
+    if (authTokenMaxAgeMillis > 0) {
+        if (static_cast<int64_t>(newest_match->time_received()) + authTokenMaxAgeMillis <
+            static_cast<int64_t>(now)) {
+            return {AUTH_TOKEN_EXPIRED, {}};
+        }
+    }
+
+    newest_match->UpdateLastUse(now);
+    return {OK, newest_match->token()};
+}
+
 void AuthTokenTable::ExtractSids(const AuthorizationSet& key_info, std::vector<uint64_t>* sids) {
     assert(sids);
     for (auto& param : key_info)
