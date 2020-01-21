@@ -1354,12 +1354,23 @@ bool KeyStoreService::checkAllowedOperationParams(const hidl_vec<KeyParameter>& 
 }
 
 Status KeyStoreService::onKeyguardVisibilityChanged(bool isShowing, int32_t userId,
-                                                    int32_t* aidl_return) {
+                                                    int32_t* _aidl_return) {
     KEYSTORE_SERVICE_LOCK;
+    if (isShowing) {
+        if (!checkBinderPermission(P_LOCK, UID_SELF)) {
+            LOG(WARNING) << "onKeyguardVisibilityChanged called with isShowing == true but "
+                            "without LOCK permission";
+            return AIDL_RETURN(ResponseCode::PERMISSION_DENIED);
+        }
+    } else {
+        if (!checkBinderPermission(P_UNLOCK, UID_SELF)) {
+            LOG(WARNING) << "onKeyguardVisibilityChanged called with isShowing == false but "
+                            "without UNLOCK permission";
+            return AIDL_RETURN(ResponseCode::PERMISSION_DENIED);
+        }
+    }
     mKeyStore->getEnforcementPolicy().set_device_locked(isShowing, userId);
-    *aidl_return = static_cast<int32_t>(ResponseCode::NO_ERROR);
-
-    return Status::ok();
+    return AIDL_RETURN(ResponseCode::NO_ERROR);
 }
 
 }  // namespace keystore
