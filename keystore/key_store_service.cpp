@@ -2353,15 +2353,24 @@ KeyStoreServiceReturnCode KeyStoreService::upgradeKeyBlob(const String16& name, 
 }
 
 Status KeyStoreService::onKeyguardVisibilityChanged(bool isShowing, int32_t userId,
-                                                    int32_t* aidl_return) {
+                                                    int32_t* _aidl_return) {
     KEYSTORE_SERVICE_LOCK;
-    enforcement_policy.set_device_locked(isShowing, userId);
-    if (!isShowing) {
+    if (isShowing) {
+        if (!checkBinderPermission(P_LOCK, UID_SELF)) {
+            LOG(WARNING) << "onKeyguardVisibilityChanged called with isShowing == true but "
+                            "without LOCK permission";
+            return AIDL_RETURN(ResponseCode::PERMISSION_DENIED);
+        }
+    } else {
+        if (!checkBinderPermission(P_UNLOCK, UID_SELF)) {
+            LOG(WARNING) << "onKeyguardVisibilityChanged called with isShowing == false but "
+                            "without UNLOCK permission";
+            return AIDL_RETURN(ResponseCode::PERMISSION_DENIED);
+        }
         mActiveUserId = userId;
     }
-    *aidl_return = static_cast<int32_t>(ResponseCode::NO_ERROR);
-
-    return Status::ok();
+    enforcement_policy.set_device_locked(isShowing, userId);
+    return AIDL_RETURN(ResponseCode::NO_ERROR);
 }
 
 }  // namespace keystore
