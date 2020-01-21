@@ -20,7 +20,7 @@
 
 #include <condition_variable>
 #include <functional>
-#include <keymasterV4_0/Keymaster.h>
+#include <keymasterV4_1/Keymaster.h>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -32,6 +32,7 @@
 #include <keystore/KeyCharacteristics.h>
 #include <keystore/KeymasterBlob.h>
 #include <keystore/OperationResult.h>
+#include <keystore/keymaster_types.h>
 #include <keystore/keystore_return_types.h>
 
 #include "blob.h"
@@ -43,16 +44,7 @@ using android::sp;
 using ::android::hardware::hidl_vec;
 using ::android::hardware::Return;
 using ::android::hardware::Void;
-using android::hardware::keymaster::V4_0::ErrorCode;
-using android::hardware::keymaster::V4_0::HardwareAuthToken;
-using android::hardware::keymaster::V4_0::HmacSharingParameters;
-using android::hardware::keymaster::V4_0::KeyCharacteristics;
-using android::hardware::keymaster::V4_0::KeyFormat;
-using android::hardware::keymaster::V4_0::KeyParameter;
-using android::hardware::keymaster::V4_0::KeyPurpose;
-using android::hardware::keymaster::V4_0::VerificationToken;
-using android::hardware::keymaster::V4_0::support::Keymaster;
-// using KeystoreCharacteristics = ::android::security::keymaster::KeyCharacteristics;
+using android::hardware::keymaster::V4_1::support::Keymaster;
 using ::android::security::keymaster::KeymasterBlob;
 
 class KeyStore;
