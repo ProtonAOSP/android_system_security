@@ -29,8 +29,8 @@ namespace keystore {
 
 using ConfirmationResponseCode = android::hardware::confirmationui::V1_0::ResponseCode;
 
-using std::chrono::time_point;
 using std::chrono::duration;
+using std::chrono::time_point;
 
 template <typename Clock = std::chrono::steady_clock> class RateLimiting {
   private:
@@ -96,7 +96,17 @@ template <typename Clock = std::chrono::steady_clock> class RateLimiting {
         return false;
     }
 
+    // The app is penalized for cancelling a request. Request are rolled back only if
+    // the prompt was cancelled by the system: e.g. a system error or asynchronous event.
+    // When the user cancels the prompt, it is subject to rate limiting.
+    static constexpr const uint_t kInvalidRequester = -1;
+
+    void cancelPrompt() { latest_requester_ = kInvalidRequester; }
+
     void processResult(ConfirmationResponseCode rc) {
+        if (latest_requester_ == kInvalidRequester) {
+            return;
+        }
         switch (rc) {
         case ConfirmationResponseCode::OK:
             // reset the counter slot
