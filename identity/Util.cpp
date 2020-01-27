@@ -60,7 +60,7 @@ optional<vector<uint8_t>> fileGetContents(const string& path) {
     uint8_t* p = data.data();
     size_t remaining = data.size();
     while (remaining > 0) {
-        size_t numRead = TEMP_FAILURE_RETRY(read(fd, p, remaining));
+        ssize_t numRead = TEMP_FAILURE_RETRY(read(fd, p, remaining));
         if (numRead <= 0) {
             PLOG(ERROR) << "Failed reading from '" << path << "'";
             close(fd);
@@ -94,7 +94,7 @@ bool fileSetContents(const string& path, const vector<uint8_t>& data) {
     const uint8_t* p = data.data();
     size_t remaining = data.size();
     while (remaining > 0) {
-        size_t numWritten = TEMP_FAILURE_RETRY(write(fd, p, remaining));
+        ssize_t numWritten = TEMP_FAILURE_RETRY(write(fd, p, remaining));
         if (numWritten <= 0) {
             PLOG(ERROR) << "Failed writing into temp file for '" << path << "'";
             close(fd);
