@@ -125,15 +125,7 @@ Status ConfirmationManager::cancelConfirmationPrompt(const sp<IBinder>& listener
 void ConfirmationManager::cancelPrompt() {
     mMutex.lock();
     mRateLimiting.cancelPrompt();
-    if (mCurrentListener != nullptr) {
-        mCurrentListener->unlinkToDeath(mDeathRecipient);
-        mCurrentListener = nullptr;
-    }
     sp<IConfirmationUI> confirmationUI = mCurrentConfirmationUI;
-    if (mCurrentConfirmationUI != nullptr) {
-        mCurrentConfirmationUI->unlinkToDeath(this);
-        mCurrentConfirmationUI = nullptr;
-    }
     mMutex.unlock();
     if (confirmationUI != nullptr) {
         confirmationUI->abort();
