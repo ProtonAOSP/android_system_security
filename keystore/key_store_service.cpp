@@ -42,9 +42,9 @@
 
 #include "defaults.h"
 #include "key_proto_handler.h"
-#include "keystore_attestation_id.h"
 #include "keystore_keymaster_enforcement.h"
 #include "keystore_utils.h"
+#include <keystore/keystore_attestation_id.h>
 #include <keystore/keystore_hidl_support.h>
 #include <keystore/keystore_return_types.h>
 

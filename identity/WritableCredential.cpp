@@ -17,15 +17,12 @@
 #define LOG_TAG "WritableCredential"
 
 #include <android-base/logging.h>
-
 #include <android/hardware/identity/support/IdentityCredentialSupport.h>
-
 #include <android/security/identity/ICredentialStore.h>
-
 #include <binder/IPCThreadState.h>
-
 #include <cppbor.h>
 #include <cppbor_parse.h>
+#include <keystore/keystore_attestation_id.h>
 
 #include "CredentialData.h"
 #include "Util.h"
@@ -60,11 +57,23 @@ Status WritableCredential::ensureAttestationCertificateExists(const vector<uint8
         return Status::ok();
     }
 
+    const int32_t callingUid = IPCThreadState::self()->getCallingUid();
+    auto asn1AttestationId = android::security::gather_attestation_application_id(callingUid);
+    if (!asn1AttestationId.isOk()) {
+        LOG(ERROR) << "Failed gathering AttestionApplicationId";
+        return Status::fromServiceSpecificError(ICredentialStore::ERROR_GENERIC,
+                                                "Failed gathering AttestionApplicationId");
+    }
+
     Result result;
     halBinder_->getAttestationCertificate(
-        challenge, [&](const Result& _result, const hidl_vec<uint8_t>& _attestationCertificate) {
+        asn1AttestationId.value(), challenge,
+        [&](const Result& _result, const hidl_vec<hidl_vec<uint8_t>>& _splitCerts) {
             result = _result;
-            attestationCertificate = _attestationCertificate;
+            vector<vector<uint8_t>> splitCerts;
+            std::copy(_splitCerts.begin(), _splitCerts.end(), std::back_inserter(splitCerts));
+            attestationCertificate =
+                ::android::hardware::identity::support::certificateChainJoin(splitCerts);
         });
     if (result.code != ResultCode::OK) {
         LOG(ERROR) << "Error calling getAttestationCertificate()";
