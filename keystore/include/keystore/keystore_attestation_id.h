@@ -51,7 +51,7 @@ template <typename T> class StatusOr {
 
     ::android::status_t status() const { return _status; }
 
-    const T& value() const & { return _value; }
+    const T& value() const& { return _value; }
     T& value() & { return _value; }
     T&& value() && { return std::move(_value); }
 

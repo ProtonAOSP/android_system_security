@@ -32,6 +32,7 @@ cc_test {
     shared_libs: [
         "libbinder",
         "libkeymaster_messages",
+        "libkeystore-attestation-application-id",
         "libvndksupport",
     ],
    sanitize: {

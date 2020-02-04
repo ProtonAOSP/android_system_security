@@ -29,7 +29,6 @@ cc_binary {
     defaults: ["keystore_defaults"],
 
     srcs: [
-        ":IKeyAttestationApplicationIdProvider.aidl",
         "KeyStore.cpp",
         "auth_token_table.cpp",
         "blob.cpp",
@@ -41,7 +40,6 @@ cc_binary {
         "keyblob_utils.cpp",
         "keymaster_enforcement.cpp",
         "keymaster_worker.cpp",
-        "keystore_attestation_id.cpp",
         "keystore_main.cpp",
         "keystore_utils.cpp",
         "legacy_keymaster_device_wrapper.cpp",
@@ -66,6 +64,7 @@ cc_binary {
         "libkeymaster4_1support",
         "libkeymaster_messages",
         "libkeymaster_portable",
+        "libkeystore-attestation-application-id",
         "libkeystore_aidl",
         "libkeystore_binder",
         "libkeystore_parcelables",
@@ -146,13 +145,10 @@ cc_library_shared {
     defaults: ["keystore_defaults"],
     export_include_dirs: ["include"],
     srcs: [
-        "KeyAttestationApplicationId.cpp",
-        "KeyAttestationPackageInfo.cpp",
         "KeymasterArguments.cpp",
         "keystore_aidl_hidl_marshalling_utils.cpp",
         "KeystoreResponse.cpp",
         "OperationResult.cpp",
-        "Signature.cpp",
     ],
     shared_libs: [
         "android.hardware.keymaster@4.0",
@@ -165,6 +161,7 @@ cc_library_shared {
         "liblog",
         "libprotobuf-cpp-lite",
         "libutils",
+        "libkeystore-attestation-application-id",
     ],
     export_shared_lib_headers: [
         "android.hardware.keymaster@4.0",
@@ -215,6 +212,31 @@ cc_library_shared {
     ],
 }
 
+// Library used by both keystore and credstore for generating the ASN.1 stored
+// in Tag::ATTESTATION_APPLICATION_ID
+cc_library_shared {
+    name: "libkeystore-attestation-application-id",
+    defaults: ["keystore_defaults"],
+
+    srcs: [
+        ":IKeyAttestationApplicationIdProvider.aidl",
+        "keystore_attestation_id.cpp",
+        "KeyAttestationApplicationId.cpp",
+        "KeyAttestationPackageInfo.cpp",
+        "Signature.cpp",
+    ],
+    shared_libs: [
+        "libbase",
+        "libbinder",
+        "libhidlbase",
+        "liblog",
+        "libutils",
+        "libcrypto",
+    ],
+
+    export_include_dirs: ["include"],
+}
+
 // Library for keystore clients using the WiFi HIDL interface
 cc_library_shared {
     name: "libkeystore-wifi-hidl",
@@ -240,13 +262,8 @@ cc_library_static {
     defaults: ["keystore_defaults"],
 
     srcs: [
-        ":IKeyAttestationApplicationIdProvider.aidl",
         "auth_token_table.cpp",
         "blob.cpp",
-        "keystore_attestation_id.cpp",
-        "KeyAttestationApplicationId.cpp",
-        "KeyAttestationPackageInfo.cpp",
-        "Signature.cpp",
     ],
     cflags: [ "-O0", ],
     static_libs: ["libgtest_main"],
@@ -256,6 +273,7 @@ cc_library_static {
         "libcrypto",
         "libhidlbase",
         "libkeymaster4support",
+        "libkeystore-attestation-application-id",
         "libutils",
         "libkeystore_aidl",
         "libkeystore_parcelables",
