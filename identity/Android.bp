@@ -37,6 +37,7 @@ cc_binary {
         "libhidlbase",
         "android.hardware.identity-support-lib",
         "libkeymaster4support",
+        "libkeystore-attestation-application-id",
     ],
     static_libs: [
         "libcppbor",
