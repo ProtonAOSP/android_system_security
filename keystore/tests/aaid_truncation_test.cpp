@@ -19,8 +19,8 @@
 #include <string>
 #include <utils/String16.h>
 
-#include "../keystore_attestation_id.h"
 #include <keymaster/logger.h>
+#include <keystore/keystore_attestation_id.h>
 
 #include <keystore/KeyAttestationApplicationId.h>
 #include <keystore/KeyAttestationPackageInfo.h>
