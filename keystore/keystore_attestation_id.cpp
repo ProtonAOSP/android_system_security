@@ -13,7 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "keystore_attestation_id.h"
+
+#include <keystore/keystore_attestation_id.h>
 
 #define LOG_TAG "keystore_att_id"
 
