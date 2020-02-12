@@ -18,7 +18,7 @@
 #define KEYSTORE_KEYSTORE_H_
 
 #include <android/hardware/keymaster/3.0/IKeymasterDevice.h>
-#include <keymasterV4_0/Keymaster.h>
+#include <keymasterV4_1/Keymaster.h>
 #include <utils/Vector.h>
 
 #include <keystore/keymaster_types.h>

@@ -16,11 +16,11 @@
 #define SECURITY_KEYSTORE_INCLUDE_KEYSTORE_KEYMASTER_TYPES_H_
 
 #include <android/hardware/keymaster/3.0/types.h>
-#include <android/hardware/keymaster/4.0/IKeymasterDevice.h>
-#include <android/hardware/keymaster/4.0/types.h>
+#include <android/hardware/keymaster/4.1/IKeymasterDevice.h>
+#include <android/hardware/keymaster/4.1/types.h>
 
-#include <keymasterV4_0/authorization_set.h>
-#include <keymasterV4_0/keymaster_tags.h>
+#include <keymasterV4_1/authorization_set.h>
+#include <keymasterV4_1/keymaster_tags.h>
 
 /**
  * This header lifts the types from the current Keymaster version into the keystore namespace.
@@ -29,7 +29,7 @@
 namespace keystore {
 
 // Changing this namespace alias will change the keymaster version.
-namespace keymaster = ::android::hardware::keymaster::V4_0;
+namespace keymaster = ::android::hardware::keymaster::V4_1;
 
 using android::hardware::hidl_vec;
 using android::hardware::Return;
@@ -40,11 +40,17 @@ using keymaster::SecurityLevel;
 using keymaster::AuthorizationSet;
 using keymaster::AuthorizationSetBuilder;
 
+// It's more convenient to use the V4.0 error and tag types by default.
+using ::android::hardware::keymaster::V4_0::ErrorCode;
+using ::android::hardware::keymaster::V4_0::Tag;
+
+using V4_1_ErrorCode = ::android::hardware::keymaster::V4_1::ErrorCode;
+using V4_1_Tag = ::android::hardware::keymaster::V4_1::Tag;
+
 using keymaster::Algorithm;
 using keymaster::BlockMode;
 using keymaster::Digest;
 using keymaster::EcCurve;
-using keymaster::ErrorCode;
 using keymaster::HardwareAuthenticatorType;
 using keymaster::HardwareAuthToken;
 using keymaster::HmacSharingParameters;
@@ -55,7 +61,6 @@ using keymaster::KeyPurpose;
 using keymaster::OperationHandle;
 using keymaster::PaddingMode;
 using keymaster::SecurityLevel;
-using keymaster::Tag;
 using keymaster::TagType;
 using keymaster::VerificationToken;
 

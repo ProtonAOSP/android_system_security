@@ -53,6 +53,7 @@ cc_binary {
         "android.hardware.confirmationui@1.0",
         "android.hardware.keymaster@3.0",
         "android.hardware.keymaster@4.0",
+        "android.hardware.keymaster@4.1",
         "libbase",
         "libbinder",
         "libcrypto",
@@ -60,6 +61,7 @@ cc_binary {
         "libhardware",
         "libhidlbase",
         "libkeymaster4support",
+        "libkeymaster4_1support",
         "libkeymaster_messages",
         "libkeymaster_portable",
         "libkeystore-attestation-application-id",
@@ -150,10 +152,12 @@ cc_library_shared {
     ],
     shared_libs: [
         "android.hardware.keymaster@4.0",
+        "android.hardware.keymaster@4.1",
         "libbinder",
         "libhardware",
         "libhidlbase",
         "libkeymaster4support",
+        "libkeymaster4_1support",
         "liblog",
         "libprotobuf-cpp-lite",
         "libutils",
@@ -161,9 +165,10 @@ cc_library_shared {
     ],
     export_shared_lib_headers: [
         "android.hardware.keymaster@4.0",
+        "android.hardware.keymaster@4.1",
         "libbinder",
         "libhidlbase",
-        "libkeymaster4support",
+        "libkeymaster4_1support",
     ],
 }
 // Library for keystore clients
