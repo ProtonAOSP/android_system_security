@@ -23,8 +23,6 @@
 
 namespace keystore {
 
-using keymaster::ErrorCode;
-
 class KeyStoreServiceReturnCode;
 class KeyStoreNativeReturnCode;
 
