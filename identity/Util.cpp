@@ -35,10 +35,16 @@ namespace identity {
 
 using ::android::base::StringPrintf;
 
-Status halResultToGenericError(const Result& result) {
-    string message =
-        StringPrintf("HAL failed with code %d: %s", int(result.code), result.message.c_str());
-    return Status::fromServiceSpecificError(ICredentialStore::ERROR_GENERIC, message.c_str());
+Status halStatusToError(const Status& halStatus, int credStoreError) {
+    string message = StringPrintf(
+        "HAL failed with exception code %d (%s), service-specific error code %d, message '%s'",
+        halStatus.exceptionCode(), Status::exceptionToString(halStatus.exceptionCode()).c_str(),
+        halStatus.serviceSpecificErrorCode(), halStatus.exceptionMessage().c_str());
+    return Status::fromServiceSpecificError(credStoreError, message.c_str());
+}
+
+Status halStatusToGenericError(const Status& halStatus) {
+    return halStatusToError(halStatus, ICredentialStore::ERROR_GENERIC);
 }
 
 optional<vector<uint8_t>> fileGetContents(const string& path) {

@@ -27,8 +27,6 @@ cc_binary {
     ],
     init_rc: ["credstore.rc"],
     shared_libs: [
-        "android.hardware.identity@1.0",
-        "android.hardware.keymaster@4.0",
         "libbase",
         "libbinder",
         "libkeystore_aidl",
@@ -40,6 +38,8 @@ cc_binary {
         "libkeystore-attestation-application-id",
     ],
     static_libs: [
+        "android.hardware.identity-cpp",
+        "android.hardware.keymaster-cpp",
         "libcppbor",
     ]
 }
