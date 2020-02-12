@@ -21,8 +21,8 @@
 #include <android/security/keystore/IKeystoreService.h>
 #include <binder/IPCThreadState.h>
 #include <binder/IServiceManager.h>
-#include <keymasterV4_0/Keymaster3.h>
-#include <keymasterV4_0/Keymaster4.h>
+#include <keymasterV4_1/Keymaster3.h>
+#include <keymasterV4_1/Keymaster4.h>
 #include <utils/StrongPointer.h>
 
 #include <keystore/keystore_hidl_support.h>
