@@ -20,8 +20,7 @@
 #include <string>
 #include <vector>
 
-#include <android/hardware/identity/1.0/IIdentityCredentialStore.h>
-#include <android/hardware/identity/1.0/types.h>
+#include <android/hardware/identity/IIdentityCredentialStore.h>
 
 #include <android/security/identity/BnCredentialStore.h>
 
@@ -35,7 +34,8 @@ using ::std::string;
 using ::std::unique_ptr;
 using ::std::vector;
 
-using ::android::hardware::identity::V1_0::IIdentityCredentialStore;
+using ::android::hardware::identity::HardwareInformation;
+using ::android::hardware::identity::IIdentityCredentialStore;
 
 class CredentialStore : public BnCredentialStore {
   public:
@@ -58,9 +58,7 @@ class CredentialStore : public BnCredentialStore {
 
     sp<IIdentityCredentialStore> hal_;
 
-    bool isDirectAccess_;
-    vector<string> supportedDocTypes_;
-    size_t dataChunkSize_;
+    HardwareInformation hwInfo_;
 };
 
 }  // namespace identity

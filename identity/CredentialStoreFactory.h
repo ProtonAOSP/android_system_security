@@ -38,7 +38,7 @@ class CredentialStoreFactory : public BnCredentialStoreFactory {
                               sp<ICredentialStore>* _aidl_return) override;
 
   private:
-    CredentialStore* createCredentialStore(const string& serviceName);
+    CredentialStore* createCredentialStore(const string& instanceName);
 
     string dataPath_;
 
