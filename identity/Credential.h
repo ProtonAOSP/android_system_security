@@ -22,8 +22,7 @@
 
 #include <android/security/identity/BnCredential.h>
 
-#include <android/hardware/identity/1.0/IIdentityCredentialStore.h>
-#include <android/hardware/identity/1.0/types.h>
+#include <android/hardware/identity/IIdentityCredentialStore.h>
 
 #include "CredentialData.h"
 
@@ -36,12 +35,13 @@ using ::android::binder::Status;
 using ::std::string;
 using ::std::vector;
 
-using ::android::hardware::identity::V1_0::IIdentityCredential;
-using ::android::hardware::identity::V1_0::IIdentityCredentialStore;
+using ::android::hardware::identity::CipherSuite;
+using ::android::hardware::identity::IIdentityCredential;
+using ::android::hardware::identity::IIdentityCredentialStore;
 
 class Credential : public BnCredential {
   public:
-    Credential(const string& dataPath, const string& credentialName);
+    Credential(CipherSuite cipherSuite, const string& dataPath, const string& credentialName);
     ~Credential();
 
     Status loadCredential(sp<IIdentityCredentialStore> halStoreBinder);
@@ -70,6 +70,7 @@ class Credential : public BnCredential {
     Status getAuthenticationDataUsageCount(vector<int32_t>* _aidl_return) override;
 
   private:
+    CipherSuite cipherSuite_;
     string dataPath_;
     string credentialName_;
 

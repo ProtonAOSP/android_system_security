@@ -42,21 +42,17 @@ using std::optional;
 
 using android::security::keystore::IKeystoreService;
 
-using ::android::hardware::hidl_vec;
-
-using ::android::hardware::identity::V1_0::Result;
-using ::android::hardware::identity::V1_0::ResultCode;
-using ::android::hardware::identity::V1_0::SecureAccessControlProfile;
-
 using ::android::hardware::identity::support::ecKeyPairGetPkcs12;
 using ::android::hardware::identity::support::ecKeyPairGetPrivateKey;
 using ::android::hardware::identity::support::ecKeyPairGetPublicKey;
 using ::android::hardware::identity::support::sha256;
 
 using android::hardware::keymaster::V4_0::HardwareAuthToken;
+using AidlHardwareAuthToken = android::hardware::keymaster::HardwareAuthToken;
 
-Credential::Credential(const std::string& dataPath, const std::string& credentialName)
-    : dataPath_(dataPath), credentialName_(credentialName) {}
+Credential::Credential(CipherSuite cipherSuite, const std::string& dataPath,
+                       const std::string& credentialName)
+    : cipherSuite_(cipherSuite), dataPath_(dataPath), credentialName_(credentialName) {}
 
 Credential::~Credential() {}
 
@@ -71,15 +67,16 @@ Status Credential::loadCredential(sp<IIdentityCredentialStore> halStoreBinder) {
 
     data_ = data;
 
-    Result result;
     sp<IIdentityCredential> halBinder;
-    halStoreBinder->getCredential(
-        data_->getCredentialData(),
-        [&](const Result& _result, const sp<IIdentityCredential>& _halBinder) {
-            result = _result;
-            halBinder = _halBinder;
-        });
-    if (result.code != ResultCode::OK) {
+    Status status =
+        halStoreBinder->getCredential(cipherSuite_, data_->getCredentialData(), &halBinder);
+    if (!status.isOk() && status.exceptionCode() == binder::Status::EX_SERVICE_SPECIFIC) {
+        int code = status.serviceSpecificErrorCode();
+        if (code == IIdentityCredentialStore::STATUS_CIPHER_SUITE_NOT_SUPPORTED) {
+            return halStatusToError(status, ICredentialStore::ERROR_CIPHER_SUITE_NOT_SUPPORTED);
+        }
+    }
+    if (!status.isOk()) {
         LOG(ERROR) << "Error getting HAL binder";
         return Status::fromServiceSpecificError(ICredentialStore::ERROR_GENERIC);
     }
@@ -104,16 +101,10 @@ Status Credential::selectAuthKey(bool allowUsingExhaustedKeys, int64_t* _aidl_re
             "No suitable authentication key available");
     }
 
-    Result result;
-    uint64_t challenge;
-    halBinder_->createAuthChallenge([&](const Result& _result, uint64_t _challenge) {
-        result = _result;
-        challenge = _challenge;
-    });
-    if (result.code != ResultCode::OK) {
-        LOG(ERROR) << "createAuthChallenge() failed " << ((int)result.code) << ": "
-                   << result.message;
-        return halResultToGenericError(result);
+    int64_t challenge;
+    Status status = halBinder_->createAuthChallenge(&challenge);
+    if (!status.isOk()) {
+        return halStatusToGenericError(status);
     }
     if (challenge == 0) {
         return Status::fromServiceSpecificError(ICredentialStore::ERROR_GENERIC,
@@ -160,7 +151,7 @@ Status Credential::getEntries(const vector<uint8_t>& requestMessage,
     //
     // Also go through and figure out which access control profiles to include
     // in the startRetrieval() call.
-    vector<uint16_t> requestCounts;
+    vector<int32_t> requestCounts;
     const vector<SecureAccessControlProfile>& allProfiles = data_->getSecureAccessControlProfiles();
     vector<bool> includeProfile(allProfiles.size());
     for (const RequestNamespaceParcel& rns : requestNamespaces) {
@@ -172,8 +163,8 @@ Status Credential::getEntries(const vector<uint8_t>& requestMessage,
 
             optional<EntryData> data = data_->getEntryData(rns.namespaceName, rep.name);
             if (data) {
-                for (uint16_t id : data.value().accessControlProfileIds) {
-                    if (id >= includeProfile.size()) {
+                for (int32_t id : data.value().accessControlProfileIds) {
+                    if (id >= int32_t(includeProfile.size())) {
                         LOG(ERROR) << "Invalid accessControlProfileId " << id << " for "
                                    << rns.namespaceName << ": " << rep.name;
                         return Status::fromServiceSpecificError(
@@ -227,7 +218,7 @@ Status Credential::getEntries(const vector<uint8_t>& requestMessage,
     }
 
     // Only get an authToken if it's actually needed.
-    HardwareAuthToken authToken;
+    AidlHardwareAuthToken aidlAuthToken;
     if (userAuthNeeded) {
         vector<uint8_t> authTokenBytes;
         if (!getAuthTokenFromKeystore(selectedChallenge_, data_->getSecureUserId(),
@@ -237,34 +228,36 @@ Status Credential::getEntries(const vector<uint8_t>& requestMessage,
                                                     "Error getting auth token from keystore");
         }
         if (authTokenBytes.size() > 0) {
-            authToken =
+            HardwareAuthToken authToken =
                 android::hardware::keymaster::V4_0::support::hidlVec2AuthToken(authTokenBytes);
+            // Convert from HIDL to AIDL...
+            aidlAuthToken.challenge = int64_t(authToken.challenge);
+            aidlAuthToken.userId = int64_t(authToken.userId);
+            aidlAuthToken.authenticatorId = int64_t(authToken.authenticatorId);
+            aidlAuthToken.authenticatorType =
+                ::android::hardware::keymaster::HardwareAuthenticatorType(
+                    int32_t(authToken.authenticatorType));
+            aidlAuthToken.timestamp.milliSeconds = int64_t(authToken.timestamp);
+            aidlAuthToken.mac = authToken.mac;
         }
     }
 
-    Result result;
-    halBinder_->startRetrieval(selectedProfiles, authToken, requestMessage, sessionTranscript,
-                               readerSignature, requestCounts,
-                               [&](const Result& _result) { result = _result; });
-    if (result.code == ResultCode::EPHEMERAL_PUBLIC_KEY_NOT_FOUND) {
-        LOG(ERROR) << "startRetrieval() failed " << ((int)result.code) << ": " << result.message;
-        return Status::fromServiceSpecificError(
-            ICredentialStore::ERROR_EPHEMERAL_PUBLIC_KEY_NOT_FOUND, result.message.c_str());
-    } else if (result.code == ResultCode::READER_SIGNATURE_CHECK_FAILED) {
-        LOG(ERROR) << "startRetrieval() failed " << ((int)result.code) << ": " << result.message;
-        return Status::fromServiceSpecificError(ICredentialStore::ERROR_INVALID_READER_SIGNATURE,
-                                                result.message.c_str());
-    } else if (result.code == ResultCode::INVALID_ITEMS_REQUEST_MESSAGE) {
-        LOG(ERROR) << "startRetrieval() failed " << ((int)result.code) << ": " << result.message;
-        return Status::fromServiceSpecificError(
-            ICredentialStore::ERROR_INVALID_ITEMS_REQUEST_MESSAGE, result.message.c_str());
-    } else if (result.code == ResultCode::SESSION_TRANSCRIPT_MISMATCH) {
-        LOG(ERROR) << "startRetrieval() failed " << ((int)result.code) << ": " << result.message;
-        return Status::fromServiceSpecificError(ICredentialStore::ERROR_SESSION_TRANSCRIPT_MISMATCH,
-                                                result.message.c_str());
-    } else if (result.code != ResultCode::OK) {
-        LOG(ERROR) << "startRetrieval() failed " << ((int)result.code) << ": " << result.message;
-        return halResultToGenericError(result);
+    Status status = halBinder_->startRetrieval(selectedProfiles, aidlAuthToken, requestMessage,
+                                               sessionTranscript, readerSignature, requestCounts);
+    if (!status.isOk() && status.exceptionCode() == binder::Status::EX_SERVICE_SPECIFIC) {
+        int code = status.serviceSpecificErrorCode();
+        if (code == IIdentityCredentialStore::STATUS_EPHEMERAL_PUBLIC_KEY_NOT_FOUND) {
+            return halStatusToError(status, ICredentialStore::ERROR_EPHEMERAL_PUBLIC_KEY_NOT_FOUND);
+        } else if (code == IIdentityCredentialStore::STATUS_READER_SIGNATURE_CHECK_FAILED) {
+            return halStatusToError(status, ICredentialStore::ERROR_INVALID_READER_SIGNATURE);
+        } else if (code == IIdentityCredentialStore::STATUS_INVALID_ITEMS_REQUEST_MESSAGE) {
+            return halStatusToError(status, ICredentialStore::ERROR_INVALID_ITEMS_REQUEST_MESSAGE);
+        } else if (code == IIdentityCredentialStore::STATUS_SESSION_TRANSCRIPT_MISMATCH) {
+            return halStatusToError(status, ICredentialStore::ERROR_SESSION_TRANSCRIPT_MISMATCH);
+        }
+    }
+    if (!status.isOk()) {
+        return halStatusToGenericError(status);
     }
 
     for (const RequestNamespaceParcel& rns : requestNamespaces) {
@@ -282,43 +275,41 @@ Status Credential::getEntries(const vector<uint8_t>& requestMessage,
                 continue;
             }
 
-            halBinder_->startRetrieveEntryValue(rns.namespaceName, rep.name, data.value().size,
-                                                data.value().accessControlProfileIds,
-                                                [&](const Result& _result) { result = _result; });
-            if (result.code == ResultCode::USER_AUTHENTICATION_FAILED) {
-                resultEntryParcel.status = STATUS_USER_AUTHENTICATION_FAILED;
-                resultNamespaceParcel.entries.push_back(resultEntryParcel);
-                continue;
-            } else if (result.code == ResultCode::READER_AUTHENTICATION_FAILED) {
-                resultEntryParcel.status = STATUS_READER_AUTHENTICATION_FAILED;
-                resultNamespaceParcel.entries.push_back(resultEntryParcel);
-                continue;
-            } else if (result.code == ResultCode::NOT_IN_REQUEST_MESSAGE) {
-                resultEntryParcel.status = STATUS_NOT_IN_REQUEST_MESSAGE;
-                resultNamespaceParcel.entries.push_back(resultEntryParcel);
-                continue;
-            } else if (result.code == ResultCode::NO_ACCESS_CONTROL_PROFILES) {
-                resultEntryParcel.status = STATUS_NO_ACCESS_CONTROL_PROFILES;
-                resultNamespaceParcel.entries.push_back(resultEntryParcel);
-                continue;
-            } else if (result.code != ResultCode::OK) {
-                LOG(ERROR) << "startRetrieveEntryValue() failed " << ((int)result.code) << ": "
-                           << result.message;
-                return halResultToGenericError(result);
+            status =
+                halBinder_->startRetrieveEntryValue(rns.namespaceName, rep.name, data.value().size,
+                                                    data.value().accessControlProfileIds);
+            if (!status.isOk() && status.exceptionCode() == binder::Status::EX_SERVICE_SPECIFIC) {
+                int code = status.serviceSpecificErrorCode();
+                if (code == IIdentityCredentialStore::STATUS_USER_AUTHENTICATION_FAILED) {
+                    resultEntryParcel.status = STATUS_USER_AUTHENTICATION_FAILED;
+                    resultNamespaceParcel.entries.push_back(resultEntryParcel);
+                    continue;
+                } else if (code == IIdentityCredentialStore::STATUS_READER_AUTHENTICATION_FAILED) {
+                    resultEntryParcel.status = STATUS_READER_AUTHENTICATION_FAILED;
+                    resultNamespaceParcel.entries.push_back(resultEntryParcel);
+                    continue;
+                } else if (code == IIdentityCredentialStore::STATUS_NOT_IN_REQUEST_MESSAGE) {
+                    resultEntryParcel.status = STATUS_NOT_IN_REQUEST_MESSAGE;
+                    resultNamespaceParcel.entries.push_back(resultEntryParcel);
+                    continue;
+                } else if (code == IIdentityCredentialStore::STATUS_NO_ACCESS_CONTROL_PROFILES) {
+                    resultEntryParcel.status = STATUS_NO_ACCESS_CONTROL_PROFILES;
+                    resultNamespaceParcel.entries.push_back(resultEntryParcel);
+                    continue;
+                }
+            }
+            if (!status.isOk()) {
+                return halStatusToGenericError(status);
             }
 
             vector<uint8_t> value;
             for (const auto& encryptedChunk : data.value().encryptedChunks) {
-                halBinder_->retrieveEntryValue(
-                    encryptedChunk, [&](const Result& _result, const hidl_vec<uint8_t>& chunk) {
-                        result = _result;
-                        value.insert(value.end(), chunk.begin(), chunk.end());
-                    });
-                if (result.code != ResultCode::OK) {
-                    LOG(ERROR) << "retrieveEntryValue failed() " << ((int)result.code) << ": "
-                               << result.message;
-                    return halResultToGenericError(result);
+                vector<uint8_t> chunk;
+                status = halBinder_->retrieveEntryValue(encryptedChunk, &chunk);
+                if (!status.isOk()) {
+                    return halStatusToGenericError(status);
                 }
+                value.insert(value.end(), chunk.begin(), chunk.end());
             }
 
             resultEntryParcel.status = STATUS_OK;
@@ -347,19 +338,12 @@ Status Credential::getEntries(const vector<uint8_t>& requestMessage,
     if (authKey != nullptr) {
         signingKeyBlob = authKey->keyBlob;
     }
-    halBinder_->finishRetrieval(signingKeyBlob, [&](const Result& _result,
-                                                    const hidl_vec<uint8_t>& _mac,
-                                                    const hidl_vec<uint8_t>& _deviceNameSpaces) {
-        result = _result;
-        ret.mac = _mac;
-        ret.deviceNameSpaces = _deviceNameSpaces;
-        if (authKey != nullptr) {
-            ret.staticAuthenticationData = authKey->staticAuthenticationData;
-        }
-    });
-    if (result.code != ResultCode::OK) {
-        LOG(ERROR) << "finishRetrieval failed() " << ((int)result.code) << ": " << result.message;
-        return halResultToGenericError(result);
+    status = halBinder_->finishRetrieval(signingKeyBlob, &ret.mac, &ret.deviceNameSpaces);
+    if (!status.isOk()) {
+        return halStatusToGenericError(status);
+    }
+    if (authKey != nullptr) {
+        ret.staticAuthenticationData = authKey->staticAuthenticationData;
     }
 
     // Ensure useCount is updated on disk.
@@ -375,36 +359,24 @@ Status Credential::getEntries(const vector<uint8_t>& requestMessage,
 }
 
 Status Credential::deleteCredential(vector<uint8_t>* _aidl_return) {
-    Result result;
-    halBinder_->deleteCredential(
-        [&](const Result& _result, const hidl_vec<uint8_t>& _proofOfDeletionSignature) {
-            result = _result;
-            *_aidl_return = _proofOfDeletionSignature;
-        });
-    if (result.code != ResultCode::OK) {
-        LOG(ERROR) << "deleteCredential failed() " << ((int)result.code) << ": " << result.message;
-        return halResultToGenericError(result);
+    vector<uint8_t> proofOfDeletionSignature;
+    Status status = halBinder_->deleteCredential(&proofOfDeletionSignature);
+    if (!status.isOk()) {
+        return halStatusToGenericError(status);
     }
     if (!data_->deleteCredential()) {
         return Status::fromServiceSpecificError(ICredentialStore::ERROR_GENERIC,
                                                 "Error deleting credential data on disk");
     }
+    *_aidl_return = proofOfDeletionSignature;
     return Status::ok();
 }
 
 Status Credential::createEphemeralKeyPair(vector<uint8_t>* _aidl_return) {
-    Result result;
-
     vector<uint8_t> keyPair;
-    halBinder_->createEphemeralKeyPair(
-        [&](const Result& _result, const hidl_vec<uint8_t>& _keyPair) {
-            result = _result;
-            keyPair = _keyPair;
-        });
-    if (result.code != ResultCode::OK) {
-        LOG(ERROR) << "createEphemeralKeyPair failed() " << ((int)result.code) << ": "
-                   << result.message;
-        return halResultToGenericError(result);
+    Status status = halBinder_->createEphemeralKeyPair(&keyPair);
+    if (!status.isOk()) {
+        return halStatusToGenericError(status);
     }
 
     optional<vector<uint8_t>> pkcs12Bytes = ecKeyPairGetPkcs12(keyPair,
@@ -423,13 +395,9 @@ Status Credential::createEphemeralKeyPair(vector<uint8_t>* _aidl_return) {
 }
 
 Status Credential::setReaderEphemeralPublicKey(const vector<uint8_t>& publicKey) {
-    Result result;
-    halBinder_->setReaderEphemeralPublicKey(publicKey,
-                                            [&](const Result& _result) { result = _result; });
-    if (result.code != ResultCode::OK) {
-        LOG(ERROR) << "setReaderEphemeralPublicKey failed() " << ((int)result.code) << ": "
-                   << result.message;
-        return halResultToGenericError(result);
+    Status status = halBinder_->setReaderEphemeralPublicKey(publicKey);
+    if (!status.isOk()) {
+        return halStatusToGenericError(status);
     }
     return Status::ok();
 }

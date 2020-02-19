@@ -34,11 +34,7 @@ namespace identity {
 
 using ::std::pair;
 
-using ::android::hardware::hidl_vec;
-
-using ::android::hardware::identity::V1_0::Result;
-using ::android::hardware::identity::V1_0::ResultCode;
-using ::android::hardware::identity::V1_0::SecureAccessControlProfile;
+using ::android::hardware::identity::SecureAccessControlProfile;
 
 using ::android::hardware::identity::support::chunkVector;
 
@@ -51,8 +47,6 @@ WritableCredential::WritableCredential(const string& dataPath, const string& cre
 WritableCredential::~WritableCredential() {}
 
 Status WritableCredential::ensureAttestationCertificateExists(const vector<uint8_t>& challenge) {
-    vector<uint8_t> attestationCertificate;
-
     if (!attestationCertificate_.empty()) {
         return Status::ok();
     }
@@ -65,21 +59,21 @@ Status WritableCredential::ensureAttestationCertificateExists(const vector<uint8
                                                 "Failed gathering AttestionApplicationId");
     }
 
-    Result result;
-    halBinder_->getAttestationCertificate(
-        asn1AttestationId.value(), challenge,
-        [&](const Result& _result, const hidl_vec<hidl_vec<uint8_t>>& _splitCerts) {
-            result = _result;
-            vector<vector<uint8_t>> splitCerts;
-            std::copy(_splitCerts.begin(), _splitCerts.end(), std::back_inserter(splitCerts));
-            attestationCertificate =
-                ::android::hardware::identity::support::certificateChainJoin(splitCerts);
-        });
-    if (result.code != ResultCode::OK) {
+    vector<Certificate> certificateChain;
+    Status status = halBinder_->getAttestationCertificate(asn1AttestationId.value(), challenge,
+                                                          &certificateChain);
+    if (!status.isOk()) {
         LOG(ERROR) << "Error calling getAttestationCertificate()";
-        return halResultToGenericError(result);
+        return halStatusToGenericError(status);
     }
-    attestationCertificate_ = attestationCertificate;
+
+    vector<vector<uint8_t>> splitCerts;
+    for (const auto& cert : certificateChain) {
+        splitCerts.push_back(cert.encodedCertificate);
+    }
+    attestationCertificate_ =
+        ::android::hardware::identity::support::certificateChainJoin(splitCerts);
+
     return Status::ok();
 }
 
@@ -114,56 +108,51 @@ WritableCredential::personalize(const vector<AccessControlProfileParcel>& access
 
     data.setAttestationCertificate(attestationCertificate_);
 
-    vector<uint16_t> entryCounts;
+    vector<int32_t> entryCounts;
     for (const EntryNamespaceParcel& ensParcel : entryNamespaces) {
         entryCounts.push_back(ensParcel.entries.size());
     }
 
-    Result result;
-    halBinder_->startPersonalization(accessControlProfiles.size(), entryCounts,
-                                     [&](const Result& _result) { result = _result; });
-    if (result.code != ResultCode::OK) {
-        return halResultToGenericError(result);
+    Status status = halBinder_->startPersonalization(accessControlProfiles.size(), entryCounts);
+    if (!status.isOk()) {
+        return halStatusToGenericError(status);
     }
 
     for (const AccessControlProfileParcel& acpParcel : accessControlProfiles) {
-        halBinder_->addAccessControlProfile(
-            acpParcel.id, acpParcel.readerCertificate, acpParcel.userAuthenticationRequired,
-            acpParcel.userAuthenticationTimeoutMillis, secureUserId,
-            [&](const Result& _result, const SecureAccessControlProfile& profile) {
-                data.addSecureAccessControlProfile(profile);
-                result = _result;
-            });
-        if (result.code != ResultCode::OK) {
-            return halResultToGenericError(result);
+        Certificate certificate;
+        certificate.encodedCertificate = acpParcel.readerCertificate;
+        SecureAccessControlProfile profile;
+        status = halBinder_->addAccessControlProfile(
+            acpParcel.id, certificate, acpParcel.userAuthenticationRequired,
+            acpParcel.userAuthenticationTimeoutMillis, secureUserId, &profile);
+        if (!status.isOk()) {
+            return halStatusToGenericError(status);
         }
+        data.addSecureAccessControlProfile(profile);
     }
 
     for (const EntryNamespaceParcel& ensParcel : entryNamespaces) {
         for (const EntryParcel& eParcel : ensParcel.entries) {
             vector<vector<uint8_t>> chunks = chunkVector(eParcel.value, dataChunkSize_);
 
-            vector<uint16_t> ids;
+            vector<int32_t> ids;
             std::copy(eParcel.accessControlProfileIds.begin(),
                       eParcel.accessControlProfileIds.end(), std::back_inserter(ids));
 
-            halBinder_->beginAddEntry(ids, ensParcel.namespaceName, eParcel.name,
-                                      eParcel.value.size(),
-                                      [&](const Result& _result) { result = _result; });
-            if (result.code != ResultCode::OK) {
-                return halResultToGenericError(result);
+            status = halBinder_->beginAddEntry(ids, ensParcel.namespaceName, eParcel.name,
+                                               eParcel.value.size());
+            if (!status.isOk()) {
+                return halStatusToGenericError(status);
             }
 
             vector<vector<uint8_t>> encryptedChunks;
             for (const auto& chunk : chunks) {
-                halBinder_->addEntryValue(
-                    chunk, [&](const Result& _result, const hidl_vec<uint8_t>& encryptedContent) {
-                        result = _result;
-                        encryptedChunks.push_back(encryptedContent);
-                    });
-                if (result.code != ResultCode::OK) {
-                    return halResultToGenericError(result);
+                vector<uint8_t> encryptedChunk;
+                status = halBinder_->addEntryValue(chunk, &encryptedChunk);
+                if (!status.isOk()) {
+                    return halStatusToGenericError(status);
                 }
+                encryptedChunks.push_back(encryptedChunk);
             }
             EntryData eData;
             eData.size = eParcel.value.size();
@@ -175,17 +164,11 @@ WritableCredential::personalize(const vector<AccessControlProfileParcel>& access
 
     vector<uint8_t> credentialData;
     vector<uint8_t> proofOfProvisioningSignature;
-    halBinder_->finishAddingEntries([&](const Result& _result,
-                                        const hidl_vec<uint8_t>& _credentialData,
-                                        const hidl_vec<uint8_t>& _proofOfProvisioningSignature) {
-        data.setCredentialData(_credentialData);
-        result = _result;
-        credentialData = _credentialData;
-        proofOfProvisioningSignature = _proofOfProvisioningSignature;
-    });
-    if (result.code != ResultCode::OK) {
-        return halResultToGenericError(result);
+    status = halBinder_->finishAddingEntries(&credentialData, &proofOfProvisioningSignature);
+    if (!status.isOk()) {
+        return halStatusToGenericError(status);
     }
+    data.setCredentialData(credentialData);
 
     if (!data.saveToDisk()) {
         return Status::fromServiceSpecificError(ICredentialStore::ERROR_GENERIC,

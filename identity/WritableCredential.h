@@ -22,15 +22,14 @@
 
 #include <android/security/identity/BnWritableCredential.h>
 
-#include <android/hardware/identity/1.0/IIdentityCredentialStore.h>
-#include <android/hardware/identity/1.0/types.h>
+#include <android/hardware/identity/IIdentityCredentialStore.h>
 
 namespace android {
 namespace security {
 namespace identity {
 
 using ::android::binder::Status;
-using ::android::hardware::identity::V1_0::IWritableIdentityCredential;
+using ::android::hardware::identity::IWritableIdentityCredential;
 using ::std::string;
 using ::std::vector;
 
