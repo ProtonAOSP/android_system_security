@@ -37,8 +37,6 @@ namespace android {
 namespace security {
 namespace identity {
 
-using android::hardware::identity::V1_0::Result;
-using android::hardware::identity::V1_0::ResultCode;
 using std::optional;
 
 string CredentialData::calculateCredentialFileName(const string& dataPath, uid_t ownerUid,
@@ -88,7 +86,7 @@ bool CredentialData::saveToDisk() const {
     for (const SecureAccessControlProfile& sacp : secureAccessControlProfiles_) {
         cppbor::Array array;
         array.add(sacp.id);
-        array.add((const vector<uint8_t>&)sacp.readerCertificate);
+        array.add(sacp.readerCertificate.encodedCertificate);
         array.add(sacp.userAuthenticationRequired);
         array.add(sacp.timeoutMillis);
         array.add(sacp.secureUserId);
@@ -107,7 +105,7 @@ bool CredentialData::saveToDisk() const {
         cppbor::Array entryDataArray;
         entryDataArray.add(entryData.size);
         cppbor::Array idsArray;
-        for (uint16_t id : entryData.accessControlProfileIds) {
+        for (int32_t id : entryData.accessControlProfileIds) {
             idsArray.add(id);
         }
         entryDataArray.add(std::move(idsArray));
@@ -159,7 +157,7 @@ optional<SecureAccessControlProfile> parseSacp(const cppbor::Item& item) {
     }
     SecureAccessControlProfile sacp;
     sacp.id = itemId->value();
-    sacp.readerCertificate = itemReaderCertificate->value();
+    sacp.readerCertificate.encodedCertificate = itemReaderCertificate->value();
     sacp.userAuthenticationRequired = itemUserAuthenticationRequired->value();
     sacp.timeoutMillis = itemTimeoutMillis->value();
     sacp.secureUserId = itesecureUserId_->value();
@@ -195,14 +193,14 @@ optional<AuthKeyData> parseAuthKeyData(const cppbor::Item& item) {
     return authKeyData;
 }
 
-vector<uint16_t> parseAccessControlProfileIds(const cppbor::Item& item) {
+vector<int32_t> parseAccessControlProfileIds(const cppbor::Item& item) {
     const cppbor::Array* array = item.asArray();
     if (array == nullptr) {
         LOG(ERROR) << "The accessControlProfileIds member is not an array";
         return {};
     }
 
-    vector<uint16_t> accessControlProfileIds;
+    vector<int32_t> accessControlProfileIds;
     for (size_t n = 0; n < array->size(); n++) {
         const cppbor::Int* itemInt = ((*array)[n])->asInt();
         if (itemInt == nullptr) {
@@ -336,7 +334,7 @@ bool CredentialData::loadFromDisk() {
                 }
                 uint64_t entrySize = ecEntrySizeItem->value();
 
-                optional<vector<uint16_t>> accessControlProfileIds =
+                optional<vector<int32_t>> accessControlProfileIds =
                     parseAccessControlProfileIds(*(*ecEntryArrayItem)[1]);
                 if (!accessControlProfileIds) {
                     LOG(ERROR) << "Error parsing access control profile ids";
@@ -391,8 +389,13 @@ bool CredentialData::loadFromDisk() {
         }
     }
 
-    if (credentialData_.size() == 0 || attestationCertificate_.size() == 0) {
-        LOG(ERROR) << "Missing credentialData or attestationCertificate";
+    if (credentialData_.size() == 0) {
+        LOG(ERROR) << "Missing credentialData";
+        return false;
+    }
+
+    if (attestationCertificate_.size() == 0) {
+        LOG(ERROR) << "Missing attestationCertificate";
         return false;
     }
 
@@ -511,8 +514,8 @@ const AuthKeyData* CredentialData::selectAuthKey(bool allowUsingExhaustedKeys) {
     return candidate;
 }
 
-optional<vector<vector<uint8_t>>> CredentialData::getAuthKeysNeedingCertification(
-    const sp<android::hardware::identity::V1_0::IIdentityCredential>& halBinder) {
+optional<vector<vector<uint8_t>>>
+CredentialData::getAuthKeysNeedingCertification(const sp<IIdentityCredential>& halBinder) {
 
     vector<vector<uint8_t>> keysNeedingCert;
 
@@ -520,22 +523,14 @@ optional<vector<vector<uint8_t>>> CredentialData::getAuthKeysNeedingCertificatio
         bool newKeyNeeded = (data.certificate.size() == 0) || (data.useCount >= maxUsesPerKey_);
         bool certificationPending = (data.pendingCertificate.size() > 0);
         if (newKeyNeeded && !certificationPending) {
-            Result result;
             vector<uint8_t> signingKeyBlob;
-            vector<uint8_t> signingKeyCertificate;
-            halBinder->generateSigningKeyPair(
-                [&](const Result& _result,
-                    const android::hardware::hidl_vec<uint8_t> _signingKeyBlob,
-                    const android::hardware::hidl_vec<uint8_t> _signingKeyCertificate) {
-                    result = _result;
-                    signingKeyBlob = _signingKeyBlob;
-                    signingKeyCertificate = _signingKeyCertificate;
-                });
-            if (result.code != ResultCode::OK) {
+            Certificate signingKeyCertificate;
+            if (!halBinder->generateSigningKeyPair(&signingKeyBlob, &signingKeyCertificate)
+                     .isOk()) {
                 LOG(ERROR) << "Error generating signing key-pair";
                 return {};
             }
-            data.pendingCertificate = signingKeyCertificate;
+            data.pendingCertificate = signingKeyCertificate.encodedCertificate;
             data.pendingKeyBlob = signingKeyBlob;
             certificationPending = true;
         }
