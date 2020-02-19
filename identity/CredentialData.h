@@ -25,14 +25,16 @@
 #include <utility>
 #include <vector>
 
-#include <android/hardware/identity/1.0/IIdentityCredential.h>
-#include <android/hardware/identity/1.0/types.h>
+#include <android/hardware/identity/IIdentityCredential.h>
+#include <android/hardware/identity/SecureAccessControlProfile.h>
 
 namespace android {
 namespace security {
 namespace identity {
 
-using ::android::hardware::identity::V1_0::SecureAccessControlProfile;
+using ::android::hardware::identity::Certificate;
+using ::android::hardware::identity::IIdentityCredential;
+using ::android::hardware::identity::SecureAccessControlProfile;
 using ::std::map;
 using ::std::optional;
 using ::std::pair;
@@ -44,7 +46,7 @@ struct EntryData {
     EntryData() {}
 
     uint64_t size = 0;
-    vector<uint16_t> accessControlProfileIds;
+    vector<int32_t> accessControlProfileIds;
     vector<vector<uint8_t>> encryptedChunks;
 };
 
@@ -108,8 +110,8 @@ class CredentialData : public RefBase {
     // the authentication and increases its use-count.
     const AuthKeyData* selectAuthKey(bool allowUsingExhaustedKeys);
 
-    optional<vector<vector<uint8_t>>> getAuthKeysNeedingCertification(
-        const sp<android::hardware::identity::V1_0::IIdentityCredential>& halBinder);
+    optional<vector<vector<uint8_t>>>
+    getAuthKeysNeedingCertification(const sp<IIdentityCredential>& halBinder);
 
     bool storeStaticAuthenticationData(const vector<uint8_t>& authenticationKey,
                                        const vector<uint8_t>& staticAuthData);
