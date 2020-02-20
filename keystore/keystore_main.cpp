@@ -114,6 +114,7 @@ KeymasterDevices initializeKeymasters() {
         LOG(WARNING) << "No secure Keymaster implementation found, but device offers insecure"
                         " Keymaster HAL. Using as default.";
         result[SecurityLevel::TRUSTED_ENVIRONMENT] = result[SecurityLevel::SOFTWARE];
+        result[SecurityLevel::SOFTWARE] = nullptr;
     }
     if (!result[SecurityLevel::SOFTWARE]) {
         auto fbdev = android::keystore::makeSoftwareKeymasterDevice();
