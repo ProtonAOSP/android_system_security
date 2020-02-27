@@ -20,8 +20,6 @@
 #include <string>
 #include <vector>
 
-#include <android/hardware/identity/1.0/IIdentityCredentialStore.h>
-#include <android/hardware/identity/1.0/types.h>
 #include <binder/Status.h>
 
 namespace android {
@@ -33,9 +31,13 @@ using ::std::string;
 using ::std::vector;
 
 using ::android::binder::Status;
-using ::android::hardware::identity::V1_0::Result;
 
-Status halResultToGenericError(const Result& result);
+// Converts a HAL status to a credstore service-specific error with code
+// ICredentialStore::ERROR_GENERIC.
+Status halStatusToGenericError(const Status& halStatus);
+
+// Converts a HAL status to a credstore service-specific error of a given value
+Status halStatusToError(const Status& halStatus, int credStoreError);
 
 // Helper function to atomically write |data| into file at |path|.
 //

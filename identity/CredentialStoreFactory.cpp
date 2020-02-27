@@ -19,28 +19,29 @@
 #include <android-base/logging.h>
 
 #include <binder/IPCThreadState.h>
+#include <binder/IServiceManager.h>
 
-#include "CredentialStore.h"
+//#include "CredentialStore.h"
 #include "CredentialStoreFactory.h"
 
 namespace android {
 namespace security {
 namespace identity {
 
-using ::android::hardware::hidl_string;
-using ::android::hardware::hidl_vec;
-using ::android::hardware::identity::V1_0::IIdentityCredentialStore;
-using ::android::hardware::identity::V1_0::Result;
-using ::android::hardware::identity::V1_0::ResultCode;
+using ::android::hardware::identity::IIdentityCredentialStore;
 
 CredentialStoreFactory::CredentialStoreFactory(const std::string& dataPath) : dataPath_(dataPath) {}
 
 CredentialStoreFactory::~CredentialStoreFactory() {}
 
-CredentialStore* CredentialStoreFactory::createCredentialStore(const string& serviceName) {
-    sp<IIdentityCredentialStore> hal = IIdentityCredentialStore::tryGetService(serviceName);
+CredentialStore* CredentialStoreFactory::createCredentialStore(const string& instanceName) {
+    String16 serviceName =
+        IIdentityCredentialStore::descriptor + String16("/") + String16(instanceName.c_str());
+    sp<IIdentityCredentialStore> hal =
+        android::waitForDeclaredService<IIdentityCredentialStore>(serviceName);
     if (hal.get() == nullptr) {
-        LOG(ERROR) << "Error get hal for store with service name '" << serviceName << "'";
+        LOG(ERROR) << "Error getting HAL for IdentityCredentialStore store with service name '"
+                   << serviceName << "'";
         return nullptr;
     }
 
@@ -51,7 +52,6 @@ CredentialStore* CredentialStoreFactory::createCredentialStore(const string& ser
         delete store;
         return nullptr;
     }
-
     return store;
 }
 
