@@ -242,8 +242,28 @@ Status Credential::getEntries(const vector<uint8_t>& requestMessage,
         }
     }
 
-    Status status = halBinder_->startRetrieval(selectedProfiles, aidlAuthToken, requestMessage,
-                                               sessionTranscript, readerSignature, requestCounts);
+    // Note that the selectAuthKey() method is only called if a CryptoObject is involved at
+    // the Java layer. So we could end up with no previously selected auth key and we may
+    // need one.
+    const AuthKeyData* authKey = selectedAuthKey_;
+    if (sessionTranscript.size() > 0) {
+        if (authKey == nullptr) {
+            authKey = data_->selectAuthKey(allowUsingExhaustedKeys);
+            if (authKey == nullptr) {
+                return Status::fromServiceSpecificError(
+                    ICredentialStore::ERROR_NO_AUTHENTICATION_KEY_AVAILABLE,
+                    "No suitable authentication key available");
+            }
+        }
+    }
+    vector<uint8_t> signingKeyBlob;
+    if (authKey != nullptr) {
+        signingKeyBlob = authKey->keyBlob;
+    }
+
+    Status status =
+        halBinder_->startRetrieval(selectedProfiles, aidlAuthToken, requestMessage, signingKeyBlob,
+                                   sessionTranscript, readerSignature, requestCounts);
     if (!status.isOk() && status.exceptionCode() == binder::Status::EX_SERVICE_SPECIFIC) {
         int code = status.serviceSpecificErrorCode();
         if (code == IIdentityCredentialStore::STATUS_EPHEMERAL_PUBLIC_KEY_NOT_FOUND) {
@@ -319,26 +339,7 @@ Status Credential::getEntries(const vector<uint8_t>& requestMessage,
         ret.resultNamespaces.push_back(resultNamespaceParcel);
     }
 
-    // Note that the selectAuthKey() method is only called if a CryptoObject is involved at
-    // the Java layer. So we could end up with no previously selected auth key and we may
-    // need one.
-    const AuthKeyData* authKey = selectedAuthKey_;
-    if (sessionTranscript.size() > 0) {
-        if (authKey == nullptr) {
-            authKey = data_->selectAuthKey(allowUsingExhaustedKeys);
-            if (authKey == nullptr) {
-                return Status::fromServiceSpecificError(
-                    ICredentialStore::ERROR_NO_AUTHENTICATION_KEY_AVAILABLE,
-                    "No suitable authentication key available");
-            }
-        }
-    }
-
-    vector<uint8_t> signingKeyBlob;
-    if (authKey != nullptr) {
-        signingKeyBlob = authKey->keyBlob;
-    }
-    status = halBinder_->finishRetrieval(signingKeyBlob, &ret.mac, &ret.deviceNameSpaces);
+    status = halBinder_->finishRetrieval(&ret.mac, &ret.deviceNameSpaces);
     if (!status.isOk()) {
         return halStatusToGenericError(status);
     }
