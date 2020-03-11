@@ -19,20 +19,14 @@
 #include <sys/types.h>
 
 #include <filesystem>
-#include <memory>
 #include <string>
-#include <vector>
 
 #include <android-base/file.h>
 #include <android-base/logging.h>
 #include <android-base/properties.h>
 #include <android-base/strings.h>
-#include <keystore/keystore_client.h>
-#include <keystore/keystore_client_impl.h>
-#include <keystore/keystore_get.h>
 #include <log/log.h>
 #include <mini_keyctl_utils.h>
-#include <private/android_filesystem_config.h>
 
 bool LoadKeyToKeyring(key_serial_t keyring_id, const char* desc, const char* data, size_t size) {
     key_serial_t key = add_key("asymmetric", desc, data, size, keyring_id);
@@ -61,31 +55,6 @@ void LoadKeyFromVerifiedPartitions(key_serial_t keyring_id) {
     }
 }
 
-std::unique_ptr<keystore::KeystoreClient> CreateKeystoreInstance() {
-    return std::unique_ptr<keystore::KeystoreClient>(
-        static_cast<keystore::KeystoreClient*>(new keystore::KeystoreClientImpl));
-}
-
-void LoadKeysFromKeystore(key_serial_t keyring_id) {
-    auto client = CreateKeystoreInstance();
-
-    std::vector<std::string> aliases;
-    if (client == nullptr || !client->listKeysOfUid("FSV_", AID_FSVERITY_CERT, &aliases)) {
-        LOG(ERROR) << "Failed to list key";
-        return;
-    }
-
-    // Always try to load all keys even if some fails to load. The rest may still
-    // be important to have.
-    for (auto& alias : aliases) {
-        auto blob = client->getKey(alias, AID_FSVERITY_CERT);
-        if (!LoadKeyToKeyring(keyring_id, "fsv_user", reinterpret_cast<char*>(blob->data()),
-                              blob->size())) {
-            LOG(ERROR) << "Failed to load key " << alias << " from keyring";
-        }
-    }
-}
-
 int main(int /*argc*/, const char** /*argv*/) {
     key_serial_t keyring_id = android::GetKeyringId(".fs-verity");
     if (keyring_id < 0) {
@@ -100,7 +69,6 @@ int main(int /*argc*/, const char** /*argv*/) {
     }
 
     LoadKeyFromVerifiedPartitions(keyring_id);
-    LoadKeysFromKeystore(keyring_id);
 
     if (!android::base::GetBoolProperty("ro.debuggable", false)) {
         if (keyctl_restrict_keyring(keyring_id, nullptr, nullptr) < 0) {
