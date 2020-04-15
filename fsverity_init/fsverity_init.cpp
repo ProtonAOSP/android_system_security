@@ -37,10 +37,8 @@ bool LoadKeyToKeyring(key_serial_t keyring_id, const char* desc, const char* dat
     return true;
 }
 
-void LoadKeyFromVerifiedPartitions(key_serial_t keyring_id) {
-    const char* dir = "/product/etc/security/fsverity";
+void LoadKeyFromDirectory(key_serial_t keyring_id, const char* keyname, const char* dir) {
     if (!std::filesystem::exists(dir)) {
-        LOG(ERROR) << "no such dir: " << dir;
         return;
     }
     for (const auto& entry : std::filesystem::directory_iterator(dir)) {
@@ -49,10 +47,17 @@ void LoadKeyFromVerifiedPartitions(key_serial_t keyring_id) {
         if (!android::base::ReadFileToString(entry.path(), &content)) {
             continue;
         }
-        if (!LoadKeyToKeyring(keyring_id, "fsv_system", content.c_str(), content.size())) {
+        if (!LoadKeyToKeyring(keyring_id, keyname, content.c_str(), content.size())) {
             LOG(ERROR) << "Failed to load key from " << entry.path();
         }
     }
+}
+
+void LoadKeyFromVerifiedPartitions(key_serial_t keyring_id) {
+    // NB: Directories need to be synced with FileIntegrityService.java in
+    // frameworks/base.
+    LoadKeyFromDirectory(keyring_id, "fsv_system", "/system/etc/security/fsverity");
+    LoadKeyFromDirectory(keyring_id, "fsv_product", "/product/etc/security/fsverity");
 }
 
 int main(int /*argc*/, const char** /*argv*/) {
