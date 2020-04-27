@@ -38,6 +38,8 @@ using ::std::vector;
 using ::android::hardware::identity::CipherSuite;
 using ::android::hardware::identity::IIdentityCredential;
 using ::android::hardware::identity::IIdentityCredentialStore;
+using ::android::hardware::identity::RequestDataItem;
+using ::android::hardware::identity::RequestNamespace;
 
 class Credential : public BnCredential {
   public:
@@ -80,6 +82,11 @@ class Credential : public BnCredential {
     sp<CredentialData> data_;
 
     sp<IIdentityCredential> halBinder_;
+
+    ssize_t
+    calcExpectedDeviceNameSpacesSize(const vector<uint8_t>& requestMessage,
+                                     const vector<RequestNamespaceParcel>& requestNamespaces,
+                                     uint32_t authorizedAcps);
 };
 
 }  // namespace identity
