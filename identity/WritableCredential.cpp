@@ -39,10 +39,10 @@ using ::android::hardware::identity::SecureAccessControlProfile;
 using ::android::hardware::identity::support::chunkVector;
 
 WritableCredential::WritableCredential(const string& dataPath, const string& credentialName,
-                                       const string& /*docType*/, size_t dataChunkSize,
+                                       const string& docType, size_t dataChunkSize,
                                        sp<IWritableIdentityCredential> halBinder)
-    : dataPath_(dataPath), credentialName_(credentialName), dataChunkSize_(dataChunkSize),
-      halBinder_(halBinder) {}
+    : dataPath_(dataPath), credentialName_(credentialName), docType_(docType),
+      dataChunkSize_(dataChunkSize), halBinder_(halBinder) {}
 
 WritableCredential::~WritableCredential() {}
 
@@ -89,6 +89,62 @@ Status WritableCredential::getCredentialKeyCertificateChain(const vector<uint8_t
     return Status::ok();
 }
 
+ssize_t WritableCredential::calcExpectedProofOfProvisioningSize(
+    const vector<AccessControlProfileParcel>& accessControlProfiles,
+    const vector<EntryNamespaceParcel>& entryNamespaces) {
+
+    // Right now, we calculate the size by simply just calculating the
+    // CBOR. There's a little bit of overhead associated with this (as compared
+    // to just adding up sizes) but it's a lot simpler and robust. In the future
+    // if this turns out to be a problem, we can optimize it.
+    //
+
+    cppbor::Array acpArray;
+    for (const AccessControlProfileParcel& profile : accessControlProfiles) {
+        cppbor::Map map;
+        map.add("id", profile.id);
+        if (profile.readerCertificate.size() > 0) {
+            map.add("readerCertificate", cppbor::Bstr(profile.readerCertificate));
+        }
+        if (profile.userAuthenticationRequired) {
+            map.add("userAuthenticationRequired", profile.userAuthenticationRequired);
+            map.add("timeoutMillis", profile.userAuthenticationTimeoutMillis);
+        }
+        acpArray.add(std::move(map));
+    }
+
+    cppbor::Map dataMap;
+    for (const EntryNamespaceParcel& ensParcel : entryNamespaces) {
+        cppbor::Array entriesArray;
+        for (const EntryParcel& eParcel : ensParcel.entries) {
+            // TODO: ideally do do this without parsing the data (but still validate data is valid
+            // CBOR).
+            auto [itemForValue, _, _2] = cppbor::parse(eParcel.value);
+            if (itemForValue == nullptr) {
+                return -1;
+            }
+            cppbor::Map entryMap;
+            entryMap.add("name", eParcel.name);
+            entryMap.add("value", std::move(itemForValue));
+            cppbor::Array acpIdsArray;
+            for (int32_t id : eParcel.accessControlProfileIds) {
+                acpIdsArray.add(id);
+            }
+            entryMap.add("accessControlProfiles", std::move(acpIdsArray));
+            entriesArray.add(std::move(entryMap));
+        }
+        dataMap.add(ensParcel.namespaceName, std::move(entriesArray));
+    }
+
+    cppbor::Array array;
+    array.add("ProofOfProvisioning");
+    array.add(docType_);
+    array.add(std::move(acpArray));
+    array.add(std::move(dataMap));
+    array.add(false);  // testCredential
+    return array.encode().size();
+}
+
 Status
 WritableCredential::personalize(const vector<AccessControlProfileParcel>& accessControlProfiles,
                                 const vector<EntryNamespaceParcel>& entryNamespaces,
@@ -113,7 +169,21 @@ WritableCredential::personalize(const vector<AccessControlProfileParcel>& access
         entryCounts.push_back(ensParcel.entries.size());
     }
 
-    Status status = halBinder_->startPersonalization(accessControlProfiles.size(), entryCounts);
+    ssize_t expectedPoPSize =
+        calcExpectedProofOfProvisioningSize(accessControlProfiles, entryNamespaces);
+    if (expectedPoPSize < 0) {
+        return Status::fromServiceSpecificError(ICredentialStore::ERROR_GENERIC,
+                                                "Data is not valid CBOR");
+    }
+    // This is not catastrophic, we might be dealing with a version 1 implementation which
+    // doesn't have this method.
+    Status status = halBinder_->setExpectedProofOfProvisioningSize(expectedPoPSize);
+    if (!status.isOk()) {
+        LOG(INFO) << "Failed setting expected ProofOfProvisioning size, assuming V1 HAL "
+                  << "and continuing";
+    }
+
+    status = halBinder_->startPersonalization(accessControlProfiles.size(), entryCounts);
     if (!status.isOk()) {
         return halStatusToGenericError(status);
     }
