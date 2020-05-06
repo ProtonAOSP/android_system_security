@@ -1072,7 +1072,7 @@ Status KeyStoreService::attestKey(
 
     uid_t callingUid = IPCThreadState::self()->getCallingUid();
 
-    if (isDeviceIdAttestationRequested(params) && (get_app_id(callingUid) != AID_SYSTEM)) {
+    if (needsPermissionToAttestDeviceIds(params) && (get_app_id(callingUid) != AID_SYSTEM)) {
         return AIDL_RETURN(KeyStoreServiceReturnCode(ErrorCode::INVALID_ARGUMENT));
     }
 
