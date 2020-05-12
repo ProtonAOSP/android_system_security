@@ -13,6 +13,7 @@ cc_test {
         "auth_token_formatting_test.cpp",
         "blob_test.cpp",
         "confirmationui_rate_limiting_test.cpp",
+        "verification_token_seralization_test.cpp",
         "gtest_main.cpp",
     ],
     name: "keystore_unit_tests",
