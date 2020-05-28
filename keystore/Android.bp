@@ -294,6 +294,7 @@ filegroup {
     name: "keystore_aidl",
     srcs: [
         "binder/android/security/IConfirmationPromptCallback.aidl",
+        "binder/android/security/keystore/ICredstoreTokenCallback.aidl",
         "binder/android/security/keystore/IKeystoreCertificateChainCallback.aidl",
         "binder/android/security/keystore/IKeystoreExportKeyCallback.aidl",
         "binder/android/security/keystore/IKeystoreKeyCharacteristicsCallback.aidl",

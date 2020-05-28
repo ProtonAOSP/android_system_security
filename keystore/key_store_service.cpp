@@ -57,6 +57,8 @@ using namespace android;
 namespace {
 
 using ::android::binder::Status;
+using android::hardware::keymaster::V4_0::support::authToken2HidlVec;
+using android::hardware::keymaster::V4_0::support::serializeVerificationToken;
 using android::security::keymaster::ExportResult;
 using android::security::keymaster::KeymasterArguments;
 using android::security::keymaster::KeymasterBlob;
@@ -64,6 +66,7 @@ using android::security::keymaster::KeymasterCertificateChain;
 using android::security::keymaster::operationFailed;
 using android::security::keymaster::OperationResult;
 using ConfirmationResponseCode = android::hardware::confirmationui::V1_0::ResponseCode;
+using ::android::security::keystore::ICredstoreTokenCallback;
 using ::android::security::keystore::IKeystoreOperationResultCallback;
 using ::android::security::keystore::IKeystoreResponseCallback;
 using ::android::security::keystore::KeystoreResponse;
@@ -943,9 +946,9 @@ Status KeyStoreService::addAuthToken(const ::std::vector<uint8_t>& authTokenAsVe
     return Status::ok();
 }
 
-Status KeyStoreService::getAuthTokenForCredstore(int64_t challenge, int64_t secureUserId,
-                                                 int32_t authTokenMaxAgeMillis,
-                                                 std::vector<uint8_t>* _aidl_return) {
+Status KeyStoreService::getTokensForCredstore(int64_t challenge, int64_t secureUserId,
+                                              int32_t authTokenMaxAgeMillis,
+                                              const ::android::sp<ICredstoreTokenCallback>& cb) {
     uid_t callingUid = IPCThreadState::self()->getCallingUid();
     if (callingUid != AID_CREDSTORE) {
         return Status::fromServiceSpecificError(static_cast<int32_t>(0));
@@ -953,11 +956,48 @@ Status KeyStoreService::getAuthTokenForCredstore(int64_t challenge, int64_t secu
 
     auto [err, authToken] = mKeyStore->getAuthTokenTable().FindAuthorizationForCredstore(
         challenge, secureUserId, authTokenMaxAgeMillis);
-    std::vector<uint8_t> ret;
-    if (err == AuthTokenTable::OK) {
-        ret = android::hardware::keymaster::V4_0::support::authToken2HidlVec(authToken);
+    // It's entirely possible we couldn't find an authToken (e.g. no user auth
+    // happened within the requested deadline) and in that case, we just
+    // callback immediately signaling success but just not returning any tokens.
+    if (err != AuthTokenTable::OK) {
+        cb->onFinished(true, {} /* serializedAuthToken */, {} /* serializedVerificationToken */);
+        return Status::ok();
     }
-    *_aidl_return = ret;
+
+    // If we did find an authToken, get a verificationToken as well...
+    //
+    std::vector<uint8_t> serializedAuthToken = authToken2HidlVec(authToken);
+    std::vector<uint8_t> serializedVerificationToken;
+    std::shared_ptr<KeymasterWorker> dev = mKeyStore->getDevice(SecurityLevel::TRUSTED_ENVIRONMENT);
+    if (!dev) {
+        LOG(ERROR) << "Unable to get KM device for SecurityLevel::TRUSTED_ENVIRONMENT";
+        dev = mKeyStore->getDevice(SecurityLevel::SOFTWARE);
+        if (!dev) {
+            LOG(ERROR) << "Unable to get KM device for SecurityLevel::SOFTWARE";
+            cb->onFinished(false, {}, {});
+            return Status::fromServiceSpecificError(static_cast<int32_t>(0));
+        }
+    }
+
+    dev->verifyAuthorization(
+        challenge, {} /* params */, authToken,
+        [serializedAuthToken, cb](KeyStoreServiceReturnCode rc, HardwareAuthToken,
+                                  VerificationToken verificationToken) {
+            if (rc != ErrorCode::OK) {
+                LOG(ERROR) << "verifyAuthorization failed, rc=" << rc;
+                cb->onFinished(false, {}, {});
+                return;
+            }
+            std::optional<std::vector<uint8_t>> serializedVerificationToken =
+                serializeVerificationToken(verificationToken);
+            if (!serializedVerificationToken) {
+                LOG(ERROR) << "Error serializing verificationToken";
+                cb->onFinished(false, {}, {});
+                return;
+            }
+            cb->onFinished(true, serializedAuthToken, serializedVerificationToken.value());
+        });
+
     return Status::ok();
 }
 
