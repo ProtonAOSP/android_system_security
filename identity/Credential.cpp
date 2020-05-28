@@ -261,7 +261,35 @@ Status Credential::getEntries(const vector<uint8_t>& requestMessage,
         signingKeyBlob = authKey->keyBlob;
     }
 
-    Status status =
+    // Pass the HAL enough information to allow calculating the size of
+    // DeviceNameSpaces ahead of time.
+    vector<RequestNamespace> halRequestNamespaces;
+    for (const RequestNamespaceParcel& rns : requestNamespaces) {
+        RequestNamespace ns;
+        ns.namespaceName = rns.namespaceName;
+        for (const RequestEntryParcel& rep : rns.entries) {
+            optional<EntryData> entryData = data_->getEntryData(rns.namespaceName, rep.name);
+            if (entryData) {
+                RequestDataItem di;
+                di.name = rep.name;
+                di.size = entryData.value().size;
+                di.accessControlProfileIds = entryData.value().accessControlProfileIds;
+                ns.items.push_back(di);
+            }
+        }
+        if (ns.items.size() > 0) {
+            halRequestNamespaces.push_back(ns);
+        }
+    }
+    // This is not catastrophic, we might be dealing with a version 1 implementation which
+    // doesn't have this method.
+    Status status = halBinder_->setRequestedNamespaces(halRequestNamespaces);
+    if (!status.isOk()) {
+        LOG(INFO) << "Failed setting expected requested namespaces assuming V1 HAL "
+                  << "and continuing";
+    }
+
+    status =
         halBinder_->startRetrieval(selectedProfiles, aidlAuthToken, requestMessage, signingKeyBlob,
                                    sessionTranscript, readerSignature, requestCounts);
     if (!status.isOk() && status.exceptionCode() == binder::Status::EX_SERVICE_SPECIFIC) {
