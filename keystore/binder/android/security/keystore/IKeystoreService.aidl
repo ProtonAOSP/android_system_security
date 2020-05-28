@@ -19,6 +19,7 @@ package android.security.keystore;
 import android.security.keymaster.KeymasterArguments;
 import android.security.keymaster.KeymasterBlob;
 import android.security.keymaster.OperationResult;
+import android.security.keystore.ICredstoreTokenCallback;
 import android.security.keystore.IKeystoreResponseCallback;
 import android.security.keystore.IKeystoreKeyCharacteristicsCallback;
 import android.security.keystore.IKeystoreExportKeyCallback;
@@ -86,5 +87,6 @@ interface IKeystoreService {
     int listUidsOfAuthBoundKeys(out @utf8InCpp List<String> uids);
 
     // Called by credstore (and only credstore).
-    byte[] getAuthTokenForCredstore(in long challenge, in long secureUserId, in int authTokenMaxAgeMillis);
+    void getTokensForCredstore(in long challenge, in long secureUserId, in int authTokenMaxAgeMillis,
+                               in ICredstoreTokenCallback cb);
 }
