@@ -132,9 +132,9 @@ class KeyStoreService : public android::security::keystore::BnKeystoreService {
           const ::android::sp<::android::IBinder>& token, int32_t* _aidl_return) override;
     ::android::binder::Status addAuthToken(const ::std::vector<uint8_t>& authToken,
                                            int32_t* _aidl_return) override;
-    ::android::binder::Status
-    getAuthTokenForCredstore(int64_t challenge, int64_t secureUserId, int32_t authTokenMaxAge,
-                             ::std::vector<uint8_t>* _aidl_return) override;
+    ::android::binder::Status getTokensForCredstore(
+        int64_t challenge, int64_t secureUserId, int32_t authTokenMaxAge,
+        const ::android::sp<::android::security::keystore::ICredstoreTokenCallback>& cb) override;
     ::android::binder::Status onUserAdded(int32_t userId, int32_t parentId,
                                           int32_t* _aidl_return) override;
     ::android::binder::Status onUserRemoved(int32_t userId, int32_t* _aidl_return) override;
