@@ -50,9 +50,14 @@ class WritableCredential : public BnWritableCredential {
   private:
     string dataPath_;
     string credentialName_;
+    string docType_;
     size_t dataChunkSize_;
     sp<IWritableIdentityCredential> halBinder_;
     vector<uint8_t> attestationCertificate_;
+
+    ssize_t calcExpectedProofOfProvisioningSize(
+        const vector<AccessControlProfileParcel>& accessControlProfiles,
+        const vector<EntryNamespaceParcel>& entryNamespaces);
 
     Status ensureAttestationCertificateExists(const vector<uint8_t>& challenge);
 };
