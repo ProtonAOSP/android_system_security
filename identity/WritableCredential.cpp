@@ -149,7 +149,7 @@ Status
 WritableCredential::personalize(const vector<AccessControlProfileParcel>& accessControlProfiles,
                                 const vector<EntryNamespaceParcel>& entryNamespaces,
                                 int64_t secureUserId, vector<uint8_t>* _aidl_return) {
-    Status ensureStatus = ensureAttestationCertificateExists({});
+    Status ensureStatus = ensureAttestationCertificateExists({0x00});  // Challenge cannot be empty.
     if (!ensureStatus.isOk()) {
         return ensureStatus;
     }
