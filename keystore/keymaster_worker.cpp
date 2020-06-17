@@ -29,7 +29,7 @@
 #include "KeyStore.h"
 #include "keymaster_enforcement.h"
 
-#include "key_proto_handler.h"
+#include "key_creation_log_handler.h"
 #include "keystore_utils.h"
 
 #include <chrono>
@@ -800,8 +800,10 @@ void KeymasterWorker::generateKey(LockedKeyBlobEntry lockedEntry, hidl_vec<KeyPa
         // by KeyStore::getFallbackDevice()
         bool consider_fallback = securityLevel == SecurityLevel::TRUSTED_ENVIRONMENT;
 
-        Finalize logOnFail(
-            [&] { uploadKeyCharacteristicsAsProto(keyParams, false /* wasCreationSuccessful */); });
+        Finalize logOnFail([&] {
+            logKeystoreKeyCreationEvent(keyParams, false /*wasCreationSuccessful*/,
+                                        rc.getErrorCode());
+        });
 
         KeyCharacteristics outCharacteristics;
         KeyStoreServiceReturnCode error;
@@ -870,7 +872,8 @@ void KeymasterWorker::generateKey(LockedKeyBlobEntry lockedEntry, hidl_vec<KeyPa
 
         // log on success
         logOnFail.release();
-        uploadKeyCharacteristicsAsProto(keyParams, true /* wasCreationSuccessful */);
+        logKeystoreKeyCreationEvent(keyParams, true /*wasCreationSuccessful*/,
+                                    error.getErrorCode());
 
         return worker_cb(error, std::move(outCharacteristics));
     });
@@ -904,11 +907,13 @@ void KeymasterWorker::importKey(LockedKeyBlobEntry lockedEntry, hidl_vec<KeyPara
         // by KeyStore::getFallbackDevice()
         bool consider_fallback = securityLevel == SecurityLevel::TRUSTED_ENVIRONMENT;
 
-        Finalize logOnFail(
-            [&] { uploadKeyCharacteristicsAsProto(keyParams, false /* wasCreationSuccessful */); });
+        KeyStoreServiceReturnCode error;
+        Finalize logOnFail([&] {
+            logKeystoreKeyCreationEvent(keyParams, false /*wasCreationSuccessful*/,
+                                        error.getErrorCode());
+        });
 
         KeyCharacteristics outCharacteristics;
-        KeyStoreServiceReturnCode error;
         auto hidl_cb = [&](ErrorCode ret, const hidl_vec<uint8_t>& hidlKeyBlob,
                            const KeyCharacteristics& keyCharacteristics) {
             keymasterDevice_->logIfKeymasterVendorError(ret);
@@ -975,7 +980,8 @@ void KeymasterWorker::importKey(LockedKeyBlobEntry lockedEntry, hidl_vec<KeyPara
 
         // log on success
         logOnFail.release();
-        uploadKeyCharacteristicsAsProto(keyParams, true /* wasCreationSuccessful */);
+        logKeystoreKeyCreationEvent(keyParams, true /*wasCreationSuccessful*/,
+                                    error.getErrorCode());
 
         return worker_cb(error, std::move(outCharacteristics));
     });
