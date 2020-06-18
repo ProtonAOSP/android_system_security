@@ -190,7 +190,7 @@ class KeymasterWorker : protected Worker {
     getAuthToken(const KeyCharacteristics& characteristics, uint64_t handle, KeyPurpose purpose,
                  bool failOnTokenMissing = true);
 
-    KeyStoreServiceReturnCode abort(const sp<IBinder>& token);
+    KeyStoreServiceReturnCode abort(const sp<IBinder>& token, ResponseCode reason_for_abort);
 
     bool pruneOperation();
 
