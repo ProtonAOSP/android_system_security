@@ -45,6 +45,20 @@ enum class ResponseCode : int32_t {
     OP_AUTH_NEEDED = 15,  // Auth is needed for this operation before it can be used.
     KEY_ALREADY_EXISTS = 16,
     KEY_PERMANENTLY_INVALIDATED = 17,
+
+    /**
+     * Following three response codes are for logging purposes only.
+     * The operations are logged at the end of the life cycle of an operation handle,
+     * along with the reason for the end of the operation handle. For the operations
+     * that fail in update and finish, the reason for failure is available with
+     * the above response codes.
+     * For the operations that are aborted in three different ways, the reason
+     * for aborting is not available. The following enum values define the
+     * three ways an operation can get aborted.
+     */
+    ABORT_CALLED = 18,
+    PRUNED = 19,
+    BINDER_DIED = 20,
 };
 
 /*
