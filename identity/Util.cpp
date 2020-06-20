@@ -110,7 +110,7 @@ bool fileSetContents(const string& path, const vector<uint8_t>& data) {
         remaining -= numWritten;
     }
 
-    if (TEMP_FAILURE_RETRY(fsync(fd) == -1)) {
+    if (TEMP_FAILURE_RETRY(fsync(fd))) {
         PLOG(ERROR) << "Failed fsyncing temp file for '" << path << "'";
         close(fd);
         return false;
