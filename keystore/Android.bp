@@ -36,6 +36,7 @@ cc_binary {
         "grant_store.cpp",
         "key_creation_log_handler.cpp",
         "key_operation_log_handler.cpp",
+        "key_attestation_log_handler.cpp",
         "key_store_service.cpp",
         "keyblob_utils.cpp",
         "keymaster_enforcement.cpp",
