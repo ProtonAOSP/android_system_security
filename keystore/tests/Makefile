@@ -17,7 +17,6 @@ GTEST=$(BASE)/external/gtest
 KEYMASTER=$(BASE)/system/keymaster
 
 INCLUDES=$(foreach dir,$(SUBS),-I $(BASE)/$(dir)/include) \
-	-I $(BASE)/libnativehelper/include/nativehelper \
 	-I $(GTEST) -Iinclude
 
 # Add USE_CLANG=1 to the make command line to build with clang, which has better error
