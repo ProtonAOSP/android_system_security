@@ -184,7 +184,21 @@ Status Credential::getEntries(const vector<uint8_t>& requestMessage,
     // in the startRetrieval() call.
     vector<int32_t> requestCounts;
     const vector<SecureAccessControlProfile>& allProfiles = data_->getSecureAccessControlProfiles();
-    vector<bool> includeProfile(allProfiles.size());
+
+    // We don't support ACP identifiers which isn't in the range 0 to 31. This
+    // guarantee exists so it's feasible to implement the TA part of an Identity
+    // Credential HAL implementation where the TA uses a 32-bit word to indicate
+    // which profiles are authorized.
+    for (const SecureAccessControlProfile& profile : allProfiles) {
+        if (profile.id < 0 || profile.id >= 32) {
+            return Status::fromServiceSpecificError(
+                ICredentialStore::ERROR_GENERIC,
+                "Invalid accessProfileId in profile (must be between 0 and 31)");
+        }
+    }
+
+    vector<bool> includeProfile(32);
+
     for (const RequestNamespaceParcel& rns : requestNamespaces) {
         size_t numEntriesInNsToRequest = 0;
         for (const RequestEntryParcel& rep : rns.entries) {
@@ -195,11 +209,12 @@ Status Credential::getEntries(const vector<uint8_t>& requestMessage,
             optional<EntryData> data = data_->getEntryData(rns.namespaceName, rep.name);
             if (data) {
                 for (int32_t id : data.value().accessControlProfileIds) {
-                    if (id >= int32_t(includeProfile.size())) {
+                    if (id < 0 || id >= 32) {
                         LOG(ERROR) << "Invalid accessControlProfileId " << id << " for "
                                    << rns.namespaceName << ": " << rep.name;
                         return Status::fromServiceSpecificError(
-                            ICredentialStore::ERROR_GENERIC, "Invalid accessProfileId for entry");
+                            ICredentialStore::ERROR_GENERIC,
+                            "Invalid accessProfileId in entry (must be between 0 and 31)");
                     }
                     includeProfile[id] = true;
                 }
@@ -212,7 +227,7 @@ Status Credential::getEntries(const vector<uint8_t>& requestMessage,
     // HAL.
     vector<SecureAccessControlProfile> selectedProfiles;
     for (size_t n = 0; n < allProfiles.size(); n++) {
-        if (includeProfile[n]) {
+        if (includeProfile[allProfiles[n].id]) {
             selectedProfiles.push_back(allProfiles[n]);
         }
     }
