@@ -21,13 +21,14 @@ rust_library {
         "libanyhow",
         "libkeystore_aidl_generated",
         "liblog_rust",
+        "librusqlite",
         "libthiserror",
     ],
 }
 
 rust_test {
     name: "keystore2_test",
-    crate_name: "keystore2_test",
+    crate_name: "keystore2",
     srcs: ["src/lib.rs"],
     test_suites: ["general-tests"],
     auto_gen_config: true,
@@ -36,6 +37,7 @@ rust_test {
         "libanyhow",
         "libkeystore_aidl_generated",
         "liblog_rust",
+        "librusqlite",
         "libthiserror",
     ],
 }
