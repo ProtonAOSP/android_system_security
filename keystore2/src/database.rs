@@ -15,20 +15,72 @@
 // TODO: Once this is stable, remove this and document everything public.
 #![allow(missing_docs)]
 
+use crate::error::Error as KsError;
 use anyhow::{Context, Result};
-use rusqlite::Connection;
+use keystore_aidl_generated as aidl;
+#[cfg(not(test))]
+use rand::prelude::random;
+use rusqlite::{params, Connection, NO_PARAMS};
+#[cfg(test)]
+use tests::random;
 
 pub struct KeystoreDB {
-    #[allow(dead_code)]
     conn: Connection,
 }
 
 impl KeystoreDB {
     pub fn new() -> Result<KeystoreDB> {
-        Ok(KeystoreDB {
+        let db = KeystoreDB {
             conn: Connection::open_in_memory()
                 .context("Failed to initialize sqlite connection.")?,
-        })
+        };
+        db.init_tables().context("Failed to create KeystoreDB.")?;
+        Ok(db)
+    }
+
+    fn init_tables(&self) -> Result<()> {
+        self.conn
+            .execute(
+                "CREATE TABLE IF NOT EXISTS keyentry (
+                     id INTEGER UNIQUE,
+                     creation_date DATETIME,
+                     domain INTEGER,
+                     namespace INTEGER,
+                     alias TEXT);",
+                NO_PARAMS,
+            )
+            .context("Failed to initialize \"keyentry\" table.")?;
+        Ok(())
+    }
+
+    pub fn create_key_entry(&self, domain: aidl::Domain, namespace: i64) -> Result<i64> {
+        match domain {
+            aidl::Domain::App | aidl::Domain::SELinux => {}
+            _ => {
+                return Err(KsError::sys())
+                    .context(format!("Domain {:?} must be either App or SELinux.", domain));
+            }
+        }
+        // Loop until we get a unique id.
+        loop {
+            let newid: i64 = random();
+            let ret = self.conn.execute(
+                "INSERT into keyentry (id, creation_date, domain, namespace, alias)
+                     VALUES(?, datetime('now'), ?, ?, NULL);",
+                params![newid, domain as i64, namespace],
+            );
+            match ret {
+                // If the id already existed, try again.
+                Err(rusqlite::Error::SqliteFailure(
+                    libsqlite3_sys::Error {
+                        code: libsqlite3_sys::ErrorCode::ConstraintViolation,
+                        extended_code: libsqlite3_sys::SQLITE_CONSTRAINT_UNIQUE,
+                    },
+                    _,
+                )) => (),
+                _ => return Ok(newid),
+            }
+        }
     }
 }
 
@@ -36,7 +88,21 @@ impl KeystoreDB {
 mod tests {
 
     use super::*;
-    use rusqlite::params;
+    use std::cell::RefCell;
+
+    // Ensure that we're using the "injected" random function, not the real one.
+    #[test]
+    fn test_mocked_random() {
+        let rand1 = random();
+        let rand2 = random();
+        let rand3 = random();
+        if rand1 == rand2 {
+            assert_eq!(rand2 + 1, rand3);
+        } else {
+            assert_eq!(rand1 + 1, rand2);
+            assert_eq!(rand2, rand3);
+        }
+    }
 
     // Ensure we can initialize the database.
     #[test]
@@ -54,7 +120,113 @@ mod tests {
             .prepare("SELECT name from sqlite_master WHERE type='table' ORDER BY name;")?
             .query_map(params![], |row| row.get(0))?
             .collect::<rusqlite::Result<Vec<String>>>()?;
-        assert_eq!(tables.len(), 0);
+        assert_eq!(tables.len(), 1);
+        assert_eq!(tables[0], "keyentry");
         Ok(())
+    }
+
+    #[test]
+    fn test_create_key_entry() -> Result<()> {
+        use aidl::Domain;
+
+        fn extractor(ke: &KeyEntryRow) -> (Domain, i64, Option<&str>) {
+            (ke.domain.unwrap(), ke.namespace.unwrap(), ke.alias.as_deref())
+        }
+
+        let db = KeystoreDB::new()?;
+
+        db.create_key_entry(Domain::App, 100)?;
+        db.create_key_entry(Domain::SELinux, 101)?;
+
+        let entries = get_keyentry(&db)?;
+        assert_eq!(entries.len(), 2);
+        assert_eq!(extractor(&entries[0]), (Domain::App, 100, None));
+        assert_eq!(extractor(&entries[1]), (Domain::SELinux, 101, None));
+
+        // Test that we must pass in a valid Domain.
+        check_result_is_error_containing_string(
+            db.create_key_entry(Domain::Grant, 102),
+            "Domain Grant must be either App or SELinux.",
+        );
+        check_result_is_error_containing_string(
+            db.create_key_entry(Domain::Blob, 103),
+            "Domain Blob must be either App or SELinux.",
+        );
+        check_result_is_error_containing_string(
+            db.create_key_entry(Domain::KeyId, 104),
+            "Domain KeyId must be either App or SELinux.",
+        );
+
+        Ok(())
+    }
+
+    // Helpers
+
+    // Checks that the given result is an error containing the given string.
+    fn check_result_is_error_containing_string<T>(result: Result<T>, target: &str) {
+        let error_str = format!(
+            "{:#?}",
+            result.err().unwrap_or_else(|| panic!("Expected the error: {}", target))
+        );
+        assert!(
+            error_str.contains(target),
+            "The string \"{}\" should contain \"{}\"",
+            error_str,
+            target
+        );
+    }
+
+    #[allow(dead_code)]
+    struct KeyEntryRow {
+        id: u32,
+        creation_date: String,
+        domain: Option<aidl::Domain>,
+        namespace: Option<i64>,
+        alias: Option<String>,
+    }
+
+    fn get_keyentry(db: &KeystoreDB) -> Result<Vec<KeyEntryRow>> {
+        db.conn
+            .prepare("SELECT * FROM keyentry;")?
+            .query_map(NO_PARAMS, |row| {
+                let domain: Option<i32> = row.get(2)?;
+                Ok(KeyEntryRow {
+                    id: row.get(0)?,
+                    creation_date: row.get(1)?,
+                    domain: domain.map(domain_from_integer),
+                    namespace: row.get(3)?,
+                    alias: row.get(4)?,
+                })
+            })?
+            .map(|r| r.context("Could not read keyentry row."))
+            .collect::<Result<Vec<_>>>()
+    }
+
+    // TODO: Replace this with num_derive.
+    fn domain_from_integer(value: i32) -> aidl::Domain {
+        use aidl::Domain;
+        match value {
+            x if Domain::App as i32 == x => Domain::App,
+            x if Domain::Grant as i32 == x => Domain::Grant,
+            x if Domain::SELinux as i32 == x => Domain::SELinux,
+            x if Domain::Blob as i32 == x => Domain::Blob,
+            x if Domain::KeyId as i32 == x => Domain::KeyId,
+            _ => panic!("Unexpected domain: {}", value),
+        }
+    }
+
+    // Use a custom random number generator that repeats each number once.
+    // This allows us to test repeated elements.
+
+    thread_local! {
+        static RANDOM_COUNTER: RefCell<i64> = RefCell::new(0);
+    }
+
+    pub fn random() -> i64 {
+        RANDOM_COUNTER.with(|counter| {
+            let result = *counter.borrow() / 2;
+            *counter.borrow_mut() += 1;
+            result
+        })
     }
 }
