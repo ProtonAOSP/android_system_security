@@ -29,19 +29,38 @@ pub struct KeystoreDB {
 }
 
 impl KeystoreDB {
+    // TODO(b/160882985): Figure out the location for this file.
+    #[cfg(not(test))]
     pub fn new() -> Result<KeystoreDB> {
+        KeystoreDB::new_with_filename("persistent.sql")
+    }
+
+    #[cfg(test)]
+    pub fn new() -> Result<KeystoreDB> {
+        KeystoreDB::new_with_filename("")
+    }
+
+    fn new_with_filename(persistent_file: &str) -> Result<KeystoreDB> {
         let db = KeystoreDB {
             conn: Connection::open_in_memory()
                 .context("Failed to initialize sqlite connection.")?,
         };
+        db.attach_databases(persistent_file).context("Failed to create KeystoreDB.")?;
         db.init_tables().context("Failed to create KeystoreDB.")?;
         Ok(db)
+    }
+
+    fn attach_databases(&self, persistent_file: &str) -> Result<()> {
+        self.conn
+            .execute("ATTACH DATABASE ? as 'persistent';", params![persistent_file])
+            .context("Failed to attach databases.")?;
+        Ok(())
     }
 
     fn init_tables(&self) -> Result<()> {
         self.conn
             .execute(
-                "CREATE TABLE IF NOT EXISTS keyentry (
+                "CREATE TABLE IF NOT EXISTS persistent.keyentry (
                      id INTEGER UNIQUE,
                      creation_date DATETIME,
                      domain INTEGER,
@@ -65,7 +84,7 @@ impl KeystoreDB {
         loop {
             let newid: i64 = random();
             let ret = self.conn.execute(
-                "INSERT into keyentry (id, creation_date, domain, namespace, alias)
+                "INSERT into persistent.keyentry (id, creation_date, domain, namespace, alias)
                      VALUES(?, datetime('now'), ?, ?, NULL);",
                 params![newid, domain as i64, namespace],
             );
@@ -117,11 +136,40 @@ mod tests {
         let db = KeystoreDB::new()?;
         let tables = db
             .conn
-            .prepare("SELECT name from sqlite_master WHERE type='table' ORDER BY name;")?
+            .prepare("SELECT name from persistent.sqlite_master WHERE type='table' ORDER BY name;")?
             .query_map(params![], |row| row.get(0))?
             .collect::<rusqlite::Result<Vec<String>>>()?;
         assert_eq!(tables.len(), 1);
         assert_eq!(tables[0], "keyentry");
+        Ok(())
+    }
+
+    #[test]
+    fn test_no_persistence_for_tests() -> Result<()> {
+        let db = KeystoreDB::new()?;
+
+        db.create_key_entry(aidl::Domain::App, 100)?;
+        let entries = get_keyentry(&db)?;
+        assert_eq!(entries.len(), 1);
+        let db = KeystoreDB::new()?;
+
+        let entries = get_keyentry(&db)?;
+        assert_eq!(entries.len(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_persistence_for_files() -> Result<()> {
+        let persistent = TempFile { filename: "/data/local/tmp/persistent.sql" };
+        let db = KeystoreDB::new_with_filename(persistent.filename)?;
+
+        db.create_key_entry(aidl::Domain::App, 100)?;
+        let entries = get_keyentry(&db)?;
+        assert_eq!(entries.len(), 1);
+        let db = KeystoreDB::new_with_filename(persistent.filename)?;
+
+        let entries_new = get_keyentry(&db)?;
+        assert_eq!(entries, entries_new);
         Ok(())
     }
 
@@ -176,6 +224,7 @@ mod tests {
         );
     }
 
+    #[derive(Debug, PartialEq)]
     #[allow(dead_code)]
     struct KeyEntryRow {
         id: u32,
@@ -187,7 +236,7 @@ mod tests {
 
     fn get_keyentry(db: &KeystoreDB) -> Result<Vec<KeyEntryRow>> {
         db.conn
-            .prepare("SELECT * FROM keyentry;")?
+            .prepare("SELECT * FROM persistent.keyentry;")?
             .query_map(NO_PARAMS, |row| {
                 let domain: Option<i32> = row.get(2)?;
                 Ok(KeyEntryRow {
@@ -212,6 +261,18 @@ mod tests {
             x if Domain::Blob as i32 == x => Domain::Blob,
             x if Domain::KeyId as i32 == x => Domain::KeyId,
             _ => panic!("Unexpected domain: {}", value),
+        }
+    }
+
+    // A class that deletes a file when it is dropped.
+    // TODO: If we ever add a crate that does this, we can use it instead.
+    struct TempFile {
+        filename: &'static str,
+    }
+
+    impl Drop for TempFile {
+        fn drop(&mut self) {
+            std::fs::remove_file(self.filename).expect("Cannot delete temporary file");
         }
     }
 
