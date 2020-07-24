@@ -143,9 +143,9 @@ pub fn map_or_log_err<T>(
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
 
-    use anyhow::{anyhow, Context};
+    use anyhow::{anyhow, Context, Result};
 
     use super::aidl::ErrorCode;
     use super::*;
@@ -283,5 +283,19 @@ mod tests {
             map_or_log_err(nested_selinux_perm(), |_| AidlResult::ec(0))
         );
         Ok(())
+    }
+
+    //Helper function to test whether error cases are handled as expected.
+    pub fn check_result_contains_error_string<T>(result: Result<T>, expected_error_string: &str) {
+        let error_str = format!(
+            "{:#?}",
+            result.err().unwrap_or_else(|| panic!("Expected the error: {}", expected_error_string))
+        );
+        assert!(
+            error_str.contains(expected_error_string),
+            "The string \"{}\" should contain \"{}\"",
+            error_str,
+            expected_error_string
+        );
     }
 } // mod tests
