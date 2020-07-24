@@ -62,9 +62,9 @@ template <typename T, size_t count> class Devices : public std::array<T, count> 
 }  // namespace keystore
 
 namespace std {
-template <typename T, size_t count> struct tuple_size<keystore::Devices<T, count>> {
+template <typename T, size_t N> struct tuple_size<keystore::Devices<T, N>> {
   public:
-    static constexpr size_t value = std::tuple_size<std::array<T, count>>::value;
+    static constexpr size_t value = std::tuple_size<std::array<T, N>>::value;
 };
 }  // namespace std
 
