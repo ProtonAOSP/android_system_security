@@ -20,7 +20,7 @@ use anyhow::{Context, Result};
 use keystore_aidl_generated as aidl;
 #[cfg(not(test))]
 use rand::prelude::random;
-use rusqlite::{params, Connection, NO_PARAMS};
+use rusqlite::{params, Connection, TransactionBehavior, NO_PARAMS};
 #[cfg(test)]
 use tests::random;
 
@@ -100,6 +100,52 @@ impl KeystoreDB {
                 _ => return Ok(newid),
             }
         }
+    }
+
+    pub fn rebind_alias(
+        &mut self,
+        newid: u32,
+        alias: &str,
+        domain: aidl::Domain,
+        namespace: i64,
+    ) -> Result<()> {
+        match domain {
+            aidl::Domain::App | aidl::Domain::SELinux => {}
+            _ => {
+                return Err(KsError::sys())
+                    .context(format!("Domain {:?} must be either App or SELinux.", domain));
+            }
+        }
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .context("Failed to initialize transaction.")?;
+        tx.execute(
+            "UPDATE persistent.keyentry
+                 SET alias = NULL, domain = NULL, namespace = NULL
+                 WHERE alias = ? AND domain = ? AND namespace = ?;",
+            params![alias, domain as i64, namespace],
+        )
+        .context("Failed to rebind existing entry.")?;
+        let result = tx
+            .execute(
+                "UPDATE persistent.keyentry
+                 SET alias = ?
+                 WHERE id = ? AND domain = ? AND namespace = ?;",
+                params![alias, newid, domain as i64, namespace],
+            )
+            .context("Failed to set alias.")?;
+        if result != 1 {
+            // Note that this explicit rollback is not required, as
+            // the transaction should rollback if we do not commit it.
+            // We leave it here for readability.
+            tx.rollback().context("Failed to rollback a failed transaction.")?;
+            return Err(KsError::sys()).context(format!(
+                "Expected to update a single entry but instead updated {}.",
+                result
+            ));
+        }
+        tx.commit().context("Failed to commit transaction.")
     }
 }
 
@@ -204,6 +250,64 @@ mod tests {
             db.create_key_entry(Domain::KeyId, 104),
             "Domain KeyId must be either App or SELinux.",
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_rebind_alias() -> Result<()> {
+        use aidl::Domain;
+
+        fn extractor(ke: &KeyEntryRow) -> (Option<Domain>, Option<i64>, Option<&str>) {
+            (ke.domain, ke.namespace, ke.alias.as_deref())
+        }
+
+        let mut db = KeystoreDB::new()?;
+        db.create_key_entry(Domain::App, 42)?;
+        db.create_key_entry(Domain::App, 42)?;
+        let entries = get_keyentry(&db)?;
+        assert_eq!(entries.len(), 2);
+        assert_eq!(extractor(&entries[0]), (Some(Domain::App), Some(42), None));
+        assert_eq!(extractor(&entries[1]), (Some(Domain::App), Some(42), None));
+
+        // Test that the first call to rebind_alias sets the alias.
+        db.rebind_alias(entries[0].id, "foo", Domain::App, 42)?;
+        let entries = get_keyentry(&db)?;
+        assert_eq!(entries.len(), 2);
+        assert_eq!(extractor(&entries[0]), (Some(Domain::App), Some(42), Some("foo")));
+        assert_eq!(extractor(&entries[1]), (Some(Domain::App), Some(42), None));
+
+        // Test that the second call to rebind_alias also empties the old one.
+        db.rebind_alias(entries[1].id, "foo", Domain::App, 42)?;
+        let entries = get_keyentry(&db)?;
+        assert_eq!(entries.len(), 2);
+        assert_eq!(extractor(&entries[0]), (None, None, None));
+        assert_eq!(extractor(&entries[1]), (Some(Domain::App), Some(42), Some("foo")));
+
+        // Test that we must pass in a valid Domain.
+        check_result_is_error_containing_string(
+            db.rebind_alias(0, "foo", Domain::Grant, 42),
+            "Domain Grant must be either App or SELinux.",
+        );
+        check_result_is_error_containing_string(
+            db.rebind_alias(0, "foo", Domain::Blob, 42),
+            "Domain Blob must be either App or SELinux.",
+        );
+        check_result_is_error_containing_string(
+            db.rebind_alias(0, "foo", Domain::KeyId, 42),
+            "Domain KeyId must be either App or SELinux.",
+        );
+
+        // Test that we correctly handle setting an alias for something that does not exist.
+        check_result_is_error_containing_string(
+            db.rebind_alias(0, "foo", Domain::SELinux, 42),
+            "Expected to update a single entry but instead updated 0",
+        );
+        // Test that we correctly abort the transaction in this case.
+        let entries = get_keyentry(&db)?;
+        assert_eq!(entries.len(), 2);
+        assert_eq!(extractor(&entries[0]), (None, None, None));
+        assert_eq!(extractor(&entries[1]), (Some(Domain::App), Some(42), Some("foo")));
 
         Ok(())
     }
