@@ -25,3 +25,12 @@ rust_test {
     test_suites: ["general-tests"],
     auto_gen_config: true,
 }
+
+// This is a placeholder for the libraries that will be generated from the AIDL specs
+// eventually.
+rust_library {
+    name: "libkeystore_aidl_generated",
+    crate_name: "keystore_aidl_generated",
+
+    srcs: ["src/aidl_generated.rs"],
+}
