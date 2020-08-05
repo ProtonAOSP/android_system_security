@@ -30,11 +30,24 @@ use anyhow::Context as AnyhowContext;
 
 use selinux::Backend;
 
+use lazy_static::lazy_static;
+
 // Replace getcon with a mock in the test situation
 #[cfg(not(test))]
 use selinux::getcon;
 #[cfg(test)]
 use tests::test_getcon as getcon;
+
+lazy_static! {
+    // Panicking here is allowed because keystore cannot function without this backend
+    // and it would happen early and indicate a gross misconfiguration of the device.
+    static ref KEYSTORE2_KEY_LABEL_BACKEND: selinux::KeystoreKeyBackend =
+            selinux::KeystoreKeyBackend::new().unwrap();
+}
+
+fn lookup_keystore2_key_context(namespace: i64) -> anyhow::Result<selinux::Context> {
+    KEYSTORE2_KEY_LABEL_BACKEND.lookup(&namespace.to_string())
+}
 
 /// The below example wraps the enum MyPermission in the tuple struct `MyPerm` and implements
 ///  * `From<i32> for `MyPerm`, where each unknown numeric value is mapped to the given default,
@@ -369,20 +382,11 @@ pub fn check_grant_permission(
     key: &aidl::KeyDescriptor,
 ) -> anyhow::Result<()> {
     use aidl::Domain;
-    use selinux::KeystoreKeyBackend;
 
     let target_context = match key.domain {
         Domain::App => getcon().context("check_grant_permission: getcon failed.")?,
-        Domain::SELinux => {
-            // TODO cache an open backend, possible use a lazy static.
-            let backend = KeystoreKeyBackend::new().context(concat!(
-                "check_grant_permission: Domain::SELinux: ",
-                "Failed to create selinux keystore backend."
-            ))?;
-            backend
-                .lookup(format!("{}", key.namespace_).as_str())
-                .context("check_grant_permission: Domain::SELinux: Failed to lookup namespace")?
-        }
+        Domain::SELinux => lookup_keystore2_key_context(key.namespace_)
+            .context("check_grant_permission: Domain::SELinux: Failed to lookup namespace.")?,
         _ => return Err(KsError::sys()).context(format!("Cannot grant {:?}.", key.domain)),
     };
 
@@ -429,20 +433,12 @@ pub fn check_key_permission(
     access_vector: &Option<KeyPermSet>,
 ) -> anyhow::Result<()> {
     use aidl::Domain;
-    use selinux::KeystoreKeyBackend;
 
     let target_context = match key.domain {
         // apps get the default keystore context
         Domain::App => getcon().context("check_key_permission: getcon failed.")?,
-        Domain::SELinux => {
-            // TODO cache an open backend, possible use a lasy static.
-            let backend = KeystoreKeyBackend::new().context(
-                "check_key_permission: Domain::SELinux: Failed to create selinux keystore backend.",
-            )?;
-            backend
-                .lookup(format!("{}", key.namespace_).as_str())
-                .context("check_key_permission: Domain::SELinux: Failed to lookup namespace")?
-        }
+        Domain::SELinux => lookup_keystore2_key_context(key.namespace_)
+            .context("check_key_permission: Domain::SELinux: Failed to lookup namespace.")?,
         Domain::Grant => {
             match access_vector {
                 Some(pv) => {
@@ -468,10 +464,7 @@ pub fn check_key_permission(
             return Err(KsError::sys()).context("Cannot check permission for Domain::KeyId.");
         }
         Domain::Blob => {
-            let backend = KeystoreKeyBackend::new()
-                .context("Domain::Blob: Failed to create selinux keystore backend.")?;
-            let tctx = backend
-                .lookup(format!("{}", key.namespace_).as_str())
+            let tctx = lookup_keystore2_key_context(key.namespace_)
                 .context("Domain::Blob: Failed to lookup namespace.")?;
             // If DOMAIN_KEY_BLOB was specified, we check for the "manage_blob"
             // permission in addition to the requested permission.
