@@ -16,6 +16,13 @@ rust_library {
     name: "libkeystore2",
     crate_name: "keystore2",
     srcs: ["src/lib.rs"],
+
+    rustlibs: [
+        "libanyhow",
+        "libkeystore_aidl_generated",
+        "liblog_rust",
+        "libthiserror",
+    ],
 }
 
 rust_test {
@@ -24,6 +31,13 @@ rust_test {
     srcs: ["src/lib.rs"],
     test_suites: ["general-tests"],
     auto_gen_config: true,
+    rustlibs: [
+        "libandroid_logger",
+        "libanyhow",
+        "libkeystore_aidl_generated",
+        "liblog_rust",
+        "libthiserror",
+    ],
 }
 
 // This is a placeholder for the libraries that will be generated from the AIDL specs
