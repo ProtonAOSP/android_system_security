@@ -13,3 +13,5 @@
 // limitations under the License.
 
 //! This crate implements the Android Keystore 2.0 service.
+
+pub mod error;
