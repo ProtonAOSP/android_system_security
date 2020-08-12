@@ -33,7 +33,6 @@
 #include <keystore/keystore_concurrency.h>
 #include <keystore/keystore_hidl_support.h>
 
-#include "operation_proto_handler.h"
 #include "operation_struct.h"
 
 namespace keystore {
@@ -57,7 +56,8 @@ class OperationMap {
                              KeyCharacteristics&& characteristics,
                              const hidl_vec<KeyParameter>& params, bool pruneable);
     std::shared_ptr<Operation> getOperation(const sp<IBinder>& token);
-    std::shared_ptr<Operation> removeOperation(const sp<IBinder>& token, bool wasSuccessful);
+    std::shared_ptr<Operation> removeOperation(const sp<IBinder>& token, bool wasSuccessful,
+                                               int32_t responseCode);
     size_t getOperationCount() const { return mMap.size(); }
     sp<IBinder> getOldestPruneableOperation();
     std::vector<sp<IBinder>> getOperationsForToken(const sp<IBinder>& appToken);
@@ -70,7 +70,6 @@ class OperationMap {
     std::list<sp<IBinder>> mLru;
     std::map<sp<IBinder>, std::vector<sp<IBinder>>> mAppTokenMap;
     IBinder::DeathRecipient* mDeathRecipient;
-    OperationProtoHandler operationUploader;
 };
 
 }  // namespace keystore
