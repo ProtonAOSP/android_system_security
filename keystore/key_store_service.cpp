@@ -41,6 +41,7 @@
 #include <keymasterV4_0/keymaster_utils.h>
 
 #include "defaults.h"
+#include "key_attestation_log_handler.h"
 #include "keystore_keymaster_enforcement.h"
 #include "keystore_utils.h"
 #include <keystore/keystore_attestation_id.h>
@@ -1117,6 +1118,10 @@ Status KeyStoreService::attestKey(
 
     AuthorizationSet mutableParams = params.getParameters();
     KeyStoreServiceReturnCode rc = updateParamsForAttestation(callingUid, &mutableParams);
+
+    auto logErrorOnReturn = android::base::make_scope_guard(
+        [&] { logKeystoreKeyAttestationEvent(false /*wasSuccessful*/, rc.getErrorCode()); });
+
     if (!rc.isOk()) {
         return AIDL_RETURN(rc);
     }
@@ -1133,6 +1138,8 @@ Status KeyStoreService::attestKey(
         return AIDL_RETURN(rc);
     }
 
+    logErrorOnReturn.Disable();
+
     auto dev = mKeyStore->getDevice(keyBlob);
     auto hidlKey = blob2hidlVec(keyBlob);
     dev->attestKey(
@@ -1141,13 +1148,18 @@ Status KeyStoreService::attestKey(
                   std::tuple<ErrorCode, hidl_vec<hidl_vec<uint8_t>>>&& hidlResult) {
             auto& [ret, certChain] = hidlResult;
             if (!rc.isOk()) {
+                logKeystoreKeyAttestationEvent(false /*wasSuccessful*/,
+                                               static_cast<int32_t>(ResponseCode::SYSTEM_ERROR));
                 cb->onFinished(KeyStoreServiceReturnCode(ResponseCode::SYSTEM_ERROR), {});
             } else if (ret != ErrorCode::OK) {
+                KeyStoreServiceReturnCode ksrc(ret);
+                logKeystoreKeyAttestationEvent(false /*wasSuccessful*/, ksrc.getErrorCode());
                 dev->logIfKeymasterVendorError(ret);
-                cb->onFinished(KeyStoreServiceReturnCode(ret), {});
+                cb->onFinished(ksrc, {});
             } else {
-                cb->onFinished(KeyStoreServiceReturnCode(ret),
-                               KeymasterCertificateChain(std::move(certChain)));
+                KeyStoreServiceReturnCode ksrc(ret);
+                logKeystoreKeyAttestationEvent(true /*wasSuccessful*/, ksrc.getErrorCode());
+                cb->onFinished(ksrc, KeymasterCertificateChain(std::move(certChain)));
             }
         });
 
