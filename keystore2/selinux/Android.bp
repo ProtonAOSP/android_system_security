@@ -13,45 +13,42 @@
 // limitations under the License.
 
 rust_library {
-    name: "libkeystore2",
-    crate_name: "keystore2",
-    srcs: ["src/lib.rs"],
+    name: "libkeystore2_selinux",
+    crate_name: "keystore2_selinux",
+    srcs: [
+        "src/lib.rs",
+    ],
+
+    shared_libs: [
+        "libselinux",
+    ],
 
     rustlibs: [
         "libanyhow",
-        "libkeystore_aidl_generated",
-        "libkeystore2_selinux",
-        "liblibsqlite3_sys",
         "liblog_rust",
-        "librand",
-        "librusqlite",
+        "libselinux_bindgen",
         "libthiserror",
     ],
 }
 
 rust_test {
-    name: "keystore2_test",
-    crate_name: "keystore2",
-    srcs: ["src/lib.rs"],
+    name: "keystore2_selinux_test",
+    srcs: [
+        "src/lib.rs",
+    ],
+    crate_name: "keystore2_selinux_test",
     test_suites: ["general-tests"],
     auto_gen_config: true,
+
+    shared_libs: [
+        "libselinux",
+    ],
+
     rustlibs: [
         "libandroid_logger",
         "libanyhow",
-        "libkeystore_aidl_generated",
-        "libkeystore2_selinux",
-        "liblibsqlite3_sys",
         "liblog_rust",
-        "librusqlite",
+        "libselinux_bindgen",
         "libthiserror",
     ],
-}
-
-// This is a placeholder for the libraries that will be generated from the AIDL specs
-// eventually.
-rust_library {
-    name: "libkeystore_aidl_generated",
-    crate_name: "keystore_aidl_generated",
-
-    srcs: ["src/aidl_generated.rs"],
 }
