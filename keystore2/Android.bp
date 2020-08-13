@@ -20,14 +20,17 @@ rust_library {
     rustlibs: [
         "libanyhow",
         "libkeystore_aidl_generated",
+        "liblibsqlite3_sys",
         "liblog_rust",
+        "librand",
+        "librusqlite",
         "libthiserror",
     ],
 }
 
 rust_test {
     name: "keystore2_test",
-    crate_name: "keystore2_test",
+    crate_name: "keystore2",
     srcs: ["src/lib.rs"],
     test_suites: ["general-tests"],
     auto_gen_config: true,
@@ -35,7 +38,9 @@ rust_test {
         "libandroid_logger",
         "libanyhow",
         "libkeystore_aidl_generated",
+        "liblibsqlite3_sys",
         "liblog_rust",
+        "librusqlite",
         "libthiserror",
     ],
 }
