@@ -36,6 +36,8 @@ use std::convert::From;
 use keystore_aidl_generated as aidl;
 use keystore_aidl_generated::ResponseCode as AidlRc;
 
+use keystore2_selinux as selinux;
+
 pub use aidl::ResponseCode;
 
 /// AidlResult wraps the `android.security.keystore2.Result` generated from AIDL
@@ -89,7 +91,10 @@ impl From<anyhow::Error> for AidlResult {
         match root_cause.downcast_ref::<Error>() {
             Some(Error::Rc(rcode)) => AidlResult::rc(*rcode),
             Some(Error::Km(ec)) => AidlResult::ec(*ec),
-            None => AidlResult::rc(AidlRc::SystemError),
+            None => match root_cause.downcast_ref::<selinux::Error>() {
+                Some(selinux::Error::PermissionDenied) => AidlResult::rc(AidlRc::PermissionDenied),
+                _ => AidlResult::rc(AidlRc::SystemError),
+            },
         }
     }
 }
@@ -101,6 +106,7 @@ impl From<anyhow::Error> for AidlResult {
 /// All `Error::Rc(x)` variants get mapped onto `aidl::Result{x, 0}`.
 /// All `Error::Km(x)` variants get mapped onto
 /// `aidl::Result{aidl::ResponseCode::KeymintErrorCode, x}`.
+/// `selinux::Error::perm()` is mapped on `aidl::Result{aidl::ResponseCode::PermissionDenied, 0}`.
 ///
 /// All non `Error` error conditions get mapped onto
 /// `aidl::Result{aidl::ResponseCode::SystemError}`.
@@ -166,6 +172,14 @@ mod tests {
 
     fn nested_ok(rc: AidlRc) -> anyhow::Result<AidlRc> {
         nested_nested_ok(rc).context("nested ok")
+    }
+
+    fn nested_nested_selinux_perm() -> anyhow::Result<()> {
+        Err(anyhow!(selinux::Error::perm())).context("nested nexted selinux permission denied")
+    }
+
+    fn nested_selinux_perm() -> anyhow::Result<()> {
+        nested_nested_selinux_perm().context("nested selinux permission denied")
     }
 
     #[derive(Debug, thiserror::Error)]
@@ -263,6 +277,11 @@ mod tests {
         );
         assert_eq!(AidlResult::ok(), map_or_log_err(nested_ok(AidlRc::Ok), AidlResult::rc));
 
+        // selinux::Error::Perm() needs to be mapped to AidlRc::PermissionDenied
+        assert_eq!(
+            AidlResult::rc(AidlRc::PermissionDenied),
+            map_or_log_err(nested_selinux_perm(), |_| AidlResult::ec(0))
+        );
         Ok(())
     }
 } // mod tests
