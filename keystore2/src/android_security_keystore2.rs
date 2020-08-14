@@ -1219,6 +1219,7 @@ pub mod aidl {
           pub(crate) mod mangled { pub use super::ResponseCode as _7_android_8_security_9_keystore2_12_ResponseCode; }
         }
         pub mod Result {
+          #[derive(Debug, Copy, Clone, Eq, PartialEq)]
           pub struct Result {
             pub rc: crate::mangled::_7_android_8_security_9_keystore2_12_ResponseCode, 
             pub errorCode: crate::mangled::_7_android_8_hardware_7_keymint_9_ErrorCode, 
