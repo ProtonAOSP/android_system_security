@@ -25,6 +25,7 @@
 use std::ffi::{CStr, CString};
 use std::fmt;
 use std::io;
+use std::marker::{Send, Sync};
 pub use std::ops::Deref;
 use std::os::raw::c_char;
 use std::ptr;
@@ -141,6 +142,10 @@ pub struct KeystoreKeyBackend {
     handle: *mut selinux::selabel_handle,
 }
 
+// KeystoreKeyBackend is Sync because selabel_lookup is thread safe.
+unsafe impl Sync for KeystoreKeyBackend {}
+unsafe impl Send for KeystoreKeyBackend {}
+
 impl KeystoreKeyBackend {
     const BACKEND_TYPE: i32 = SELABEL_CTX_ANDROID_KEYSTORE2_KEY as i32;
 
@@ -164,6 +169,9 @@ impl Drop for KeystoreKeyBackend {
     }
 }
 
+// Because KeystoreKeyBackend is Sync and Send, member function must never call
+// non thread safe libselinux functions. As of this writing no non thread safe
+// functions exist that could be called on a label backend handle.
 impl Backend for KeystoreKeyBackend {
     fn lookup(&self, key: &str) -> Result<Context> {
         let mut con: *mut c_char = ptr::null_mut();
