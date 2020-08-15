@@ -1,0 +1,7 @@
+{
+  "presubmit": [
+    {
+      "name": "keystore2_selinux_test"
+    }
+  ]
+}
