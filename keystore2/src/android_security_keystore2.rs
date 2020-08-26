@@ -854,6 +854,7 @@ pub mod aidl {
           }
         }
         pub mod KeyDescriptor {
+          #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
           pub struct KeyDescriptor {
             pub domain: crate::mangled::_7_android_8_security_9_keystore2_6_Domain, 
             pub namespace_: i64, 
