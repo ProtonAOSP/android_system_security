@@ -472,7 +472,7 @@ pub mod aidl {
               },
             }
           }
-          pub trait IKeyMintDevice: binder::Interface {
+          pub trait IKeyMintDevice: binder::Interface + Send {
             fn get_descriptor() -> &'static str where Self: Sized { "android.hardware.keymint.IKeyMintDevice" }
             fn getHardwareInfo(&self) -> binder::public_api::Result<crate::mangled::_7_android_8_hardware_7_keymint_19_KeyMintHardwareInfo> {
               Err(binder::StatusCode::UNKNOWN_TRANSACTION.into())
@@ -525,7 +525,7 @@ pub mod aidl {
           pub const TRANSACTION_deleteAllKeys: binder::TransactionCode = binder::SpIBinder::FIRST_CALL_TRANSACTION + 8;
           pub const TRANSACTION_destroyAttestationIds: binder::TransactionCode = binder::SpIBinder::FIRST_CALL_TRANSACTION + 9;
           pub const TRANSACTION_begin: binder::TransactionCode = binder::SpIBinder::FIRST_CALL_TRANSACTION + 10;
-          pub type DefaultImpl = Option<std::sync::Arc<dyn IKeyMintDevice + Send + Sync>>;
+          pub type DefaultImpl = Option<std::sync::Arc<dyn IKeyMintDevice + Sync>>;
           use lazy_static::lazy_static;
           lazy_static! {
             static ref DEFAULT_IMPL: std::sync::Mutex<DefaultImpl> = std::sync::Mutex::new(None);
@@ -912,7 +912,7 @@ pub mod aidl {
               },
             }
           }
-          pub trait IKeyMintOperation: binder::Interface {
+          pub trait IKeyMintOperation: binder::Interface + Send {
             fn get_descriptor() -> &'static str where Self: Sized { "android.hardware.keymint.IKeyMintOperation" }
             fn update(&self, _arg_inParams: &[crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter], _arg_input: &[u8], _arg_inVerificationToken: &crate::mangled::_7_android_8_hardware_7_keymint_17_VerificationToken, _arg_outParams: &mut Vec<crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter>, _arg_output: &mut Vec<u8>) -> binder::public_api::Result<i32> {
               Err(binder::StatusCode::UNKNOWN_TRANSACTION.into())
@@ -933,7 +933,7 @@ pub mod aidl {
           pub const TRANSACTION_update: binder::TransactionCode = binder::SpIBinder::FIRST_CALL_TRANSACTION + 0;
           pub const TRANSACTION_finish: binder::TransactionCode = binder::SpIBinder::FIRST_CALL_TRANSACTION + 1;
           pub const TRANSACTION_abort: binder::TransactionCode = binder::SpIBinder::FIRST_CALL_TRANSACTION + 2;
-          pub type DefaultImpl = Option<std::sync::Arc<dyn IKeyMintOperation + Send + Sync>>;
+          pub type DefaultImpl = Option<std::sync::Arc<dyn IKeyMintOperation + Sync>>;
           use lazy_static::lazy_static;
           lazy_static! {
             static ref DEFAULT_IMPL: std::sync::Mutex<DefaultImpl> = std::sync::Mutex::new(None);
