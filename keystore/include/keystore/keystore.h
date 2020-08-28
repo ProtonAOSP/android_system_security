@@ -59,7 +59,6 @@ enum class ResponseCode : int32_t {
     ABORT_CALLED = 18,
     PRUNED = 19,
     BINDER_DIED = 20,
-
 };
 
 /*
