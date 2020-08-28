@@ -142,13 +142,13 @@ pub mod aidl {
         }
         pub mod CertificateChain {
           pub struct CertificateChain {
-            pub certificates: Vec<crate::mangled::_7_android_8_security_9_keystore2_11_Certificate>, 
+            pub data: Vec<u8>, 
           }
           pub(crate) mod mangled { pub use super::CertificateChain as _7_android_8_security_9_keystore2_16_CertificateChain; }
           impl Default for CertificateChain {
             fn default() -> Self {
               Self {
-                certificates: Default::default(),
+                data: Default::default(),
               }
             }
           }
@@ -168,7 +168,7 @@ pub mod aidl {
               };
               let start_pos = parcel.get_data_position();
               parcel.write(&0i32)?;
-              parcel.write(&this.certificates)?;
+              parcel.write(&this.data)?;
               let end_pos = parcel.get_data_position();
               let parcelable_size = (end_pos - start_pos) as i32;
               unsafe { parcel.set_data_position(start_pos)?; }
@@ -193,7 +193,7 @@ pub mod aidl {
               let parcelable_size: i32 = parcel.read()?;
               if parcelable_size < 0 { return Err(binder::StatusCode::BAD_VALUE); }
               let mut result = Self::default();
-              result.certificates = parcel.read()?;
+              result.data = parcel.read()?;
               if (parcel.get_data_position() - start_pos) >= parcelable_size {
                 unsafe { parcel.set_data_position(start_pos + parcelable_size)?; }
                 return Ok(Some(result));
@@ -224,15 +224,15 @@ pub mod aidl {
               },
             }
           }
-          pub trait IKeystoreOperation: binder::Interface {
+          pub trait IKeystoreOperation: binder::Interface + Send {
             fn get_descriptor() -> &'static str where Self: Sized { "android.security.keystore2.IKeystoreOperation" }
-            fn update(&self, _arg_input: Option<&[u8]>, _arg_aadInput: Option<&[u8]>, _arg_output: &mut Option<Vec<u8>>) -> binder::public_api::Result<crate::mangled::_7_android_8_security_9_keystore2_6_Result> {
+            fn update(&self, _arg_input: Option<&[u8]>, _arg_aadInput: Option<&[u8]>, _arg_output: &mut Option<Vec<u8>>) -> binder::public_api::Result<()> {
               Err(binder::StatusCode::UNKNOWN_TRANSACTION.into())
             }
-            fn finish(&self, _arg_input: Option<&[u8]>, _arg_signature: Option<&[u8]>, _arg_entropy: Option<&[u8]>, _arg_output: &mut Option<Vec<u8>>) -> binder::public_api::Result<crate::mangled::_7_android_8_security_9_keystore2_6_Result> {
+            fn finish(&self, _arg_input: Option<&[u8]>, _arg_signature: Option<&[u8]>, _arg_entropy: Option<&[u8]>, _arg_output: &mut Option<Vec<u8>>) -> binder::public_api::Result<()> {
               Err(binder::StatusCode::UNKNOWN_TRANSACTION.into())
             }
-            fn abort(&self) -> binder::public_api::Result<crate::mangled::_7_android_8_security_9_keystore2_6_Result> {
+            fn abort(&self) -> binder::public_api::Result<()> {
               Err(binder::StatusCode::UNKNOWN_TRANSACTION.into())
             }
             fn getDefaultImpl() -> DefaultImpl where Self: Sized {
@@ -245,14 +245,14 @@ pub mod aidl {
           pub const TRANSACTION_update: binder::TransactionCode = binder::SpIBinder::FIRST_CALL_TRANSACTION + 0;
           pub const TRANSACTION_finish: binder::TransactionCode = binder::SpIBinder::FIRST_CALL_TRANSACTION + 1;
           pub const TRANSACTION_abort: binder::TransactionCode = binder::SpIBinder::FIRST_CALL_TRANSACTION + 2;
-          pub type DefaultImpl = Option<std::sync::Arc<dyn IKeystoreOperation + Send + Sync>>;
+          pub type DefaultImpl = Option<std::sync::Arc<dyn IKeystoreOperation + Sync>>;
           use lazy_static::lazy_static;
           lazy_static! {
             static ref DEFAULT_IMPL: std::sync::Mutex<DefaultImpl> = std::sync::Mutex::new(None);
           }
           pub(crate) mod mangled { pub use super::IKeystoreOperation as _7_android_8_security_9_keystore2_18_IKeystoreOperation; }
           impl IKeystoreOperation for BpKeystoreOperation {
-            fn update(&self, _arg_input: Option<&[u8]>, _arg_aadInput: Option<&[u8]>, _arg_output: &mut Option<Vec<u8>>) -> binder::public_api::Result<crate::mangled::_7_android_8_security_9_keystore2_6_Result> {
+            fn update(&self, _arg_input: Option<&[u8]>, _arg_aadInput: Option<&[u8]>, _arg_output: &mut Option<Vec<u8>>) -> binder::public_api::Result<()> {
               let _aidl_reply = self.binder.transact(TRANSACTION_update, 0, |_aidl_data| {
                 _aidl_data.write(&_arg_input)?;
                 _aidl_data.write(&_arg_aadInput)?;
@@ -267,11 +267,10 @@ pub mod aidl {
               let _aidl_reply = _aidl_reply?;
               let _aidl_status: binder::Status = _aidl_reply.read()?;
               if !_aidl_status.is_ok() { return Err(_aidl_status); }
-              let _aidl_return: crate::mangled::_7_android_8_security_9_keystore2_6_Result = _aidl_reply.read()?;
               *_arg_output = _aidl_reply.read()?;
-              Ok(_aidl_return)
+              Ok(())
             }
-            fn finish(&self, _arg_input: Option<&[u8]>, _arg_signature: Option<&[u8]>, _arg_entropy: Option<&[u8]>, _arg_output: &mut Option<Vec<u8>>) -> binder::public_api::Result<crate::mangled::_7_android_8_security_9_keystore2_6_Result> {
+            fn finish(&self, _arg_input: Option<&[u8]>, _arg_signature: Option<&[u8]>, _arg_entropy: Option<&[u8]>, _arg_output: &mut Option<Vec<u8>>) -> binder::public_api::Result<()> {
               let _aidl_reply = self.binder.transact(TRANSACTION_finish, 0, |_aidl_data| {
                 _aidl_data.write(&_arg_input)?;
                 _aidl_data.write(&_arg_signature)?;
@@ -287,11 +286,10 @@ pub mod aidl {
               let _aidl_reply = _aidl_reply?;
               let _aidl_status: binder::Status = _aidl_reply.read()?;
               if !_aidl_status.is_ok() { return Err(_aidl_status); }
-              let _aidl_return: crate::mangled::_7_android_8_security_9_keystore2_6_Result = _aidl_reply.read()?;
               *_arg_output = _aidl_reply.read()?;
-              Ok(_aidl_return)
+              Ok(())
             }
-            fn abort(&self) -> binder::public_api::Result<crate::mangled::_7_android_8_security_9_keystore2_6_Result> {
+            fn abort(&self) -> binder::public_api::Result<()> {
               let _aidl_reply = self.binder.transact(TRANSACTION_abort, 0, |_aidl_data| {
                 Ok(())
               });
@@ -303,14 +301,13 @@ pub mod aidl {
               let _aidl_reply = _aidl_reply?;
               let _aidl_status: binder::Status = _aidl_reply.read()?;
               if !_aidl_status.is_ok() { return Err(_aidl_status); }
-              let _aidl_return: crate::mangled::_7_android_8_security_9_keystore2_6_Result = _aidl_reply.read()?;
-              Ok(_aidl_return)
+              Ok(())
             }
           }
           impl IKeystoreOperation for binder::Binder<BnKeystoreOperation> {
-            fn update(&self, _arg_input: Option<&[u8]>, _arg_aadInput: Option<&[u8]>, _arg_output: &mut Option<Vec<u8>>) -> binder::public_api::Result<crate::mangled::_7_android_8_security_9_keystore2_6_Result> { self.0.update(_arg_input, _arg_aadInput, _arg_output) }
-            fn finish(&self, _arg_input: Option<&[u8]>, _arg_signature: Option<&[u8]>, _arg_entropy: Option<&[u8]>, _arg_output: &mut Option<Vec<u8>>) -> binder::public_api::Result<crate::mangled::_7_android_8_security_9_keystore2_6_Result> { self.0.finish(_arg_input, _arg_signature, _arg_entropy, _arg_output) }
-            fn abort(&self) -> binder::public_api::Result<crate::mangled::_7_android_8_security_9_keystore2_6_Result> { self.0.abort() }
+            fn update(&self, _arg_input: Option<&[u8]>, _arg_aadInput: Option<&[u8]>, _arg_output: &mut Option<Vec<u8>>) -> binder::public_api::Result<()> { self.0.update(_arg_input, _arg_aadInput, _arg_output) }
+            fn finish(&self, _arg_input: Option<&[u8]>, _arg_signature: Option<&[u8]>, _arg_entropy: Option<&[u8]>, _arg_output: &mut Option<Vec<u8>>) -> binder::public_api::Result<()> { self.0.finish(_arg_input, _arg_signature, _arg_entropy, _arg_output) }
+            fn abort(&self) -> binder::public_api::Result<()> { self.0.abort() }
           }
           fn on_transact(_aidl_service: &dyn IKeystoreOperation, _aidl_code: binder::TransactionCode, _aidl_data: &binder::parcel::Parcel, _aidl_reply: &mut binder::parcel::Parcel) -> binder::Result<()> {
             match _aidl_code {
@@ -323,7 +320,6 @@ pub mod aidl {
                 match &_aidl_return {
                   Ok(_aidl_return) => {
                     _aidl_reply.write(&binder::Status::from(binder::StatusCode::OK))?;
-                    _aidl_reply.write(_aidl_return)?;
                     _aidl_reply.write(&_arg_output)?;
                   }
                   Err(_aidl_status) => _aidl_reply.write(_aidl_status)?
@@ -340,7 +336,6 @@ pub mod aidl {
                 match &_aidl_return {
                   Ok(_aidl_return) => {
                     _aidl_reply.write(&binder::Status::from(binder::StatusCode::OK))?;
-                    _aidl_reply.write(_aidl_return)?;
                     _aidl_reply.write(&_arg_output)?;
                   }
                   Err(_aidl_status) => _aidl_reply.write(_aidl_status)?
@@ -352,7 +347,6 @@ pub mod aidl {
                 match &_aidl_return {
                   Ok(_aidl_return) => {
                     _aidl_reply.write(&binder::Status::from(binder::StatusCode::OK))?;
-                    _aidl_reply.write(_aidl_return)?;
                   }
                   Err(_aidl_status) => _aidl_reply.write(_aidl_status)?
                 }
@@ -374,21 +368,21 @@ pub mod aidl {
               },
             }
           }
-          pub trait IKeystoreSecurityLevel: binder::Interface {
+          pub trait IKeystoreSecurityLevel: binder::Interface + Send {
             fn get_descriptor() -> &'static str where Self: Sized { "android.security.keystore2.IKeystoreSecurityLevel" }
-            fn create(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_operationParameters: &[crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter], _arg_forced: bool, _arg_challenge: &mut crate::mangled::_7_android_8_security_9_keystore2_18_OperationChallenge, _arg_rc: &mut crate::mangled::_7_android_8_security_9_keystore2_6_Result) -> binder::public_api::Result<Box<dyn crate::mangled::_7_android_8_security_9_keystore2_18_IKeystoreOperation>> {
+            fn create(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_operationParameters: &[crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter], _arg_forced: bool, _arg_challenge: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_18_OperationChallenge>) -> binder::public_api::Result<Box<dyn crate::mangled::_7_android_8_security_9_keystore2_18_IKeystoreOperation>> {
               Err(binder::StatusCode::UNKNOWN_TRANSACTION.into())
             }
-            fn updateSubcomponent(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_publicKey: Option<&crate::mangled::_7_android_8_security_9_keystore2_9_PublicKey>, _arg_certificateChain: Option<&crate::mangled::_7_android_8_security_9_keystore2_16_CertificateChain>) -> binder::public_api::Result<crate::mangled::_7_android_8_security_9_keystore2_6_Result> {
+            fn updateSubcomponent(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_publicCert: Option<&crate::mangled::_7_android_8_security_9_keystore2_11_Certificate>, _arg_certificateChain: Option<&crate::mangled::_7_android_8_security_9_keystore2_16_CertificateChain>) -> binder::public_api::Result<()> {
               Err(binder::StatusCode::UNKNOWN_TRANSACTION.into())
             }
-            fn generateKey(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_params: &[crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter], _arg_entropy: &[u8], _arg_resultKey: &mut crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_publicKey: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_9_PublicKey>, _arg_certificateChain: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_16_CertificateChain>) -> binder::public_api::Result<crate::mangled::_7_android_8_security_9_keystore2_6_Result> {
+            fn generateKey(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_params: &[crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter], _arg_entropy: &[u8], _arg_resultKey: &mut crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_publicCert: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_11_Certificate>, _arg_certificateChain: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_16_CertificateChain>) -> binder::public_api::Result<()> {
               Err(binder::StatusCode::UNKNOWN_TRANSACTION.into())
             }
-            fn importKey(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_params: &[crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter], _arg_keyData: &[u8], _arg_resultKey: &mut crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_publicKey: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_9_PublicKey>, _arg_certificateChain: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_16_CertificateChain>) -> binder::public_api::Result<crate::mangled::_7_android_8_security_9_keystore2_6_Result> {
+            fn importKey(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_params: &[crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter], _arg_keyData: &[u8], _arg_resultKey: &mut crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_publicCert: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_11_Certificate>, _arg_certificateChain: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_16_CertificateChain>) -> binder::public_api::Result<()> {
               Err(binder::StatusCode::UNKNOWN_TRANSACTION.into())
             }
-            fn importWrappedKey(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_wrappingKey: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_maskingKey: &[u8], _arg_params: &[crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter], _arg_authenticators: &[crate::mangled::_7_android_8_security_9_keystore2_17_AuthenticatorSpec], _arg_resultKey: &mut crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_publicKey: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_9_PublicKey>, _arg_certificateChain: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_16_CertificateChain>) -> binder::public_api::Result<crate::mangled::_7_android_8_security_9_keystore2_6_Result> {
+            fn importWrappedKey(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_wrappingKey: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_maskingKey: &[u8], _arg_params: &[crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter], _arg_authenticators: &[crate::mangled::_7_android_8_security_9_keystore2_17_AuthenticatorSpec], _arg_resultKey: &mut crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_publicCert: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_11_Certificate>, _arg_certificateChain: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_16_CertificateChain>) -> binder::public_api::Result<()> {
               Err(binder::StatusCode::UNKNOWN_TRANSACTION.into())
             }
             fn getDefaultImpl() -> DefaultImpl where Self: Sized {
@@ -403,14 +397,14 @@ pub mod aidl {
           pub const TRANSACTION_generateKey: binder::TransactionCode = binder::SpIBinder::FIRST_CALL_TRANSACTION + 2;
           pub const TRANSACTION_importKey: binder::TransactionCode = binder::SpIBinder::FIRST_CALL_TRANSACTION + 3;
           pub const TRANSACTION_importWrappedKey: binder::TransactionCode = binder::SpIBinder::FIRST_CALL_TRANSACTION + 4;
-          pub type DefaultImpl = Option<std::sync::Arc<dyn IKeystoreSecurityLevel + Send + Sync>>;
+          pub type DefaultImpl = Option<std::sync::Arc<dyn IKeystoreSecurityLevel + Sync>>;
           use lazy_static::lazy_static;
           lazy_static! {
             static ref DEFAULT_IMPL: std::sync::Mutex<DefaultImpl> = std::sync::Mutex::new(None);
           }
           pub(crate) mod mangled { pub use super::IKeystoreSecurityLevel as _7_android_8_security_9_keystore2_22_IKeystoreSecurityLevel; }
           impl IKeystoreSecurityLevel for BpKeystoreSecurityLevel {
-            fn create(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_operationParameters: &[crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter], _arg_forced: bool, _arg_challenge: &mut crate::mangled::_7_android_8_security_9_keystore2_18_OperationChallenge, _arg_rc: &mut crate::mangled::_7_android_8_security_9_keystore2_6_Result) -> binder::public_api::Result<Box<dyn crate::mangled::_7_android_8_security_9_keystore2_18_IKeystoreOperation>> {
+            fn create(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_operationParameters: &[crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter], _arg_forced: bool, _arg_challenge: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_18_OperationChallenge>) -> binder::public_api::Result<Box<dyn crate::mangled::_7_android_8_security_9_keystore2_18_IKeystoreOperation>> {
               let _aidl_reply = self.binder.transact(TRANSACTION_create, 0, |_aidl_data| {
                 _aidl_data.write(_arg_key)?;
                 _aidl_data.write(_arg_operationParameters)?;
@@ -419,7 +413,7 @@ pub mod aidl {
               });
               if let Err(binder::StatusCode::UNKNOWN_TRANSACTION) = _aidl_reply {
                 if let Some(_aidl_default_impl) = <Self as IKeystoreSecurityLevel>::getDefaultImpl() {
-                  return _aidl_default_impl.create(_arg_key, _arg_operationParameters, _arg_forced, _arg_challenge, _arg_rc);
+                  return _aidl_default_impl.create(_arg_key, _arg_operationParameters, _arg_forced, _arg_challenge);
                 }
               }
               let _aidl_reply = _aidl_reply?;
@@ -427,28 +421,26 @@ pub mod aidl {
               if !_aidl_status.is_ok() { return Err(_aidl_status); }
               let _aidl_return: Box<dyn crate::mangled::_7_android_8_security_9_keystore2_18_IKeystoreOperation> = _aidl_reply.read()?;
               *_arg_challenge = _aidl_reply.read()?;
-              *_arg_rc = _aidl_reply.read()?;
               Ok(_aidl_return)
             }
-            fn updateSubcomponent(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_publicKey: Option<&crate::mangled::_7_android_8_security_9_keystore2_9_PublicKey>, _arg_certificateChain: Option<&crate::mangled::_7_android_8_security_9_keystore2_16_CertificateChain>) -> binder::public_api::Result<crate::mangled::_7_android_8_security_9_keystore2_6_Result> {
+            fn updateSubcomponent(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_publicCert: Option<&crate::mangled::_7_android_8_security_9_keystore2_11_Certificate>, _arg_certificateChain: Option<&crate::mangled::_7_android_8_security_9_keystore2_16_CertificateChain>) -> binder::public_api::Result<()> {
               let _aidl_reply = self.binder.transact(TRANSACTION_updateSubcomponent, 0, |_aidl_data| {
                 _aidl_data.write(_arg_key)?;
-                _aidl_data.write(&_arg_publicKey)?;
+                _aidl_data.write(&_arg_publicCert)?;
                 _aidl_data.write(&_arg_certificateChain)?;
                 Ok(())
               });
               if let Err(binder::StatusCode::UNKNOWN_TRANSACTION) = _aidl_reply {
                 if let Some(_aidl_default_impl) = <Self as IKeystoreSecurityLevel>::getDefaultImpl() {
-                  return _aidl_default_impl.updateSubcomponent(_arg_key, _arg_publicKey, _arg_certificateChain);
+                  return _aidl_default_impl.updateSubcomponent(_arg_key, _arg_publicCert, _arg_certificateChain);
                 }
               }
               let _aidl_reply = _aidl_reply?;
               let _aidl_status: binder::Status = _aidl_reply.read()?;
               if !_aidl_status.is_ok() { return Err(_aidl_status); }
-              let _aidl_return: crate::mangled::_7_android_8_security_9_keystore2_6_Result = _aidl_reply.read()?;
-              Ok(_aidl_return)
+              Ok(())
             }
-            fn generateKey(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_params: &[crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter], _arg_entropy: &[u8], _arg_resultKey: &mut crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_publicKey: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_9_PublicKey>, _arg_certificateChain: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_16_CertificateChain>) -> binder::public_api::Result<crate::mangled::_7_android_8_security_9_keystore2_6_Result> {
+            fn generateKey(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_params: &[crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter], _arg_entropy: &[u8], _arg_resultKey: &mut crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_publicCert: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_11_Certificate>, _arg_certificateChain: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_16_CertificateChain>) -> binder::public_api::Result<()> {
               let _aidl_reply = self.binder.transact(TRANSACTION_generateKey, 0, |_aidl_data| {
                 _aidl_data.write(_arg_key)?;
                 _aidl_data.write(_arg_params)?;
@@ -457,19 +449,18 @@ pub mod aidl {
               });
               if let Err(binder::StatusCode::UNKNOWN_TRANSACTION) = _aidl_reply {
                 if let Some(_aidl_default_impl) = <Self as IKeystoreSecurityLevel>::getDefaultImpl() {
-                  return _aidl_default_impl.generateKey(_arg_key, _arg_params, _arg_entropy, _arg_resultKey, _arg_publicKey, _arg_certificateChain);
+                  return _aidl_default_impl.generateKey(_arg_key, _arg_params, _arg_entropy, _arg_resultKey, _arg_publicCert, _arg_certificateChain);
                 }
               }
               let _aidl_reply = _aidl_reply?;
               let _aidl_status: binder::Status = _aidl_reply.read()?;
               if !_aidl_status.is_ok() { return Err(_aidl_status); }
-              let _aidl_return: crate::mangled::_7_android_8_security_9_keystore2_6_Result = _aidl_reply.read()?;
               *_arg_resultKey = _aidl_reply.read()?;
-              *_arg_publicKey = _aidl_reply.read()?;
+              *_arg_publicCert = _aidl_reply.read()?;
               *_arg_certificateChain = _aidl_reply.read()?;
-              Ok(_aidl_return)
+              Ok(())
             }
-            fn importKey(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_params: &[crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter], _arg_keyData: &[u8], _arg_resultKey: &mut crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_publicKey: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_9_PublicKey>, _arg_certificateChain: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_16_CertificateChain>) -> binder::public_api::Result<crate::mangled::_7_android_8_security_9_keystore2_6_Result> {
+            fn importKey(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_params: &[crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter], _arg_keyData: &[u8], _arg_resultKey: &mut crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_publicCert: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_11_Certificate>, _arg_certificateChain: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_16_CertificateChain>) -> binder::public_api::Result<()> {
               let _aidl_reply = self.binder.transact(TRANSACTION_importKey, 0, |_aidl_data| {
                 _aidl_data.write(_arg_key)?;
                 _aidl_data.write(_arg_params)?;
@@ -478,19 +469,18 @@ pub mod aidl {
               });
               if let Err(binder::StatusCode::UNKNOWN_TRANSACTION) = _aidl_reply {
                 if let Some(_aidl_default_impl) = <Self as IKeystoreSecurityLevel>::getDefaultImpl() {
-                  return _aidl_default_impl.importKey(_arg_key, _arg_params, _arg_keyData, _arg_resultKey, _arg_publicKey, _arg_certificateChain);
+                  return _aidl_default_impl.importKey(_arg_key, _arg_params, _arg_keyData, _arg_resultKey, _arg_publicCert, _arg_certificateChain);
                 }
               }
               let _aidl_reply = _aidl_reply?;
               let _aidl_status: binder::Status = _aidl_reply.read()?;
               if !_aidl_status.is_ok() { return Err(_aidl_status); }
-              let _aidl_return: crate::mangled::_7_android_8_security_9_keystore2_6_Result = _aidl_reply.read()?;
               *_arg_resultKey = _aidl_reply.read()?;
-              *_arg_publicKey = _aidl_reply.read()?;
+              *_arg_publicCert = _aidl_reply.read()?;
               *_arg_certificateChain = _aidl_reply.read()?;
-              Ok(_aidl_return)
+              Ok(())
             }
-            fn importWrappedKey(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_wrappingKey: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_maskingKey: &[u8], _arg_params: &[crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter], _arg_authenticators: &[crate::mangled::_7_android_8_security_9_keystore2_17_AuthenticatorSpec], _arg_resultKey: &mut crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_publicKey: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_9_PublicKey>, _arg_certificateChain: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_16_CertificateChain>) -> binder::public_api::Result<crate::mangled::_7_android_8_security_9_keystore2_6_Result> {
+            fn importWrappedKey(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_wrappingKey: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_maskingKey: &[u8], _arg_params: &[crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter], _arg_authenticators: &[crate::mangled::_7_android_8_security_9_keystore2_17_AuthenticatorSpec], _arg_resultKey: &mut crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_publicCert: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_11_Certificate>, _arg_certificateChain: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_16_CertificateChain>) -> binder::public_api::Result<()> {
               let _aidl_reply = self.binder.transact(TRANSACTION_importWrappedKey, 0, |_aidl_data| {
                 _aidl_data.write(_arg_key)?;
                 _aidl_data.write(_arg_wrappingKey)?;
@@ -501,25 +491,24 @@ pub mod aidl {
               });
               if let Err(binder::StatusCode::UNKNOWN_TRANSACTION) = _aidl_reply {
                 if let Some(_aidl_default_impl) = <Self as IKeystoreSecurityLevel>::getDefaultImpl() {
-                  return _aidl_default_impl.importWrappedKey(_arg_key, _arg_wrappingKey, _arg_maskingKey, _arg_params, _arg_authenticators, _arg_resultKey, _arg_publicKey, _arg_certificateChain);
+                  return _aidl_default_impl.importWrappedKey(_arg_key, _arg_wrappingKey, _arg_maskingKey, _arg_params, _arg_authenticators, _arg_resultKey, _arg_publicCert, _arg_certificateChain);
                 }
               }
               let _aidl_reply = _aidl_reply?;
               let _aidl_status: binder::Status = _aidl_reply.read()?;
               if !_aidl_status.is_ok() { return Err(_aidl_status); }
-              let _aidl_return: crate::mangled::_7_android_8_security_9_keystore2_6_Result = _aidl_reply.read()?;
               *_arg_resultKey = _aidl_reply.read()?;
-              *_arg_publicKey = _aidl_reply.read()?;
+              *_arg_publicCert = _aidl_reply.read()?;
               *_arg_certificateChain = _aidl_reply.read()?;
-              Ok(_aidl_return)
+              Ok(())
             }
           }
           impl IKeystoreSecurityLevel for binder::Binder<BnKeystoreSecurityLevel> {
-            fn create(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_operationParameters: &[crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter], _arg_forced: bool, _arg_challenge: &mut crate::mangled::_7_android_8_security_9_keystore2_18_OperationChallenge, _arg_rc: &mut crate::mangled::_7_android_8_security_9_keystore2_6_Result) -> binder::public_api::Result<Box<dyn crate::mangled::_7_android_8_security_9_keystore2_18_IKeystoreOperation>> { self.0.create(_arg_key, _arg_operationParameters, _arg_forced, _arg_challenge, _arg_rc) }
-            fn updateSubcomponent(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_publicKey: Option<&crate::mangled::_7_android_8_security_9_keystore2_9_PublicKey>, _arg_certificateChain: Option<&crate::mangled::_7_android_8_security_9_keystore2_16_CertificateChain>) -> binder::public_api::Result<crate::mangled::_7_android_8_security_9_keystore2_6_Result> { self.0.updateSubcomponent(_arg_key, _arg_publicKey, _arg_certificateChain) }
-            fn generateKey(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_params: &[crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter], _arg_entropy: &[u8], _arg_resultKey: &mut crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_publicKey: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_9_PublicKey>, _arg_certificateChain: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_16_CertificateChain>) -> binder::public_api::Result<crate::mangled::_7_android_8_security_9_keystore2_6_Result> { self.0.generateKey(_arg_key, _arg_params, _arg_entropy, _arg_resultKey, _arg_publicKey, _arg_certificateChain) }
-            fn importKey(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_params: &[crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter], _arg_keyData: &[u8], _arg_resultKey: &mut crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_publicKey: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_9_PublicKey>, _arg_certificateChain: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_16_CertificateChain>) -> binder::public_api::Result<crate::mangled::_7_android_8_security_9_keystore2_6_Result> { self.0.importKey(_arg_key, _arg_params, _arg_keyData, _arg_resultKey, _arg_publicKey, _arg_certificateChain) }
-            fn importWrappedKey(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_wrappingKey: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_maskingKey: &[u8], _arg_params: &[crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter], _arg_authenticators: &[crate::mangled::_7_android_8_security_9_keystore2_17_AuthenticatorSpec], _arg_resultKey: &mut crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_publicKey: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_9_PublicKey>, _arg_certificateChain: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_16_CertificateChain>) -> binder::public_api::Result<crate::mangled::_7_android_8_security_9_keystore2_6_Result> { self.0.importWrappedKey(_arg_key, _arg_wrappingKey, _arg_maskingKey, _arg_params, _arg_authenticators, _arg_resultKey, _arg_publicKey, _arg_certificateChain) }
+            fn create(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_operationParameters: &[crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter], _arg_forced: bool, _arg_challenge: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_18_OperationChallenge>) -> binder::public_api::Result<Box<dyn crate::mangled::_7_android_8_security_9_keystore2_18_IKeystoreOperation>> { self.0.create(_arg_key, _arg_operationParameters, _arg_forced, _arg_challenge) }
+            fn updateSubcomponent(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_publicCert: Option<&crate::mangled::_7_android_8_security_9_keystore2_11_Certificate>, _arg_certificateChain: Option<&crate::mangled::_7_android_8_security_9_keystore2_16_CertificateChain>) -> binder::public_api::Result<()> { self.0.updateSubcomponent(_arg_key, _arg_publicCert, _arg_certificateChain) }
+            fn generateKey(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_params: &[crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter], _arg_entropy: &[u8], _arg_resultKey: &mut crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_publicCert: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_11_Certificate>, _arg_certificateChain: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_16_CertificateChain>) -> binder::public_api::Result<()> { self.0.generateKey(_arg_key, _arg_params, _arg_entropy, _arg_resultKey, _arg_publicCert, _arg_certificateChain) }
+            fn importKey(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_params: &[crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter], _arg_keyData: &[u8], _arg_resultKey: &mut crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_publicCert: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_11_Certificate>, _arg_certificateChain: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_16_CertificateChain>) -> binder::public_api::Result<()> { self.0.importKey(_arg_key, _arg_params, _arg_keyData, _arg_resultKey, _arg_publicCert, _arg_certificateChain) }
+            fn importWrappedKey(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_wrappingKey: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_maskingKey: &[u8], _arg_params: &[crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter], _arg_authenticators: &[crate::mangled::_7_android_8_security_9_keystore2_17_AuthenticatorSpec], _arg_resultKey: &mut crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_publicCert: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_11_Certificate>, _arg_certificateChain: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_16_CertificateChain>) -> binder::public_api::Result<()> { self.0.importWrappedKey(_arg_key, _arg_wrappingKey, _arg_maskingKey, _arg_params, _arg_authenticators, _arg_resultKey, _arg_publicCert, _arg_certificateChain) }
           }
           fn on_transact(_aidl_service: &dyn IKeystoreSecurityLevel, _aidl_code: binder::TransactionCode, _aidl_data: &binder::parcel::Parcel, _aidl_reply: &mut binder::parcel::Parcel) -> binder::Result<()> {
             match _aidl_code {
@@ -527,15 +516,13 @@ pub mod aidl {
                 let _arg_key: crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor = _aidl_data.read()?;
                 let _arg_operationParameters: Vec<crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter> = _aidl_data.read()?;
                 let _arg_forced: bool = _aidl_data.read()?;
-                let mut _arg_challenge: crate::mangled::_7_android_8_security_9_keystore2_18_OperationChallenge = Default::default();
-                let mut _arg_rc: crate::mangled::_7_android_8_security_9_keystore2_6_Result = Default::default();
-                let _aidl_return = _aidl_service.create(&_arg_key, &_arg_operationParameters, _arg_forced, &mut _arg_challenge, &mut _arg_rc);
+                let mut _arg_challenge: Option<crate::mangled::_7_android_8_security_9_keystore2_18_OperationChallenge> = Default::default();
+                let _aidl_return = _aidl_service.create(&_arg_key, &_arg_operationParameters, _arg_forced, &mut _arg_challenge);
                 match &_aidl_return {
                   Ok(_aidl_return) => {
                     _aidl_reply.write(&binder::Status::from(binder::StatusCode::OK))?;
                     _aidl_reply.write(_aidl_return)?;
                     _aidl_reply.write(&_arg_challenge)?;
-                    _aidl_reply.write(&_arg_rc)?;
                   }
                   Err(_aidl_status) => _aidl_reply.write(_aidl_status)?
                 }
@@ -543,13 +530,12 @@ pub mod aidl {
               }
               TRANSACTION_updateSubcomponent => {
                 let _arg_key: crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor = _aidl_data.read()?;
-                let _arg_publicKey: Option<crate::mangled::_7_android_8_security_9_keystore2_9_PublicKey> = _aidl_data.read()?;
+                let _arg_publicCert: Option<crate::mangled::_7_android_8_security_9_keystore2_11_Certificate> = _aidl_data.read()?;
                 let _arg_certificateChain: Option<crate::mangled::_7_android_8_security_9_keystore2_16_CertificateChain> = _aidl_data.read()?;
-                let _aidl_return = _aidl_service.updateSubcomponent(&_arg_key, _arg_publicKey.as_ref(), _arg_certificateChain.as_ref());
+                let _aidl_return = _aidl_service.updateSubcomponent(&_arg_key, _arg_publicCert.as_ref(), _arg_certificateChain.as_ref());
                 match &_aidl_return {
                   Ok(_aidl_return) => {
                     _aidl_reply.write(&binder::Status::from(binder::StatusCode::OK))?;
-                    _aidl_reply.write(_aidl_return)?;
                   }
                   Err(_aidl_status) => _aidl_reply.write(_aidl_status)?
                 }
@@ -560,15 +546,14 @@ pub mod aidl {
                 let _arg_params: Vec<crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter> = _aidl_data.read()?;
                 let _arg_entropy: Vec<u8> = _aidl_data.read()?;
                 let mut _arg_resultKey: crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor = Default::default();
-                let mut _arg_publicKey: Option<crate::mangled::_7_android_8_security_9_keystore2_9_PublicKey> = Default::default();
+                let mut _arg_publicCert: Option<crate::mangled::_7_android_8_security_9_keystore2_11_Certificate> = Default::default();
                 let mut _arg_certificateChain: Option<crate::mangled::_7_android_8_security_9_keystore2_16_CertificateChain> = Default::default();
-                let _aidl_return = _aidl_service.generateKey(&_arg_key, &_arg_params, &_arg_entropy, &mut _arg_resultKey, &mut _arg_publicKey, &mut _arg_certificateChain);
+                let _aidl_return = _aidl_service.generateKey(&_arg_key, &_arg_params, &_arg_entropy, &mut _arg_resultKey, &mut _arg_publicCert, &mut _arg_certificateChain);
                 match &_aidl_return {
                   Ok(_aidl_return) => {
                     _aidl_reply.write(&binder::Status::from(binder::StatusCode::OK))?;
-                    _aidl_reply.write(_aidl_return)?;
                     _aidl_reply.write(&_arg_resultKey)?;
-                    _aidl_reply.write(&_arg_publicKey)?;
+                    _aidl_reply.write(&_arg_publicCert)?;
                     _aidl_reply.write(&_arg_certificateChain)?;
                   }
                   Err(_aidl_status) => _aidl_reply.write(_aidl_status)?
@@ -580,15 +565,14 @@ pub mod aidl {
                 let _arg_params: Vec<crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter> = _aidl_data.read()?;
                 let _arg_keyData: Vec<u8> = _aidl_data.read()?;
                 let mut _arg_resultKey: crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor = Default::default();
-                let mut _arg_publicKey: Option<crate::mangled::_7_android_8_security_9_keystore2_9_PublicKey> = Default::default();
+                let mut _arg_publicCert: Option<crate::mangled::_7_android_8_security_9_keystore2_11_Certificate> = Default::default();
                 let mut _arg_certificateChain: Option<crate::mangled::_7_android_8_security_9_keystore2_16_CertificateChain> = Default::default();
-                let _aidl_return = _aidl_service.importKey(&_arg_key, &_arg_params, &_arg_keyData, &mut _arg_resultKey, &mut _arg_publicKey, &mut _arg_certificateChain);
+                let _aidl_return = _aidl_service.importKey(&_arg_key, &_arg_params, &_arg_keyData, &mut _arg_resultKey, &mut _arg_publicCert, &mut _arg_certificateChain);
                 match &_aidl_return {
                   Ok(_aidl_return) => {
                     _aidl_reply.write(&binder::Status::from(binder::StatusCode::OK))?;
-                    _aidl_reply.write(_aidl_return)?;
                     _aidl_reply.write(&_arg_resultKey)?;
-                    _aidl_reply.write(&_arg_publicKey)?;
+                    _aidl_reply.write(&_arg_publicCert)?;
                     _aidl_reply.write(&_arg_certificateChain)?;
                   }
                   Err(_aidl_status) => _aidl_reply.write(_aidl_status)?
@@ -602,15 +586,14 @@ pub mod aidl {
                 let _arg_params: Vec<crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter> = _aidl_data.read()?;
                 let _arg_authenticators: Vec<crate::mangled::_7_android_8_security_9_keystore2_17_AuthenticatorSpec> = _aidl_data.read()?;
                 let mut _arg_resultKey: crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor = Default::default();
-                let mut _arg_publicKey: Option<crate::mangled::_7_android_8_security_9_keystore2_9_PublicKey> = Default::default();
+                let mut _arg_publicCert: Option<crate::mangled::_7_android_8_security_9_keystore2_11_Certificate> = Default::default();
                 let mut _arg_certificateChain: Option<crate::mangled::_7_android_8_security_9_keystore2_16_CertificateChain> = Default::default();
-                let _aidl_return = _aidl_service.importWrappedKey(&_arg_key, &_arg_wrappingKey, &_arg_maskingKey, &_arg_params, &_arg_authenticators, &mut _arg_resultKey, &mut _arg_publicKey, &mut _arg_certificateChain);
+                let _aidl_return = _aidl_service.importWrappedKey(&_arg_key, &_arg_wrappingKey, &_arg_maskingKey, &_arg_params, &_arg_authenticators, &mut _arg_resultKey, &mut _arg_publicCert, &mut _arg_certificateChain);
                 match &_aidl_return {
                   Ok(_aidl_return) => {
                     _aidl_reply.write(&binder::Status::from(binder::StatusCode::OK))?;
-                    _aidl_reply.write(_aidl_return)?;
                     _aidl_reply.write(&_arg_resultKey)?;
-                    _aidl_reply.write(&_arg_publicKey)?;
+                    _aidl_reply.write(&_arg_publicCert)?;
                     _aidl_reply.write(&_arg_certificateChain)?;
                   }
                   Err(_aidl_status) => _aidl_reply.write(_aidl_status)?
@@ -633,24 +616,24 @@ pub mod aidl {
               },
             }
           }
-          pub trait IKeystoreService: binder::Interface {
+          pub trait IKeystoreService: binder::Interface + Send {
             fn get_descriptor() -> &'static str where Self: Sized { "android.security.keystore2.IKeystoreService" }
-            fn getSecurityLevel(&self, _arg_securityLevel: crate::mangled::_7_android_8_hardware_7_keymint_13_SecurityLevel, _arg_rc: &mut crate::mangled::_7_android_8_security_9_keystore2_6_Result) -> binder::public_api::Result<Box<dyn crate::mangled::_7_android_8_security_9_keystore2_22_IKeystoreSecurityLevel>> {
+            fn getSecurityLevel(&self, _arg_securityLevel: crate::mangled::_7_android_8_hardware_7_keymint_13_SecurityLevel) -> binder::public_api::Result<Box<dyn crate::mangled::_7_android_8_security_9_keystore2_22_IKeystoreSecurityLevel>> {
               Err(binder::StatusCode::UNKNOWN_TRANSACTION.into())
             }
-            fn getKeyEntry(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_metadata: &mut crate::mangled::_7_android_8_security_9_keystore2_11_KeyMetadata, _arg_publicKey: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_9_PublicKey>, _arg_certificateChain: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_16_CertificateChain>, _arg_rc: &mut crate::mangled::_7_android_8_security_9_keystore2_6_Result) -> binder::public_api::Result<Box<dyn crate::mangled::_7_android_8_security_9_keystore2_22_IKeystoreSecurityLevel>> {
+            fn getKeyEntry(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_metadata: &mut crate::mangled::_7_android_8_security_9_keystore2_11_KeyMetadata, _arg_publicCert: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_11_Certificate>, _arg_certificateChain: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_16_CertificateChain>) -> binder::public_api::Result<Box<dyn crate::mangled::_7_android_8_security_9_keystore2_22_IKeystoreSecurityLevel>> {
               Err(binder::StatusCode::UNKNOWN_TRANSACTION.into())
             }
-            fn listEntries(&self, _arg_domain: crate::mangled::_7_android_8_security_9_keystore2_6_Domain, _arg_nameSpace: i64, _arg_list: &mut Vec<crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor>) -> binder::public_api::Result<crate::mangled::_7_android_8_security_9_keystore2_6_Result> {
+            fn listEntries(&self, _arg_domain: crate::mangled::_7_android_8_security_9_keystore2_6_Domain, _arg_namespace_: i64) -> binder::public_api::Result<Vec<crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor>> {
               Err(binder::StatusCode::UNKNOWN_TRANSACTION.into())
             }
-            fn deleteKey(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor) -> binder::public_api::Result<crate::mangled::_7_android_8_security_9_keystore2_6_Result> {
+            fn deleteKey(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor) -> binder::public_api::Result<()> {
               Err(binder::StatusCode::UNKNOWN_TRANSACTION.into())
             }
-            fn grant(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_granteeUid: i32, _arg_accessVector: i32, _arg_grantKey: &mut crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor) -> binder::public_api::Result<crate::mangled::_7_android_8_security_9_keystore2_6_Result> {
+            fn grant(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_granteeUid: i32, _arg_accessVector: i32, _arg_grantKey: &mut crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor) -> binder::public_api::Result<()> {
               Err(binder::StatusCode::UNKNOWN_TRANSACTION.into())
             }
-            fn ungrant(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_granteeUid: i32) -> binder::public_api::Result<crate::mangled::_7_android_8_security_9_keystore2_6_Result> {
+            fn ungrant(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_granteeUid: i32) -> binder::public_api::Result<()> {
               Err(binder::StatusCode::UNKNOWN_TRANSACTION.into())
             }
             fn getDefaultImpl() -> DefaultImpl where Self: Sized {
@@ -666,38 +649,37 @@ pub mod aidl {
           pub const TRANSACTION_deleteKey: binder::TransactionCode = binder::SpIBinder::FIRST_CALL_TRANSACTION + 3;
           pub const TRANSACTION_grant: binder::TransactionCode = binder::SpIBinder::FIRST_CALL_TRANSACTION + 4;
           pub const TRANSACTION_ungrant: binder::TransactionCode = binder::SpIBinder::FIRST_CALL_TRANSACTION + 5;
-          pub type DefaultImpl = Option<std::sync::Arc<dyn IKeystoreService + Send + Sync>>;
+          pub type DefaultImpl = Option<std::sync::Arc<dyn IKeystoreService + Sync>>;
           use lazy_static::lazy_static;
           lazy_static! {
             static ref DEFAULT_IMPL: std::sync::Mutex<DefaultImpl> = std::sync::Mutex::new(None);
           }
           pub(crate) mod mangled { pub use super::IKeystoreService as _7_android_8_security_9_keystore2_16_IKeystoreService; }
           impl IKeystoreService for BpKeystoreService {
-            fn getSecurityLevel(&self, _arg_securityLevel: crate::mangled::_7_android_8_hardware_7_keymint_13_SecurityLevel, _arg_rc: &mut crate::mangled::_7_android_8_security_9_keystore2_6_Result) -> binder::public_api::Result<Box<dyn crate::mangled::_7_android_8_security_9_keystore2_22_IKeystoreSecurityLevel>> {
+            fn getSecurityLevel(&self, _arg_securityLevel: crate::mangled::_7_android_8_hardware_7_keymint_13_SecurityLevel) -> binder::public_api::Result<Box<dyn crate::mangled::_7_android_8_security_9_keystore2_22_IKeystoreSecurityLevel>> {
               let _aidl_reply = self.binder.transact(TRANSACTION_getSecurityLevel, 0, |_aidl_data| {
                 _aidl_data.write(&_arg_securityLevel)?;
                 Ok(())
               });
               if let Err(binder::StatusCode::UNKNOWN_TRANSACTION) = _aidl_reply {
                 if let Some(_aidl_default_impl) = <Self as IKeystoreService>::getDefaultImpl() {
-                  return _aidl_default_impl.getSecurityLevel(_arg_securityLevel, _arg_rc);
+                  return _aidl_default_impl.getSecurityLevel(_arg_securityLevel);
                 }
               }
               let _aidl_reply = _aidl_reply?;
               let _aidl_status: binder::Status = _aidl_reply.read()?;
               if !_aidl_status.is_ok() { return Err(_aidl_status); }
               let _aidl_return: Box<dyn crate::mangled::_7_android_8_security_9_keystore2_22_IKeystoreSecurityLevel> = _aidl_reply.read()?;
-              *_arg_rc = _aidl_reply.read()?;
               Ok(_aidl_return)
             }
-            fn getKeyEntry(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_metadata: &mut crate::mangled::_7_android_8_security_9_keystore2_11_KeyMetadata, _arg_publicKey: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_9_PublicKey>, _arg_certificateChain: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_16_CertificateChain>, _arg_rc: &mut crate::mangled::_7_android_8_security_9_keystore2_6_Result) -> binder::public_api::Result<Box<dyn crate::mangled::_7_android_8_security_9_keystore2_22_IKeystoreSecurityLevel>> {
+            fn getKeyEntry(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_metadata: &mut crate::mangled::_7_android_8_security_9_keystore2_11_KeyMetadata, _arg_publicCert: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_11_Certificate>, _arg_certificateChain: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_16_CertificateChain>) -> binder::public_api::Result<Box<dyn crate::mangled::_7_android_8_security_9_keystore2_22_IKeystoreSecurityLevel>> {
               let _aidl_reply = self.binder.transact(TRANSACTION_getKeyEntry, 0, |_aidl_data| {
                 _aidl_data.write(_arg_key)?;
                 Ok(())
               });
               if let Err(binder::StatusCode::UNKNOWN_TRANSACTION) = _aidl_reply {
                 if let Some(_aidl_default_impl) = <Self as IKeystoreService>::getDefaultImpl() {
-                  return _aidl_default_impl.getKeyEntry(_arg_key, _arg_metadata, _arg_publicKey, _arg_certificateChain, _arg_rc);
+                  return _aidl_default_impl.getKeyEntry(_arg_key, _arg_metadata, _arg_publicCert, _arg_certificateChain);
                 }
               }
               let _aidl_reply = _aidl_reply?;
@@ -705,31 +687,28 @@ pub mod aidl {
               if !_aidl_status.is_ok() { return Err(_aidl_status); }
               let _aidl_return: Box<dyn crate::mangled::_7_android_8_security_9_keystore2_22_IKeystoreSecurityLevel> = _aidl_reply.read()?;
               *_arg_metadata = _aidl_reply.read()?;
-              *_arg_publicKey = _aidl_reply.read()?;
+              *_arg_publicCert = _aidl_reply.read()?;
               *_arg_certificateChain = _aidl_reply.read()?;
-              *_arg_rc = _aidl_reply.read()?;
               Ok(_aidl_return)
             }
-            fn listEntries(&self, _arg_domain: crate::mangled::_7_android_8_security_9_keystore2_6_Domain, _arg_nameSpace: i64, _arg_list: &mut Vec<crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor>) -> binder::public_api::Result<crate::mangled::_7_android_8_security_9_keystore2_6_Result> {
+            fn listEntries(&self, _arg_domain: crate::mangled::_7_android_8_security_9_keystore2_6_Domain, _arg_namespace_: i64) -> binder::public_api::Result<Vec<crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor>> {
               let _aidl_reply = self.binder.transact(TRANSACTION_listEntries, 0, |_aidl_data| {
                 _aidl_data.write(&_arg_domain)?;
-                _aidl_data.write(&_arg_nameSpace)?;
-                _aidl_data.write_slice_size(Some(_arg_list))?;
+                _aidl_data.write(&_arg_namespace_)?;
                 Ok(())
               });
               if let Err(binder::StatusCode::UNKNOWN_TRANSACTION) = _aidl_reply {
                 if let Some(_aidl_default_impl) = <Self as IKeystoreService>::getDefaultImpl() {
-                  return _aidl_default_impl.listEntries(_arg_domain, _arg_nameSpace, _arg_list);
+                  return _aidl_default_impl.listEntries(_arg_domain, _arg_namespace_);
                 }
               }
               let _aidl_reply = _aidl_reply?;
               let _aidl_status: binder::Status = _aidl_reply.read()?;
               if !_aidl_status.is_ok() { return Err(_aidl_status); }
-              let _aidl_return: crate::mangled::_7_android_8_security_9_keystore2_6_Result = _aidl_reply.read()?;
-              *_arg_list = _aidl_reply.read()?;
+              let _aidl_return: Vec<crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor> = _aidl_reply.read()?;
               Ok(_aidl_return)
             }
-            fn deleteKey(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor) -> binder::public_api::Result<crate::mangled::_7_android_8_security_9_keystore2_6_Result> {
+            fn deleteKey(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor) -> binder::public_api::Result<()> {
               let _aidl_reply = self.binder.transact(TRANSACTION_deleteKey, 0, |_aidl_data| {
                 _aidl_data.write(_arg_key)?;
                 Ok(())
@@ -742,10 +721,9 @@ pub mod aidl {
               let _aidl_reply = _aidl_reply?;
               let _aidl_status: binder::Status = _aidl_reply.read()?;
               if !_aidl_status.is_ok() { return Err(_aidl_status); }
-              let _aidl_return: crate::mangled::_7_android_8_security_9_keystore2_6_Result = _aidl_reply.read()?;
-              Ok(_aidl_return)
+              Ok(())
             }
-            fn grant(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_granteeUid: i32, _arg_accessVector: i32, _arg_grantKey: &mut crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor) -> binder::public_api::Result<crate::mangled::_7_android_8_security_9_keystore2_6_Result> {
+            fn grant(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_granteeUid: i32, _arg_accessVector: i32, _arg_grantKey: &mut crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor) -> binder::public_api::Result<()> {
               let _aidl_reply = self.binder.transact(TRANSACTION_grant, 0, |_aidl_data| {
                 _aidl_data.write(_arg_key)?;
                 _aidl_data.write(&_arg_granteeUid)?;
@@ -760,11 +738,10 @@ pub mod aidl {
               let _aidl_reply = _aidl_reply?;
               let _aidl_status: binder::Status = _aidl_reply.read()?;
               if !_aidl_status.is_ok() { return Err(_aidl_status); }
-              let _aidl_return: crate::mangled::_7_android_8_security_9_keystore2_6_Result = _aidl_reply.read()?;
               *_arg_grantKey = _aidl_reply.read()?;
-              Ok(_aidl_return)
+              Ok(())
             }
-            fn ungrant(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_granteeUid: i32) -> binder::public_api::Result<crate::mangled::_7_android_8_security_9_keystore2_6_Result> {
+            fn ungrant(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_granteeUid: i32) -> binder::public_api::Result<()> {
               let _aidl_reply = self.binder.transact(TRANSACTION_ungrant, 0, |_aidl_data| {
                 _aidl_data.write(_arg_key)?;
                 _aidl_data.write(&_arg_granteeUid)?;
@@ -778,29 +755,26 @@ pub mod aidl {
               let _aidl_reply = _aidl_reply?;
               let _aidl_status: binder::Status = _aidl_reply.read()?;
               if !_aidl_status.is_ok() { return Err(_aidl_status); }
-              let _aidl_return: crate::mangled::_7_android_8_security_9_keystore2_6_Result = _aidl_reply.read()?;
-              Ok(_aidl_return)
+              Ok(())
             }
           }
           impl IKeystoreService for binder::Binder<BnKeystoreService> {
-            fn getSecurityLevel(&self, _arg_securityLevel: crate::mangled::_7_android_8_hardware_7_keymint_13_SecurityLevel, _arg_rc: &mut crate::mangled::_7_android_8_security_9_keystore2_6_Result) -> binder::public_api::Result<Box<dyn crate::mangled::_7_android_8_security_9_keystore2_22_IKeystoreSecurityLevel>> { self.0.getSecurityLevel(_arg_securityLevel, _arg_rc) }
-            fn getKeyEntry(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_metadata: &mut crate::mangled::_7_android_8_security_9_keystore2_11_KeyMetadata, _arg_publicKey: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_9_PublicKey>, _arg_certificateChain: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_16_CertificateChain>, _arg_rc: &mut crate::mangled::_7_android_8_security_9_keystore2_6_Result) -> binder::public_api::Result<Box<dyn crate::mangled::_7_android_8_security_9_keystore2_22_IKeystoreSecurityLevel>> { self.0.getKeyEntry(_arg_key, _arg_metadata, _arg_publicKey, _arg_certificateChain, _arg_rc) }
-            fn listEntries(&self, _arg_domain: crate::mangled::_7_android_8_security_9_keystore2_6_Domain, _arg_nameSpace: i64, _arg_list: &mut Vec<crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor>) -> binder::public_api::Result<crate::mangled::_7_android_8_security_9_keystore2_6_Result> { self.0.listEntries(_arg_domain, _arg_nameSpace, _arg_list) }
-            fn deleteKey(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor) -> binder::public_api::Result<crate::mangled::_7_android_8_security_9_keystore2_6_Result> { self.0.deleteKey(_arg_key) }
-            fn grant(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_granteeUid: i32, _arg_accessVector: i32, _arg_grantKey: &mut crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor) -> binder::public_api::Result<crate::mangled::_7_android_8_security_9_keystore2_6_Result> { self.0.grant(_arg_key, _arg_granteeUid, _arg_accessVector, _arg_grantKey) }
-            fn ungrant(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_granteeUid: i32) -> binder::public_api::Result<crate::mangled::_7_android_8_security_9_keystore2_6_Result> { self.0.ungrant(_arg_key, _arg_granteeUid) }
+            fn getSecurityLevel(&self, _arg_securityLevel: crate::mangled::_7_android_8_hardware_7_keymint_13_SecurityLevel) -> binder::public_api::Result<Box<dyn crate::mangled::_7_android_8_security_9_keystore2_22_IKeystoreSecurityLevel>> { self.0.getSecurityLevel(_arg_securityLevel) }
+            fn getKeyEntry(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_metadata: &mut crate::mangled::_7_android_8_security_9_keystore2_11_KeyMetadata, _arg_publicCert: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_11_Certificate>, _arg_certificateChain: &mut Option<crate::mangled::_7_android_8_security_9_keystore2_16_CertificateChain>) -> binder::public_api::Result<Box<dyn crate::mangled::_7_android_8_security_9_keystore2_22_IKeystoreSecurityLevel>> { self.0.getKeyEntry(_arg_key, _arg_metadata, _arg_publicCert, _arg_certificateChain) }
+            fn listEntries(&self, _arg_domain: crate::mangled::_7_android_8_security_9_keystore2_6_Domain, _arg_namespace_: i64) -> binder::public_api::Result<Vec<crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor>> { self.0.listEntries(_arg_domain, _arg_namespace_) }
+            fn deleteKey(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor) -> binder::public_api::Result<()> { self.0.deleteKey(_arg_key) }
+            fn grant(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_granteeUid: i32, _arg_accessVector: i32, _arg_grantKey: &mut crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor) -> binder::public_api::Result<()> { self.0.grant(_arg_key, _arg_granteeUid, _arg_accessVector, _arg_grantKey) }
+            fn ungrant(&self, _arg_key: &crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor, _arg_granteeUid: i32) -> binder::public_api::Result<()> { self.0.ungrant(_arg_key, _arg_granteeUid) }
           }
           fn on_transact(_aidl_service: &dyn IKeystoreService, _aidl_code: binder::TransactionCode, _aidl_data: &binder::parcel::Parcel, _aidl_reply: &mut binder::parcel::Parcel) -> binder::Result<()> {
             match _aidl_code {
               TRANSACTION_getSecurityLevel => {
                 let _arg_securityLevel: crate::mangled::_7_android_8_hardware_7_keymint_13_SecurityLevel = _aidl_data.read()?;
-                let mut _arg_rc: crate::mangled::_7_android_8_security_9_keystore2_6_Result = Default::default();
-                let _aidl_return = _aidl_service.getSecurityLevel(_arg_securityLevel, &mut _arg_rc);
+                let _aidl_return = _aidl_service.getSecurityLevel(_arg_securityLevel);
                 match &_aidl_return {
                   Ok(_aidl_return) => {
                     _aidl_reply.write(&binder::Status::from(binder::StatusCode::OK))?;
                     _aidl_reply.write(_aidl_return)?;
-                    _aidl_reply.write(&_arg_rc)?;
                   }
                   Err(_aidl_status) => _aidl_reply.write(_aidl_status)?
                 }
@@ -809,18 +783,16 @@ pub mod aidl {
               TRANSACTION_getKeyEntry => {
                 let _arg_key: crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor = _aidl_data.read()?;
                 let mut _arg_metadata: crate::mangled::_7_android_8_security_9_keystore2_11_KeyMetadata = Default::default();
-                let mut _arg_publicKey: Option<crate::mangled::_7_android_8_security_9_keystore2_9_PublicKey> = Default::default();
+                let mut _arg_publicCert: Option<crate::mangled::_7_android_8_security_9_keystore2_11_Certificate> = Default::default();
                 let mut _arg_certificateChain: Option<crate::mangled::_7_android_8_security_9_keystore2_16_CertificateChain> = Default::default();
-                let mut _arg_rc: crate::mangled::_7_android_8_security_9_keystore2_6_Result = Default::default();
-                let _aidl_return = _aidl_service.getKeyEntry(&_arg_key, &mut _arg_metadata, &mut _arg_publicKey, &mut _arg_certificateChain, &mut _arg_rc);
+                let _aidl_return = _aidl_service.getKeyEntry(&_arg_key, &mut _arg_metadata, &mut _arg_publicCert, &mut _arg_certificateChain);
                 match &_aidl_return {
                   Ok(_aidl_return) => {
                     _aidl_reply.write(&binder::Status::from(binder::StatusCode::OK))?;
                     _aidl_reply.write(_aidl_return)?;
                     _aidl_reply.write(&_arg_metadata)?;
-                    _aidl_reply.write(&_arg_publicKey)?;
+                    _aidl_reply.write(&_arg_publicCert)?;
                     _aidl_reply.write(&_arg_certificateChain)?;
-                    _aidl_reply.write(&_arg_rc)?;
                   }
                   Err(_aidl_status) => _aidl_reply.write(_aidl_status)?
                 }
@@ -828,15 +800,12 @@ pub mod aidl {
               }
               TRANSACTION_listEntries => {
                 let _arg_domain: crate::mangled::_7_android_8_security_9_keystore2_6_Domain = _aidl_data.read()?;
-                let _arg_nameSpace: i64 = _aidl_data.read()?;
-                let mut _arg_list: Vec<crate::mangled::_7_android_8_security_9_keystore2_13_KeyDescriptor> = Default::default();
-                _aidl_data.resize_out_vec(&mut _arg_list)?;
-                let _aidl_return = _aidl_service.listEntries(_arg_domain, _arg_nameSpace, &mut _arg_list);
+                let _arg_namespace_: i64 = _aidl_data.read()?;
+                let _aidl_return = _aidl_service.listEntries(_arg_domain, _arg_namespace_);
                 match &_aidl_return {
                   Ok(_aidl_return) => {
                     _aidl_reply.write(&binder::Status::from(binder::StatusCode::OK))?;
                     _aidl_reply.write(_aidl_return)?;
-                    _aidl_reply.write(&_arg_list)?;
                   }
                   Err(_aidl_status) => _aidl_reply.write(_aidl_status)?
                 }
@@ -848,7 +817,6 @@ pub mod aidl {
                 match &_aidl_return {
                   Ok(_aidl_return) => {
                     _aidl_reply.write(&binder::Status::from(binder::StatusCode::OK))?;
-                    _aidl_reply.write(_aidl_return)?;
                   }
                   Err(_aidl_status) => _aidl_reply.write(_aidl_status)?
                 }
@@ -863,7 +831,6 @@ pub mod aidl {
                 match &_aidl_return {
                   Ok(_aidl_return) => {
                     _aidl_reply.write(&binder::Status::from(binder::StatusCode::OK))?;
-                    _aidl_reply.write(_aidl_return)?;
                     _aidl_reply.write(&_arg_grantKey)?;
                   }
                   Err(_aidl_status) => _aidl_reply.write(_aidl_status)?
@@ -877,7 +844,6 @@ pub mod aidl {
                 match &_aidl_return {
                   Ok(_aidl_return) => {
                     _aidl_reply.write(&binder::Status::from(binder::StatusCode::OK))?;
-                    _aidl_reply.write(_aidl_return)?;
                   }
                   Err(_aidl_status) => _aidl_reply.write(_aidl_status)?
                 }
@@ -888,11 +854,12 @@ pub mod aidl {
           }
         }
         pub mod KeyDescriptor {
+          #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
           pub struct KeyDescriptor {
             pub domain: crate::mangled::_7_android_8_security_9_keystore2_6_Domain, 
             pub namespace_: i64, 
-            pub alias: Option<String>,
-            pub blob: Option<Vec<u8>>,
+            pub alias: Option<String>, 
+            pub blob: Option<Vec<u8>>, 
           }
           pub(crate) mod mangled { pub use super::KeyDescriptor as _7_android_8_security_9_keystore2_13_KeyDescriptor; }
           impl Default for KeyDescriptor {
@@ -1138,68 +1105,6 @@ pub mod aidl {
             }
           }
         }
-        pub mod PublicKey {
-          pub struct PublicKey {
-            pub keyMaterial: Vec<u8>, 
-          }
-          pub(crate) mod mangled { pub use super::PublicKey as _7_android_8_security_9_keystore2_9_PublicKey; }
-          impl Default for PublicKey {
-            fn default() -> Self {
-              Self {
-                keyMaterial: Default::default(),
-              }
-            }
-          }
-          impl binder::parcel::Serialize for PublicKey {
-            fn serialize(&self, parcel: &mut binder::parcel::Parcel) -> binder::Result<()> {
-              <Self as binder::parcel::SerializeOption>::serialize_option(Some(self), parcel)
-            }
-          }
-          impl binder::parcel::SerializeArray for PublicKey {}
-          impl binder::parcel::SerializeOption for PublicKey {
-            fn serialize_option(this: Option<&Self>, parcel: &mut binder::parcel::Parcel) -> binder::Result<()> {
-              let this = if let Some(this) = this {
-                parcel.write(&1i32)?;
-                this
-              } else {
-                return parcel.write(&0i32);
-              };
-              let start_pos = parcel.get_data_position();
-              parcel.write(&0i32)?;
-              parcel.write(&this.keyMaterial)?;
-              let end_pos = parcel.get_data_position();
-              let parcelable_size = (end_pos - start_pos) as i32;
-              unsafe { parcel.set_data_position(start_pos)?; }
-              parcel.write(&parcelable_size)?;
-              unsafe { parcel.set_data_position(end_pos)?; }
-              Ok(())
-            }
-          }
-          impl binder::parcel::Deserialize for PublicKey {
-            fn deserialize(parcel: &binder::parcel::Parcel) -> binder::Result<Self> {
-              <Self as binder::parcel::DeserializeOption>::deserialize_option(parcel)
-                 .transpose()
-                 .unwrap_or(Err(binder::StatusCode::UNEXPECTED_NULL))
-            }
-          }
-          impl binder::parcel::DeserializeArray for PublicKey {}
-          impl binder::parcel::DeserializeOption for PublicKey {
-            fn deserialize_option(parcel: &binder::parcel::Parcel) -> binder::Result<Option<Self>> {
-              let status: i32 = parcel.read()?;
-              if status == 0 { return Ok(None); }
-              let start_pos = parcel.get_data_position();
-              let parcelable_size: i32 = parcel.read()?;
-              if parcelable_size < 0 { return Err(binder::StatusCode::BAD_VALUE); }
-              let mut result = Self::default();
-              result.keyMaterial = parcel.read()?;
-              if (parcel.get_data_position() - start_pos) >= parcelable_size {
-                unsafe { parcel.set_data_position(start_pos + parcelable_size)?; }
-                return Ok(Some(result));
-              }
-              Ok(Some(result))
-            }
-          }
-        }
         pub mod ResponseCode {
           #![allow(non_upper_case_globals)]
           pub type ResponseCode = i32;
@@ -1218,77 +1123,6 @@ pub mod aidl {
           pub const BackendBusy: ResponseCode = 20;
           pub(crate) mod mangled { pub use super::ResponseCode as _7_android_8_security_9_keystore2_12_ResponseCode; }
         }
-        pub mod Result {
-          #[derive(Debug, Copy, Clone, Eq, PartialEq)]
-          pub struct Result {
-            pub rc: crate::mangled::_7_android_8_security_9_keystore2_12_ResponseCode, 
-            pub errorCode: crate::mangled::_7_android_8_hardware_7_keymint_9_ErrorCode, 
-          }
-          pub(crate) mod mangled { pub use super::Result as _7_android_8_security_9_keystore2_6_Result; }
-          impl Default for Result {
-            fn default() -> Self {
-              Self {
-                rc: Default::default(),
-                errorCode: Default::default(),
-              }
-            }
-          }
-          impl binder::parcel::Serialize for Result {
-            fn serialize(&self, parcel: &mut binder::parcel::Parcel) -> binder::Result<()> {
-              <Self as binder::parcel::SerializeOption>::serialize_option(Some(self), parcel)
-            }
-          }
-          impl binder::parcel::SerializeArray for Result {}
-          impl binder::parcel::SerializeOption for Result {
-            fn serialize_option(this: Option<&Self>, parcel: &mut binder::parcel::Parcel) -> binder::Result<()> {
-              let this = if let Some(this) = this {
-                parcel.write(&1i32)?;
-                this
-              } else {
-                return parcel.write(&0i32);
-              };
-              let start_pos = parcel.get_data_position();
-              parcel.write(&0i32)?;
-              parcel.write(&this.rc)?;
-              parcel.write(&this.errorCode)?;
-              let end_pos = parcel.get_data_position();
-              let parcelable_size = (end_pos - start_pos) as i32;
-              unsafe { parcel.set_data_position(start_pos)?; }
-              parcel.write(&parcelable_size)?;
-              unsafe { parcel.set_data_position(end_pos)?; }
-              Ok(())
-            }
-          }
-          impl binder::parcel::Deserialize for Result {
-            fn deserialize(parcel: &binder::parcel::Parcel) -> binder::Result<Self> {
-              <Self as binder::parcel::DeserializeOption>::deserialize_option(parcel)
-                 .transpose()
-                 .unwrap_or(Err(binder::StatusCode::UNEXPECTED_NULL))
-            }
-          }
-          impl binder::parcel::DeserializeArray for Result {}
-          impl binder::parcel::DeserializeOption for Result {
-            fn deserialize_option(parcel: &binder::parcel::Parcel) -> binder::Result<Option<Self>> {
-              let status: i32 = parcel.read()?;
-              if status == 0 { return Ok(None); }
-              let start_pos = parcel.get_data_position();
-              let parcelable_size: i32 = parcel.read()?;
-              if parcelable_size < 0 { return Err(binder::StatusCode::BAD_VALUE); }
-              let mut result = Self::default();
-              result.rc = parcel.read()?;
-              if (parcel.get_data_position() - start_pos) >= parcelable_size {
-                unsafe { parcel.set_data_position(start_pos + parcelable_size)?; }
-                return Ok(Some(result));
-              }
-              result.errorCode = parcel.read()?;
-              if (parcel.get_data_position() - start_pos) >= parcelable_size {
-                unsafe { parcel.set_data_position(start_pos + parcelable_size)?; }
-                return Ok(Some(result));
-              }
-              Ok(Some(result))
-            }
-          }
-        }
       }
     }
   }
@@ -1305,8 +1139,6 @@ pub mod mangled {
   pub use super::aidl::android::security::keystore2::KeyMetadata::mangled::*;
   pub use super::aidl::android::security::keystore2::KeyPermission::mangled::*;
   pub use super::aidl::android::security::keystore2::OperationChallenge::mangled::*;
-  pub use super::aidl::android::security::keystore2::PublicKey::mangled::*;
   pub use super::aidl::android::security::keystore2::ResponseCode::mangled::*;
-  pub use super::aidl::android::security::keystore2::Result::mangled::*;
   pub(crate) use android_hardware_keymint::mangled::*;
 }
