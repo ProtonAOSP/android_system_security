@@ -39,10 +39,12 @@ use anyhow::{anyhow, Result};
 use selinux::SELABEL_CTX_ANDROID_KEYSTORE2_KEY;
 use selinux::SELINUX_CB_LOG;
 
+pub use selinux::pid_t;
+
 static SELINUX_LOG_INIT: sync::Once = sync::Once::new();
 
 fn redirect_selinux_logs_to_logcat() {
-    // `selinux_set_callback` assigned the static lifetime function pointer
+    // `selinux_set_callback` assigns the static lifetime function pointer
     // `selinux_log_callback` to a static lifetime variable.
     let cb = selinux::selinux_callback { func_log: Some(selinux::selinux_log_callback) };
     unsafe {
@@ -50,7 +52,7 @@ fn redirect_selinux_logs_to_logcat() {
     }
 }
 
-// This function must be called before any entrypoint into lib selinux.
+// This function must be called before any entry point into lib selinux.
 // Or leave a comment reasoning why calling this macro is not necessary
 // for a given entry point.
 fn init_logger_once() {
@@ -82,12 +84,23 @@ impl Error {
 /// s-string as allocated by `getcon` or `selabel_lookup`. In this case it uses
 /// `freecon` to free the resources when dropped. In its second variant it stores
 /// an `std::ffi::CString` that can be initialized from a Rust string slice.
+#[derive(Debug)]
 pub enum Context {
     /// Wraps a raw context c-string as returned by libselinux.
     Raw(*mut ::std::os::raw::c_char),
     /// Stores a context string as `std::ffi::CString`.
     CString(CString),
 }
+
+impl PartialEq for Context {
+    fn eq(&self, other: &Self) -> bool {
+        // We dereference both and thereby delegate the comparison
+        // to `CStr`'s implementation of `PartialEq`.
+        **self == **other
+    }
+}
+
+impl Eq for Context {}
 
 impl fmt::Display for Context {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -221,6 +234,32 @@ pub fn getcon() -> Result<Context> {
     }
 }
 
+/// Safe wrapper around libselinux `getpidcon`. It initializes the `Context::Raw` variant of the
+/// returned `Context`.
+///
+/// ## Return
+///  * Ok(Context::Raw()) if successful.
+///  * Err(Error::sys()) if getpidcon succeeded but returned a NULL pointer.
+///  * Err(io::Error::last_os_error()) if getpidcon failed.
+pub fn getpidcon(pid: selinux::pid_t) -> Result<Context> {
+    init_logger_once();
+    let mut con: *mut c_char = ptr::null_mut();
+    match unsafe { selinux::getpidcon(pid, &mut con) } {
+        0 => {
+            if !con.is_null() {
+                Ok(Context::Raw(con))
+            } else {
+                Err(anyhow!(Error::sys(format!(
+                    "getpidcon returned a NULL context for pid {}",
+                    pid
+                ))))
+            }
+        }
+        _ => Err(anyhow!(io::Error::last_os_error()))
+            .context(format!("getpidcon failed for pid {}", pid)),
+    }
+}
+
 /// Safe wrapper around selinux_check_access.
 ///
 /// ## Return
@@ -325,7 +364,7 @@ mod tests {
         /// check_key_perm(perm, privileged, priv_domain)
         /// `perm` is a permission of the keystore2_key class and `privileged` is a boolean
         /// indicating whether the permission is considered privileged.
-        /// Privileged permissions are expeced to be denied to `shell` users but granted
+        /// Privileged permissions are expected to be denied to `shell` users but granted
         /// to the given priv_domain.
         macro_rules! check_key_perm {
             // "use" is a keyword and cannot be used as an identifier, but we must keep
@@ -423,5 +462,13 @@ mod tests {
         check_keystore_perm!(lock);
         check_keystore_perm!(reset);
         check_keystore_perm!(unlock);
+    }
+
+    #[test]
+    fn test_getpidcon() {
+        // Check that `getpidcon` of our pid is equal to what `getcon` returns.
+        // And by using `unwrap` we make sure that both also have to return successfully
+        // fully to pass the test.
+        assert_eq!(getpidcon(std::process::id() as i32).unwrap(), getcon().unwrap());
     }
 }
