@@ -18,6 +18,4 @@ pub mod database;
 pub mod error;
 /// Internal Representation of Key Parameter and convenience functions.
 pub mod key_parameter;
-/// Internal interface for the code to-be-generated from the keymint AIDL
-pub mod keymint_definitions;
 pub mod permission;
