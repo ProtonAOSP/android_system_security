@@ -22,7 +22,6 @@ rust_library {
         "libandroid_security_keystore2",
         "libanyhow",
         "libbinder_rs",
-        "libkeystore_aidl_generated",
         "libkeystore2_selinux",
         "liblazy_static",
         "liblibsqlite3_sys",
@@ -45,7 +44,6 @@ rust_test {
         "libandroid_security_keystore2",
         "libanyhow",
         "libbinder_rs",
-        "libkeystore_aidl_generated",
         "libkeystore2_selinux",
         "liblazy_static",
         "liblibsqlite3_sys",
@@ -53,15 +51,6 @@ rust_test {
         "librusqlite",
         "libthiserror",
     ],
-}
-
-// This is a placeholder for the libraries that will be generated from the AIDL specs
-// eventually.
-rust_library {
-    name: "libkeystore_aidl_generated",
-    crate_name: "keystore_aidl_generated",
-
-    srcs: ["src/aidl_generated.rs"],
 }
 
 // This is a placeholder for the libraries that will be generated from the AIDL specs
