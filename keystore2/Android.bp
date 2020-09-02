@@ -19,6 +19,7 @@ rust_library {
 
     rustlibs: [
         "libanyhow",
+        "libandroid_hardware_keymint",
         "libkeystore_aidl_generated",
         "libkeystore2_selinux",
         "liblazy_static",
@@ -39,6 +40,7 @@ rust_test {
     rustlibs: [
         "libandroid_logger",
         "libanyhow",
+        "libandroid_hardware_keymint",
         "libkeystore_aidl_generated",
         "libkeystore2_selinux",
         "liblazy_static",

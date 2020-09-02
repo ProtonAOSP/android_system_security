@@ -69,6 +69,16 @@ impl KeystoreDB {
                 NO_PARAMS,
             )
             .context("Failed to initialize \"keyentry\" table.")?;
+        self.conn
+            .execute(
+                "CREATE TABLE IF NOT EXISTS persistent.keyparameter (
+                     keyentryid INTEGER,
+                     tag INTEGER,
+                     data ANY,
+                     security_level INTEGER);",
+                NO_PARAMS,
+            )
+            .context("Failed to initialize \"keyparameter\" table.")?;
         Ok(())
     }
 
@@ -185,8 +195,9 @@ mod tests {
             .prepare("SELECT name from persistent.sqlite_master WHERE type='table' ORDER BY name;")?
             .query_map(params![], |row| row.get(0))?
             .collect::<rusqlite::Result<Vec<String>>>()?;
-        assert_eq!(tables.len(), 1);
+        assert_eq!(tables.len(), 2);
         assert_eq!(tables[0], "keyentry");
+        assert_eq!(tables[1], "keyparameter");
         Ok(())
     }
 

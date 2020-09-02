@@ -16,15 +16,26 @@
 //! and enforced by the OEMs. This module implements the internal representation of KeyParameter
 //! and the methods to work with KeyParameter.
 
-use crate::keymint_definitions::{
-    Algorithm, BlockMode, Digest, EcCurve, HardwareAuthenticatorType, KeyBlobUsageRequirements,
-    KeyOrigin, KeyPurpose, PaddingMode, SecurityLevel, Tag,
+use crate::error::Error as KeystoreError;
+use crate::error::ResponseCode;
+pub use android_hardware_keymint::aidl::android::hardware::keymint::{
+    Algorithm, Algorithm::Algorithm as AlgorithmType, BlockMode,
+    BlockMode::BlockMode as BlockModeType, Digest, Digest::Digest as DigestType, EcCurve,
+    EcCurve::EcCurve as EcCurveType, HardwareAuthenticatorType,
+    HardwareAuthenticatorType::HardwareAuthenticatorType as HardwareAuthenticatorTypeType,
+    KeyOrigin, KeyOrigin::KeyOrigin as KeyOriginType, KeyPurpose,
+    KeyPurpose::KeyPurpose as KeyPurposeType, PaddingMode,
+    PaddingMode::PaddingMode as PaddingModeType, SecurityLevel,
+    SecurityLevel::SecurityLevel as SecurityLevelType, Tag, Tag::Tag as TagType,
 };
+use anyhow::{Context, Result};
+use rusqlite::types::{FromSql, Null, ToSql, ToSqlOutput};
+use rusqlite::{Result as SqlResult, Row};
 
 /// KeyParameter wraps the KeyParameterValue and the security level at which it is enforced.
 pub struct KeyParameter {
     key_parameter_value: KeyParameterValue,
-    security_level: SecurityLevel,
+    security_level: SecurityLevelType,
 }
 
 /// KeyParameterValue holds a value corresponding to one of the Tags defined in
@@ -34,55 +45,55 @@ pub enum KeyParameterValue {
     /// Associated with Tag:INVALID
     Invalid,
     /// Set of purposes for which the key may be used
-    KeyPurpose(KeyPurpose),
+    KeyPurpose(KeyPurposeType),
     /// Cryptographic algorithm with which the key is used
-    Algorithm(Algorithm),
+    Algorithm(AlgorithmType),
     /// Size of the key , in bits
-    KeySize(u32),
+    KeySize(i32),
     /// Block cipher mode(s) with which the key may be used
-    BlockMode(BlockMode),
+    BlockMode(BlockModeType),
     /// Digest algorithms that may be used with the key to perform signing and verification
-    Digest(Digest),
+    Digest(DigestType),
     /// Padding modes that may be used with the key.  Relevant to RSA, AES and 3DES keys.
-    PaddingMode(PaddingMode),
+    PaddingMode(PaddingModeType),
     /// Can the caller provide a nonce for nonce-requiring operations
     CallerNonce,
     /// Minimum length of MAC for HMAC keys and AES keys that support GCM mode
-    MinMacLength(u32),
+    MinMacLength(i32),
     /// The elliptic curve
-    EcCurve(EcCurve),
+    EcCurve(EcCurveType),
     /// Value of the public exponent for an RSA key pair
-    RSAPublicExponent(u64),
+    RSAPublicExponent(i64),
     /// An attestation certificate for the generated key should contain an application-scoped
     /// and time-bounded device-unique ID
     IncludeUniqueID,
-    /// Necessary system environment conditions for the generated key to be used
-    KeyBlobUsageRequirements(KeyBlobUsageRequirements),
+    //TODO: find out about this
+    // /// Necessary system environment conditions for the generated key to be used
+    // KeyBlobUsageRequirements(KeyBlobUsageRequirements),
     /// Only the boot loader can use the key
     BootLoaderOnly,
     /// When deleted, the key is guaranteed to be permanently deleted and unusable
     RollbackResistance,
-    //TODO: HARDWARE_TYPE reserved for future use
     /// The date and time at which the key becomes active
-    ActiveDateTime(u64),
+    ActiveDateTime(i64),
     /// The date and time at which the key expires for signing and encryption
-    OriginationExpireDateTime(u64),
+    OriginationExpireDateTime(i64),
     /// The date and time at which the key expires for verification and decryption
-    UsageExpireDateTime(u64),
+    UsageExpireDateTime(i64),
     /// Minimum amount of time that elapses between allowed operations
-    MinSecondsBetweenOps(u32),
+    MinSecondsBetweenOps(i32),
     /// Maximum number of times that a key may be used between system reboots
-    MaxUsesPerBoot(u32),
+    MaxUsesPerBoot(i32),
     /// ID of the Android user that is permitted to use the key
-    UserID(u32),
+    UserID(i32),
     /// A key may only be used under a particular secure user authentication state
-    UserSecureID(u64),
+    UserSecureID(i64),
     /// No authentication is required to use this key
     NoAuthRequired,
     /// The types of user authenticators that may be used to authorize this key
-    HardwareAuthenticatorType(HardwareAuthenticatorType),
+    HardwareAuthenticatorType(HardwareAuthenticatorTypeType),
     /// The time in seconds for which the key is authorized for use, after user authentication
-    AuthTimeout(u32),
+    AuthTimeout(i32),
     /// The key may be used after authentication timeout if device is still on-body
     AllowWhileOnBody,
     /// The key must be unusable except when the user has provided proof of physical presence
@@ -99,15 +110,15 @@ pub enum KeyParameterValue {
     /// that is necessary during all uses of the key
     ApplicationData(Vec<u8>),
     /// Specifies the date and time the key was created
-    CreationDateTime(u64),
+    CreationDateTime(i64),
     /// Specifies where the key was created, if known
-    KeyOrigin(KeyOrigin),
+    KeyOrigin(KeyOriginType),
     /// The key used by verified boot to validate the operating system booted
     RootOfTrust(Vec<u8>),
     /// System OS version with which the key may be used
-    OSVersion(u32),
+    OSVersion(i32),
     /// Specifies the system security patch level with which the key may be used
-    OSPatchLevel(u32),
+    OSPatchLevel(i32),
     /// Specifies a unique, time-based identifier
     UniqueID(Vec<u8>),
     /// Used to deliver a "challenge" value to the attestKey() method
@@ -131,16 +142,16 @@ pub enum KeyParameterValue {
     /// Provides the device's model name, to attestKey()
     AttestationIdModel(Vec<u8>),
     /// Specifies the vendor image security patch level with which the key may be used
-    VendorPatchLevel(u32),
+    VendorPatchLevel(i32),
     /// Specifies the boot image (kernel) security patch level with which the key may be used
-    BootPatchLevel(u32),
+    BootPatchLevel(i32),
     /// Provides "associated data" for AES-GCM encryption or decryption
     AssociatedData(Vec<u8>),
     /// Provides or returns a nonce or Initialization Vector (IV) for AES-GCM,
     /// AES-CBC, AES-CTR, or 3DES-CBC encryption or decryption
     Nonce(Vec<u8>),
     /// Provides the requested length of a MAC or GCM authentication tag, in bits
-    MacLength(u32),
+    MacLength(i32),
     /// Specifies whether the device has been factory reset since the
     /// last unique ID rotation.  Used for key attestation
     ResetSinceIdRotation,
@@ -151,12 +162,12 @@ pub enum KeyParameterValue {
 
 impl KeyParameter {
     /// Create an instance of KeyParameter, given the value and the security level.
-    pub fn new(key_parameter_value: KeyParameterValue, security_level: SecurityLevel) -> Self {
+    pub fn new(key_parameter_value: KeyParameterValue, security_level: SecurityLevelType) -> Self {
         KeyParameter { key_parameter_value, security_level }
     }
 
     /// Returns the tag given the KeyParameter instance.
-    pub fn get_tag(&self) -> Tag {
+    pub fn get_tag(&self) -> TagType {
         match self.key_parameter_value {
             KeyParameterValue::Invalid => Tag::INVALID,
             KeyParameterValue::KeyPurpose(_) => Tag::PURPOSE,
@@ -170,7 +181,6 @@ impl KeyParameter {
             KeyParameterValue::EcCurve(_) => Tag::EC_CURVE,
             KeyParameterValue::RSAPublicExponent(_) => Tag::RSA_PUBLIC_EXPONENT,
             KeyParameterValue::IncludeUniqueID => Tag::INCLUDE_UNIQUE_ID,
-            KeyParameterValue::KeyBlobUsageRequirements(_) => Tag::BLOB_USAGE_REQUIREMENTS,
             KeyParameterValue::BootLoaderOnly => Tag::BOOTLOADER_ONLY,
             KeyParameterValue::RollbackResistance => Tag::ROLLBACK_RESISTANCE,
             KeyParameterValue::ActiveDateTime(_) => Tag::ACTIVE_DATETIME,
@@ -221,7 +231,7 @@ impl KeyParameter {
     }
 
     /// Returns the security level of a KeyParameter.
-    pub fn security_level(&self) -> &SecurityLevel {
+    pub fn security_level(&self) -> &SecurityLevelType {
         &self.security_level
     }
 }
@@ -229,7 +239,6 @@ impl KeyParameter {
 #[cfg(test)]
 mod basic_tests {
     use crate::key_parameter::*;
-    use crate::keymint_definitions::{SecurityLevel, Tag};
 
     // Test basic functionality of KeyParameter.
     #[test]
@@ -247,5 +256,627 @@ mod basic_tests {
         );
 
         assert_eq!(*key_parameter.security_level(), SecurityLevel::STRONGBOX);
+    }
+}
+
+/// This struct is defined to postpone converting rusqlite column value to the
+/// appropriate key parameter value until we know the corresponding tag value.
+/// Wraps the column index and a rusqlite row.
+pub struct SqlField<'a>(usize, &'a Row<'a>);
+
+impl<'a> SqlField<'a> {
+    /// Returns the column value from the row, when we know the expected type.
+    pub fn get<T: FromSql>(&self) -> SqlResult<T> {
+        self.1.get(self.0)
+    }
+}
+
+impl ToSql for KeyParameterValue {
+    /// Converts KeyParameterValue to be stored in rusqlite database.
+    /// Note that following variants of KeyParameterValue should not be stored:
+    /// IncludeUniqueID, ApplicationID, ApplicationData, RootOfTrust, UniqueID,
+    /// Attestation*, AssociatedData, Nonce, MacLength, ResetSinceIdRotation, ConfirmationToken.
+    /// This filtering is enforced at a higher level (i.e. enforcement module) and here we support
+    /// conversion for all the variants, to keep error handling simple.
+    fn to_sql(&self) -> SqlResult<ToSqlOutput> {
+        match self {
+            KeyParameterValue::Invalid => Ok(ToSqlOutput::from(Null)),
+            KeyParameterValue::KeyPurpose(k) => Ok(ToSqlOutput::from(*k as u32)),
+            KeyParameterValue::Algorithm(a) => Ok(ToSqlOutput::from(*a as u32)),
+            KeyParameterValue::KeySize(k) => Ok(ToSqlOutput::from(*k)),
+            KeyParameterValue::BlockMode(b) => Ok(ToSqlOutput::from(*b as u32)),
+            KeyParameterValue::Digest(d) => Ok(ToSqlOutput::from(*d as u32)),
+            KeyParameterValue::PaddingMode(p) => Ok(ToSqlOutput::from(*p as u32)),
+            KeyParameterValue::CallerNonce => Ok(ToSqlOutput::from(Null)),
+            KeyParameterValue::MinMacLength(m) => Ok(ToSqlOutput::from(*m)),
+            KeyParameterValue::EcCurve(e) => Ok(ToSqlOutput::from(*e as u32)),
+            KeyParameterValue::RSAPublicExponent(r) => Ok(ToSqlOutput::from(*r as i64)),
+            KeyParameterValue::IncludeUniqueID => Ok(ToSqlOutput::from(Null)),
+            KeyParameterValue::BootLoaderOnly => Ok(ToSqlOutput::from(Null)),
+            KeyParameterValue::RollbackResistance => Ok(ToSqlOutput::from(Null)),
+            KeyParameterValue::ActiveDateTime(a) => Ok(ToSqlOutput::from(*a as i64)),
+            KeyParameterValue::OriginationExpireDateTime(o) => Ok(ToSqlOutput::from(*o as i64)),
+            KeyParameterValue::UsageExpireDateTime(u) => Ok(ToSqlOutput::from(*u as i64)),
+            KeyParameterValue::MinSecondsBetweenOps(m) => Ok(ToSqlOutput::from(*m)),
+            KeyParameterValue::MaxUsesPerBoot(m) => Ok(ToSqlOutput::from(*m)),
+            KeyParameterValue::UserID(u) => Ok(ToSqlOutput::from(*u)),
+            KeyParameterValue::UserSecureID(u) => Ok(ToSqlOutput::from(*u as i64)),
+            KeyParameterValue::NoAuthRequired => Ok(ToSqlOutput::from(Null)),
+            KeyParameterValue::HardwareAuthenticatorType(h) => Ok(ToSqlOutput::from(*h as u32)),
+            KeyParameterValue::AuthTimeout(m) => Ok(ToSqlOutput::from(*m)),
+            KeyParameterValue::AllowWhileOnBody => Ok(ToSqlOutput::from(Null)),
+            KeyParameterValue::TrustedUserPresenceRequired => Ok(ToSqlOutput::from(Null)),
+            KeyParameterValue::TrustedConfirmationRequired => Ok(ToSqlOutput::from(Null)),
+            KeyParameterValue::UnlockedDeviceRequired => Ok(ToSqlOutput::from(Null)),
+            KeyParameterValue::ApplicationID(a) => Ok(ToSqlOutput::from(a.to_vec())),
+            KeyParameterValue::ApplicationData(a) => Ok(ToSqlOutput::from(a.to_vec())),
+            KeyParameterValue::CreationDateTime(c) => Ok(ToSqlOutput::from(*c as i64)),
+            KeyParameterValue::KeyOrigin(k) => Ok(ToSqlOutput::from(*k as u32)),
+            KeyParameterValue::RootOfTrust(r) => Ok(ToSqlOutput::from(r.to_vec())),
+            KeyParameterValue::OSVersion(o) => Ok(ToSqlOutput::from(*o)),
+            KeyParameterValue::OSPatchLevel(o) => Ok(ToSqlOutput::from(*o)),
+            KeyParameterValue::UniqueID(u) => Ok(ToSqlOutput::from(u.to_vec())),
+            KeyParameterValue::AttestationChallenge(a) => Ok(ToSqlOutput::from(a.to_vec())),
+            KeyParameterValue::AttestationApplicationID(a) => Ok(ToSqlOutput::from(a.to_vec())),
+            KeyParameterValue::AttestationIdBrand(a) => Ok(ToSqlOutput::from(a.to_vec())),
+            KeyParameterValue::AttestationIdDevice(a) => Ok(ToSqlOutput::from(a.to_vec())),
+            KeyParameterValue::AttestationIdProduct(a) => Ok(ToSqlOutput::from(a.to_vec())),
+            KeyParameterValue::AttestationIdSerial(a) => Ok(ToSqlOutput::from(a.to_vec())),
+            KeyParameterValue::AttestationIdIMEI(a) => Ok(ToSqlOutput::from(a.to_vec())),
+            KeyParameterValue::AttestationIdMEID(a) => Ok(ToSqlOutput::from(a.to_vec())),
+            KeyParameterValue::AttestationIdManufacturer(a) => Ok(ToSqlOutput::from(a.to_vec())),
+            KeyParameterValue::AttestationIdModel(a) => Ok(ToSqlOutput::from(a.to_vec())),
+            KeyParameterValue::VendorPatchLevel(v) => Ok(ToSqlOutput::from(*v)),
+            KeyParameterValue::BootPatchLevel(b) => Ok(ToSqlOutput::from(*b)),
+            KeyParameterValue::AssociatedData(a) => Ok(ToSqlOutput::from(a.to_vec())),
+            KeyParameterValue::Nonce(n) => Ok(ToSqlOutput::from(n.to_vec())),
+            KeyParameterValue::MacLength(m) => Ok(ToSqlOutput::from(*m)),
+            KeyParameterValue::ResetSinceIdRotation => Ok(ToSqlOutput::from(Null)),
+            KeyParameterValue::ConfirmationToken(c) => Ok(ToSqlOutput::from(c.to_vec())),
+        }
+    }
+}
+
+fn format_context_for_enums(enum_name: &'static str) -> impl FnOnce() -> String {
+    move || format!("Failed to decode {} enum from value.", enum_name)
+}
+
+fn format_context_for_sql_data(tag_name: &'static str) -> impl FnOnce() -> String {
+    move || format!("Failed to read sql data for tag: {}.", tag_name)
+}
+
+impl KeyParameter {
+    /// Construct a KeyParameter from the data from a rusqlite row.
+    /// Note that following variants of KeyParameterValue should not be stored:
+    /// IncludeUniqueID, ApplicationID, ApplicationData, RootOfTrust, UniqueID,
+    /// Attestation*, AssociatedData, Nonce, MacLength, ResetSinceIdRotation, ConfirmationToken.
+    /// This filtering is enforced at a higher level and here we support conversion for all the
+    /// variants.
+    pub fn new_from_sql(
+        tag_val: TagType,
+        data: &SqlField,
+        security_level_val: SecurityLevelType,
+    ) -> Result<Self> {
+        let key_param_value = match tag_val {
+            Tag::INVALID => KeyParameterValue::Invalid,
+            Tag::PURPOSE => {
+                let key_purpose: KeyPurposeType = data
+                    .get()
+                    .map_err(|_| KeystoreError::Rc(ResponseCode::ValueCorrupted))
+                    .with_context(format_context_for_sql_data("PURPOSE"))?;
+                KeyParameterValue::KeyPurpose(key_purpose)
+            }
+            Tag::ALGORITHM => {
+                let algorithm: AlgorithmType = data
+                    .get()
+                    .map_err(|_| KeystoreError::Rc(ResponseCode::ValueCorrupted))
+                    .with_context(format_context_for_sql_data("ALGORITHM"))?;
+                KeyParameterValue::Algorithm(algorithm)
+            }
+            Tag::KEY_SIZE => {
+                let key_size: i32 =
+                    data.get().with_context(format_context_for_sql_data("KEY_SIZE"))?;
+                KeyParameterValue::KeySize(key_size)
+            }
+            Tag::BLOCK_MODE => {
+                let block_mode: BlockModeType = data
+                    .get()
+                    .map_err(|_| KeystoreError::Rc(ResponseCode::ValueCorrupted))
+                    .with_context(format_context_for_sql_data("BLOCK_MODE"))?;
+                KeyParameterValue::BlockMode(block_mode)
+            }
+            Tag::DIGEST => {
+                let digest: DigestType = data
+                    .get()
+                    .map_err(|_| KeystoreError::Rc(ResponseCode::ValueCorrupted))
+                    .with_context(format_context_for_sql_data("DIGEST"))?;
+                KeyParameterValue::Digest(digest)
+            }
+            Tag::PADDING => {
+                let padding: PaddingModeType = data
+                    .get()
+                    .map_err(|_| KeystoreError::Rc(ResponseCode::ValueCorrupted))
+                    .with_context(format_context_for_sql_data("PADDING"))?;
+                KeyParameterValue::PaddingMode(padding)
+            }
+            Tag::CALLER_NONCE => KeyParameterValue::CallerNonce,
+            Tag::MIN_MAC_LENGTH => {
+                let min_mac_length: i32 =
+                    data.get().with_context(format_context_for_sql_data("MIN_MAC_LENGTH"))?;
+                KeyParameterValue::MinMacLength(min_mac_length)
+            }
+            Tag::EC_CURVE => {
+                let ec_curve: EcCurveType = data
+                    .get()
+                    .map_err(|_| KeystoreError::Rc(ResponseCode::ValueCorrupted))
+                    .with_context(format_context_for_sql_data("EC_CURVE"))?;
+                KeyParameterValue::EcCurve(ec_curve)
+            }
+            Tag::RSA_PUBLIC_EXPONENT => {
+                let rsa_pub_exponent: i64 =
+                    data.get().with_context(format_context_for_sql_data("RSA_PUBLIC_EXPONENT"))?;
+
+                KeyParameterValue::RSAPublicExponent(rsa_pub_exponent)
+            }
+            Tag::INCLUDE_UNIQUE_ID => KeyParameterValue::IncludeUniqueID,
+            Tag::BOOTLOADER_ONLY => KeyParameterValue::BootLoaderOnly,
+            Tag::ROLLBACK_RESISTANCE => KeyParameterValue::RollbackResistance,
+            Tag::ACTIVE_DATETIME => {
+                let active_datetime: i64 =
+                    data.get().with_context(format_context_for_sql_data("ACTIVE_DATETIME"))?;
+                KeyParameterValue::ActiveDateTime(active_datetime)
+            }
+            Tag::ORIGINATION_EXPIRE_DATETIME => {
+                let origination_expire_datetime: i64 = data
+                    .get()
+                    .with_context(format_context_for_sql_data("ORIGINATION_EXPIRE_DATETIME"))?;
+                KeyParameterValue::OriginationExpireDateTime(origination_expire_datetime)
+            }
+            Tag::USAGE_EXPIRE_DATETIME => {
+                let usage_expire_datetime: i64 = data
+                    .get()
+                    .with_context(format_context_for_sql_data("USAGE_EXPIRE_DATETIME"))?;
+                KeyParameterValue::UsageExpireDateTime(usage_expire_datetime)
+            }
+            Tag::MIN_SECONDS_BETWEEN_OPS => {
+                let min_secs_between_ops: i32 = data
+                    .get()
+                    .with_context(format_context_for_sql_data("MIN_SECONDS_BETWEEN_OPS"))?;
+                KeyParameterValue::MinSecondsBetweenOps(min_secs_between_ops)
+            }
+            Tag::MAX_USES_PER_BOOT => {
+                let max_uses_per_boot: i32 =
+                    data.get().with_context(format_context_for_sql_data("MAX_USES_PER_BOOT"))?;
+                KeyParameterValue::MaxUsesPerBoot(max_uses_per_boot)
+            }
+            Tag::USER_ID => {
+                let user_id: i32 =
+                    data.get().with_context(format_context_for_sql_data("USER_ID"))?;
+                KeyParameterValue::UserID(user_id)
+            }
+            Tag::USER_SECURE_ID => {
+                let user_secure_id: i64 =
+                    data.get().with_context(format_context_for_sql_data("USER_SECURE_ID"))?;
+                KeyParameterValue::UserSecureID(user_secure_id)
+            }
+            Tag::NO_AUTH_REQUIRED => KeyParameterValue::NoAuthRequired,
+            Tag::USER_AUTH_TYPE => {
+                let user_auth_type: HardwareAuthenticatorTypeType = data
+                    .get()
+                    .map_err(|_| KeystoreError::Rc(ResponseCode::ValueCorrupted))
+                    .with_context(format_context_for_sql_data("USER_AUTH_TYPE"))?;
+                KeyParameterValue::HardwareAuthenticatorType(user_auth_type)
+            }
+            Tag::AUTH_TIMEOUT => {
+                let auth_timeout: i32 =
+                    data.get().with_context(format_context_for_sql_data("AUTH_TIMEOUT"))?;
+                KeyParameterValue::AuthTimeout(auth_timeout)
+            }
+            Tag::ALLOW_WHILE_ON_BODY => KeyParameterValue::AllowWhileOnBody,
+            Tag::TRUSTED_USER_PRESENCE_REQUIRED => KeyParameterValue::TrustedUserPresenceRequired,
+            Tag::TRUSTED_CONFIRMATION_REQUIRED => KeyParameterValue::TrustedConfirmationRequired,
+            Tag::UNLOCKED_DEVICE_REQUIRED => KeyParameterValue::UnlockedDeviceRequired,
+            Tag::APPLICATION_ID => {
+                let app_id: Vec<u8> =
+                    data.get().with_context(format_context_for_sql_data("APPLICATION_ID"))?;
+                KeyParameterValue::ApplicationID(app_id)
+            }
+            Tag::APPLICATION_DATA => {
+                let app_data: Vec<u8> =
+                    data.get().with_context(format_context_for_sql_data("APPLICATION_DATA"))?;
+                KeyParameterValue::ApplicationData(app_data)
+            }
+            Tag::CREATION_DATETIME => {
+                let creation_datetime: i64 =
+                    data.get().with_context(format_context_for_sql_data("CREATION_DATETIME"))?;
+                KeyParameterValue::CreationDateTime(creation_datetime)
+            }
+            Tag::ORIGIN => {
+                let origin: KeyOriginType = data
+                    .get()
+                    .map_err(|_| KeystoreError::Rc(ResponseCode::ValueCorrupted))
+                    .with_context(format_context_for_sql_data("ORIGIN"))?;
+                KeyParameterValue::KeyOrigin(origin)
+            }
+            Tag::ROOT_OF_TRUST => {
+                let root_of_trust: Vec<u8> =
+                    data.get().with_context(format_context_for_sql_data("ROOT_OF_TRUST"))?;
+                KeyParameterValue::RootOfTrust(root_of_trust)
+            }
+            Tag::OS_VERSION => {
+                let os_version: i32 =
+                    data.get().with_context(format_context_for_sql_data("OS_VERSION"))?;
+                KeyParameterValue::OSVersion(os_version)
+            }
+            Tag::OS_PATCHLEVEL => {
+                let os_patch_level: i32 =
+                    data.get().with_context(format_context_for_sql_data("OS_PATCHLEVEL"))?;
+                KeyParameterValue::OSPatchLevel(os_patch_level)
+            }
+            Tag::UNIQUE_ID => {
+                let unique_id: Vec<u8> =
+                    data.get().with_context(format_context_for_sql_data("UNIQUE_ID"))?;
+                KeyParameterValue::UniqueID(unique_id)
+            }
+            Tag::ATTESTATION_CHALLENGE => {
+                let attestation_challenge: Vec<u8> = data
+                    .get()
+                    .with_context(format_context_for_sql_data("ATTESTATION_CHALLENGE"))?;
+                KeyParameterValue::AttestationChallenge(attestation_challenge)
+            }
+            Tag::ATTESTATION_APPLICATION_ID => {
+                let attestation_app_id: Vec<u8> = data
+                    .get()
+                    .with_context(format_context_for_sql_data("ATTESTATION_APPLICATION_ID"))?;
+                KeyParameterValue::AttestationApplicationID(attestation_app_id)
+            }
+            Tag::ATTESTATION_ID_BRAND => {
+                let attestation_id_brand: Vec<u8> =
+                    data.get().with_context(format_context_for_sql_data("ATTESTATION_ID_BRAND"))?;
+                KeyParameterValue::AttestationIdBrand(attestation_id_brand)
+            }
+            Tag::ATTESTATION_ID_DEVICE => {
+                let attestation_id_device: Vec<u8> = data
+                    .get()
+                    .with_context(format_context_for_sql_data("ATTESTATION_ID_DEVICE"))?;
+                KeyParameterValue::AttestationIdDevice(attestation_id_device)
+            }
+            Tag::ATTESTATION_ID_PRODUCT => {
+                let attestation_id_product: Vec<u8> = data
+                    .get()
+                    .with_context(format_context_for_sql_data("ATTESTATION_ID_PRODUCT"))?;
+                KeyParameterValue::AttestationIdProduct(attestation_id_product)
+            }
+            Tag::ATTESTATION_ID_SERIAL => {
+                let attestation_id_serial: Vec<u8> = data
+                    .get()
+                    .with_context(format_context_for_sql_data("ATTESTATION_ID_SERIAL"))?;
+                KeyParameterValue::AttestationIdSerial(attestation_id_serial)
+            }
+            Tag::ATTESTATION_ID_IMEI => {
+                let attestation_id_imei: Vec<u8> =
+                    data.get().with_context(format_context_for_sql_data("ATTESTATION_ID_IMEI"))?;
+                KeyParameterValue::AttestationIdIMEI(attestation_id_imei)
+            }
+            Tag::ATTESTATION_ID_MEID => {
+                let attestation_id_meid: Vec<u8> =
+                    data.get().with_context(format_context_for_sql_data("ATTESTATION_ID_MEID"))?;
+                KeyParameterValue::AttestationIdMEID(attestation_id_meid)
+            }
+            Tag::ATTESTATION_ID_MANUFACTURER => {
+                let attestation_id_manufacturer: Vec<u8> = data
+                    .get()
+                    .with_context(format_context_for_sql_data("ATTESTATION_ID_MANUFACTURER"))?;
+                KeyParameterValue::AttestationIdManufacturer(attestation_id_manufacturer)
+            }
+            Tag::ATTESTATION_ID_MODEL => {
+                let attestation_id_model: Vec<u8> =
+                    data.get().with_context(format_context_for_sql_data("ATTESTATION_ID_MODEL"))?;
+                KeyParameterValue::AttestationIdModel(attestation_id_model)
+            }
+            Tag::VENDOR_PATCHLEVEL => {
+                let vendor_patch_level: i32 =
+                    data.get().with_context(format_context_for_sql_data("VENDOR_PATCHLEVEL"))?;
+                KeyParameterValue::VendorPatchLevel(vendor_patch_level)
+            }
+            Tag::BOOT_PATCHLEVEL => {
+                let boot_patch_level: i32 =
+                    data.get().with_context(format_context_for_sql_data("BOOT_PATCHLEVEL"))?;
+                KeyParameterValue::BootPatchLevel(boot_patch_level)
+            }
+            Tag::ASSOCIATED_DATA => {
+                let associated_data: Vec<u8> =
+                    data.get().with_context(format_context_for_sql_data("ASSOCIATED_DATA"))?;
+                KeyParameterValue::AssociatedData(associated_data)
+            }
+            Tag::NONCE => {
+                let nonce: Vec<u8> =
+                    data.get().with_context(format_context_for_sql_data("NONCE"))?;
+                KeyParameterValue::Nonce(nonce)
+            }
+            Tag::MAC_LENGTH => {
+                let mac_length: i32 =
+                    data.get().with_context(format_context_for_sql_data("MAC_LENGTH"))?;
+                KeyParameterValue::MacLength(mac_length)
+            }
+            Tag::RESET_SINCE_ID_ROTATION => KeyParameterValue::ResetSinceIdRotation,
+            Tag::CONFIRMATION_TOKEN => {
+                let confirmation_token: Vec<u8> =
+                    data.get().with_context(format_context_for_sql_data("CONFIRMATION_TOKEN"))?;
+                KeyParameterValue::ConfirmationToken(confirmation_token)
+            }
+            _ => {
+                return Err(KeystoreError::Rc(ResponseCode::ValueCorrupted))
+                    .with_context(format_context_for_enums("Tag"))?
+            }
+        };
+        Ok(KeyParameter::new(key_param_value, security_level_val))
+    }
+}
+
+/// The storage_tests module first tests the 'new_from_sql' method for KeyParameters of different
+/// data types and then tests 'to_sql' method for KeyParameters of those
+/// different data types. The five different data types for KeyParameter values are:
+/// i) enums of u32
+/// ii) u32
+/// iii) u64
+/// iv) Vec<u8>
+/// v) bool
+#[cfg(test)]
+mod storage_tests {
+    use crate::error::*;
+    use crate::key_parameter::*;
+    use anyhow::Result;
+    use rusqlite::types::ToSql;
+    use rusqlite::{params, Connection, NO_PARAMS};
+
+    /// Test initializing a KeyParameter (with key parameter value corresponding to an enum of i32)
+    /// from a database table row.
+    #[test]
+    fn test_new_from_sql_enum_i32() -> Result<()> {
+        let db = init_db()?;
+        insert_into_keyparameter(
+            &db,
+            1,
+            Tag::ALGORITHM,
+            &Algorithm::RSA,
+            SecurityLevel::STRONGBOX,
+        )?;
+        let key_param = query_from_keyparameter(&db)?;
+        assert_eq!(Tag::ALGORITHM, key_param.get_tag());
+        assert_eq!(*key_param.key_parameter_value(), KeyParameterValue::Algorithm(Algorithm::RSA));
+        assert_eq!(*key_param.security_level(), SecurityLevel::STRONGBOX);
+        Ok(())
+    }
+
+    /// Test initializing a KeyParameter (with key parameter value which is of i32)
+    /// from a database table row.
+    #[test]
+    fn test_new_from_sql_i32() -> Result<()> {
+        let db = init_db()?;
+        insert_into_keyparameter(&db, 1, Tag::KEY_SIZE, &1024, SecurityLevel::STRONGBOX)?;
+        let key_param = query_from_keyparameter(&db)?;
+        assert_eq!(Tag::KEY_SIZE, key_param.get_tag());
+        assert_eq!(*key_param.key_parameter_value(), KeyParameterValue::KeySize(1024));
+        Ok(())
+    }
+
+    /// Test initializing a KeyParameter (with key parameter value which is of i64)
+    /// from a database table row.
+    #[test]
+    fn test_new_from_sql_i64() -> Result<()> {
+        let db = init_db()?;
+        // max value for i64, just to test corner cases
+        insert_into_keyparameter(
+            &db,
+            1,
+            Tag::RSA_PUBLIC_EXPONENT,
+            &(i64::MAX),
+            SecurityLevel::STRONGBOX,
+        )?;
+        let key_param = query_from_keyparameter(&db)?;
+        assert_eq!(Tag::RSA_PUBLIC_EXPONENT, key_param.get_tag());
+        assert_eq!(
+            *key_param.key_parameter_value(),
+            KeyParameterValue::RSAPublicExponent(i64::MAX)
+        );
+        Ok(())
+    }
+
+    /// Test initializing a KeyParameter (with key parameter value which is of bool)
+    /// from a database table row.
+    #[test]
+    fn test_new_from_sql_bool() -> Result<()> {
+        let db = init_db()?;
+        insert_into_keyparameter(&db, 1, Tag::CALLER_NONCE, &Null, SecurityLevel::STRONGBOX)?;
+        let key_param = query_from_keyparameter(&db)?;
+        assert_eq!(Tag::CALLER_NONCE, key_param.get_tag());
+        assert_eq!(*key_param.key_parameter_value(), KeyParameterValue::CallerNonce);
+        Ok(())
+    }
+
+    /// Test initializing a KeyParameter (with key parameter value which is of Vec<u8>)
+    /// from a database table row.
+    #[test]
+    fn test_new_from_sql_vec_u8() -> Result<()> {
+        let db = init_db()?;
+        let app_id = String::from("MyAppID");
+        let app_id_bytes = app_id.into_bytes();
+        insert_into_keyparameter(
+            &db,
+            1,
+            Tag::APPLICATION_ID,
+            &app_id_bytes,
+            SecurityLevel::STRONGBOX,
+        )?;
+        let key_param = query_from_keyparameter(&db)?;
+        assert_eq!(Tag::APPLICATION_ID, key_param.get_tag());
+        assert_eq!(
+            *key_param.key_parameter_value(),
+            KeyParameterValue::ApplicationID(app_id_bytes)
+        );
+        Ok(())
+    }
+
+    /// Test storing a KeyParameter (with key parameter value which corresponds to an enum of i32)
+    /// in the database
+    #[test]
+    fn test_to_sql_enum_i32() -> Result<()> {
+        let db = init_db()?;
+        let kp = KeyParameter::new(
+            KeyParameterValue::Algorithm(Algorithm::RSA),
+            SecurityLevel::STRONGBOX,
+        );
+        store_keyparameter(&db, 1, &kp)?;
+        let key_param = query_from_keyparameter(&db)?;
+        assert_eq!(kp.get_tag(), key_param.get_tag());
+        assert_eq!(kp.key_parameter_value(), key_param.key_parameter_value());
+        assert_eq!(kp.security_level(), key_param.security_level());
+        Ok(())
+    }
+
+    /// Test storing a KeyParameter (with key parameter value which is of i32) in the database
+    #[test]
+    fn test_to_sql_i32() -> Result<()> {
+        let db = init_db()?;
+        let kp = KeyParameter::new(KeyParameterValue::KeySize(1024), SecurityLevel::STRONGBOX);
+        store_keyparameter(&db, 1, &kp)?;
+        let key_param = query_from_keyparameter(&db)?;
+        assert_eq!(kp.get_tag(), key_param.get_tag());
+        assert_eq!(kp.key_parameter_value(), key_param.key_parameter_value());
+        assert_eq!(kp.security_level(), key_param.security_level());
+        Ok(())
+    }
+
+    /// Test storing a KeyParameter (with key parameter value which is of i64) in the database
+    #[test]
+    fn test_to_sql_i64() -> Result<()> {
+        let db = init_db()?;
+        // max value for i64, just to test corner cases
+        let kp = KeyParameter::new(
+            KeyParameterValue::RSAPublicExponent(i64::MAX),
+            SecurityLevel::STRONGBOX,
+        );
+        store_keyparameter(&db, 1, &kp)?;
+        let key_param = query_from_keyparameter(&db)?;
+        assert_eq!(kp.get_tag(), key_param.get_tag());
+        assert_eq!(kp.key_parameter_value(), key_param.key_parameter_value());
+        assert_eq!(kp.security_level(), key_param.security_level());
+        Ok(())
+    }
+
+    /// Test storing a KeyParameter (with key parameter value which is of Vec<u8>) in the database
+    #[test]
+    fn test_to_sql_vec_u8() -> Result<()> {
+        let db = init_db()?;
+        let kp = KeyParameter::new(
+            KeyParameterValue::ApplicationID(String::from("MyAppID").into_bytes()),
+            SecurityLevel::STRONGBOX,
+        );
+        store_keyparameter(&db, 1, &kp)?;
+        let key_param = query_from_keyparameter(&db)?;
+        assert_eq!(kp.get_tag(), key_param.get_tag());
+        assert_eq!(kp.key_parameter_value(), key_param.key_parameter_value());
+        assert_eq!(kp.security_level(), key_param.security_level());
+        Ok(())
+    }
+
+    /// Test storing a KeyParameter (with key parameter value which is of i32) in the database
+    #[test]
+    fn test_to_sql_bool() -> Result<()> {
+        let db = init_db()?;
+        let kp = KeyParameter::new(KeyParameterValue::CallerNonce, SecurityLevel::STRONGBOX);
+        store_keyparameter(&db, 1, &kp)?;
+        let key_param = query_from_keyparameter(&db)?;
+        assert_eq!(kp.get_tag(), key_param.get_tag());
+        assert_eq!(kp.key_parameter_value(), key_param.key_parameter_value());
+        assert_eq!(kp.security_level(), key_param.security_level());
+        Ok(())
+    }
+
+    #[test]
+    /// Test Tag::Invalid
+    fn test_invalid_tag() -> Result<()> {
+        let db = init_db()?;
+        insert_into_keyparameter(&db, 1, 0, &123, 1)?;
+        let key_param = query_from_keyparameter(&db)?;
+        assert_eq!(Tag::INVALID, key_param.get_tag());
+        Ok(())
+    }
+
+    #[test]
+    fn test_non_existing_enum_variant() -> Result<()> {
+        let db = init_db()?;
+        insert_into_keyparameter(&db, 1, 100, &123, 1)?;
+        tests::check_result_contains_error_string(
+            query_from_keyparameter(&db),
+            "Failed to decode Tag enum from value.",
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_invalid_conversion_from_sql() -> Result<()> {
+        let db = init_db()?;
+        insert_into_keyparameter(&db, 1, Tag::ALGORITHM, &Null, 1)?;
+        tests::check_result_contains_error_string(
+            query_from_keyparameter(&db),
+            "Failed to read sql data for tag: ALGORITHM.",
+        );
+        Ok(())
+    }
+
+    /// Helper method to init database table for key parameter
+    fn init_db() -> Result<Connection> {
+        let db = Connection::open_in_memory().context("Failed to initialize sqlite connection.")?;
+        db.execute("ATTACH DATABASE ? as 'persistent';", params![""])
+            .context("Failed to attach databases.")?;
+        db.execute(
+            "CREATE TABLE IF NOT EXISTS persistent.keyparameter (
+                                keyentryid INTEGER,
+                                tag INTEGER,
+                                data ANY,
+                                security_level INTEGER);",
+            NO_PARAMS,
+        )
+        .context("Failed to initialize \"keyparameter\" table.")?;
+        Ok(db)
+    }
+
+    /// Helper method to insert an entry into key parameter table, with individual parameters
+    fn insert_into_keyparameter<T: ToSql>(
+        db: &Connection,
+        key_id: i64,
+        tag: i32,
+        value: &T,
+        security_level: i32,
+    ) -> Result<()> {
+        db.execute(
+            "INSERT into persistent.keyparameter (keyentryid, tag, data, security_level)
+VALUES(?, ?, ?, ?);",
+            params![key_id, tag, *value, security_level],
+        )?;
+        Ok(())
+    }
+
+    /// Helper method to store a key parameter instance.
+    fn store_keyparameter(db: &Connection, key_id: i64, kp: &KeyParameter) -> Result<()> {
+        db.execute(
+            "INSERT into persistent.keyparameter (keyentryid, tag, data, security_level)
+VALUES(?, ?, ?, ?);",
+            params![key_id, kp.get_tag(), kp.key_parameter_value(), kp.security_level()],
+        )?;
+        Ok(())
+    }
+
+    /// Helper method to query a row from keyparameter table
+    fn query_from_keyparameter(db: &Connection) -> Result<KeyParameter> {
+        let mut stmt = db.prepare(
+            "SELECT tag, data, security_level FROM
+persistent.keyparameter",
+        )?;
+        let mut rows = stmt.query(NO_PARAMS)?;
+        let row = rows.next()?.unwrap();
+        Ok(KeyParameter::new_from_sql(row.get(0)?, &SqlField(1, row), row.get(2)?)?)
     }
 }
