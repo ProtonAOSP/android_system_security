@@ -267,7 +267,7 @@ pub fn getpidcon(pid: selinux::pid_t) -> Result<Context> {
 ///  * Err(anyhow!(Error::perm()))) if the permission was denied.
 ///  * Err(anyhow!(ioError::last_os_error())) if any other error occurred while performing
 ///            the access check.
-pub fn check_access(source: &Context, target: &Context, tclass: &str, perm: &str) -> Result<()> {
+pub fn check_access(source: &CStr, target: &CStr, tclass: &str, perm: &str) -> Result<()> {
     init_logger_once();
     let c_tclass = CString::new(tclass).with_context(|| {
         format!("check_access: Failed to convert tclass \"{}\" to CString.", tclass)
@@ -295,7 +295,7 @@ pub fn check_access(source: &Context, target: &Context, tclass: &str, perm: &str
             .with_context(|| {
                 format!(
                     concat!(
-                        "check_access: Failed with sctx: {} tctx: {}",
+                        "check_access: Failed with sctx: {:?} tctx: {:?}",
                         " with target class: \"{}\" perm: \"{}\""
                     ),
                     source, target, tclass, perm
