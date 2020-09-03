@@ -18,9 +18,10 @@ rust_library {
     srcs: ["src/lib.rs"],
 
     rustlibs: [
+        "libandroid_hardware_keymint",
         "libandroid_security_keystore2",
         "libanyhow",
-        "libandroid_hardware_keymint",
+        "libbinder_rs",
         "libkeystore_aidl_generated",
         "libkeystore2_selinux",
         "liblazy_static",
@@ -40,9 +41,10 @@ rust_test {
     auto_gen_config: true,
     rustlibs: [
         "libandroid_logger",
+        "libandroid_hardware_keymint",
         "libandroid_security_keystore2",
         "libanyhow",
-        "libandroid_hardware_keymint",
+        "libbinder_rs",
         "libkeystore_aidl_generated",
         "libkeystore2_selinux",
         "liblazy_static",
