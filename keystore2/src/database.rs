@@ -21,65 +21,59 @@ use keystore_aidl_generated as aidl;
 #[cfg(not(test))]
 use rand::prelude::random;
 use rusqlite::{params, Connection, TransactionBehavior, NO_PARAMS};
+use std::sync::Once;
 #[cfg(test)]
 use tests::random;
+
+static INIT_TABLES: Once = Once::new();
 
 pub struct KeystoreDB {
     conn: Connection,
 }
 
 impl KeystoreDB {
-    // TODO(b/160882985): Figure out the location for this file.
-    #[cfg(not(test))]
-    pub fn new() -> Result<KeystoreDB> {
-        KeystoreDB::new_with_filename("persistent.sql")
+    pub fn new() -> Result<Self> {
+        let conn = Self::make_connection("file:persistent.sqlite", "file:perboot.sqlite")?;
+
+        INIT_TABLES.call_once(|| Self::init_tables(&conn).expect("Failed to initialize tables."));
+        Ok(Self { conn })
     }
 
-    #[cfg(test)]
-    pub fn new() -> Result<KeystoreDB> {
-        KeystoreDB::new_with_filename("")
-    }
-
-    fn new_with_filename(persistent_file: &str) -> Result<KeystoreDB> {
-        let db = KeystoreDB {
-            conn: Connection::open_in_memory()
-                .context("Failed to initialize sqlite connection.")?,
-        };
-        db.attach_databases(persistent_file).context("Failed to create KeystoreDB.")?;
-        db.init_tables().context("Failed to create KeystoreDB.")?;
-        Ok(db)
-    }
-
-    fn attach_databases(&self, persistent_file: &str) -> Result<()> {
-        self.conn
-            .execute("ATTACH DATABASE ? as 'persistent';", params![persistent_file])
-            .context("Failed to attach databases.")?;
-        Ok(())
-    }
-
-    fn init_tables(&self) -> Result<()> {
-        self.conn
-            .execute(
-                "CREATE TABLE IF NOT EXISTS persistent.keyentry (
+    fn init_tables(conn: &Connection) -> Result<()> {
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS persistent.keyentry (
                      id INTEGER UNIQUE,
                      creation_date DATETIME,
                      domain INTEGER,
                      namespace INTEGER,
                      alias TEXT);",
-                NO_PARAMS,
-            )
-            .context("Failed to initialize \"keyentry\" table.")?;
-        self.conn
-            .execute(
-                "CREATE TABLE IF NOT EXISTS persistent.keyparameter (
+            NO_PARAMS,
+        )
+        .context("Failed to initialize \"keyentry\" table.")?;
+
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS persistent.keyparameter (
                      keyentryid INTEGER,
                      tag INTEGER,
                      data ANY,
                      security_level INTEGER);",
-                NO_PARAMS,
-            )
-            .context("Failed to initialize \"keyparameter\" table.")?;
+            NO_PARAMS,
+        )
+        .context("Failed to initialize \"keyparameter\" table.")?;
+
         Ok(())
+    }
+
+    fn make_connection(persistent_file: &str, perboot_file: &str) -> Result<Connection> {
+        let conn =
+            Connection::open_in_memory().context("Failed to initialize SQLite connection.")?;
+
+        conn.execute("ATTACH DATABASE ? as persistent;", params![persistent_file])
+            .context("Failed to attach database persistent.")?;
+        conn.execute("ATTACH DATABASE ? as perboot;", params![perboot_file])
+            .context("Failed to attach database perboot.")?;
+
+        Ok(conn)
     }
 
     pub fn create_key_entry(&self, domain: aidl::Domain, namespace: i64) -> Result<i64> {
@@ -165,6 +159,23 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
 
+    static PERSISTENT_TEST_SQL: &str = "/data/local/tmp/persistent.sqlite";
+    static PERBOOT_TEST_SQL: &str = "/data/local/tmp/perboot.sqlite";
+
+    fn new_test_db() -> Result<KeystoreDB> {
+        let conn = KeystoreDB::make_connection("file::memory:", "file::memory:")?;
+
+        KeystoreDB::init_tables(&conn).context("Failed to initialize tables.")?;
+        Ok(KeystoreDB { conn })
+    }
+
+    fn new_test_db_with_persistent_file() -> Result<KeystoreDB> {
+        let conn = KeystoreDB::make_connection(PERSISTENT_TEST_SQL, PERBOOT_TEST_SQL)?;
+
+        KeystoreDB::init_tables(&conn).context("Failed to initialize tables.")?;
+        Ok(KeystoreDB { conn })
+    }
+
     // Ensure that we're using the "injected" random function, not the real one.
     #[test]
     fn test_mocked_random() {
@@ -179,17 +190,10 @@ mod tests {
         }
     }
 
-    // Ensure we can initialize the database.
-    #[test]
-    fn test_new() -> Result<()> {
-        KeystoreDB::new()?;
-        Ok(())
-    }
-
     // Test that we have the correct tables.
     #[test]
     fn test_tables() -> Result<()> {
-        let db = KeystoreDB::new()?;
+        let db = new_test_db()?;
         let tables = db
             .conn
             .prepare("SELECT name from persistent.sqlite_master WHERE type='table' ORDER BY name;")?
@@ -203,12 +207,12 @@ mod tests {
 
     #[test]
     fn test_no_persistence_for_tests() -> Result<()> {
-        let db = KeystoreDB::new()?;
+        let db = new_test_db()?;
 
         db.create_key_entry(aidl::Domain::App, 100)?;
         let entries = get_keyentry(&db)?;
         assert_eq!(entries.len(), 1);
-        let db = KeystoreDB::new()?;
+        let db = new_test_db()?;
 
         let entries = get_keyentry(&db)?;
         assert_eq!(entries.len(), 0);
@@ -217,13 +221,14 @@ mod tests {
 
     #[test]
     fn test_persistence_for_files() -> Result<()> {
-        let persistent = TempFile { filename: "/data/local/tmp/persistent.sql" };
-        let db = KeystoreDB::new_with_filename(persistent.filename)?;
+        let _file_guard_persistent = TempFile { filename: PERSISTENT_TEST_SQL };
+        let _file_guard_perboot = TempFile { filename: PERBOOT_TEST_SQL };
+        let db = new_test_db_with_persistent_file()?;
 
         db.create_key_entry(aidl::Domain::App, 100)?;
         let entries = get_keyentry(&db)?;
         assert_eq!(entries.len(), 1);
-        let db = KeystoreDB::new_with_filename(persistent.filename)?;
+        let db = new_test_db_with_persistent_file()?;
 
         let entries_new = get_keyentry(&db)?;
         assert_eq!(entries, entries_new);
@@ -238,7 +243,7 @@ mod tests {
             (ke.domain.unwrap(), ke.namespace.unwrap(), ke.alias.as_deref())
         }
 
-        let db = KeystoreDB::new()?;
+        let db = new_test_db()?;
 
         db.create_key_entry(Domain::App, 100)?;
         db.create_key_entry(Domain::SELinux, 101)?;
@@ -273,7 +278,7 @@ mod tests {
             (ke.domain, ke.namespace, ke.alias.as_deref())
         }
 
-        let mut db = KeystoreDB::new()?;
+        let mut db = new_test_db()?;
         db.create_key_entry(Domain::App, 42)?;
         db.create_key_entry(Domain::App, 42)?;
         let entries = get_keyentry(&db)?;
