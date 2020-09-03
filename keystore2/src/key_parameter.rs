@@ -337,14 +337,6 @@ impl ToSql for KeyParameterValue {
     }
 }
 
-fn format_context_for_enums(enum_name: &'static str) -> impl FnOnce() -> String {
-    move || format!("Failed to decode {} enum from value.", enum_name)
-}
-
-fn format_context_for_sql_data(tag_name: &'static str) -> impl FnOnce() -> String {
-    move || format!("Failed to read sql data for tag: {}.", tag_name)
-}
-
 impl KeyParameter {
     /// Construct a KeyParameter from the data from a rusqlite row.
     /// Note that following variants of KeyParameterValue should not be stored:
@@ -363,58 +355,58 @@ impl KeyParameter {
                 let key_purpose: KeyPurposeType = data
                     .get()
                     .map_err(|_| KeystoreError::Rc(ResponseCode::ValueCorrupted))
-                    .with_context(format_context_for_sql_data("PURPOSE"))?;
+                    .context("Failed to read sql data for tag: PURPOSE.")?;
                 KeyParameterValue::KeyPurpose(key_purpose)
             }
             Tag::ALGORITHM => {
                 let algorithm: AlgorithmType = data
                     .get()
                     .map_err(|_| KeystoreError::Rc(ResponseCode::ValueCorrupted))
-                    .with_context(format_context_for_sql_data("ALGORITHM"))?;
+                    .context("Failed to read sql data for tag: ALGORITHM.")?;
                 KeyParameterValue::Algorithm(algorithm)
             }
             Tag::KEY_SIZE => {
                 let key_size: i32 =
-                    data.get().with_context(format_context_for_sql_data("KEY_SIZE"))?;
+                    data.get().context("Failed to read sql data for tag: KEY_SIZE.")?;
                 KeyParameterValue::KeySize(key_size)
             }
             Tag::BLOCK_MODE => {
                 let block_mode: BlockModeType = data
                     .get()
                     .map_err(|_| KeystoreError::Rc(ResponseCode::ValueCorrupted))
-                    .with_context(format_context_for_sql_data("BLOCK_MODE"))?;
+                    .context("Failed to read sql data for tag: BLOCK_MODE.")?;
                 KeyParameterValue::BlockMode(block_mode)
             }
             Tag::DIGEST => {
                 let digest: DigestType = data
                     .get()
                     .map_err(|_| KeystoreError::Rc(ResponseCode::ValueCorrupted))
-                    .with_context(format_context_for_sql_data("DIGEST"))?;
+                    .context("Failed to read sql data for tag: DIGEST.")?;
                 KeyParameterValue::Digest(digest)
             }
             Tag::PADDING => {
                 let padding: PaddingModeType = data
                     .get()
                     .map_err(|_| KeystoreError::Rc(ResponseCode::ValueCorrupted))
-                    .with_context(format_context_for_sql_data("PADDING"))?;
+                    .context("Failed to read sql data for tag: PADDING.")?;
                 KeyParameterValue::PaddingMode(padding)
             }
             Tag::CALLER_NONCE => KeyParameterValue::CallerNonce,
             Tag::MIN_MAC_LENGTH => {
                 let min_mac_length: i32 =
-                    data.get().with_context(format_context_for_sql_data("MIN_MAC_LENGTH"))?;
+                    data.get().context("Failed to read sql data for tag: MIN_MAC_LENGTH.")?;
                 KeyParameterValue::MinMacLength(min_mac_length)
             }
             Tag::EC_CURVE => {
                 let ec_curve: EcCurveType = data
                     .get()
                     .map_err(|_| KeystoreError::Rc(ResponseCode::ValueCorrupted))
-                    .with_context(format_context_for_sql_data("EC_CURVE"))?;
+                    .context("Failed to read sql data for tag: EC_CURVE.")?;
                 KeyParameterValue::EcCurve(ec_curve)
             }
             Tag::RSA_PUBLIC_EXPONENT => {
                 let rsa_pub_exponent: i64 =
-                    data.get().with_context(format_context_for_sql_data("RSA_PUBLIC_EXPONENT"))?;
+                    data.get().context("Failed to read sql data for tag: RSA_PUBLIC_EXPONENT.")?;
 
                 KeyParameterValue::RSAPublicExponent(rsa_pub_exponent)
             }
@@ -423,40 +415,40 @@ impl KeyParameter {
             Tag::ROLLBACK_RESISTANCE => KeyParameterValue::RollbackResistance,
             Tag::ACTIVE_DATETIME => {
                 let active_datetime: i64 =
-                    data.get().with_context(format_context_for_sql_data("ACTIVE_DATETIME"))?;
+                    data.get().context("Failed to read sql data for tag: ACTIVE_DATETIME.")?;
                 KeyParameterValue::ActiveDateTime(active_datetime)
             }
             Tag::ORIGINATION_EXPIRE_DATETIME => {
                 let origination_expire_datetime: i64 = data
                     .get()
-                    .with_context(format_context_for_sql_data("ORIGINATION_EXPIRE_DATETIME"))?;
+                    .context("Failed to read sql data for tag: ORIGINATION_EXPIRE_DATETIME.")?;
                 KeyParameterValue::OriginationExpireDateTime(origination_expire_datetime)
             }
             Tag::USAGE_EXPIRE_DATETIME => {
                 let usage_expire_datetime: i64 = data
                     .get()
-                    .with_context(format_context_for_sql_data("USAGE_EXPIRE_DATETIME"))?;
+                    .context("Failed to read sql data for tag: USAGE_EXPIRE_DATETIME.")?;
                 KeyParameterValue::UsageExpireDateTime(usage_expire_datetime)
             }
             Tag::MIN_SECONDS_BETWEEN_OPS => {
                 let min_secs_between_ops: i32 = data
                     .get()
-                    .with_context(format_context_for_sql_data("MIN_SECONDS_BETWEEN_OPS"))?;
+                    .context("Failed to read sql data for tag: MIN_SECONDS_BETWEEN_OPS.")?;
                 KeyParameterValue::MinSecondsBetweenOps(min_secs_between_ops)
             }
             Tag::MAX_USES_PER_BOOT => {
                 let max_uses_per_boot: i32 =
-                    data.get().with_context(format_context_for_sql_data("MAX_USES_PER_BOOT"))?;
+                    data.get().context("Failed to read sql data for tag: MAX_USES_PER_BOOT.")?;
                 KeyParameterValue::MaxUsesPerBoot(max_uses_per_boot)
             }
             Tag::USER_ID => {
                 let user_id: i32 =
-                    data.get().with_context(format_context_for_sql_data("USER_ID"))?;
+                    data.get().context("Failed to read sql data for tag: USER_ID.")?;
                 KeyParameterValue::UserID(user_id)
             }
             Tag::USER_SECURE_ID => {
                 let user_secure_id: i64 =
-                    data.get().with_context(format_context_for_sql_data("USER_SECURE_ID"))?;
+                    data.get().context("Failed to read sql data for tag: USER_SECURE_ID.")?;
                 KeyParameterValue::UserSecureID(user_secure_id)
             }
             Tag::NO_AUTH_REQUIRED => KeyParameterValue::NoAuthRequired,
@@ -464,12 +456,12 @@ impl KeyParameter {
                 let user_auth_type: HardwareAuthenticatorTypeType = data
                     .get()
                     .map_err(|_| KeystoreError::Rc(ResponseCode::ValueCorrupted))
-                    .with_context(format_context_for_sql_data("USER_AUTH_TYPE"))?;
+                    .context("Failed to read sql data for tag: USER_AUTH_TYPE.")?;
                 KeyParameterValue::HardwareAuthenticatorType(user_auth_type)
             }
             Tag::AUTH_TIMEOUT => {
                 let auth_timeout: i32 =
-                    data.get().with_context(format_context_for_sql_data("AUTH_TIMEOUT"))?;
+                    data.get().context("Failed to read sql data for tag: AUTH_TIMEOUT.")?;
                 KeyParameterValue::AuthTimeout(auth_timeout)
             }
             Tag::ALLOW_WHILE_ON_BODY => KeyParameterValue::AllowWhileOnBody,
@@ -478,136 +470,136 @@ impl KeyParameter {
             Tag::UNLOCKED_DEVICE_REQUIRED => KeyParameterValue::UnlockedDeviceRequired,
             Tag::APPLICATION_ID => {
                 let app_id: Vec<u8> =
-                    data.get().with_context(format_context_for_sql_data("APPLICATION_ID"))?;
+                    data.get().context("Failed to read sql data for tag: APPLICATION_ID.")?;
                 KeyParameterValue::ApplicationID(app_id)
             }
             Tag::APPLICATION_DATA => {
                 let app_data: Vec<u8> =
-                    data.get().with_context(format_context_for_sql_data("APPLICATION_DATA"))?;
+                    data.get().context("Failed to read sql data for tag: APPLICATION_DATA.")?;
                 KeyParameterValue::ApplicationData(app_data)
             }
             Tag::CREATION_DATETIME => {
                 let creation_datetime: i64 =
-                    data.get().with_context(format_context_for_sql_data("CREATION_DATETIME"))?;
+                    data.get().context("Failed to read sql data for tag: CREATION_DATETIME.")?;
                 KeyParameterValue::CreationDateTime(creation_datetime)
             }
             Tag::ORIGIN => {
                 let origin: KeyOriginType = data
                     .get()
                     .map_err(|_| KeystoreError::Rc(ResponseCode::ValueCorrupted))
-                    .with_context(format_context_for_sql_data("ORIGIN"))?;
+                    .context("Failed to read sql data for tag: ORIGIN.")?;
                 KeyParameterValue::KeyOrigin(origin)
             }
             Tag::ROOT_OF_TRUST => {
                 let root_of_trust: Vec<u8> =
-                    data.get().with_context(format_context_for_sql_data("ROOT_OF_TRUST"))?;
+                    data.get().context("Failed to read sql data for tag: ROOT_OF_TRUST.")?;
                 KeyParameterValue::RootOfTrust(root_of_trust)
             }
             Tag::OS_VERSION => {
                 let os_version: i32 =
-                    data.get().with_context(format_context_for_sql_data("OS_VERSION"))?;
+                    data.get().context("Failed to read sql data for tag: OS_VERSION.")?;
                 KeyParameterValue::OSVersion(os_version)
             }
             Tag::OS_PATCHLEVEL => {
                 let os_patch_level: i32 =
-                    data.get().with_context(format_context_for_sql_data("OS_PATCHLEVEL"))?;
+                    data.get().context("Failed to read sql data for tag: OS_PATCHLEVEL.")?;
                 KeyParameterValue::OSPatchLevel(os_patch_level)
             }
             Tag::UNIQUE_ID => {
                 let unique_id: Vec<u8> =
-                    data.get().with_context(format_context_for_sql_data("UNIQUE_ID"))?;
+                    data.get().context("Failed to read sql data for tag: UNIQUE_ID.")?;
                 KeyParameterValue::UniqueID(unique_id)
             }
             Tag::ATTESTATION_CHALLENGE => {
                 let attestation_challenge: Vec<u8> = data
                     .get()
-                    .with_context(format_context_for_sql_data("ATTESTATION_CHALLENGE"))?;
+                    .context("Failed to read sql data for tag: ATTESTATION_CHALLENGE.")?;
                 KeyParameterValue::AttestationChallenge(attestation_challenge)
             }
             Tag::ATTESTATION_APPLICATION_ID => {
                 let attestation_app_id: Vec<u8> = data
                     .get()
-                    .with_context(format_context_for_sql_data("ATTESTATION_APPLICATION_ID"))?;
+                    .context("Failed to read sql data for tag: ATTESTATION_APPLICATION_ID.")?;
                 KeyParameterValue::AttestationApplicationID(attestation_app_id)
             }
             Tag::ATTESTATION_ID_BRAND => {
                 let attestation_id_brand: Vec<u8> =
-                    data.get().with_context(format_context_for_sql_data("ATTESTATION_ID_BRAND"))?;
+                    data.get().context("Failed to read sql data for tag: ATTESTATION_ID_BRAND.")?;
                 KeyParameterValue::AttestationIdBrand(attestation_id_brand)
             }
             Tag::ATTESTATION_ID_DEVICE => {
                 let attestation_id_device: Vec<u8> = data
                     .get()
-                    .with_context(format_context_for_sql_data("ATTESTATION_ID_DEVICE"))?;
+                    .context("Failed to read sql data for tag: ATTESTATION_ID_DEVICE.")?;
                 KeyParameterValue::AttestationIdDevice(attestation_id_device)
             }
             Tag::ATTESTATION_ID_PRODUCT => {
                 let attestation_id_product: Vec<u8> = data
                     .get()
-                    .with_context(format_context_for_sql_data("ATTESTATION_ID_PRODUCT"))?;
+                    .context("Failed to read sql data for tag: ATTESTATION_ID_PRODUCT.")?;
                 KeyParameterValue::AttestationIdProduct(attestation_id_product)
             }
             Tag::ATTESTATION_ID_SERIAL => {
                 let attestation_id_serial: Vec<u8> = data
                     .get()
-                    .with_context(format_context_for_sql_data("ATTESTATION_ID_SERIAL"))?;
+                    .context("Failed to read sql data for tag: ATTESTATION_ID_SERIAL.")?;
                 KeyParameterValue::AttestationIdSerial(attestation_id_serial)
             }
             Tag::ATTESTATION_ID_IMEI => {
                 let attestation_id_imei: Vec<u8> =
-                    data.get().with_context(format_context_for_sql_data("ATTESTATION_ID_IMEI"))?;
+                    data.get().context("Failed to read sql data for tag: ATTESTATION_ID_IMEI.")?;
                 KeyParameterValue::AttestationIdIMEI(attestation_id_imei)
             }
             Tag::ATTESTATION_ID_MEID => {
                 let attestation_id_meid: Vec<u8> =
-                    data.get().with_context(format_context_for_sql_data("ATTESTATION_ID_MEID"))?;
+                    data.get().context("Failed to read sql data for tag: ATTESTATION_ID_MEID.")?;
                 KeyParameterValue::AttestationIdMEID(attestation_id_meid)
             }
             Tag::ATTESTATION_ID_MANUFACTURER => {
                 let attestation_id_manufacturer: Vec<u8> = data
                     .get()
-                    .with_context(format_context_for_sql_data("ATTESTATION_ID_MANUFACTURER"))?;
+                    .context("Failed to read sql data for tag: ATTESTATION_ID_MANUFACTURER.")?;
                 KeyParameterValue::AttestationIdManufacturer(attestation_id_manufacturer)
             }
             Tag::ATTESTATION_ID_MODEL => {
                 let attestation_id_model: Vec<u8> =
-                    data.get().with_context(format_context_for_sql_data("ATTESTATION_ID_MODEL"))?;
+                    data.get().context("Failed to read sql data for tag: ATTESTATION_ID_MODEL.")?;
                 KeyParameterValue::AttestationIdModel(attestation_id_model)
             }
             Tag::VENDOR_PATCHLEVEL => {
                 let vendor_patch_level: i32 =
-                    data.get().with_context(format_context_for_sql_data("VENDOR_PATCHLEVEL"))?;
+                    data.get().context("Failed to read sql data for tag: VENDOR_PATCHLEVEL.")?;
                 KeyParameterValue::VendorPatchLevel(vendor_patch_level)
             }
             Tag::BOOT_PATCHLEVEL => {
                 let boot_patch_level: i32 =
-                    data.get().with_context(format_context_for_sql_data("BOOT_PATCHLEVEL"))?;
+                    data.get().context("Failed to read sql data for tag: BOOT_PATCHLEVEL.")?;
                 KeyParameterValue::BootPatchLevel(boot_patch_level)
             }
             Tag::ASSOCIATED_DATA => {
                 let associated_data: Vec<u8> =
-                    data.get().with_context(format_context_for_sql_data("ASSOCIATED_DATA"))?;
+                    data.get().context("Failed to read sql data for tag: ASSOCIATED_DATA.")?;
                 KeyParameterValue::AssociatedData(associated_data)
             }
             Tag::NONCE => {
                 let nonce: Vec<u8> =
-                    data.get().with_context(format_context_for_sql_data("NONCE"))?;
+                    data.get().context("Failed to read sql data for tag: NONCE.")?;
                 KeyParameterValue::Nonce(nonce)
             }
             Tag::MAC_LENGTH => {
                 let mac_length: i32 =
-                    data.get().with_context(format_context_for_sql_data("MAC_LENGTH"))?;
+                    data.get().context("Failed to read sql data for tag: MAC_LENGTH.")?;
                 KeyParameterValue::MacLength(mac_length)
             }
             Tag::RESET_SINCE_ID_ROTATION => KeyParameterValue::ResetSinceIdRotation,
             Tag::CONFIRMATION_TOKEN => {
                 let confirmation_token: Vec<u8> =
-                    data.get().with_context(format_context_for_sql_data("CONFIRMATION_TOKEN"))?;
+                    data.get().context("Failed to read sql data for tag: CONFIRMATION_TOKEN.")?;
                 KeyParameterValue::ConfirmationToken(confirmation_token)
             }
             _ => {
                 return Err(KeystoreError::Rc(ResponseCode::ValueCorrupted))
-                    .with_context(format_context_for_enums("Tag"))?
+                    .context("Failed to decode Tag enum from value.")?
             }
         };
         Ok(KeyParameter::new(key_param_value, security_level_val))
