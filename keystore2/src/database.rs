@@ -17,7 +17,11 @@
 
 use crate::error::Error as KsError;
 use anyhow::{Context, Result};
-use keystore_aidl_generated as aidl;
+
+use android_security_keystore2::aidl::android::security::keystore2::{
+    Domain, Domain::Domain as DomainType,
+};
+
 #[cfg(not(test))]
 use rand::prelude::random;
 use rusqlite::{params, Connection, TransactionBehavior, NO_PARAMS};
@@ -76,9 +80,9 @@ impl KeystoreDB {
         Ok(conn)
     }
 
-    pub fn create_key_entry(&self, domain: aidl::Domain, namespace: i64) -> Result<i64> {
+    pub fn create_key_entry(&self, domain: DomainType, namespace: i64) -> Result<i64> {
         match domain {
-            aidl::Domain::App | aidl::Domain::SELinux => {}
+            Domain::App | Domain::SELinux => {}
             _ => {
                 return Err(KsError::sys())
                     .context(format!("Domain {:?} must be either App or SELinux.", domain));
@@ -110,11 +114,11 @@ impl KeystoreDB {
         &mut self,
         newid: u32,
         alias: &str,
-        domain: aidl::Domain,
+        domain: DomainType,
         namespace: i64,
     ) -> Result<()> {
         match domain {
-            aidl::Domain::App | aidl::Domain::SELinux => {}
+            Domain::App | Domain::SELinux => {}
             _ => {
                 return Err(KsError::sys())
                     .context(format!("Domain {:?} must be either App or SELinux.", domain));
@@ -209,7 +213,7 @@ mod tests {
     fn test_no_persistence_for_tests() -> Result<()> {
         let db = new_test_db()?;
 
-        db.create_key_entry(aidl::Domain::App, 100)?;
+        db.create_key_entry(Domain::App, 100)?;
         let entries = get_keyentry(&db)?;
         assert_eq!(entries.len(), 1);
         let db = new_test_db()?;
@@ -225,7 +229,7 @@ mod tests {
         let _file_guard_perboot = TempFile { filename: PERBOOT_TEST_SQL };
         let db = new_test_db_with_persistent_file()?;
 
-        db.create_key_entry(aidl::Domain::App, 100)?;
+        db.create_key_entry(Domain::App, 100)?;
         let entries = get_keyentry(&db)?;
         assert_eq!(entries.len(), 1);
         let db = new_test_db_with_persistent_file()?;
@@ -237,9 +241,7 @@ mod tests {
 
     #[test]
     fn test_create_key_entry() -> Result<()> {
-        use aidl::Domain;
-
-        fn extractor(ke: &KeyEntryRow) -> (Domain, i64, Option<&str>) {
+        fn extractor(ke: &KeyEntryRow) -> (DomainType, i64, Option<&str>) {
             (ke.domain.unwrap(), ke.namespace.unwrap(), ke.alias.as_deref())
         }
 
@@ -256,15 +258,15 @@ mod tests {
         // Test that we must pass in a valid Domain.
         check_result_is_error_containing_string(
             db.create_key_entry(Domain::Grant, 102),
-            "Domain Grant must be either App or SELinux.",
+            "Domain 1 must be either App or SELinux.",
         );
         check_result_is_error_containing_string(
             db.create_key_entry(Domain::Blob, 103),
-            "Domain Blob must be either App or SELinux.",
+            "Domain 3 must be either App or SELinux.",
         );
         check_result_is_error_containing_string(
             db.create_key_entry(Domain::KeyId, 104),
-            "Domain KeyId must be either App or SELinux.",
+            "Domain 4 must be either App or SELinux.",
         );
 
         Ok(())
@@ -272,9 +274,7 @@ mod tests {
 
     #[test]
     fn test_rebind_alias() -> Result<()> {
-        use aidl::Domain;
-
-        fn extractor(ke: &KeyEntryRow) -> (Option<Domain>, Option<i64>, Option<&str>) {
+        fn extractor(ke: &KeyEntryRow) -> (Option<DomainType>, Option<i64>, Option<&str>) {
             (ke.domain, ke.namespace, ke.alias.as_deref())
         }
 
@@ -303,15 +303,15 @@ mod tests {
         // Test that we must pass in a valid Domain.
         check_result_is_error_containing_string(
             db.rebind_alias(0, "foo", Domain::Grant, 42),
-            "Domain Grant must be either App or SELinux.",
+            "Domain 1 must be either App or SELinux.",
         );
         check_result_is_error_containing_string(
             db.rebind_alias(0, "foo", Domain::Blob, 42),
-            "Domain Blob must be either App or SELinux.",
+            "Domain 3 must be either App or SELinux.",
         );
         check_result_is_error_containing_string(
             db.rebind_alias(0, "foo", Domain::KeyId, 42),
-            "Domain KeyId must be either App or SELinux.",
+            "Domain 4 must be either App or SELinux.",
         );
 
         // Test that we correctly handle setting an alias for something that does not exist.
@@ -349,7 +349,7 @@ mod tests {
     struct KeyEntryRow {
         id: u32,
         creation_date: String,
-        domain: Option<aidl::Domain>,
+        domain: Option<DomainType>,
         namespace: Option<i64>,
         alias: Option<String>,
     }
@@ -358,30 +358,16 @@ mod tests {
         db.conn
             .prepare("SELECT * FROM persistent.keyentry;")?
             .query_map(NO_PARAMS, |row| {
-                let domain: Option<i32> = row.get(2)?;
                 Ok(KeyEntryRow {
                     id: row.get(0)?,
                     creation_date: row.get(1)?,
-                    domain: domain.map(domain_from_integer),
+                    domain: row.get(2)?,
                     namespace: row.get(3)?,
                     alias: row.get(4)?,
                 })
             })?
             .map(|r| r.context("Could not read keyentry row."))
             .collect::<Result<Vec<_>>>()
-    }
-
-    // TODO: Replace this with num_derive.
-    fn domain_from_integer(value: i32) -> aidl::Domain {
-        use aidl::Domain;
-        match value {
-            x if Domain::App as i32 == x => Domain::App,
-            x if Domain::Grant as i32 == x => Domain::Grant,
-            x if Domain::SELinux as i32 == x => Domain::SELinux,
-            x if Domain::Blob as i32 == x => Domain::Blob,
-            x if Domain::KeyId as i32 == x => Domain::KeyId,
-            _ => panic!("Unexpected domain: {}", value),
-        }
     }
 
     // A class that deletes a file when it is dropped.
