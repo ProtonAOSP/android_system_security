@@ -17,7 +17,7 @@
 //! and the methods to work with KeyParameter.
 
 use crate::error::Error as KeystoreError;
-use crate::error::ResponseCode;
+use crate::error::Rc;
 pub use android_hardware_keymint::aidl::android::hardware::keymint::{
     Algorithm, Algorithm::Algorithm as AlgorithmType, BlockMode,
     BlockMode::BlockMode as BlockModeType, Digest, Digest::Digest as DigestType, EcCurve,
@@ -354,14 +354,14 @@ impl KeyParameter {
             Tag::PURPOSE => {
                 let key_purpose: KeyPurposeType = data
                     .get()
-                    .map_err(|_| KeystoreError::Rc(ResponseCode::ValueCorrupted))
+                    .map_err(|_| KeystoreError::Rc(Rc::ValueCorrupted))
                     .context("Failed to read sql data for tag: PURPOSE.")?;
                 KeyParameterValue::KeyPurpose(key_purpose)
             }
             Tag::ALGORITHM => {
                 let algorithm: AlgorithmType = data
                     .get()
-                    .map_err(|_| KeystoreError::Rc(ResponseCode::ValueCorrupted))
+                    .map_err(|_| KeystoreError::Rc(Rc::ValueCorrupted))
                     .context("Failed to read sql data for tag: ALGORITHM.")?;
                 KeyParameterValue::Algorithm(algorithm)
             }
@@ -373,21 +373,21 @@ impl KeyParameter {
             Tag::BLOCK_MODE => {
                 let block_mode: BlockModeType = data
                     .get()
-                    .map_err(|_| KeystoreError::Rc(ResponseCode::ValueCorrupted))
+                    .map_err(|_| KeystoreError::Rc(Rc::ValueCorrupted))
                     .context("Failed to read sql data for tag: BLOCK_MODE.")?;
                 KeyParameterValue::BlockMode(block_mode)
             }
             Tag::DIGEST => {
                 let digest: DigestType = data
                     .get()
-                    .map_err(|_| KeystoreError::Rc(ResponseCode::ValueCorrupted))
+                    .map_err(|_| KeystoreError::Rc(Rc::ValueCorrupted))
                     .context("Failed to read sql data for tag: DIGEST.")?;
                 KeyParameterValue::Digest(digest)
             }
             Tag::PADDING => {
                 let padding: PaddingModeType = data
                     .get()
-                    .map_err(|_| KeystoreError::Rc(ResponseCode::ValueCorrupted))
+                    .map_err(|_| KeystoreError::Rc(Rc::ValueCorrupted))
                     .context("Failed to read sql data for tag: PADDING.")?;
                 KeyParameterValue::PaddingMode(padding)
             }
@@ -400,7 +400,7 @@ impl KeyParameter {
             Tag::EC_CURVE => {
                 let ec_curve: EcCurveType = data
                     .get()
-                    .map_err(|_| KeystoreError::Rc(ResponseCode::ValueCorrupted))
+                    .map_err(|_| KeystoreError::Rc(Rc::ValueCorrupted))
                     .context("Failed to read sql data for tag: EC_CURVE.")?;
                 KeyParameterValue::EcCurve(ec_curve)
             }
@@ -455,7 +455,7 @@ impl KeyParameter {
             Tag::USER_AUTH_TYPE => {
                 let user_auth_type: HardwareAuthenticatorTypeType = data
                     .get()
-                    .map_err(|_| KeystoreError::Rc(ResponseCode::ValueCorrupted))
+                    .map_err(|_| KeystoreError::Rc(Rc::ValueCorrupted))
                     .context("Failed to read sql data for tag: USER_AUTH_TYPE.")?;
                 KeyParameterValue::HardwareAuthenticatorType(user_auth_type)
             }
@@ -486,7 +486,7 @@ impl KeyParameter {
             Tag::ORIGIN => {
                 let origin: KeyOriginType = data
                     .get()
-                    .map_err(|_| KeystoreError::Rc(ResponseCode::ValueCorrupted))
+                    .map_err(|_| KeystoreError::Rc(Rc::ValueCorrupted))
                     .context("Failed to read sql data for tag: ORIGIN.")?;
                 KeyParameterValue::KeyOrigin(origin)
             }
@@ -598,7 +598,7 @@ impl KeyParameter {
                 KeyParameterValue::ConfirmationToken(confirmation_token)
             }
             _ => {
-                return Err(KeystoreError::Rc(ResponseCode::ValueCorrupted))
+                return Err(KeystoreError::Rc(Rc::ValueCorrupted))
                     .context("Failed to decode Tag enum from value.")?
             }
         };
