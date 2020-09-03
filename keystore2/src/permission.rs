@@ -18,7 +18,9 @@
 //! It also provides KeystorePerm and KeyPerm as convenience wrappers for the SELinux permission
 //! defined by keystore2 and keystore2_key respectively.
 
-use keystore_aidl_generated as aidl;
+use android_security_keystore2::aidl::android::security::keystore2::KeyPermission;
+
+use android_security_keystore2::aidl::android::security::keystore2::KeyDescriptor::KeyDescriptor;
 
 use std::cmp::PartialEq;
 use std::convert::From;
@@ -49,17 +51,25 @@ fn lookup_keystore2_key_context(namespace: i64) -> anyhow::Result<selinux::Conte
     KEYSTORE2_KEY_LABEL_BACKEND.lookup(&namespace.to_string())
 }
 
-/// The below example wraps the enum MyPermission in the tuple struct `MyPerm` and implements
-///  * `From<i32> for `MyPerm`, where each unknown numeric value is mapped to the given default,
-///    here `None`
-///  * `Into<MyPermission> for `MyPerm`
-///  * `MyPerm::foo()` and `MyPerm::bar()` which construct MyPerm instances representing
-///    `MyPermission::Foo` and `MyPermission::Bar` respectively.
-///  * `MyPerm.to_selinux(&self)`, which returns the selinux string representation of the
+/// ## Background
+///
+/// AIDL enums are represented as constants of the form:
+/// ```
+/// mod EnumName {
+///     pub type EnumName = i32;
+///     pub const Variant1: EnumName = <value1>;
+///     pub const Variant2: EnumName = <value2>;
+///     ...
+/// }
+///```
+/// This macro wraps the enum in a new type, e.g., `MyPerm` and maps each variant to an SELinux
+/// permission while providing the following interface:
+///  * From<EnumName> and Into<EnumName> are implemented. Where the implementation of From maps
+///    any variant not specified to the default.
+///  * Every variant has a constructor with a name corresponding to its lower case SELinux string
+///    representation.
+///  * `MyPerm.to_selinux(&self)` returns the SELinux string representation of the
 ///    represented permission.
-///  * Tests in the given test namespace for each permision that check that the numeric
-///    representations of MyPermission and MyPerm match. (TODO replace with static assert if
-///    they become available.)
 ///
 /// ## Special behavior
 /// If the keyword `use` appears as an selinux name `use_` is used as identifier for the
@@ -68,85 +78,78 @@ fn lookup_keystore2_key_context(namespace: i64) -> anyhow::Result<selinux::Conte
 ///
 /// ## Example
 /// ```
-/// #[i32]
-/// enum MyPermission {
-///     None = 0,
-///     Foo = 1,
-///     Bar = 2,
-/// }
 ///
 /// implement_permission!(
 ///     /// MyPerm documentation.
 ///     #[derive(Clone, Copy, Debug, PartialEq)]
-///     MyPermission as MyPerm with default (None = 0, none)
-///     and test namespace my_perm_tests {
-///         Foo = 1,           selinux name: foo;
-///         Bar = 2,           selinux name: bar;
+///     MyPerm from EnumName with default (None, none) {}
+///         Variant1,    selinux name: variant1;
+///         Variant2,    selinux name: variant1;
 ///     }
 /// );
 /// ```
-macro_rules! implement_permission {
+macro_rules! implement_permission_aidl {
     // This rule provides the public interface of the macro. And starts the preprocessing
     // recursion (see below).
-    ($(#[$m:meta])* $t:ty as $name:ident with default ($($def:tt)*)
-        and test namespace $tn:ident { $($element:tt)* })
+    ($(#[$m:meta])* $name:ident from $aidl_name:ident with default ($($def:tt)*)
+        { $($element:tt)* })
     => {
-        implement_permission!(@replace_use $($m)*, $t, $name, $tn, ($($def)*), [] , $($element)*);
+        implement_permission_aidl!(@replace_use $($m)*, $name, $aidl_name, ($($def)*), [],
+            $($element)*);
     };
 
-
     // The following three rules recurse through the elements of the form
-    // `<enum variant> = <integer_literal>, selinux name: <selinux_name>;`
+    // `<enum variant>, selinux name: <selinux_name>;`
     // preprocessing the input.
 
     // The first rule terminates the recursion and passes the processed arguments to the final
     // rule that spills out the implementation.
-    (@replace_use $($m:meta)*, $t:ty, $name:ident, $tn:ident, ($($def:tt)*), [$($out:tt)*], ) => {
-        implement_permission!(@end $($m)*, $t, $name, $tn, ($($def)*) { $($out)* } );
+    (@replace_use $($m:meta)*, $name:ident, $aidl_name:ident, ($($def:tt)*), [$($out:tt)*], ) => {
+        implement_permission_aidl!(@end $($m)*, $name, $aidl_name, ($($def)*) { $($out)* } );
     };
 
     // The second rule is triggered if the selinux name of an element is literally `use`.
-    // It produces the tuple `<enum variant> = <integer_literal>, use_, use;`
+    // It produces the tuple `<enum variant>, use_, use;`
     // and appends it to the out list.
-    (@replace_use $($m:meta)*, $t:ty, $name:ident, $tn:ident, ($($def:tt)*), [$($out:tt)*],
-        $e_name:ident = $e_val:expr, selinux name: use; $($element:tt)*)
+    (@replace_use $($m:meta)*, $name:ident, $aidl_name:ident, ($($def:tt)*), [$($out:tt)*],
+        $e_name:ident, selinux name: use; $($element:tt)*)
     => {
-        implement_permission!(@replace_use $($m)*, $t, $name, $tn, ($($def)*),
-                              [$($out)* $e_name = $e_val, use_, use;], $($element)*);
+        implement_permission_aidl!(@replace_use $($m)*, $name, $aidl_name, ($($def)*),
+                              [$($out)* $e_name, use_, use;], $($element)*);
     };
 
     // The third rule is the default rule which replaces every input tuple with
-    // `<enum variant> = <integer_literal>, <selinux_name>, <selinux_name>;`
+    // `<enum variant>, <selinux_name>, <selinux_name>;`
     // and appends the result to the out list.
-    (@replace_use $($m:meta)*, $t:ty, $name:ident, $tn:ident, ($($def:tt)*), [$($out:tt)*],
-        $e_name:ident = $e_val:expr, selinux name: $e_str:ident; $($element:tt)*)
+    (@replace_use $($m:meta)*, $name:ident, $aidl_name:ident, ($($def:tt)*), [$($out:tt)*],
+        $e_name:ident, selinux name: $e_str:ident; $($element:tt)*)
     => {
-        implement_permission!(@replace_use $($m)*, $t, $name, $tn, ($($def)*),
-                              [$($out)* $e_name = $e_val, $e_str, $e_str;], $($element)*);
+        implement_permission_aidl!(@replace_use $($m)*, $name, $aidl_name, ($($def)*),
+                              [$($out)* $e_name, $e_str, $e_str;], $($element)*);
     };
 
-    (@end $($m:meta)*, $t:ty, $name:ident, $tn:ident,
-        ($def_name:ident = $def:expr, $def_selinux_name:ident) {
-            $($element_name:ident = $element_val:expr, $element_identifier:ident,
+    (@end $($m:meta)*, $name:ident, $aidl_name:ident,
+        ($def_name:ident, $def_selinux_name:ident) {
+            $($element_name:ident, $element_identifier:ident,
                 $selinux_name:ident;)*
         })
     =>
     {
         $(#[$m])*
-        pub struct $name($t);
+        pub struct $name(pub $aidl_name::$aidl_name);
 
-        impl From<i32> for $name {
-            fn from (p: i32) -> Self {
+        impl From<$aidl_name::$aidl_name> for $name {
+            fn from (p: $aidl_name::$aidl_name) -> Self {
                 match p {
-                    $def => Self(<$t>::$def_name),
-                    $($element_val => Self(<$t>::$element_name),)*
-                    _ => Self(<$t>::$def_name),
+                    $aidl_name::$def_name => Self($aidl_name::$def_name),
+                    $($aidl_name::$element_name => Self($aidl_name::$element_name),)*
+                    _ => Self($aidl_name::$def_name),
                 }
             }
         }
 
-        impl Into<$t> for $name {
-            fn into(self) -> $t {
+        impl Into<$aidl_name::$aidl_name> for $name {
+            fn into(self) -> $aidl_name::$aidl_name {
                 self.0
             }
         }
@@ -156,39 +159,23 @@ macro_rules! implement_permission {
             /// `selinux::check_access`.
             pub fn to_selinux(&self) -> &'static str {
                 match self {
-                    Self(<$t>::$def_name) => stringify!($def_selinux_name),
-                    $(Self(<$t>::$element_name) => stringify!($selinux_name),)*
+                    Self($aidl_name::$def_name) => stringify!($def_selinux_name),
+                    $(Self($aidl_name::$element_name) => stringify!($selinux_name),)*
+                    _ => stringify!($def_selinux_name),
                 }
             }
 
             /// Creates an instance representing a permission with the same name.
-            pub const fn $def_selinux_name() -> Self { Self(<$t>::$def_name) }
+            pub const fn $def_selinux_name() -> Self { Self($aidl_name::$def_name) }
             $(
                 /// Creates an instance representing a permission with the same name.
-                pub const fn $element_identifier() -> Self { Self(<$t>::$element_name) }
-             )*
-        }
-        #[cfg(test)]
-        mod $tn {
-            use super::*;
-
-            #[test]
-            fn $def_selinux_name() {
-                assert_eq!($name::$def_selinux_name(), (<$t>::$def_name as i32).into());
-            }
-            $(
-                #[test]
-                fn $element_identifier() {
-                    assert_eq!($name::$element_identifier(), (<$t>::$element_name as i32).into());
-                }
+                pub const fn $element_identifier() -> Self { Self($aidl_name::$element_name) }
             )*
         }
     };
-
-
 }
 
-implement_permission!(
+implement_permission_aidl!(
     /// KeyPerm provides a convenient abstraction from the SELinux class `keystore2_key`.
     /// At the same time it maps `KeyPermissions` from the Keystore 2.0 AIDL Grant interface to
     /// the SELinux permissions. With the implement_permission macro, we conveniently
@@ -204,56 +191,113 @@ implement_permission!(
     ///                       KeyPerm::get_info().to_selinux());
     /// ```
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-    aidl::KeyPermission as KeyPerm with default (None = 0, none)
-    and test namespace key_perm_tests {
-        Delete = 1,         selinux name: delete;
-        GenUniqueId = 2,    selinux name: gen_unique_id;
-        GetInfo = 4,        selinux name: get_info;
-        Grant = 8,          selinux name: grant;
-        List = 0x10,        selinux name: list;
-        ManageBlob = 0x20,  selinux name: manage_blob;
-        Rebind = 0x40,      selinux name: rebind;
-        ReqForcedOp = 0x80, selinux name: req_forced_op;
-        Update = 0x100,     selinux name: update;
-        Use = 0x200,        selinux name: use;
-        UseDevId = 0x400,   selinux name: use_dev_id;
+    KeyPerm from KeyPermission with default (None, none) {
+        Delete,         selinux name: delete;
+        GenUniqueId,    selinux name: gen_unique_id;
+        GetInfo,        selinux name: get_info;
+        Grant,          selinux name: grant;
+        List,           selinux name: list;
+        ManageBlob,     selinux name: manage_blob;
+        Rebind,         selinux name: rebind;
+        ReqForcedOp,    selinux name: req_forced_op;
+        Update,         selinux name: update;
+        Use,            selinux name: use;
+        UseDevId,       selinux name: use_dev_id;
     }
 );
 
-/// KeystorePermission defines values for the SELinux `keystore2` security class.
-/// Countrary to `KeyPermission`, this enum is not generated by AIDL and need not be
-/// wrapped by newtype pattern. But we conveniently use the implement_permission macro
-/// to provide the same feature that we did for `KeyPermission` to this set of permissions.
-#[repr(i32)]
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub enum KeystorePermission {
-    /// `None` is not a permission that can ever be granted. It is not known to the SEPolicy.
-    None = 0,
-    /// Checked when a new auth token is installed.
-    AddAuth = 1,
-    /// Checked when an app is uninstalled or wiped.
-    ClearNs = 2,
-    /// Checked when the locked state of Keystore 2.0 is queried.
-    GetState = 4,
-    /// Checked when Keystore 2.0 gets locked.
-    Lock = 8,
-    /// Checked when Keystore 2.0 shall be reset.
-    Reset = 0x10,
-    /// Checked when Keystore 2.0 shall be unlocked.
-    Unlock = 0x20,
+/// This macro implements an enum with values mapped to SELinux permission names.
+/// The below example wraps the enum MyPermission in the tuple struct `MyPerm` and implements
+///  * From<i32> and Into<i32> are implemented. Where the implementation of From maps
+///    any variant not specified to the default.
+///  * Every variant has a constructor with a name corresponding to its lower case SELinux string
+///    representation.
+///  * `MyPerm.to_selinux(&self)` returns the SELinux string representation of the
+///    represented permission.
+///
+/// ## Example
+/// ```
+/// implement_permission!(
+///     /// MyPerm documentation.
+///     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+///     MyPerm with default (None = 0, none) {
+///         Foo = 1,           selinux name: foo;
+///         Bar = 2,           selinux name: bar;
+///     }
+/// );
+/// ```
+macro_rules! implement_permission {
+    // This rule provides the public interface of the macro. And starts the preprocessing
+    // recursion (see below).
+    ($(#[$m:meta])* $name:ident with default
+        ($def_name:ident = $def_val:expr, $def_selinux_name:ident)
+        {
+            $($(#[$element_meta:meta])*
+            $element_name:ident = $element_val:expr, selinux name: $selinux_name:ident;)*
+        })
+    => {
+        $(#[$m])*
+        pub enum $name {
+            /// The default variant of an enum.
+            $def_name = $def_val,
+            $(
+                $(#[$element_meta])*
+                $element_name = $element_val,
+            )*
+        }
+
+        impl From<i32> for $name {
+            fn from (p: i32) -> Self {
+                match p {
+                    $def_val => Self::$def_name,
+                    $($element_val => Self::$element_name,)*
+                    _ => Self::$def_name,
+                }
+            }
+        }
+
+        impl Into<i32> for $name {
+            fn into(self) -> i32 {
+                self as i32
+            }
+        }
+
+        impl $name {
+            /// Returns a string representation of the permission as required by
+            /// `selinux::check_access`.
+            pub fn to_selinux(&self) -> &'static str {
+                match self {
+                    Self::$def_name => stringify!($def_selinux_name),
+                    $(Self::$element_name => stringify!($selinux_name),)*
+                }
+            }
+
+            /// Creates an instance representing a permission with the same name.
+            pub const fn $def_selinux_name() -> Self { Self::$def_name }
+            $(
+                /// Creates an instance representing a permission with the same name.
+                pub const fn $selinux_name() -> Self { Self::$element_name }
+            )*
+        }
+    };
 }
 
 implement_permission!(
     /// KeystorePerm provides a convenient abstraction from the SELinux class `keystore2`.
     /// Using the implement_permission macro we get the same features as `KeyPerm`.
     #[derive(Clone, Copy, Debug, PartialEq)]
-    KeystorePermission as KeystorePerm with default (None = 0, none)
-    and test namespace keystore_perm_tests {
+    KeystorePerm with default (None = 0, none) {
+        /// Checked when a new auth token is installed.
         AddAuth = 1,    selinux name: add_auth;
+        /// Checked when an app is uninstalled or wiped.
         ClearNs = 2,    selinux name: clear_ns;
+        /// Checked when Keystore 2.0 gets locked.
         GetState = 4,   selinux name: get_state;
+        /// Checked when Keystore 2.0 gets locked.
         Lock = 8,       selinux name: lock;
+        /// Checked when Keystore 2.0 shall be reset.
         Reset = 0x10,   selinux name: reset;
+        /// Checked when Keystore 2.0 shall be unlocked.
         Unlock = 0x20,  selinux name: unlock;
     }
 );
@@ -281,8 +325,8 @@ implement_permission!(
 /// assert_eq(Some(KeyPerm::use_()), i.next());
 /// assert_eq(None, i.next());
 /// ```
-#[derive(Copy, Clone)]
-pub struct KeyPermSet(i32);
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub struct KeyPermSet(pub i32);
 
 mod perm {
     use super::*;
@@ -322,9 +366,22 @@ impl From<KeyPerm> for KeyPermSet {
     }
 }
 
+/// allow conversion from the AIDL wire type i32 to a permission set.
+impl From<i32> for KeyPermSet {
+    fn from(p: i32) -> Self {
+        Self(p)
+    }
+}
+
+impl From<KeyPermSet> for i32 {
+    fn from(p: KeyPermSet) -> i32 {
+        p.0
+    }
+}
+
 impl KeyPermSet {
     /// Returns true iff this permission set has all of the permissions that are in `other`.
-    fn includes<T: Into<KeyPermSet>>(&self, other: T) -> bool {
+    pub fn includes<T: Into<KeyPermSet>>(&self, other: T) -> bool {
         let o: KeyPermSet = other.into();
         (self.0 & o.0) == o.0
     }
@@ -379,9 +436,9 @@ pub fn check_keystore_permission(
 pub fn check_grant_permission(
     caller_ctx: &selinux::Context,
     access_vec: KeyPermSet,
-    key: &aidl::KeyDescriptor,
+    key: &KeyDescriptor,
 ) -> anyhow::Result<()> {
-    use aidl::Domain;
+    use android_security_keystore2::aidl::android::security::keystore2::Domain;
 
     let target_context = match key.domain {
         Domain::App => getcon().context("check_grant_permission: getcon failed.")?,
@@ -429,10 +486,10 @@ pub fn check_grant_permission(
 pub fn check_key_permission(
     caller_ctx: &selinux::Context,
     perm: KeyPerm,
-    key: &aidl::KeyDescriptor,
+    key: &KeyDescriptor,
     access_vector: &Option<KeyPermSet>,
 ) -> anyhow::Result<()> {
-    use aidl::Domain;
+    use android_security_keystore2::aidl::android::security::keystore2::Domain;
 
     let target_context = match key.domain {
         // apps get the default keystore context
@@ -477,6 +534,10 @@ pub fn check_key_permission(
 
             tctx
         }
+        _ => {
+            return Err(KsError::sys())
+                .context(format!("Unknown domain value: \"{}\".", key.domain))
+        }
     };
 
     selinux::check_access(caller_ctx, &target_context, "keystore2_key", perm.to_selinux())
@@ -488,7 +549,6 @@ mod tests {
     use anyhow::anyhow;
     use anyhow::Result;
     use keystore2_selinux::*;
-    use keystore_aidl_generated as aidl;
 
     const ALL_PERMS: KeyPermSet = key_perm_set![
         KeyPerm::manage_blob(),
@@ -591,9 +651,8 @@ mod tests {
     fn check_grant_permission_app() -> Result<()> {
         let system_server_ctx = Context::new("u:r:system_server:s0")?;
         let shell_ctx = Context::new("u:r:shell:s0")?;
-        use aidl::Domain;
-        let key =
-            aidl::KeyDescriptor { domain: Domain::App, namespace_: 0, alias: None, blob: None };
+        use android_security_keystore2::aidl::android::security::keystore2::Domain;
+        let key = KeyDescriptor { domain: Domain::App, namespace_: 0, alias: None, blob: None };
         assert!(check_grant_permission(&system_server_ctx, NOT_GRANT_PERMS, &key).is_ok());
         // attempts to grant the grant permission must always fail even when privileged.
 
@@ -609,9 +668,9 @@ mod tests {
 
     #[test]
     fn check_grant_permission_selinux() -> Result<()> {
-        use aidl::Domain;
+        use android_security_keystore2::aidl::android::security::keystore2::Domain;
         let (sctx, namespace, is_su) = check_context()?;
-        let key = aidl::KeyDescriptor {
+        let key = KeyDescriptor {
             domain: Domain::SELinux,
             namespace_: namespace as i64,
             alias: None,
@@ -630,9 +689,8 @@ mod tests {
 
     #[test]
     fn check_key_permission_domain_grant() -> Result<()> {
-        use aidl::Domain;
-        let key =
-            aidl::KeyDescriptor { domain: Domain::Grant, namespace_: 0, alias: None, blob: None };
+        use android_security_keystore2::aidl::android::security::keystore2::Domain;
+        let key = KeyDescriptor { domain: Domain::Grant, namespace_: 0, alias: None, blob: None };
 
         assert_perm_failed!(check_key_permission(
             &selinux::Context::new("ignored").unwrap(),
@@ -654,10 +712,9 @@ mod tests {
         let system_server_ctx = Context::new("u:r:system_server:s0")?;
         let shell_ctx = Context::new("u:r:shell:s0")?;
         let gmscore_app = Context::new("u:r:gmscore_app:s0")?;
-        use aidl::Domain;
+        use android_security_keystore2::aidl::android::security::keystore2::Domain;
 
-        let key =
-            aidl::KeyDescriptor { domain: Domain::App, namespace_: 0, alias: None, blob: None };
+        let key = KeyDescriptor { domain: Domain::App, namespace_: 0, alias: None, blob: None };
 
         assert!(check_key_permission(&system_server_ctx, KeyPerm::use_(), &key, &None).is_ok());
         assert!(check_key_permission(&system_server_ctx, KeyPerm::delete(), &key, &None).is_ok());
@@ -698,9 +755,9 @@ mod tests {
 
     #[test]
     fn check_key_permission_domain_selinux() -> Result<()> {
-        use aidl::Domain;
+        use android_security_keystore2::aidl::android::security::keystore2::Domain;
         let (sctx, namespace, is_su) = check_context()?;
-        let key = aidl::KeyDescriptor {
+        let key = KeyDescriptor {
             domain: Domain::SELinux,
             namespace_: namespace as i64,
             alias: None,
@@ -737,9 +794,9 @@ mod tests {
 
     #[test]
     fn check_key_permission_domain_blob() -> Result<()> {
-        use aidl::Domain;
+        use android_security_keystore2::aidl::android::security::keystore2::Domain;
         let (sctx, namespace, is_su) = check_context()?;
-        let key = aidl::KeyDescriptor {
+        let key = KeyDescriptor {
             domain: Domain::Blob,
             namespace_: namespace as i64,
             alias: None,
@@ -756,9 +813,8 @@ mod tests {
 
     #[test]
     fn check_key_permission_domain_key_id() -> Result<()> {
-        use aidl::Domain;
-        let key =
-            aidl::KeyDescriptor { domain: Domain::KeyId, namespace_: 0, alias: None, blob: None };
+        use android_security_keystore2::aidl::android::security::keystore2::Domain;
+        let key = KeyDescriptor { domain: Domain::KeyId, namespace_: 0, alias: None, blob: None };
 
         assert_eq!(
             Some(&KsError::sys()),
