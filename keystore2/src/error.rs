@@ -40,7 +40,9 @@ use android_security_keystore2::aidl::android::security::keystore2::ResponseCode
 
 use keystore2_selinux as selinux;
 
-use android_security_keystore2::binder::{Result as BinderResult, Status as BinderStatus};
+use android_security_keystore2::binder::{
+    ExceptionCode, Result as BinderResult, Status as BinderStatus,
+};
 
 /// This is the main Keystore error type. It wraps the Keystore `ResponseCode` generated
 /// from AIDL in the `Rc` variant and Keymint `ErrorCode` in the Km variant.
@@ -52,6 +54,9 @@ pub enum Error {
     /// Wraps a Keymint `ErrorCode` as defined by the Keymint AIDL interface specification.
     #[error("Error::Km({0:?})")]
     Km(ErrorCode),
+    /// Wraps a Binder exception code other than a service specific exception.
+    #[error("Binder exception code {0:?}, {1:?}")]
+    Binder(ExceptionCode, i32),
 }
 
 impl Error {
@@ -64,6 +69,36 @@ impl Error {
     pub fn perm() -> Self {
         Error::Rc(Rc::PermissionDenied)
     }
+}
+
+/// Helper function to map the binder status we get from calls into KeyMint
+/// to a Keystore Error. We don't create an anyhow error here to make
+/// it easier to evaluate KeyMint errors, which we must do in some cases, e.g.,
+/// when diagnosing authentication requirements, update requirements, and running
+/// out of operation slots.
+pub fn map_km_error<T>(r: BinderResult<T>) -> Result<T, Error> {
+    r.map_err(|s| {
+        match s.exception_code() {
+            ExceptionCode::SERVICE_SPECIFIC => {
+                let se = s.service_specific_error();
+                if se < 0 {
+                    // Negative service specific errors are KM error codes.
+                    Error::Km(s.service_specific_error())
+                } else {
+                    // Non negative error codes cannot be KM error codes.
+                    // So we create an `Error::Binder` variant to preserve
+                    // the service specific error code for logging.
+                    // `map_or_log_err` will map this on a system error,
+                    // but not before logging the details to logcat.
+                    Error::Binder(ExceptionCode::SERVICE_SPECIFIC, se)
+                }
+            }
+            // We create `Error::Binder` to preserve the exception code
+            // for logging.
+            // `map_or_log_err` will map this on a system error.
+            e_code => Error::Binder(e_code, 0),
+        }
+    })
 }
 
 /// This function should be used by Keystore service calls to translate error conditions
@@ -107,6 +142,10 @@ where
             let rc = match root_cause.downcast_ref::<Error>() {
                 Some(Error::Rc(rcode)) => *rcode,
                 Some(Error::Km(ec)) => *ec,
+                // If an Error::Binder reaches this stage we report a system error.
+                // The exception code and possible service specific error will be
+                // printed in the error log above.
+                Some(Error::Binder(_, _)) => Rc::SystemError,
                 None => match root_cause.downcast_ref::<selinux::Error>() {
                     Some(selinux::Error::PermissionDenied) => Rc::PermissionDenied,
                     _ => Rc::SystemError,
@@ -122,6 +161,9 @@ where
 pub mod tests {
 
     use super::*;
+    use android_security_keystore2::binder::{
+        ExceptionCode, Result as BinderResult, Status as BinderStatus,
+    };
     use anyhow::{anyhow, Context};
 
     fn nested_nested_rc(rc: ResponseCode) -> anyhow::Result<()> {
@@ -170,6 +212,14 @@ pub mod tests {
         nested_nested_other_error().context("nested other error")
     }
 
+    fn binder_sse_error(sse: i32) -> BinderResult<()> {
+        Err(BinderStatus::new_service_specific_error(sse, None))
+    }
+
+    fn binder_exception(ex: ExceptionCode) -> BinderResult<()> {
+        Err(BinderStatus::new_exception(ex, None))
+    }
+
     #[test]
     fn keystore_error_test() -> anyhow::Result<(), String> {
         android_logger::init_once(
@@ -187,7 +237,7 @@ pub mod tests {
             );
         }
 
-        // All KeystoreKerror::Km(x) get mapped on a service
+        // All Keystore Error::Km(x) get mapped on a service
         // specific error of x.
         for ec in Ec::UNKNOWN_ERROR..Ec::ROOT_OF_TRUST_ALREADY_SET {
             assert_eq!(
@@ -196,6 +246,46 @@ pub mod tests {
                     .map_err(|s| s.service_specific_error())
             );
         }
+
+        // All Keymint errors x received through a Binder Result get mapped on
+        // a service specific error of x.
+        for ec in Ec::UNKNOWN_ERROR..Ec::ROOT_OF_TRUST_ALREADY_SET {
+            assert_eq!(
+                Result::<(), i32>::Err(ec),
+                map_or_log_err(
+                    map_km_error(binder_sse_error(ec))
+                        .with_context(|| format!("Km error code: {}.", ec)),
+                    |_| Err(BinderStatus::ok())
+                )
+                .map_err(|s| s.service_specific_error())
+            );
+        }
+
+        // map_km_error creates an Error::Binder variant storing
+        // ExceptionCode::SERVICE_SPECIFIC and the given
+        // service specific error.
+        let sse = map_km_error(binder_sse_error(1));
+        assert_eq!(Err(Error::Binder(ExceptionCode::SERVICE_SPECIFIC, 1)), sse);
+        // map_or_log_err then maps it on a service specific error of Rc::SystemError.
+        assert_eq!(
+            Result::<(), i32>::Err(Rc::SystemError),
+            map_or_log_err(sse.context("Non negative service specific error."), |_| Err(
+                BinderStatus::ok()
+            ))
+            .map_err(|s| s.service_specific_error())
+        );
+
+        // map_km_error creates a Error::Binder variant storing the given exception code.
+        let binder_exception = map_km_error(binder_exception(ExceptionCode::TRANSACTION_FAILED));
+        assert_eq!(Err(Error::Binder(ExceptionCode::TRANSACTION_FAILED, 0)), binder_exception);
+        // map_or_log_err then maps it on a service specific error of Rc::SystemError.
+        assert_eq!(
+            Result::<(), i32>::Err(Rc::SystemError),
+            map_or_log_err(binder_exception.context("Binder Exception."), |_| Err(
+                BinderStatus::ok()
+            ))
+            .map_err(|s| s.service_specific_error())
+        );
 
         // selinux::Error::Perm() needs to be mapped to Rc::PermissionDenied
         assert_eq!(
