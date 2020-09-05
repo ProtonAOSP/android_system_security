@@ -24,6 +24,7 @@ use android_security_keystore2::aidl::android::security::keystore2::KeyDescripto
 
 use std::cmp::PartialEq;
 use std::convert::From;
+use std::ffi::CStr;
 
 use crate::error::Error as KsError;
 use keystore2_selinux as selinux;
@@ -412,10 +413,7 @@ impl IntoIterator for KeyPermSet {
 
 /// Uses `selinux::check_access` to check if the given caller context `caller_cxt` may access
 /// the given permision `perm` of the `keystore2` security class.
-pub fn check_keystore_permission(
-    caller_ctx: &selinux::Context,
-    perm: KeystorePerm,
-) -> anyhow::Result<()> {
+pub fn check_keystore_permission(caller_ctx: &CStr, perm: KeystorePerm) -> anyhow::Result<()> {
     let target_context = getcon().context("check_keystore_permission: getcon failed.")?;
     selinux::check_access(caller_ctx, &target_context, "keystore2", perm.to_selinux())
 }
@@ -434,7 +432,7 @@ pub fn check_keystore_permission(
 ///                      SELinux keystore key backend, and the result is used
 ///                      as target context.
 pub fn check_grant_permission(
-    caller_ctx: &selinux::Context,
+    caller_ctx: &CStr,
     access_vec: KeyPermSet,
     key: &KeyDescriptor,
 ) -> anyhow::Result<()> {
@@ -484,7 +482,7 @@ pub fn check_grant_permission(
 ///                      was supplied. It is also produced if `Domain::KeyId` was selected, and
 ///                      on various unexpected backend failures.
 pub fn check_key_permission(
-    caller_ctx: &selinux::Context,
+    caller_ctx: &CStr,
     perm: KeyPerm,
     key: &KeyDescriptor,
     access_vector: &Option<KeyPermSet>,
