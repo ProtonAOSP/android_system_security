@@ -60,8 +60,8 @@ KeyStore::KeyStore(const KeymasterDevices& kmDevices,
                   "KmasterDevices and KeymasterWorkers must have the same size");
     for (size_t i = 0; i < kmDevices.size(); ++i) {
         if (kmDevices[SecurityLevel(i)]) {
-            mKmDevices[SecurityLevel(i)] =
-                std::make_shared<KeymasterWorker>(kmDevices[SecurityLevel(i)], this);
+            mKmDevices[SecurityLevel(i)] = std::make_shared<KeymasterWorker>(
+                kmDevices[SecurityLevel(i)], this, SecurityLevel(i));
         }
     }
 }
