@@ -135,6 +135,19 @@ class KeymasterWorker : protected Worker {
     OperationMap operationMap_;
     KeyStore* keyStore_;
 
+    /**
+     * Models the security level of this worker internal to KeyStore.
+     *
+     * When the device has only a software Keymaster, KeyStore will set it on the TEE slot and
+     * instantiate a new in-process software Keymaster. In that case there is a mismatch between the
+     * security level used by KeyStore and what is reported from the HAL. This represents the level
+     * used internally by KeyStore.
+     *
+     * This value is used to associate blobs to the corresponding Keymaster backend. It does not
+     * indicate an actual Keymaster HAL security level and should never be exposed to users.
+     */
+    SecurityLevel internalSecurityLevel_;
+
     template <typename KMFn, typename ErrorType, typename... Args, size_t... I>
     void unwrap_tuple(KMFn kmfn, std::function<void(ErrorType)> cb,
                       const std::tuple<Args...>& tuple, std::index_sequence<I...>) {
@@ -200,7 +213,8 @@ class KeymasterWorker : protected Worker {
                                          hidl_vec<KeyParameter>* params);
 
   public:
-    KeymasterWorker(sp<Keymaster> keymasterDevice, KeyStore* keyStore);
+    KeymasterWorker(sp<Keymaster> keymasterDevice, KeyStore* keyStore,
+                    SecurityLevel internalSecurityLevel);
 
     void logIfKeymasterVendorError(ErrorCode ec) const;
 
