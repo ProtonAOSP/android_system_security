@@ -83,8 +83,10 @@ void Worker::addRequest(WorkerTask request) {
     }
 }
 
-KeymasterWorker::KeymasterWorker(sp<Keymaster> keymasterDevice, KeyStore* keyStore)
-    : keymasterDevice_(std::move(keymasterDevice)), operationMap_(keyStore), keyStore_(keyStore) {
+KeymasterWorker::KeymasterWorker(sp<Keymaster> keymasterDevice, KeyStore* keyStore,
+                                 SecurityLevel internalSecurityLevel)
+    : keymasterDevice_(std::move(keymasterDevice)), operationMap_(keyStore), keyStore_(keyStore),
+      internalSecurityLevel_(internalSecurityLevel) {
     // make sure that hal version is cached.
     if (keymasterDevice_) keymasterDevice_->halVersion();
 }
@@ -821,7 +823,7 @@ void KeymasterWorker::generateKey(LockedKeyBlobEntry lockedEntry, hidl_vec<KeyPa
             outCharacteristics = keyCharacteristics;
 
             Blob keyBlob(&hidlKeyBlob[0], hidlKeyBlob.size(), nullptr, 0, ::TYPE_KEYMASTER_10);
-            keyBlob.setSecurityLevel(securityLevel);
+            keyBlob.setSecurityLevel(internalSecurityLevel_);
             keyBlob.setCriticalToDeviceEncryption(flags &
                                                   KEYSTORE_FLAG_CRITICAL_TO_DEVICE_ENCRYPTION);
             if (isAuthenticationBound(keyParams) && !keyBlob.isCriticalToDeviceEncryption()) {
@@ -929,7 +931,7 @@ void KeymasterWorker::importKey(LockedKeyBlobEntry lockedEntry, hidl_vec<KeyPara
             outCharacteristics = keyCharacteristics;
 
             Blob keyBlob(&hidlKeyBlob[0], hidlKeyBlob.size(), nullptr, 0, ::TYPE_KEYMASTER_10);
-            keyBlob.setSecurityLevel(securityLevel);
+            keyBlob.setSecurityLevel(internalSecurityLevel_);
             keyBlob.setCriticalToDeviceEncryption(flags &
                                                   KEYSTORE_FLAG_CRITICAL_TO_DEVICE_ENCRYPTION);
             if (isAuthenticationBound(keyParams) && !keyBlob.isCriticalToDeviceEncryption()) {
@@ -1004,8 +1006,6 @@ void KeymasterWorker::importWrappedKey(LockedKeyBlobEntry wrappingLockedEntry,
                         CAPTURE_MOVE(worker_cb)]() mutable {
         auto hidlWrappingKey = blob2hidlVec(wrappingBlob);
 
-        SecurityLevel securityLevel = keymasterDevice_->halVersion().securityLevel;
-
         KeyCharacteristics outCharacteristics;
         KeyStoreServiceReturnCode error;
 
@@ -1019,7 +1019,7 @@ void KeymasterWorker::importWrappedKey(LockedKeyBlobEntry wrappingLockedEntry,
             outCharacteristics = keyCharacteristics;
 
             Blob keyBlob(hidlKeyBlob.data(), hidlKeyBlob.size(), nullptr, 0, ::TYPE_KEYMASTER_10);
-            keyBlob.setSecurityLevel(securityLevel);
+            keyBlob.setSecurityLevel(internalSecurityLevel_);
             if (isAuthenticationBound(keyCharacteristics.hardwareEnforced)) {
                 keyBlob.setSuperEncrypted(true);
             }
