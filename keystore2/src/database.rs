@@ -42,10 +42,11 @@
 //! callbacks.
 
 use crate::error::Error as KsError;
+use crate::key_parameter::{KeyParameter, SqlField, TagType};
 use crate::{error, permission::KeyPermSet};
 use anyhow::{anyhow, Context, Result};
 
-use android_hardware_keymint::aidl::android::hardware::keymint::SecurityLevel::SecurityLevel;
+use android_hardware_keymint::aidl::android::hardware::keymint::SecurityLevel::SecurityLevel as SecurityLevelType;
 use android_security_keystore2::aidl::android::security::keystore2::{
     Domain, Domain::Domain as DomainType, KeyDescriptor::KeyDescriptor,
 };
@@ -98,8 +99,8 @@ pub struct KeyEntry {
     km_blob: Option<Vec<u8>>,
     cert: Option<Vec<u8>>,
     cert_chain: Option<Vec<u8>>,
-    sec_level: SecurityLevel,
-    //    parameters: Vec<KeyParameters>,
+    sec_level: SecurityLevelType,
+    parameters: Vec<KeyParameter>,
 }
 
 impl KeyEntry {
@@ -132,7 +133,7 @@ impl KeyEntry {
         self.cert_chain.take()
     }
     /// Returns the security level of the key entry.
-    pub fn sec_level(&self) -> SecurityLevel {
+    pub fn sec_level(&self) -> SecurityLevelType {
         self.sec_level
     }
 }
@@ -302,7 +303,7 @@ impl KeystoreDB {
         key_id: i64,
         sc_type: SubComponentType,
         blob: &[u8],
-        sec_level: SecurityLevel,
+        sec_level: SecurityLevelType,
     ) -> Result<()> {
         self.conn
             .execute(
@@ -311,6 +312,29 @@ impl KeystoreDB {
                 params![sc_type, key_id, blob, sec_level],
             )
             .context("Failed to insert blob.")?;
+        Ok(())
+    }
+
+    /// Inserts a collection of key parameters into the `persistent.keyparameter` table
+    /// and associates them with the given `key_id`.
+    pub fn insert_keyparameter<'a>(
+        &mut self,
+        key_id: i64,
+        params: impl IntoIterator<Item = &'a KeyParameter>,
+    ) -> Result<()> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "INSERT into persistent.keyparameter (keyentryid, tag, data, security_level)
+                    VALUES (?, ?, ?, ?);",
+            )
+            .context("In insert_keyparameter: Failed to prepare statement.")?;
+
+        let iter = params.into_iter();
+        for p in iter {
+            stmt.insert(params![key_id, p.get_tag(), p.key_parameter_value(), p.security_level()])
+                .with_context(|| format!("In insert_keyparameter: Failed to insert {:?}", p))?;
+        }
         Ok(())
     }
 
@@ -486,6 +510,79 @@ impl KeystoreDB {
         }
     }
 
+    fn load_blob_components(
+        key_id: i64,
+        load_bits: KeyEntryLoadBits,
+        tx: &Transaction,
+    ) -> Result<(SecurityLevelType, Option<Vec<u8>>, Option<Vec<u8>>, Option<Vec<u8>>)> {
+        let mut stmt = tx
+            .prepare(
+                "SELECT MAX(id), sec_level, subcomponent_type, blob FROM persistent.blobentry
+                    WHERE keyentryid = ? GROUP BY subcomponent_type;",
+            )
+            .context("In load_blob_components: prepare statement failed.")?;
+
+        let mut rows =
+            stmt.query(params![key_id]).context("In load_blob_components: query failed.")?;
+
+        let mut sec_level: SecurityLevelType = Default::default();
+        let mut km_blob: Option<Vec<u8>> = None;
+        let mut cert_blob: Option<Vec<u8>> = None;
+        let mut cert_chain_blob: Option<Vec<u8>> = None;
+        Self::with_rows_extract_all(&mut rows, |row| {
+            let sub_type: SubComponentType =
+                row.get(2).context("Failed to extract subcomponent_type.")?;
+            match (sub_type, load_bits.load_public()) {
+                (SubComponentType::KM_BLOB, _) => {
+                    sec_level = row.get(1).context("Failed to extract security level.")?;
+                    if load_bits.load_km() {
+                        km_blob = Some(row.get(3).context("Failed to extract KM blob.")?);
+                    }
+                }
+                (SubComponentType::CERT, true) => {
+                    cert_blob =
+                        Some(row.get(3).context("Failed to extract public certificate blob.")?);
+                }
+                (SubComponentType::CERT_CHAIN, true) => {
+                    cert_chain_blob =
+                        Some(row.get(3).context("Failed to extract certificate chain blob.")?);
+                }
+                (SubComponentType::CERT, _) | (SubComponentType::CERT_CHAIN, _) => {}
+                _ => Err(KsError::sys()).context("Unknown subcomponent type.")?,
+            }
+            Ok(())
+        })
+        .context("In load_blob_components.")?;
+
+        Ok((sec_level, km_blob, cert_blob, cert_chain_blob))
+    }
+
+    fn load_key_parameters(key_id: i64, tx: &Transaction) -> Result<Vec<KeyParameter>> {
+        let mut stmt = tx
+            .prepare(
+                "SELECT tag, data, security_level from persistent.keyparameter
+                    WHERE keyentryid = ?;",
+            )
+            .context("In load_key_parameters: prepare statement failed.")?;
+
+        let mut parameters: Vec<KeyParameter> = Vec::new();
+
+        let mut rows =
+            stmt.query(params![key_id]).context("In load_key_parameters: query failed.")?;
+        Self::with_rows_extract_all(&mut rows, |row| {
+            let tag: TagType = row.get(0).context("Failed to read tag.")?;
+            let sec_level: SecurityLevelType = row.get(2).context("Failed to read sec_level.")?;
+            parameters.push(
+                KeyParameter::new_from_sql(tag, &SqlField::new(1, &row), sec_level)
+                    .context("Failed to read KeyParameter.")?,
+            );
+            Ok(())
+        })
+        .context("In load_key_parameters.")?;
+
+        Ok(parameters)
+    }
+
     /// Load a key entry by the given key descriptor.
     /// It uses the `check_permission` callback to verify if the access is allowed
     /// given the key access tuple read from the database using `load_access_tuple`.
@@ -505,52 +602,27 @@ impl KeystoreDB {
 
         // Load the key_id and complete the access control tuple.
         let (key_id, access_key_descriptor, access_vector) =
-            Self::load_access_tuple(&tx, key, caller_uid).context("In load_key_entry:")?;
+            Self::load_access_tuple(&tx, key, caller_uid).context("In load_key_entry.")?;
 
         // Perform access control. It is vital that we return here if the permission is denied.
         // So do not touch that '?' at the end.
-        check_permission(&access_key_descriptor, access_vector).context("In load_key_entry")?;
+        check_permission(&access_key_descriptor, access_vector).context("In load_key_entry.")?;
 
-        let mut result =
-            KeyEntry { id: key_id, km_blob: None, cert: None, cert_chain: None, sec_level: 0 };
+        let (sec_level, km_blob, cert_blob, cert_chain_blob) =
+            Self::load_blob_components(key_id, load_bits, &tx).context("In load_key_entry.")?;
 
-        let mut stmt = tx
-            .prepare(
-                "SELECT MAX(id), sec_level, subcomponent_type, blob FROM persistent.blobentry
-                    WHERE keyentryid = ? GROUP BY subcomponent_type;",
-            )
-            .context("In load_key_entry: blobentry: prepare statement failed.")?;
+        let parameters = Self::load_key_parameters(key_id, &tx).context("In load_key_entry.")?;
 
-        let mut rows =
-            stmt.query(params![key_id]).context("In load_key_entry: blobentry: query failed.")?;
-        Self::with_rows_extract_all(&mut rows, |row| {
-            let sub_type: SubComponentType =
-                row.get(2).context("Failed to extract subcomponent_type.")?;
-            match (sub_type, load_bits.load_public()) {
-                (SubComponentType::KM_BLOB, _) => {
-                    result.sec_level = row.get(1).context("Failed to extract security level.")?;
-                    if load_bits.load_km() {
-                        result.km_blob = Some(row.get(3).context("Failed to extract KM blob.")?);
-                    }
-                }
-                (SubComponentType::CERT, true) => {
-                    result.cert =
-                        Some(row.get(3).context("Failed to extract public certificate blob.")?);
-                }
-                (SubComponentType::CERT_CHAIN, true) => {
-                    result.cert_chain =
-                        Some(row.get(3).context("Failed to extract certificate chain blob.")?);
-                }
-                (SubComponentType::CERT, _) | (SubComponentType::CERT_CHAIN, _) => {}
-                _ => Err(KsError::sys()).context("Unknown subcomponent type.")?,
-            }
-            Ok(())
+        tx.commit().context("In load_key_entry: Failed to commit transaction.")?;
+
+        Ok(KeyEntry {
+            id: key_id,
+            km_blob,
+            cert: cert_blob,
+            cert_chain: cert_chain_blob,
+            sec_level,
+            parameters,
         })
-        .context("In load_key_entry")?;
-
-        // TODO load key parameters.
-
-        Ok(result)
     }
 
     /// Adds a grant to the grant table.
@@ -712,6 +784,10 @@ impl KeystoreDB {
 mod tests {
 
     use super::*;
+    use crate::key_parameter::{
+        Algorithm, BlockMode, Digest, EcCurve, HardwareAuthenticatorType, KeyOrigin, KeyParameter,
+        KeyParameterValue, KeyPurpose, PaddingMode, SecurityLevel,
+    };
     use crate::key_perm_set;
     use crate::permission::{KeyPerm, KeyPermSet};
     use rusqlite::NO_PARAMS;
@@ -1088,6 +1164,7 @@ mod tests {
                 cert: Some(TEST_CERT_BLOB.to_vec()),
                 cert_chain: Some(TEST_CERT_CHAIN_BLOB.to_vec()),
                 sec_level: 1,
+                parameters: make_test_params()
             }
         );
         Ok(())
@@ -1117,6 +1194,7 @@ mod tests {
                 cert: Some(TEST_CERT_BLOB.to_vec()),
                 cert_chain: Some(TEST_CERT_CHAIN_BLOB.to_vec()),
                 sec_level: 1,
+                parameters: make_test_params()
             }
         );
         Ok(())
@@ -1141,6 +1219,7 @@ mod tests {
                 cert: Some(TEST_CERT_BLOB.to_vec()),
                 cert_chain: Some(TEST_CERT_CHAIN_BLOB.to_vec()),
                 sec_level: 1,
+                parameters: make_test_params()
             }
         );
 
@@ -1182,6 +1261,7 @@ mod tests {
                 cert: Some(TEST_CERT_BLOB.to_vec()),
                 cert_chain: Some(TEST_CERT_CHAIN_BLOB.to_vec()),
                 sec_level: 1,
+                parameters: make_test_params()
             }
         );
         Ok(())
@@ -1229,6 +1309,228 @@ mod tests {
             .collect::<Result<Vec<_>>>()
     }
 
+    // Note: The parameters and SecurityLevel associations are nonsensical. This
+    // collection is only used to check if the parameters are preserved as expected by the
+    // database.
+    fn make_test_params() -> Vec<KeyParameter> {
+        vec![
+            KeyParameter::new(KeyParameterValue::Invalid, SecurityLevel::TRUSTED_ENVIRONMENT),
+            KeyParameter::new(
+                KeyParameterValue::KeyPurpose(KeyPurpose::SIGN),
+                SecurityLevel::TRUSTED_ENVIRONMENT,
+            ),
+            KeyParameter::new(
+                KeyParameterValue::KeyPurpose(KeyPurpose::DECRYPT),
+                SecurityLevel::TRUSTED_ENVIRONMENT,
+            ),
+            KeyParameter::new(
+                KeyParameterValue::Algorithm(Algorithm::RSA),
+                SecurityLevel::TRUSTED_ENVIRONMENT,
+            ),
+            KeyParameter::new(KeyParameterValue::KeySize(1024), SecurityLevel::TRUSTED_ENVIRONMENT),
+            KeyParameter::new(
+                KeyParameterValue::BlockMode(BlockMode::ECB),
+                SecurityLevel::TRUSTED_ENVIRONMENT,
+            ),
+            KeyParameter::new(
+                KeyParameterValue::BlockMode(BlockMode::GCM),
+                SecurityLevel::TRUSTED_ENVIRONMENT,
+            ),
+            KeyParameter::new(KeyParameterValue::Digest(Digest::NONE), SecurityLevel::STRONGBOX),
+            KeyParameter::new(
+                KeyParameterValue::Digest(Digest::MD5),
+                SecurityLevel::TRUSTED_ENVIRONMENT,
+            ),
+            KeyParameter::new(
+                KeyParameterValue::Digest(Digest::SHA_2_224),
+                SecurityLevel::TRUSTED_ENVIRONMENT,
+            ),
+            KeyParameter::new(
+                KeyParameterValue::Digest(Digest::SHA_2_256),
+                SecurityLevel::STRONGBOX,
+            ),
+            KeyParameter::new(
+                KeyParameterValue::PaddingMode(PaddingMode::NONE),
+                SecurityLevel::TRUSTED_ENVIRONMENT,
+            ),
+            KeyParameter::new(
+                KeyParameterValue::PaddingMode(PaddingMode::RSA_OAEP),
+                SecurityLevel::TRUSTED_ENVIRONMENT,
+            ),
+            KeyParameter::new(
+                KeyParameterValue::PaddingMode(PaddingMode::RSA_PSS),
+                SecurityLevel::STRONGBOX,
+            ),
+            KeyParameter::new(
+                KeyParameterValue::PaddingMode(PaddingMode::RSA_PKCS1_1_5_SIGN),
+                SecurityLevel::TRUSTED_ENVIRONMENT,
+            ),
+            KeyParameter::new(KeyParameterValue::CallerNonce, SecurityLevel::TRUSTED_ENVIRONMENT),
+            KeyParameter::new(KeyParameterValue::MinMacLength(256), SecurityLevel::STRONGBOX),
+            KeyParameter::new(
+                KeyParameterValue::EcCurve(EcCurve::P_224),
+                SecurityLevel::TRUSTED_ENVIRONMENT,
+            ),
+            KeyParameter::new(KeyParameterValue::EcCurve(EcCurve::P_256), SecurityLevel::STRONGBOX),
+            KeyParameter::new(
+                KeyParameterValue::EcCurve(EcCurve::P_384),
+                SecurityLevel::TRUSTED_ENVIRONMENT,
+            ),
+            KeyParameter::new(
+                KeyParameterValue::EcCurve(EcCurve::P_521),
+                SecurityLevel::TRUSTED_ENVIRONMENT,
+            ),
+            KeyParameter::new(
+                KeyParameterValue::RSAPublicExponent(3),
+                SecurityLevel::TRUSTED_ENVIRONMENT,
+            ),
+            KeyParameter::new(
+                KeyParameterValue::IncludeUniqueID,
+                SecurityLevel::TRUSTED_ENVIRONMENT,
+            ),
+            KeyParameter::new(KeyParameterValue::BootLoaderOnly, SecurityLevel::STRONGBOX),
+            KeyParameter::new(KeyParameterValue::RollbackResistance, SecurityLevel::STRONGBOX),
+            KeyParameter::new(
+                KeyParameterValue::ActiveDateTime(1234567890),
+                SecurityLevel::STRONGBOX,
+            ),
+            KeyParameter::new(
+                KeyParameterValue::OriginationExpireDateTime(1234567890),
+                SecurityLevel::TRUSTED_ENVIRONMENT,
+            ),
+            KeyParameter::new(
+                KeyParameterValue::UsageExpireDateTime(1234567890),
+                SecurityLevel::TRUSTED_ENVIRONMENT,
+            ),
+            KeyParameter::new(
+                KeyParameterValue::MinSecondsBetweenOps(1234567890),
+                SecurityLevel::TRUSTED_ENVIRONMENT,
+            ),
+            KeyParameter::new(
+                KeyParameterValue::MaxUsesPerBoot(1234567890),
+                SecurityLevel::TRUSTED_ENVIRONMENT,
+            ),
+            KeyParameter::new(KeyParameterValue::UserID(1), SecurityLevel::STRONGBOX),
+            KeyParameter::new(KeyParameterValue::UserSecureID(42), SecurityLevel::STRONGBOX),
+            KeyParameter::new(
+                KeyParameterValue::NoAuthRequired,
+                SecurityLevel::TRUSTED_ENVIRONMENT,
+            ),
+            KeyParameter::new(
+                KeyParameterValue::HardwareAuthenticatorType(HardwareAuthenticatorType::PASSWORD),
+                SecurityLevel::TRUSTED_ENVIRONMENT,
+            ),
+            KeyParameter::new(KeyParameterValue::AuthTimeout(1234567890), SecurityLevel::SOFTWARE),
+            KeyParameter::new(KeyParameterValue::AllowWhileOnBody, SecurityLevel::SOFTWARE),
+            KeyParameter::new(
+                KeyParameterValue::TrustedUserPresenceRequired,
+                SecurityLevel::TRUSTED_ENVIRONMENT,
+            ),
+            KeyParameter::new(
+                KeyParameterValue::TrustedConfirmationRequired,
+                SecurityLevel::TRUSTED_ENVIRONMENT,
+            ),
+            KeyParameter::new(
+                KeyParameterValue::UnlockedDeviceRequired,
+                SecurityLevel::TRUSTED_ENVIRONMENT,
+            ),
+            KeyParameter::new(
+                KeyParameterValue::ApplicationID(vec![1u8, 2u8, 3u8, 4u8]),
+                SecurityLevel::SOFTWARE,
+            ),
+            KeyParameter::new(
+                KeyParameterValue::ApplicationData(vec![4u8, 3u8, 2u8, 1u8]),
+                SecurityLevel::SOFTWARE,
+            ),
+            KeyParameter::new(
+                KeyParameterValue::CreationDateTime(12345677890),
+                SecurityLevel::SOFTWARE,
+            ),
+            KeyParameter::new(
+                KeyParameterValue::KeyOrigin(KeyOrigin::GENERATED),
+                SecurityLevel::TRUSTED_ENVIRONMENT,
+            ),
+            KeyParameter::new(
+                KeyParameterValue::RootOfTrust(vec![3u8, 2u8, 1u8, 4u8]),
+                SecurityLevel::TRUSTED_ENVIRONMENT,
+            ),
+            KeyParameter::new(KeyParameterValue::OSVersion(1), SecurityLevel::TRUSTED_ENVIRONMENT),
+            KeyParameter::new(KeyParameterValue::OSPatchLevel(2), SecurityLevel::SOFTWARE),
+            KeyParameter::new(
+                KeyParameterValue::UniqueID(vec![4u8, 3u8, 1u8, 2u8]),
+                SecurityLevel::SOFTWARE,
+            ),
+            KeyParameter::new(
+                KeyParameterValue::AttestationChallenge(vec![4u8, 3u8, 1u8, 2u8]),
+                SecurityLevel::TRUSTED_ENVIRONMENT,
+            ),
+            KeyParameter::new(
+                KeyParameterValue::AttestationApplicationID(vec![4u8, 3u8, 1u8, 2u8]),
+                SecurityLevel::TRUSTED_ENVIRONMENT,
+            ),
+            KeyParameter::new(
+                KeyParameterValue::AttestationIdBrand(vec![4u8, 3u8, 1u8, 2u8]),
+                SecurityLevel::TRUSTED_ENVIRONMENT,
+            ),
+            KeyParameter::new(
+                KeyParameterValue::AttestationIdDevice(vec![4u8, 3u8, 1u8, 2u8]),
+                SecurityLevel::TRUSTED_ENVIRONMENT,
+            ),
+            KeyParameter::new(
+                KeyParameterValue::AttestationIdProduct(vec![4u8, 3u8, 1u8, 2u8]),
+                SecurityLevel::TRUSTED_ENVIRONMENT,
+            ),
+            KeyParameter::new(
+                KeyParameterValue::AttestationIdSerial(vec![4u8, 3u8, 1u8, 2u8]),
+                SecurityLevel::TRUSTED_ENVIRONMENT,
+            ),
+            KeyParameter::new(
+                KeyParameterValue::AttestationIdIMEI(vec![4u8, 3u8, 1u8, 2u8]),
+                SecurityLevel::TRUSTED_ENVIRONMENT,
+            ),
+            KeyParameter::new(
+                KeyParameterValue::AttestationIdMEID(vec![4u8, 3u8, 1u8, 2u8]),
+                SecurityLevel::TRUSTED_ENVIRONMENT,
+            ),
+            KeyParameter::new(
+                KeyParameterValue::AttestationIdManufacturer(vec![4u8, 3u8, 1u8, 2u8]),
+                SecurityLevel::TRUSTED_ENVIRONMENT,
+            ),
+            KeyParameter::new(
+                KeyParameterValue::AttestationIdModel(vec![4u8, 3u8, 1u8, 2u8]),
+                SecurityLevel::TRUSTED_ENVIRONMENT,
+            ),
+            KeyParameter::new(
+                KeyParameterValue::VendorPatchLevel(3),
+                SecurityLevel::TRUSTED_ENVIRONMENT,
+            ),
+            KeyParameter::new(
+                KeyParameterValue::BootPatchLevel(4),
+                SecurityLevel::TRUSTED_ENVIRONMENT,
+            ),
+            KeyParameter::new(
+                KeyParameterValue::AssociatedData(vec![4u8, 3u8, 1u8, 2u8]),
+                SecurityLevel::TRUSTED_ENVIRONMENT,
+            ),
+            KeyParameter::new(
+                KeyParameterValue::Nonce(vec![4u8, 3u8, 1u8, 2u8]),
+                SecurityLevel::TRUSTED_ENVIRONMENT,
+            ),
+            KeyParameter::new(
+                KeyParameterValue::MacLength(256),
+                SecurityLevel::TRUSTED_ENVIRONMENT,
+            ),
+            KeyParameter::new(
+                KeyParameterValue::ResetSinceIdRotation,
+                SecurityLevel::TRUSTED_ENVIRONMENT,
+            ),
+            KeyParameter::new(
+                KeyParameterValue::ConfirmationToken(vec![5u8, 5u8, 5u8, 5u8]),
+                SecurityLevel::TRUSTED_ENVIRONMENT,
+            ),
+        ]
+    }
+
     fn make_test_key_entry(
         db: &mut KeystoreDB,
         domain: DomainType,
@@ -1239,6 +1541,7 @@ mod tests {
         db.insert_blob(key_id, SubComponentType::KM_BLOB, TEST_KM_BLOB, 1)?;
         db.insert_blob(key_id, SubComponentType::CERT, TEST_CERT_BLOB, 1)?;
         db.insert_blob(key_id, SubComponentType::CERT_CHAIN, TEST_CERT_CHAIN_BLOB, 1)?;
+        db.insert_keyparameter(key_id, &make_test_params())?;
         db.rebind_alias(key_id, alias, domain, namespace)?;
         Ok(key_id)
     }
