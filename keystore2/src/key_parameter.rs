@@ -33,6 +33,7 @@ use rusqlite::types::{FromSql, Null, ToSql, ToSqlOutput};
 use rusqlite::{Result as SqlResult, Row};
 
 /// KeyParameter wraps the KeyParameterValue and the security level at which it is enforced.
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
 pub struct KeyParameter {
     key_parameter_value: KeyParameterValue,
     security_level: SecurityLevelType,
@@ -40,7 +41,7 @@ pub struct KeyParameter {
 
 /// KeyParameterValue holds a value corresponding to one of the Tags defined in
 /// the AIDL spec at hardware/interfaces/keymint
-#[derive(PartialEq, Debug)]
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
 pub enum KeyParameterValue {
     /// Associated with Tag:INVALID
     Invalid,
@@ -238,7 +239,7 @@ impl KeyParameter {
 
 #[cfg(test)]
 mod basic_tests {
-    use crate::key_parameter::*;
+    use super::*;
 
     // Test basic functionality of KeyParameter.
     #[test]
@@ -265,6 +266,10 @@ mod basic_tests {
 pub struct SqlField<'a>(usize, &'a Row<'a>);
 
 impl<'a> SqlField<'a> {
+    /// Creates a new SqlField with the given index and row.
+    pub fn new(index: usize, row: &'a Row<'a>) -> Self {
+        Self(index, row)
+    }
     /// Returns the column value from the row, when we know the expected type.
     pub fn get<T: FromSql>(&self) -> SqlResult<T> {
         self.1.get(self.0)
