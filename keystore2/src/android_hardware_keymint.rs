@@ -260,7 +260,7 @@ pub mod aidl {
           pub const UNSUPPORTED_EC_CURVE: ErrorCode = -61;
           pub const KEY_REQUIRES_UPGRADE: ErrorCode = -62;
           pub const ATTESTATION_CHALLENGE_MISSING: ErrorCode = -63;
-          pub const KEYMASTER_NOT_CONFIGURED: ErrorCode = -64;
+          pub const KEYMINT_NOT_CONFIGURED: ErrorCode = -64;
           pub const ATTESTATION_APPLICATION_ID_MISSING: ErrorCode = -65;
           pub const CANNOT_ATTEST_IDS: ErrorCode = -66;
           pub const ROLLBACK_RESISTANCE_UNAVAILABLE: ErrorCode = -67;
@@ -1243,6 +1243,7 @@ pub mod aidl {
           pub const GENERATED: KeyOrigin = 0;
           pub const DERIVED: KeyOrigin = 1;
           pub const IMPORTED: KeyOrigin = 2;
+          pub const RESERVED: KeyOrigin = 3;
           pub const SECURELY_IMPORTED: KeyOrigin = 4;
           pub(crate) mod mangled { pub use super::KeyOrigin as _7_android_8_hardware_7_keymint_9_KeyOrigin; }
         }
