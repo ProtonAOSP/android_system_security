@@ -269,27 +269,14 @@ impl KeystoreDB {
                     .context(format!("Domain {:?} must be either App or SELinux.", domain));
             }
         }
-        // Loop until we get a unique id.
-        loop {
-            let newid: i64 = random();
-            let ret = self.conn.execute(
+        Self::insert_with_retry(|id| {
+            self.conn.execute(
                 "INSERT into persistent.keyentry (id, creation_date, domain, namespace, alias)
                      VALUES(?, datetime('now'), ?, ?, NULL);",
-                params![newid, domain as i64, namespace],
-            );
-            match ret {
-                // If the id already existed, try again.
-                Err(rusqlite::Error::SqliteFailure(
-                    libsqlite3_sys::Error {
-                        code: libsqlite3_sys::ErrorCode::ConstraintViolation,
-                        extended_code: libsqlite3_sys::SQLITE_CONSTRAINT_UNIQUE,
-                    },
-                    _,
-                )) => (),
-                Err(e) => return Err(e).context("Failed to create key entry."),
-                _ => return Ok(newid),
-            }
-        }
+                params![id, domain as i64, namespace],
+            )
+        })
+        .context("In create_key_entry")
     }
 
     /// Inserts a new blob and associates it with the given key id. Each blob
@@ -683,26 +670,14 @@ impl KeystoreDB {
             .context("In grant: Failed to update existing grant.")?;
             grant_id
         } else {
-            loop {
-                let newid: i64 = random();
-                let ret = tx.execute(
+            Self::insert_with_retry(|id| {
+                tx.execute(
                     "INSERT INTO perboot.grant (id, grantee, keyentryid, access_vector)
                         VALUES (?, ?, ?, ?);",
-                    params![newid, grantee_uid, key_id, i32::from(access_vector)],
-                );
-                match ret {
-                    // If the id already existed, try again.
-                    Err(rusqlite::Error::SqliteFailure(
-                        libsqlite3_sys::Error {
-                            code: libsqlite3_sys::ErrorCode::ConstraintViolation,
-                            extended_code: libsqlite3_sys::SQLITE_CONSTRAINT_UNIQUE,
-                        },
-                        _,
-                    )) => (),
-                    Err(e) => return Err(e).context("Failed to insert grant."),
-                    Ok(_) => break newid,
-                }
-            }
+                    params![id, grantee_uid, key_id, i32::from(access_vector)],
+                )
+            })
+            .context("In grant")?
         };
         tx.commit().context("In grant: failed to commit transaction.")?;
 
@@ -742,6 +717,29 @@ impl KeystoreDB {
         tx.commit().context("In ungrant: failed to commit transaction.")?;
 
         Ok(())
+    }
+
+    // Generates a random id and passes it to the given function, which will
+    // try to insert it into a database.  If that insertion fails, retry;
+    // otherwise return the id.
+    fn insert_with_retry(inserter: impl Fn(i64) -> rusqlite::Result<usize>) -> Result<i64> {
+        loop {
+            let newid: i64 = random();
+            match inserter(newid) {
+                // If the id already existed, try again.
+                Err(rusqlite::Error::SqliteFailure(
+                    libsqlite3_sys::Error {
+                        code: libsqlite3_sys::ErrorCode::ConstraintViolation,
+                        extended_code: libsqlite3_sys::SQLITE_CONSTRAINT_UNIQUE,
+                    },
+                    _,
+                )) => (),
+                Err(e) => {
+                    return Err(e).context("In insert_with_retry: failed to insert into database.")
+                }
+                _ => return Ok(newid),
+            }
+        }
     }
 
     // Takes Rows as returned by a query call on prepared statement.
