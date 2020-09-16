@@ -23,7 +23,8 @@ pub use android_hardware_keymint::aidl::android::hardware::keymint::{
     BlockMode::BlockMode as BlockModeType, Digest, Digest::Digest as DigestType, EcCurve,
     EcCurve::EcCurve as EcCurveType, HardwareAuthenticatorType,
     HardwareAuthenticatorType::HardwareAuthenticatorType as HardwareAuthenticatorTypeType,
-    KeyOrigin, KeyOrigin::KeyOrigin as KeyOriginType, KeyPurpose,
+    KeyOrigin, KeyOrigin::KeyOrigin as KeyOriginType,
+    KeyParameter::KeyParameter as AidlKeyParameter, KeyPurpose,
     KeyPurpose::KeyPurpose as KeyPurposeType, PaddingMode,
     PaddingMode::PaddingMode as PaddingModeType, SecurityLevel,
     SecurityLevel::SecurityLevel as SecurityLevelType, Tag, Tag::Tag as TagType,
@@ -234,29 +235,6 @@ impl KeyParameter {
     /// Returns the security level of a KeyParameter.
     pub fn security_level(&self) -> &SecurityLevelType {
         &self.security_level
-    }
-}
-
-#[cfg(test)]
-mod basic_tests {
-    use super::*;
-
-    // Test basic functionality of KeyParameter.
-    #[test]
-    fn test_key_parameter() {
-        let key_parameter = KeyParameter::new(
-            KeyParameterValue::Algorithm(Algorithm::RSA),
-            SecurityLevel::STRONGBOX,
-        );
-
-        assert_eq!(key_parameter.get_tag(), Tag::ALGORITHM);
-
-        assert_eq!(
-            *key_parameter.key_parameter_value(),
-            KeyParameterValue::Algorithm(Algorithm::RSA)
-        );
-
-        assert_eq!(*key_parameter.security_level(), SecurityLevel::STRONGBOX);
     }
 }
 
@@ -611,6 +589,353 @@ impl KeyParameter {
     }
 }
 
+/// Macro rules for converting key parameter to/from wire type.
+/// This macro takes three different pieces of information about each of the KeyParameterValue
+/// variants.
+/// 1. variant name
+/// 2. tag name corresponding to the variant
+/// 3. the field name in the AidlKeyParameter struct, in which information about this variant is
+/// stored when converted
+/// The macro takes a set of lines corresponding to each KeyParameterValue variant and generates
+/// the two conversion methods: convert_to_wire() and convert_from_wire().
+/// ## Example
+/// ```
+/// implement_key_parameter_conversion_to_from_wire! {
+///         Invalid, INVALID, na;
+///         KeyPurpose, PURPOSE, integer;
+///         CallerNonce, CALLER_NONCE, boolValue;
+///         UserSecureID, USER_SECURE_ID, longInteger;
+///         ApplicationID, APPLICATION_ID, blob;
+///         ActiveDateTime, ACTIVE_DATETIME, dateTime;
+/// }
+/// ```
+/// expands to:
+/// ```
+/// pub fn convert_to_wire(self) -> AidlKeyParameter {
+///         match self {
+///                 KeyParameterValue::Invalid => AidlKeyParameter {
+///                         tag: Tag::INVALID,
+///                         ..Default::default()
+///                 },
+///                 KeyParameterValue::KeyPurpose(v) => AidlKeyParameter {
+///                         tag: Tag::PURPOSE,
+///                         integer: v,
+///                         ..Default::default()
+///                 },
+///                 KeyParameterValue::CallerNonce => AidlKeyParameter {
+///                         tag: Tag::CALLER_NONCE,
+///                         boolValue: true,
+///                         ..Default::default()
+///                 },
+///                 KeyParameterValue::UserSecureID(v) => AidlKeyParameter {
+///                         tag: Tag::USER_SECURE_ID,
+///                         longInteger: v,
+///                         ..Default::default()
+///                 },
+///                 KeyParameterValue::ApplicationID(v) => AidlKeyParameter {
+///                         tag: Tag::APPLICATION_ID,
+///                         blob: v,
+///                         ..Default::default()
+///                 },
+///                 KeyParameterValue::ActiveDateTime(v) => AidlKeyParameter {
+///                         tag: Tag::ACTIVE_DATETIME,
+///                         dateTime: v,
+///                         ..Default::default()
+///                 },
+///         }
+/// }
+/// ```
+/// and
+/// ```
+/// pub fn convert_from_wire(aidl_kp: AidlKeyParameter) -> KeyParameterValue {
+///         match aidl_kp {
+///                 AidlKeyParameter {
+///                         tag: Tag::INVALID,
+///                         ..
+///                 } => KeyParameterValue::Invalid,
+///                 AidlKeyParameter {
+///                         tag: Tag::PURPOSE,
+///                         integer: v,
+///                         ..
+///                 } => KeyParameterValue::KeyPurpose(v),
+///                 AidlKeyParameter {
+///                         tag: Tag::CALLER_NONCE,
+///                         boolValue: true,
+///                         ..
+///                 } => KeyParameterValue::CallerNonce,
+///                 AidlKeyParameter {
+///                          tag: Tag::USER_SECURE_ID,
+///                          longInteger: v,
+///                          ..
+///                 } => KeyParameterValue::UserSecureID(v),
+///                 AidlKeyParameter {
+///                          tag: Tag::APPLICATION_ID,
+///                          blob: v,
+///                          ..
+///                 } => KeyParameterValue::ApplicationID(v),
+///                 AidlKeyParameter {
+///                          tag: Tag::ACTIVE_DATETIME,
+///                          dateTime: v,
+///                          ..
+///                 } => KeyParameterValue::ActiveDateTime(v),
+///                 _ => KeyParameterValue::Invalid,
+///         }
+/// }
+///
+macro_rules! implement_key_parameter_conversion_to_from_wire {
+     // There are three groups of rules in this macro.
+     // 1. The first group contains the rule which acts as the public interface. It takes the input
+     //    given to this macro and prepares it to be given as input to the two groups of rules
+     //    mentioned below.
+     // 2. The second group starts with the prefix @to and generates convert_to_wire() method.
+     // 3. The third group starts with the prefix @from and generates convert_from_wire() method.
+     //
+     // Input to this macro is first handled by the first macro rule (belonging to the first
+     // group above), which pre-processes the input such that rules in the other two groups
+     // generate the code for the two methods, when called recursively.
+     // Each of convert_to_wire() and convert_from_wire() methods are generated using a set of
+     // four macro rules in the second two groups. These four rules intend to do the following
+     // tasks respectively:
+     // i) generates match arms related to Invalid KeyParameterValue variant.
+     // ii) generates match arms related to boolValue field in AidlKeyParameter struct.
+     // iii) generates match arms related to all the other fields in AidlKeyParameter struct.
+     // iv) generates the method definition including the match arms generated from the above
+     // three recursive macro rules.
+
+     // This rule is applied on the input given to the macro invocations from outside the macro.
+     ($($variant:ident, $tag_name:ident, $field_name:ident;)*) => {
+         // pre-processes input to target the rules that generate convert_to_wire() method.
+         implement_key_parameter_conversion_to_from_wire! {@to
+             [], $($variant, $tag_name, $field_name;)*
+         }
+         // pre-processes input to target the rules that generate convert_from_wire() method.
+         implement_key_parameter_conversion_to_from_wire! {@from
+             [], $($variant, $tag_name, $field_name;)*
+         }
+     };
+
+     // Following four rules (belonging to the aforementioned second group) generate
+     // convert_to_wire() conversion method.
+     // -----------------------------------------------------------------------
+     // This rule handles Invalid variant.
+     // On an input: 'Invalid, INVALID, na;' it generates a match arm like:
+     // KeyParameterValue::Invalid => AidlKeyParameter {
+     //                                 tag: Tag::INVALID,
+     //                                 ..Default::default()
+     //                               },
+     (@to [$($out:tt)*], Invalid, INVALID, na; $($in:tt)*) => {
+         implement_key_parameter_conversion_to_from_wire! {@to
+             [$($out)*
+                 KeyParameterValue::Invalid => AidlKeyParameter {
+                     tag: Tag::INVALID,
+                     ..Default::default()
+                 },
+             ], $($in)*
+         }
+     };
+     // This rule handles all variants that correspond to bool values.
+     // On an input like: 'CallerNonce, CALLER_NONCE, boolValue;' it generates
+     // a match arm like:
+     // KeyParameterValue::CallerNonce => AidlKeyParameter {
+     //                                      tag: Tag::CALLER_NONCE,
+     //                                      boolValue: true,
+     //                                      ..Default::default()
+     //                                   },
+     (@to [$($out:tt)*], $variant:ident, $tag_val:ident, boolValue; $($in:tt)*) => {
+         implement_key_parameter_conversion_to_from_wire! {@to
+             [$($out)*
+                 KeyParameterValue::$variant => AidlKeyParameter {
+                     tag: Tag::$tag_val,
+                     boolValue: true,
+                     ..Default::default()
+                 },
+             ], $($in)*
+         }
+     };
+     // This rule handles all variants that are neither invalid nor bool values
+     // (i.e. all variants which correspond to integer, longInteger, dateTime and blob fields in
+     // AidlKeyParameter).
+     // On an input like: 'ConfirmationToken, CONFIRMATION_TOKEN, blob;' it generates a match arm
+     // like: KeyParameterValue::ConfirmationToken(v) => AidlKeyParameter {
+     //                                                      tag: Tag::CONFIRMATION_TOKEN,
+     //                                                      blob: v,
+     //                                                      ..Default::default(),
+     //                                                }
+     (@to [$($out:tt)*], $variant:ident, $tag_val:ident, $field:ident; $($in:tt)*) => {
+         implement_key_parameter_conversion_to_from_wire! {@to
+             [$($out)*
+                 KeyParameterValue::$variant(v) => AidlKeyParameter {
+                     tag: Tag::$tag_val,
+                     $field: v,
+                     ..Default::default()
+                 },
+             ], $($in)*
+         }
+     };
+     // After all the match arms are generated by the above three rules, this rule combines them
+     // into the convert_to_wire() method.
+     (@to [$($out:tt)*], ) => {
+         /// Conversion of key parameter to wire type
+         pub fn convert_to_wire(self) -> AidlKeyParameter {
+             match self {
+                 $($out)*
+             }
+         }
+     };
+
+     // Following four rules (belonging to the aforementioned third group) generate
+     // convert_from_wire() conversion method.
+     // ------------------------------------------------------------------------
+     // This rule handles Invalid variant.
+     // On an input: 'Invalid, INVALID, na;' it generates a match arm like:
+     // AidlKeyParameter { tag: Tag::INVALID, .. } => KeyParameterValue::Invalid,
+     (@from [$($out:tt)*], Invalid, INVALID, na; $($in:tt)*) => {
+         implement_key_parameter_conversion_to_from_wire! {@from
+             [$($out)*
+                 AidlKeyParameter {
+                     tag: Tag::INVALID,
+                     ..
+                 } => KeyParameterValue::Invalid,
+             ], $($in)*
+         }
+     };
+     // This rule handles all variants that correspond to bool values.
+     // On an input like: 'CallerNonce, CALLER_NONCE, boolValue;' it generates a match arm like:
+     // AidlKeyParameter {
+     //      tag: Tag::CALLER_NONCE,
+     //      boolValue: true,
+     //      ..
+     // } => KeyParameterValue::CallerNonce,
+     (@from [$($out:tt)*], $variant:ident, $tag_val:ident, boolValue; $($in:tt)*) => {
+         implement_key_parameter_conversion_to_from_wire! {@from
+             [$($out)*
+                 AidlKeyParameter {
+                     tag: Tag::$tag_val,
+                     boolValue: true,
+                     ..
+                 } => KeyParameterValue::$variant,
+             ], $($in)*
+         }
+     };
+     // This rule handles all variants that are neither invalid nor bool values
+     // (i.e. all variants which correspond to integer, longInteger, dateTime and blob fields in
+     // AidlKeyParameter).
+     // On an input like: 'ConfirmationToken, CONFIRMATION_TOKEN, blob;' it generates a match arm
+     // like:
+     // AidlKeyParameter {
+     //         tag: Tag::CONFIRMATION_TOKEN,
+     //         blob: v,
+     //         ..,
+     // } => KeyParameterValue::ConfirmationToken(v),
+     (@from [$($out:tt)*], $variant:ident, $tag_val:ident, $field:ident; $($in:tt)*) => {
+         implement_key_parameter_conversion_to_from_wire! {@from
+             [$($out)*
+                 AidlKeyParameter {
+                     tag: Tag::$tag_val,
+                     $field: v,
+                     ..
+                 } => KeyParameterValue::$variant(v),
+             ], $($in)*
+         }
+     };
+     // After all the match arms are generated by the above three rules, this rule combines them
+     // into the convert_from_wire() method.
+     (@from [$($out:tt)*], ) => {
+         /// Conversion of key parameter from wire type
+         pub fn convert_from_wire(aidl_kp: AidlKeyParameter) -> KeyParameterValue {
+             match aidl_kp {
+                 $($out)*
+                 _ => KeyParameterValue::Invalid,
+             }
+         }
+     };
+}
+
+impl KeyParameterValue {
+    // Invoke the macro that generates the code for key parameter conversion to/from wire type
+    // with all possible variants of KeyParameterValue. Each line corresponding to a variant
+    // contains: variant identifier, tag value, and the related field name (i.e.
+    // boolValue/integer/longInteger/dateTime/blob) in the AidlKeyParameter.
+    implement_key_parameter_conversion_to_from_wire! {
+        Invalid, INVALID, na;
+        KeyPurpose, PURPOSE, integer;
+        Algorithm, ALGORITHM, integer;
+        KeySize, KEY_SIZE, integer;
+        BlockMode, BLOCK_MODE, integer;
+        Digest, DIGEST, integer;
+        PaddingMode, PADDING, integer;
+        CallerNonce, CALLER_NONCE, boolValue;
+        MinMacLength, MIN_MAC_LENGTH, integer;
+        EcCurve, EC_CURVE, integer;
+        RSAPublicExponent, RSA_PUBLIC_EXPONENT, longInteger;
+        IncludeUniqueID, INCLUDE_UNIQUE_ID, boolValue;
+        BootLoaderOnly, BOOTLOADER_ONLY, boolValue;
+        RollbackResistance, ROLLBACK_RESISTANCE, boolValue;
+        ActiveDateTime, ACTIVE_DATETIME, dateTime;
+        OriginationExpireDateTime, ORIGINATION_EXPIRE_DATETIME, dateTime;
+        UsageExpireDateTime, USAGE_EXPIRE_DATETIME, dateTime;
+        MinSecondsBetweenOps, MIN_SECONDS_BETWEEN_OPS, integer;
+        MaxUsesPerBoot, MAX_USES_PER_BOOT, integer;
+        UserID, USER_ID, integer;
+        UserSecureID, USER_SECURE_ID, longInteger;
+        NoAuthRequired, NO_AUTH_REQUIRED, boolValue;
+        HardwareAuthenticatorType, USER_AUTH_TYPE, integer;
+        AuthTimeout, AUTH_TIMEOUT, integer;
+        AllowWhileOnBody, ALLOW_WHILE_ON_BODY, boolValue;
+        TrustedUserPresenceRequired, TRUSTED_USER_PRESENCE_REQUIRED, boolValue;
+        TrustedConfirmationRequired, TRUSTED_CONFIRMATION_REQUIRED, boolValue;
+        UnlockedDeviceRequired, UNLOCKED_DEVICE_REQUIRED, boolValue;
+        ApplicationID, APPLICATION_ID, blob;
+        ApplicationData, APPLICATION_DATA, blob;
+        CreationDateTime, CREATION_DATETIME, dateTime;
+        KeyOrigin, ORIGIN, integer;
+        RootOfTrust, ROOT_OF_TRUST, blob;
+        OSVersion, OS_VERSION, integer;
+        OSPatchLevel, OS_PATCHLEVEL, integer;
+        UniqueID, UNIQUE_ID, blob;
+        AttestationChallenge, ATTESTATION_CHALLENGE, blob;
+        AttestationApplicationID, ATTESTATION_APPLICATION_ID, blob;
+        AttestationIdBrand, ATTESTATION_ID_BRAND, blob;
+        AttestationIdDevice, ATTESTATION_ID_DEVICE, blob;
+        AttestationIdProduct, ATTESTATION_ID_PRODUCT, blob;
+        AttestationIdSerial, ATTESTATION_ID_SERIAL, blob;
+        AttestationIdIMEI, ATTESTATION_ID_IMEI, blob;
+        AttestationIdMEID, ATTESTATION_ID_MEID, blob;
+        AttestationIdManufacturer, ATTESTATION_ID_MANUFACTURER, blob;
+        AttestationIdModel, ATTESTATION_ID_MODEL, blob;
+        VendorPatchLevel, VENDOR_PATCHLEVEL, integer;
+        BootPatchLevel, BOOT_PATCHLEVEL, integer;
+        AssociatedData, ASSOCIATED_DATA, blob;
+        Nonce, NONCE, blob;
+        MacLength, MAC_LENGTH, integer;
+        ResetSinceIdRotation, RESET_SINCE_ID_ROTATION, boolValue;
+        ConfirmationToken, CONFIRMATION_TOKEN, blob;
+    }
+}
+
+#[cfg(test)]
+mod basic_tests {
+    use crate::key_parameter::*;
+
+    // Test basic functionality of KeyParameter.
+    #[test]
+    fn test_key_parameter() {
+        let key_parameter = KeyParameter::new(
+            KeyParameterValue::Algorithm(Algorithm::RSA),
+            SecurityLevel::STRONGBOX,
+        );
+
+        assert_eq!(key_parameter.get_tag(), Tag::ALGORITHM);
+
+        assert_eq!(
+            *key_parameter.key_parameter_value(),
+            KeyParameterValue::Algorithm(Algorithm::RSA)
+        );
+
+        assert_eq!(*key_parameter.security_level(), SecurityLevel::STRONGBOX);
+    }
+}
+
 /// The storage_tests module first tests the 'new_from_sql' method for KeyParameters of different
 /// data types and then tests 'to_sql' method for KeyParameters of those
 /// different data types. The five different data types for KeyParameter values are:
@@ -875,5 +1200,128 @@ persistent.keyparameter",
         let mut rows = stmt.query(NO_PARAMS)?;
         let row = rows.next()?.unwrap();
         Ok(KeyParameter::new_from_sql(row.get(0)?, &SqlField(1, row), row.get(2)?)?)
+    }
+}
+
+/// The wire_tests module tests the 'convert_to_wire' and 'convert_from_wire' methods for
+/// KeyParameter, for the five different types used in AidlKeyParameter, in addition to Invalid
+/// key parameter.
+/// i) bool
+/// ii) integer
+/// iii) longInteger
+/// iv) dateTime
+/// v) blob
+#[cfg(test)]
+mod wire_tests {
+    use crate::key_parameter::*;
+    /// unit tests for to conversions
+    #[test]
+    fn test_convert_to_wire_invalid() {
+        let kp = KeyParameter::new(KeyParameterValue::Invalid, SecurityLevel::STRONGBOX);
+        let actual = KeyParameterValue::convert_to_wire(kp.key_parameter_value);
+        assert_eq!(Tag::INVALID, actual.tag);
+    }
+    #[test]
+    fn test_convert_to_wire_bool() {
+        let kp = KeyParameter::new(KeyParameterValue::CallerNonce, SecurityLevel::STRONGBOX);
+        let actual = KeyParameterValue::convert_to_wire(kp.key_parameter_value);
+        assert_eq!(Tag::CALLER_NONCE, actual.tag);
+        assert_eq!(true, actual.boolValue);
+    }
+    #[test]
+    fn test_convert_to_wire_integer() {
+        let kp = KeyParameter::new(
+            KeyParameterValue::KeyPurpose(KeyPurpose::ENCRYPT),
+            SecurityLevel::STRONGBOX,
+        );
+        let actual = KeyParameterValue::convert_to_wire(kp.key_parameter_value);
+        assert_eq!(Tag::PURPOSE, actual.tag);
+        assert_eq!(KeyPurpose::ENCRYPT, actual.integer);
+    }
+    #[test]
+    fn test_convert_to_wire_long_integer() {
+        let kp =
+            KeyParameter::new(KeyParameterValue::UserSecureID(i64::MAX), SecurityLevel::STRONGBOX);
+        let actual = KeyParameterValue::convert_to_wire(kp.key_parameter_value);
+        assert_eq!(Tag::USER_SECURE_ID, actual.tag);
+        assert_eq!(i64::MAX, actual.longInteger);
+    }
+    #[test]
+    fn test_convert_to_wire_date_time() {
+        let kp = KeyParameter::new(
+            KeyParameterValue::ActiveDateTime(i64::MAX),
+            SecurityLevel::STRONGBOX,
+        );
+        let actual = KeyParameterValue::convert_to_wire(kp.key_parameter_value);
+        assert_eq!(Tag::ACTIVE_DATETIME, actual.tag);
+        assert_eq!(i64::MAX, actual.dateTime);
+    }
+    #[test]
+    fn test_convert_to_wire_blob() {
+        let kp = KeyParameter::new(
+            KeyParameterValue::ConfirmationToken(String::from("ConfirmationToken").into_bytes()),
+            SecurityLevel::STRONGBOX,
+        );
+        let actual = KeyParameterValue::convert_to_wire(kp.key_parameter_value);
+        assert_eq!(Tag::CONFIRMATION_TOKEN, actual.tag);
+        assert_eq!(String::from("ConfirmationToken").into_bytes(), actual.blob);
+    }
+
+    /// unit tests for from conversion
+    #[test]
+    fn test_convert_from_wire_invalid() {
+        let aidl_kp = AidlKeyParameter { tag: Tag::INVALID, ..Default::default() };
+        let actual = KeyParameterValue::convert_from_wire(aidl_kp);
+        assert_eq!(KeyParameterValue::Invalid, actual);
+    }
+    #[test]
+    fn test_convert_from_wire_bool() {
+        let aidl_kp =
+            AidlKeyParameter { tag: Tag::CALLER_NONCE, boolValue: true, ..Default::default() };
+        let actual = KeyParameterValue::convert_from_wire(aidl_kp);
+        assert_eq!(KeyParameterValue::CallerNonce, actual);
+    }
+    #[test]
+    fn test_convert_from_wire_integer() {
+        let aidl_kp = AidlKeyParameter {
+            tag: Tag::PURPOSE,
+            integer: KeyPurpose::ENCRYPT,
+            ..Default::default()
+        };
+        let actual = KeyParameterValue::convert_from_wire(aidl_kp);
+        assert_eq!(KeyParameterValue::KeyPurpose(KeyPurpose::ENCRYPT), actual);
+    }
+    #[test]
+    fn test_convert_from_wire_long_integer() {
+        let aidl_kp = AidlKeyParameter {
+            tag: Tag::USER_SECURE_ID,
+            longInteger: i64::MAX,
+            ..Default::default()
+        };
+        let actual = KeyParameterValue::convert_from_wire(aidl_kp);
+        assert_eq!(KeyParameterValue::UserSecureID(i64::MAX), actual);
+    }
+    #[test]
+    fn test_convert_from_wire_date_time() {
+        let aidl_kp = AidlKeyParameter {
+            tag: Tag::ACTIVE_DATETIME,
+            dateTime: i64::MAX,
+            ..Default::default()
+        };
+        let actual = KeyParameterValue::convert_from_wire(aidl_kp);
+        assert_eq!(KeyParameterValue::ActiveDateTime(i64::MAX), actual);
+    }
+    #[test]
+    fn test_convert_from_wire_blob() {
+        let aidl_kp = AidlKeyParameter {
+            tag: Tag::CONFIRMATION_TOKEN,
+            blob: String::from("ConfirmationToken").into_bytes(),
+            ..Default::default()
+        };
+        let actual = KeyParameterValue::convert_from_wire(aidl_kp);
+        assert_eq!(
+            KeyParameterValue::ConfirmationToken(String::from("ConfirmationToken").into_bytes()),
+            actual
+        );
     }
 }
