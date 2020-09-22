@@ -1086,14 +1086,20 @@ mod tests {
             let mut stmt = db
                 .conn
                 .prepare("SELECT id, grantee, keyentryid, access_vector FROM perboot.grant;")?;
-            let mut rows = stmt.query_map::<(i64, u32, i64, i32), _, _>(NO_PARAMS, |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
-            })?;
+            let mut rows =
+                stmt.query_map::<(i64, u32, i64, KeyPermSet), _, _>(NO_PARAMS, |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        KeyPermSet::from(row.get::<_, i32>(3)?),
+                    ))
+                })?;
 
             let r = rows.next().unwrap().unwrap();
-            assert_eq!(r, (next_random, GRANTEE_UID, 1, 516));
+            assert_eq!(r, (next_random, GRANTEE_UID, 1, PVEC1));
             let r = rows.next().unwrap().unwrap();
-            assert_eq!(r, (next_random + 1, GRANTEE_UID, 2, 512));
+            assert_eq!(r, (next_random + 1, GRANTEE_UID, 2, PVEC2));
             assert!(rows.next().is_none());
         }
 
