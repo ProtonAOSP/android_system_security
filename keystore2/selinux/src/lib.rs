@@ -424,7 +424,6 @@ mod tests {
         check_key_perm!(gen_unique_id, true);
         check_key_perm!(grant, true);
         check_key_perm!(get_info, false);
-        check_key_perm!(list, false);
         check_key_perm!(rebind, false);
         check_key_perm!(update, false);
         check_key_perm!(use, false);
