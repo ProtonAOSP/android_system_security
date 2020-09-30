@@ -95,6 +95,24 @@ pub fn keyparam_ks_to_km(p: &KeyParameter) -> KmParam {
     }
 }
 
+/// This function converts a `KeyParameter` from the keymint AIDL
+/// bindings into a `KeyParameter` from the keystore2 AIDL bindings.
+/// TODO This is a temporary workaround until the keymint AIDL spec
+/// lands.
+pub fn keyparam_km_to_ks(p: &KmParam) -> KeyParameter {
+    KeyParameter {
+        tag: p.tag.0,
+        boolValue: p.boolValue,
+        integer: p.integer,
+        longInteger: p.longInteger,
+        dateTime: p.dateTime,
+        blob: match p.blob.len() {
+            0 => None,
+            _ => Some(p.blob.clone()),
+        },
+    }
+}
+
 /// Thread safe wrapper around SpIBinder. It is safe to have SpIBinder smart pointers to the
 /// same object in multiple threads, but cloning a SpIBinder is not thread safe.
 /// Keystore frequently hands out binder tokens to the security level interface. If this
