@@ -197,7 +197,6 @@ implement_permission_aidl!(
         GenUniqueId,    selinux name: gen_unique_id;
         GetInfo,        selinux name: get_info;
         Grant,          selinux name: grant;
-        List,           selinux name: list;
         ManageBlob,     selinux name: manage_blob;
         Rebind,         selinux name: rebind;
         ReqForcedOp,    selinux name: req_forced_op;
@@ -294,12 +293,15 @@ implement_permission!(
         ClearNs = 2,    selinux name: clear_ns;
         /// Checked when Keystore 2.0 gets locked.
         GetState = 4,   selinux name: get_state;
+        /// Checked when Keystore 2.0 is asked to list a namespace that the caller
+        /// does not have the get_info permission for.
+        List = 8,       selinux name: list;
         /// Checked when Keystore 2.0 gets locked.
-        Lock = 8,       selinux name: lock;
+        Lock = 0x10,       selinux name: lock;
         /// Checked when Keystore 2.0 shall be reset.
-        Reset = 0x10,   selinux name: reset;
+        Reset = 0x20,   selinux name: reset;
         /// Checked when Keystore 2.0 shall be unlocked.
-        Unlock = 0x20,  selinux name: unlock;
+        Unlock = 0x40,  selinux name: unlock;
     }
 );
 
@@ -556,7 +558,6 @@ mod tests {
         KeyPerm::gen_unique_id(),
         KeyPerm::grant(),
         KeyPerm::get_info(),
-        KeyPerm::list(),
         KeyPerm::rebind(),
         KeyPerm::update(),
         KeyPerm::use_(),
@@ -570,7 +571,6 @@ mod tests {
         KeyPerm::gen_unique_id(),
         // No KeyPerm::grant()
         KeyPerm::get_info(),
-        KeyPerm::list(),
         KeyPerm::rebind(),
         KeyPerm::update(),
         KeyPerm::use_(),
@@ -579,7 +579,6 @@ mod tests {
     const UNPRIV_PERMS: KeyPermSet = key_perm_set![
         KeyPerm::delete(),
         KeyPerm::get_info(),
-        KeyPerm::list(),
         KeyPerm::rebind(),
         KeyPerm::update(),
         KeyPerm::use_(),
@@ -632,6 +631,7 @@ mod tests {
         assert!(check_keystore_permission(&system_server_ctx, KeystorePerm::add_auth()).is_ok());
         assert!(check_keystore_permission(&system_server_ctx, KeystorePerm::clear_ns()).is_ok());
         assert!(check_keystore_permission(&system_server_ctx, KeystorePerm::get_state()).is_ok());
+        assert!(check_keystore_permission(&system_server_ctx, KeystorePerm::list()).is_ok());
         assert!(check_keystore_permission(&system_server_ctx, KeystorePerm::lock()).is_ok());
         assert!(check_keystore_permission(&system_server_ctx, KeystorePerm::reset()).is_ok());
         assert!(check_keystore_permission(&system_server_ctx, KeystorePerm::unlock()).is_ok());
@@ -639,6 +639,7 @@ mod tests {
         assert_perm_failed!(check_keystore_permission(&shell_ctx, KeystorePerm::add_auth()));
         assert_perm_failed!(check_keystore_permission(&shell_ctx, KeystorePerm::clear_ns()));
         assert_perm_failed!(check_keystore_permission(&shell_ctx, KeystorePerm::get_state()));
+        assert_perm_failed!(check_keystore_permission(&shell_ctx, KeystorePerm::list()));
         assert_perm_failed!(check_keystore_permission(&shell_ctx, KeystorePerm::lock()));
         assert_perm_failed!(check_keystore_permission(&shell_ctx, KeystorePerm::reset()));
         assert_perm_failed!(check_keystore_permission(&shell_ctx, KeystorePerm::unlock()));
@@ -718,7 +719,6 @@ mod tests {
         assert!(check_key_permission(&system_server_ctx, KeyPerm::delete(), &key, &None).is_ok());
         assert!(check_key_permission(&system_server_ctx, KeyPerm::get_info(), &key, &None).is_ok());
         assert!(check_key_permission(&system_server_ctx, KeyPerm::rebind(), &key, &None).is_ok());
-        assert!(check_key_permission(&system_server_ctx, KeyPerm::list(), &key, &None).is_ok());
         assert!(check_key_permission(&system_server_ctx, KeyPerm::update(), &key, &None).is_ok());
         assert!(check_key_permission(&system_server_ctx, KeyPerm::grant(), &key, &None).is_ok());
         assert!(
@@ -730,7 +730,6 @@ mod tests {
         assert!(check_key_permission(&shell_ctx, KeyPerm::delete(), &key, &None).is_ok());
         assert!(check_key_permission(&shell_ctx, KeyPerm::get_info(), &key, &None).is_ok());
         assert!(check_key_permission(&shell_ctx, KeyPerm::rebind(), &key, &None).is_ok());
-        assert!(check_key_permission(&shell_ctx, KeyPerm::list(), &key, &None).is_ok());
         assert!(check_key_permission(&shell_ctx, KeyPerm::update(), &key, &None).is_ok());
         assert_perm_failed!(check_key_permission(&shell_ctx, KeyPerm::grant(), &key, &None));
         assert_perm_failed!(check_key_permission(
@@ -767,7 +766,6 @@ mod tests {
             assert!(check_key_permission(&sctx, KeyPerm::delete(), &key, &None).is_ok());
             assert!(check_key_permission(&sctx, KeyPerm::get_info(), &key, &None).is_ok());
             assert!(check_key_permission(&sctx, KeyPerm::rebind(), &key, &None).is_ok());
-            assert!(check_key_permission(&sctx, KeyPerm::list(), &key, &None).is_ok());
             assert!(check_key_permission(&sctx, KeyPerm::update(), &key, &None).is_ok());
             assert!(check_key_permission(&sctx, KeyPerm::grant(), &key, &None).is_ok());
             assert!(check_key_permission(&sctx, KeyPerm::manage_blob(), &key, &None).is_ok());
@@ -779,7 +777,6 @@ mod tests {
             assert!(check_key_permission(&sctx, KeyPerm::delete(), &key, &None).is_ok());
             assert!(check_key_permission(&sctx, KeyPerm::get_info(), &key, &None).is_ok());
             assert!(check_key_permission(&sctx, KeyPerm::rebind(), &key, &None).is_ok());
-            assert!(check_key_permission(&sctx, KeyPerm::list(), &key, &None).is_ok());
             assert!(check_key_permission(&sctx, KeyPerm::update(), &key, &None).is_ok());
             assert_perm_failed!(check_key_permission(&sctx, KeyPerm::grant(), &key, &None));
             assert_perm_failed!(check_key_permission(&sctx, KeyPerm::req_forced_op(), &key, &None));
@@ -840,7 +837,6 @@ mod tests {
             KeyPerm::gen_unique_id(),
             KeyPerm::grant(),
             KeyPerm::get_info(),
-            KeyPerm::list(),
             KeyPerm::rebind(),
             KeyPerm::update(),
             KeyPerm::use_() // Test if the macro accepts missing comma at the end of the list.
@@ -850,7 +846,6 @@ mod tests {
         assert_eq!(i.next().unwrap().to_selinux(), "gen_unique_id");
         assert_eq!(i.next().unwrap().to_selinux(), "get_info");
         assert_eq!(i.next().unwrap().to_selinux(), "grant");
-        assert_eq!(i.next().unwrap().to_selinux(), "list");
         assert_eq!(i.next().unwrap().to_selinux(), "manage_blob");
         assert_eq!(i.next().unwrap().to_selinux(), "rebind");
         assert_eq!(i.next().unwrap().to_selinux(), "req_forced_op");
@@ -865,13 +860,11 @@ mod tests {
             KeyPerm::manage_blob(),
             KeyPerm::req_forced_op(),
             KeyPerm::gen_unique_id(),
-            KeyPerm::list(),
             KeyPerm::update(),
             KeyPerm::use_(), // Test if macro accepts the comma at the end of the list.
         ];
         let mut i = v.into_iter();
         assert_eq!(i.next().unwrap().to_selinux(), "gen_unique_id");
-        assert_eq!(i.next().unwrap().to_selinux(), "list");
         assert_eq!(i.next().unwrap().to_selinux(), "manage_blob");
         assert_eq!(i.next().unwrap().to_selinux(), "req_forced_op");
         assert_eq!(i.next().unwrap().to_selinux(), "update");
@@ -894,7 +887,6 @@ mod tests {
             KeyPerm::gen_unique_id(),
             KeyPerm::grant(),
             KeyPerm::get_info(),
-            KeyPerm::list(),
             KeyPerm::rebind(),
             KeyPerm::update(),
             KeyPerm::use_(),
@@ -902,7 +894,6 @@ mod tests {
         let v2 = key_perm_set![
             KeyPerm::manage_blob(),
             KeyPerm::delete(),
-            KeyPerm::list(),
             KeyPerm::rebind(),
             KeyPerm::update(),
             KeyPerm::use_(),
@@ -915,7 +906,6 @@ mod tests {
         let v1 = key_perm_set![
             KeyPerm::manage_blob(),
             KeyPerm::delete(),
-            KeyPerm::list(),
             KeyPerm::rebind(),
             KeyPerm::update(),
             KeyPerm::use_(),
@@ -923,7 +913,6 @@ mod tests {
         let v2 = key_perm_set![
             KeyPerm::manage_blob(),
             KeyPerm::delete(),
-            KeyPerm::list(),
             KeyPerm::rebind(),
             KeyPerm::update(),
             KeyPerm::use_(),
@@ -937,7 +926,6 @@ mod tests {
             KeyPerm::manage_blob(),
             KeyPerm::delete(),
             KeyPerm::grant(), // only in v1
-            KeyPerm::list(),
             KeyPerm::rebind(),
             KeyPerm::update(),
             KeyPerm::use_(),
@@ -946,7 +934,6 @@ mod tests {
             KeyPerm::manage_blob(),
             KeyPerm::delete(),
             KeyPerm::req_forced_op(), // only in v2
-            KeyPerm::list(),
             KeyPerm::rebind(),
             KeyPerm::update(),
             KeyPerm::use_(),
@@ -959,7 +946,6 @@ mod tests {
         let v1 = key_perm_set![KeyPerm::manage_blob(), KeyPerm::delete(), KeyPerm::grant(),];
         let v2 = key_perm_set![
             KeyPerm::req_forced_op(),
-            KeyPerm::list(),
             KeyPerm::rebind(),
             KeyPerm::update(),
             KeyPerm::use_(),
