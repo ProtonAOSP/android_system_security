@@ -1034,13 +1034,12 @@ pub mod aidl {
           pub const GenUniqueId: KeyPermission = 2;
           pub const GetInfo: KeyPermission = 4;
           pub const Grant: KeyPermission = 8;
-          pub const List: KeyPermission = 16;
-          pub const ManageBlob: KeyPermission = 32;
-          pub const Rebind: KeyPermission = 64;
-          pub const ReqForcedOp: KeyPermission = 128;
-          pub const Update: KeyPermission = 256;
-          pub const Use: KeyPermission = 512;
-          pub const UseDevId: KeyPermission = 1024;
+          pub const ManageBlob: KeyPermission = 16;
+          pub const Rebind: KeyPermission = 32;
+          pub const ReqForcedOp: KeyPermission = 64;
+          pub const Update: KeyPermission = 128;
+          pub const Use: KeyPermission = 256;
+          pub const UseDevId: KeyPermission = 512;
           pub(crate) mod mangled { pub use super::KeyPermission as _7_android_8_security_9_keystore2_13_KeyPermission; }
         }
         pub mod OperationChallenge {
