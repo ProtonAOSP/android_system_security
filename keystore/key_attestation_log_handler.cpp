@@ -17,7 +17,11 @@
 namespace keystore {
 
 void logKeystoreKeyAttestationEvent(bool wasSuccessful, int32_t errorCode) {
-    android::util::stats_write(android::util::KEYSTORE_KEY_EVENT_REPORTED,
+    // Due to a requirement in stats-write() method, the optional fields
+    // which are not required for attestation logging, are marked with -1 for
+    // non-repeated fields and 0 for repeated fields.
+    android::util::stats_write(android::util::KEYSTORE_KEY_EVENT_REPORTED, -1, -1, -1, -1, -1, 0, 0,
+                               0, 0, -1, -1,
                                android::util::KEYSTORE_KEY_EVENT_REPORTED__TYPE__KEY_ATTESTATION,
                                wasSuccessful, errorCode);
 }
