@@ -18,8 +18,8 @@ rust_library {
     srcs: ["src/lib.rs"],
 
     rustlibs: [
+        "android.system.keystore2-rust",
         "libandroid_hardware_keymint",
-        "libandroid_security_keystore2",
         "libanyhow",
         "libbinder_rs",
         "libkeystore2_selinux",
@@ -39,9 +39,9 @@ rust_test {
     test_suites: ["general-tests"],
     auto_gen_config: true,
     rustlibs: [
+        "android.system.keystore2-rust",
         "libandroid_logger",
         "libandroid_hardware_keymint",
-        "libandroid_security_keystore2",
         "libanyhow",
         "libbinder_rs",
         "libkeystore2_selinux",
@@ -62,21 +62,6 @@ rust_library {
     srcs: ["src/android_hardware_keymint.rs"],
 
     rustlibs: [
-        "libbinder_rs",
-        "liblazy_static",
-    ],
-}
-
-// This is a placeholder for the libraries that will be generated from the AIDL specs
-// eventually.
-rust_library {
-    name: "libandroid_security_keystore2",
-    crate_name: "android_security_keystore2",
-
-    srcs: ["src/android_security_keystore2.rs"],
-
-    rustlibs: [
-        "libandroid_hardware_keymint",
         "libbinder_rs",
         "liblazy_static",
     ],

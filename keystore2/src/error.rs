@@ -25,22 +25,19 @@
 //! This crate provides the convenience method `map_or_log_err` to convert `anyhow::Error`
 //! into this wire type. In addition to handling the conversion of `Error`
 //! to the `Result` wire type it handles any other error by mapping it to
-//! `ResponseCode::SystemError` and logs any error condition.
+//! `ResponseCode::SYSTEM_ERROR` and logs any error condition.
 //!
 //! Keystore functions should use `anyhow::Result` to return error conditions, and
 //! context should be added every time an error is forwarded.
 
 use std::cmp::PartialEq;
 
-pub use android_hardware_keymint::aidl::android::hardware::keymint::ErrorCode as Ec;
-pub use android_security_keystore2::aidl::android::security::keystore2::ResponseCode as Rc;
-
-use android_hardware_keymint::aidl::android::hardware::keymint::ErrorCode::ErrorCode;
-use android_security_keystore2::aidl::android::security::keystore2::ResponseCode::ResponseCode;
+pub use android_hardware_keymint::aidl::android::hardware::keymint::ErrorCode::ErrorCode;
+pub use android_system_keystore2::aidl::android::system::keystore2::ResponseCode::ResponseCode;
 
 use keystore2_selinux as selinux;
 
-use android_security_keystore2::binder::{
+use android_system_keystore2::binder::{
     ExceptionCode, Result as BinderResult, Status as BinderStatus,
 };
 
@@ -60,14 +57,14 @@ pub enum Error {
 }
 
 impl Error {
-    /// Short hand for `Error::Rc(ResponseCode::SystemError)`
+    /// Short hand for `Error::Rc(ResponseCode::SYSTEM_ERROR)`
     pub fn sys() -> Self {
-        Error::Rc(Rc::SystemError)
+        Error::Rc(ResponseCode::SYSTEM_ERROR)
     }
 
-    /// Short hand for `Error::Rc(ResponseCode::PermissionDenied`
+    /// Short hand for `Error::Rc(ResponseCode::PERMISSION_DENIED`
     pub fn perm() -> Self {
-        Error::Rc(Rc::PermissionDenied)
+        Error::Rc(ResponseCode::PERMISSION_DENIED)
     }
 }
 
@@ -83,7 +80,7 @@ pub fn map_km_error<T>(r: BinderResult<T>) -> Result<T, Error> {
                 let se = s.service_specific_error();
                 if se < 0 {
                     // Negative service specific errors are KM error codes.
-                    Error::Km(s.service_specific_error())
+                    Error::Km(ErrorCode(s.service_specific_error()))
                 } else {
                     // Non negative error codes cannot be KM error codes.
                     // So we create an `Error::Binder` variant to preserve
@@ -102,16 +99,16 @@ pub fn map_km_error<T>(r: BinderResult<T>) -> Result<T, Error> {
 }
 
 /// This function should be used by Keystore service calls to translate error conditions
-/// into `android.security.keystore2.Result` which is imported here as `aidl::Result`
+/// into `android.system.keystore2.Result` which is imported here as `aidl::Result`
 /// and newtyped as AidlResult.
 /// All error conditions get logged by this function.
 /// All `Error::Rc(x)` variants get mapped onto `aidl::Result{x, 0}`.
 /// All `Error::Km(x)` variants get mapped onto
 /// `aidl::Result{aidl::ResponseCode::KeymintErrorCode, x}`.
-/// `selinux::Error::perm()` is mapped on `aidl::Result{aidl::ResponseCode::PermissionDenied, 0}`.
+/// `selinux::Error::perm()` is mapped on `aidl::Result{aidl::ResponseCode::PERMISSION_DENIED, 0}`.
 ///
 /// All non `Error` error conditions get mapped onto
-/// `aidl::Result{aidl::ResponseCode::SystemError}`.
+/// `aidl::Result{aidl::ResponseCode::SYSTEM_ERROR}`.
 ///
 /// `handle_ok` will be called if `result` is `Ok(value)` where `value` will be passed
 /// as argument to `handle_ok`. `handle_ok` must generate an `AidlResult`, typically
@@ -125,7 +122,7 @@ pub fn map_km_error<T>(r: BinderResult<T>) -> Result<T, Error> {
 ///     if (good_but_auth_required) {
 ///         Ok(aidl::ResponseCode::OpAuthRequired)
 ///     } else {
-///         Err(anyhow!(Error::Rc(aidl::ResponseCode::KeyNotFound)))
+///         Err(anyhow!(Error::Rc(aidl::ResponseCode::KEY_NOT_FOUND)))
 ///     }
 /// }
 ///
@@ -140,15 +137,15 @@ where
             log::error!("{:?}", e);
             let root_cause = e.root_cause();
             let rc = match root_cause.downcast_ref::<Error>() {
-                Some(Error::Rc(rcode)) => *rcode,
-                Some(Error::Km(ec)) => *ec,
+                Some(Error::Rc(rcode)) => rcode.0,
+                Some(Error::Km(ec)) => ec.0,
                 // If an Error::Binder reaches this stage we report a system error.
                 // The exception code and possible service specific error will be
                 // printed in the error log above.
-                Some(Error::Binder(_, _)) => Rc::SystemError,
+                Some(Error::Binder(_, _)) => ResponseCode::SYSTEM_ERROR.0,
                 None => match root_cause.downcast_ref::<selinux::Error>() {
-                    Some(selinux::Error::PermissionDenied) => Rc::PermissionDenied,
-                    _ => Rc::SystemError,
+                    Some(selinux::Error::PermissionDenied) => ResponseCode::PERMISSION_DENIED.0,
+                    _ => ResponseCode::SYSTEM_ERROR.0,
                 },
             };
             Err(BinderStatus::new_service_specific_error(rc, None))
@@ -161,7 +158,7 @@ where
 pub mod tests {
 
     use super::*;
-    use android_security_keystore2::binder::{
+    use android_system_keystore2::binder::{
         ExceptionCode, Result as BinderResult, Status as BinderStatus,
     };
     use anyhow::{anyhow, Context};
@@ -229,27 +226,27 @@ pub mod tests {
         );
         // All Error::Rc(x) get mapped on a service specific error
         // code of x.
-        for rc in Rc::Ok..Rc::BackendBusy {
+        for rc in ResponseCode::LOCKED.0..ResponseCode::BACKEND_BUSY.0 {
             assert_eq!(
                 Result::<(), i32>::Err(rc),
-                map_or_log_err(nested_rc(rc), |_| Err(BinderStatus::ok()))
+                map_or_log_err(nested_rc(ResponseCode(rc)), |_| Err(BinderStatus::ok()))
                     .map_err(|s| s.service_specific_error())
             );
         }
 
         // All Keystore Error::Km(x) get mapped on a service
         // specific error of x.
-        for ec in Ec::UNKNOWN_ERROR..Ec::ROOT_OF_TRUST_ALREADY_SET {
+        for ec in ErrorCode::UNKNOWN_ERROR.0..ErrorCode::ROOT_OF_TRUST_ALREADY_SET.0 {
             assert_eq!(
                 Result::<(), i32>::Err(ec),
-                map_or_log_err(nested_ec(ec), |_| Err(BinderStatus::ok()))
+                map_or_log_err(nested_ec(ErrorCode(ec)), |_| Err(BinderStatus::ok()))
                     .map_err(|s| s.service_specific_error())
             );
         }
 
         // All Keymint errors x received through a Binder Result get mapped on
         // a service specific error of x.
-        for ec in Ec::UNKNOWN_ERROR..Ec::ROOT_OF_TRUST_ALREADY_SET {
+        for ec in ErrorCode::UNKNOWN_ERROR.0..ErrorCode::ROOT_OF_TRUST_ALREADY_SET.0 {
             assert_eq!(
                 Result::<(), i32>::Err(ec),
                 map_or_log_err(
@@ -266,44 +263,47 @@ pub mod tests {
         // service specific error.
         let sse = map_km_error(binder_sse_error(1));
         assert_eq!(Err(Error::Binder(ExceptionCode::SERVICE_SPECIFIC, 1)), sse);
-        // map_or_log_err then maps it on a service specific error of Rc::SystemError.
+        // map_or_log_err then maps it on a service specific error of ResponseCode::SYSTEM_ERROR.
         assert_eq!(
-            Result::<(), i32>::Err(Rc::SystemError),
+            Result::<(), ResponseCode>::Err(ResponseCode::SYSTEM_ERROR),
             map_or_log_err(sse.context("Non negative service specific error."), |_| Err(
                 BinderStatus::ok()
             ))
-            .map_err(|s| s.service_specific_error())
+            .map_err(|s| ResponseCode(s.service_specific_error()))
         );
 
         // map_km_error creates a Error::Binder variant storing the given exception code.
         let binder_exception = map_km_error(binder_exception(ExceptionCode::TRANSACTION_FAILED));
         assert_eq!(Err(Error::Binder(ExceptionCode::TRANSACTION_FAILED, 0)), binder_exception);
-        // map_or_log_err then maps it on a service specific error of Rc::SystemError.
+        // map_or_log_err then maps it on a service specific error of ResponseCode::SYSTEM_ERROR.
         assert_eq!(
-            Result::<(), i32>::Err(Rc::SystemError),
+            Result::<(), ResponseCode>::Err(ResponseCode::SYSTEM_ERROR),
             map_or_log_err(binder_exception.context("Binder Exception."), |_| Err(
                 BinderStatus::ok()
             ))
-            .map_err(|s| s.service_specific_error())
+            .map_err(|s| ResponseCode(s.service_specific_error()))
         );
 
-        // selinux::Error::Perm() needs to be mapped to Rc::PermissionDenied
+        // selinux::Error::Perm() needs to be mapped to ResponseCode::PERMISSION_DENIED
         assert_eq!(
-            Result::<(), i32>::Err(Rc::PermissionDenied),
+            Result::<(), ResponseCode>::Err(ResponseCode::PERMISSION_DENIED),
             map_or_log_err(nested_selinux_perm(), |_| Err(BinderStatus::ok()))
-                .map_err(|s| s.service_specific_error())
+                .map_err(|s| ResponseCode(s.service_specific_error()))
         );
 
         // All other errors get mapped on System Error.
         assert_eq!(
-            Result::<(), i32>::Err(Rc::SystemError),
+            Result::<(), ResponseCode>::Err(ResponseCode::SYSTEM_ERROR),
             map_or_log_err(nested_other_error(), |_| Err(BinderStatus::ok()))
-                .map_err(|s| s.service_specific_error())
+                .map_err(|s| ResponseCode(s.service_specific_error()))
         );
 
         // Result::Ok variants get passed to the ok handler.
-        assert_eq!(Ok(Rc::OpAuthNeeded), map_or_log_err(nested_ok(Rc::OpAuthNeeded), Ok));
-        assert_eq!(Ok(Rc::Ok), map_or_log_err(nested_ok(Rc::Ok), Ok));
+        assert_eq!(Ok(ResponseCode::LOCKED), map_or_log_err(nested_ok(ResponseCode::LOCKED), Ok));
+        assert_eq!(
+            Ok(ResponseCode::SYSTEM_ERROR),
+            map_or_log_err(nested_ok(ResponseCode::SYSTEM_ERROR), Ok)
+        );
 
         Ok(())
     }
