@@ -10,15 +10,18 @@ pub mod aidl {
       pub mod keymint {
         pub mod Algorithm {
           #![allow(non_upper_case_globals)]
-          pub type Algorithm = i32;
-          pub const RSA: Algorithm = 1;
-          pub const EC: Algorithm = 3;
-          pub const AES: Algorithm = 32;
-          pub const TRIPLE_DES: Algorithm = 33;
-          pub const HMAC: Algorithm = 128;
+          use binder::declare_binder_enum;
+          declare_binder_enum! { Algorithm : i32 {
+            RSA = 1,
+            EC = 3,
+            AES = 32,
+            TRIPLE_DES = 33,
+            HMAC = 128,
+          } }
           pub(crate) mod mangled { pub use super::Algorithm as _7_android_8_hardware_7_keymint_9_Algorithm; }
         }
         pub mod BeginResult {
+          #[derive(Debug)]
           pub struct BeginResult {
             pub challenge: i64, 
             pub params: Vec<crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter>, 
@@ -79,18 +82,15 @@ pub mod aidl {
               if parcelable_size < 0 { return Err(binder::StatusCode::BAD_VALUE); }
               let mut result = Self::default();
               result.challenge = parcel.read()?;
-              if (parcel.get_data_position() - start_pos) >= parcelable_size {
-                unsafe { parcel.set_data_position(start_pos + parcelable_size)?; }
+              if (parcel.get_data_position() - start_pos) == parcelable_size {
                 return Ok(Some(result));
               }
               result.params = parcel.read()?;
-              if (parcel.get_data_position() - start_pos) >= parcelable_size {
-                unsafe { parcel.set_data_position(start_pos + parcelable_size)?; }
+              if (parcel.get_data_position() - start_pos) == parcelable_size {
                 return Ok(Some(result));
               }
               result.operation = Some(parcel.read()?);
-              if (parcel.get_data_position() - start_pos) >= parcelable_size {
-                unsafe { parcel.set_data_position(start_pos + parcelable_size)?; }
+              if (parcel.get_data_position() - start_pos) == parcelable_size {
                 return Ok(Some(result));
               }
               Ok(Some(result))
@@ -99,14 +99,17 @@ pub mod aidl {
         }
         pub mod BlockMode {
           #![allow(non_upper_case_globals)]
-          pub type BlockMode = i32;
-          pub const ECB: BlockMode = 1;
-          pub const CBC: BlockMode = 2;
-          pub const CTR: BlockMode = 3;
-          pub const GCM: BlockMode = 32;
+          use binder::declare_binder_enum;
+          declare_binder_enum! { BlockMode : i32 {
+            ECB = 1,
+            CBC = 2,
+            CTR = 3,
+            GCM = 32,
+          } }
           pub(crate) mod mangled { pub use super::BlockMode as _7_android_8_hardware_7_keymint_9_BlockMode; }
         }
         pub mod Certificate {
+          #[derive(Debug)]
           pub struct Certificate {
             pub encodedCertificate: Vec<u8>, 
           }
@@ -160,8 +163,7 @@ pub mod aidl {
               if parcelable_size < 0 { return Err(binder::StatusCode::BAD_VALUE); }
               let mut result = Self::default();
               result.encodedCertificate = parcel.read()?;
-              if (parcel.get_data_position() - start_pos) >= parcelable_size {
-                unsafe { parcel.set_data_position(start_pos + parcelable_size)?; }
+              if (parcel.get_data_position() - start_pos) == parcelable_size {
                 return Ok(Some(result));
               }
               Ok(Some(result))
@@ -170,116 +172,125 @@ pub mod aidl {
         }
         pub mod Constants {
           #![allow(non_upper_case_globals)]
-          pub type Constants = i32;
-          pub const AUTH_TOKEN_MAC_LENGTH: Constants = 32;
+          use binder::declare_binder_enum;
+          declare_binder_enum! { Constants : i32 {
+            AUTH_TOKEN_MAC_LENGTH = 32,
+          } }
           pub(crate) mod mangled { pub use super::Constants as _7_android_8_hardware_7_keymint_9_Constants; }
         }
         pub mod Digest {
           #![allow(non_upper_case_globals)]
-          pub type Digest = i32;
-          pub const NONE: Digest = 0;
-          pub const MD5: Digest = 1;
-          pub const SHA1: Digest = 2;
-          pub const SHA_2_224: Digest = 3;
-          pub const SHA_2_256: Digest = 4;
-          pub const SHA_2_384: Digest = 5;
-          pub const SHA_2_512: Digest = 6;
+          use binder::declare_binder_enum;
+          declare_binder_enum! { Digest : i32 {
+            NONE = 0,
+            MD5 = 1,
+            SHA1 = 2,
+            SHA_2_224 = 3,
+            SHA_2_256 = 4,
+            SHA_2_384 = 5,
+            SHA_2_512 = 6,
+          } }
           pub(crate) mod mangled { pub use super::Digest as _7_android_8_hardware_7_keymint_6_Digest; }
         }
         pub mod EcCurve {
           #![allow(non_upper_case_globals)]
-          pub type EcCurve = i32;
-          pub const P_224: EcCurve = 0;
-          pub const P_256: EcCurve = 1;
-          pub const P_384: EcCurve = 2;
-          pub const P_521: EcCurve = 3;
+          use binder::declare_binder_enum;
+          declare_binder_enum! { EcCurve : i32 {
+            P_224 = 0,
+            P_256 = 1,
+            P_384 = 2,
+            P_521 = 3,
+          } }
           pub(crate) mod mangled { pub use super::EcCurve as _7_android_8_hardware_7_keymint_7_EcCurve; }
         }
         pub mod ErrorCode {
           #![allow(non_upper_case_globals)]
-          pub type ErrorCode = i32;
-          pub const OK: ErrorCode = 0;
-          pub const ROOT_OF_TRUST_ALREADY_SET: ErrorCode = -1;
-          pub const UNSUPPORTED_PURPOSE: ErrorCode = -2;
-          pub const INCOMPATIBLE_PURPOSE: ErrorCode = -3;
-          pub const UNSUPPORTED_ALGORITHM: ErrorCode = -4;
-          pub const INCOMPATIBLE_ALGORITHM: ErrorCode = -5;
-          pub const UNSUPPORTED_KEY_SIZE: ErrorCode = -6;
-          pub const UNSUPPORTED_BLOCK_MODE: ErrorCode = -7;
-          pub const INCOMPATIBLE_BLOCK_MODE: ErrorCode = -8;
-          pub const UNSUPPORTED_MAC_LENGTH: ErrorCode = -9;
-          pub const UNSUPPORTED_PADDING_MODE: ErrorCode = -10;
-          pub const INCOMPATIBLE_PADDING_MODE: ErrorCode = -11;
-          pub const UNSUPPORTED_DIGEST: ErrorCode = -12;
-          pub const INCOMPATIBLE_DIGEST: ErrorCode = -13;
-          pub const INVALID_EXPIRATION_TIME: ErrorCode = -14;
-          pub const INVALID_USER_ID: ErrorCode = -15;
-          pub const INVALID_AUTHORIZATION_TIMEOUT: ErrorCode = -16;
-          pub const UNSUPPORTED_KEY_FORMAT: ErrorCode = -17;
-          pub const INCOMPATIBLE_KEY_FORMAT: ErrorCode = -18;
-          pub const UNSUPPORTED_KEY_ENCRYPTION_ALGORITHM: ErrorCode = -19;
-          pub const UNSUPPORTED_KEY_VERIFICATION_ALGORITHM: ErrorCode = -20;
-          pub const INVALID_INPUT_LENGTH: ErrorCode = -21;
-          pub const KEY_EXPORT_OPTIONS_INVALID: ErrorCode = -22;
-          pub const DELEGATION_NOT_ALLOWED: ErrorCode = -23;
-          pub const KEY_NOT_YET_VALID: ErrorCode = -24;
-          pub const KEY_EXPIRED: ErrorCode = -25;
-          pub const KEY_USER_NOT_AUTHENTICATED: ErrorCode = -26;
-          pub const OUTPUT_PARAMETER_NULL: ErrorCode = -27;
-          pub const INVALID_OPERATION_HANDLE: ErrorCode = -28;
-          pub const INSUFFICIENT_BUFFER_SPACE: ErrorCode = -29;
-          pub const VERIFICATION_FAILED: ErrorCode = -30;
-          pub const TOO_MANY_OPERATIONS: ErrorCode = -31;
-          pub const UNEXPECTED_NULL_POINTER: ErrorCode = -32;
-          pub const INVALID_KEY_BLOB: ErrorCode = -33;
-          pub const IMPORTED_KEY_NOT_ENCRYPTED: ErrorCode = -34;
-          pub const IMPORTED_KEY_DECRYPTION_FAILED: ErrorCode = -35;
-          pub const IMPORTED_KEY_NOT_SIGNED: ErrorCode = -36;
-          pub const IMPORTED_KEY_VERIFICATION_FAILED: ErrorCode = -37;
-          pub const INVALID_ARGUMENT: ErrorCode = -38;
-          pub const UNSUPPORTED_TAG: ErrorCode = -39;
-          pub const INVALID_TAG: ErrorCode = -40;
-          pub const MEMORY_ALLOCATION_FAILED: ErrorCode = -41;
-          pub const IMPORT_PARAMETER_MISMATCH: ErrorCode = -44;
-          pub const SECURE_HW_ACCESS_DENIED: ErrorCode = -45;
-          pub const OPERATION_CANCELLED: ErrorCode = -46;
-          pub const CONCURRENT_ACCESS_CONFLICT: ErrorCode = -47;
-          pub const SECURE_HW_BUSY: ErrorCode = -48;
-          pub const SECURE_HW_COMMUNICATION_FAILED: ErrorCode = -49;
-          pub const UNSUPPORTED_EC_FIELD: ErrorCode = -50;
-          pub const MISSING_NONCE: ErrorCode = -51;
-          pub const INVALID_NONCE: ErrorCode = -52;
-          pub const MISSING_MAC_LENGTH: ErrorCode = -53;
-          pub const KEY_RATE_LIMIT_EXCEEDED: ErrorCode = -54;
-          pub const CALLER_NONCE_PROHIBITED: ErrorCode = -55;
-          pub const KEY_MAX_OPS_EXCEEDED: ErrorCode = -56;
-          pub const INVALID_MAC_LENGTH: ErrorCode = -57;
-          pub const MISSING_MIN_MAC_LENGTH: ErrorCode = -58;
-          pub const UNSUPPORTED_MIN_MAC_LENGTH: ErrorCode = -59;
-          pub const UNSUPPORTED_KDF: ErrorCode = -60;
-          pub const UNSUPPORTED_EC_CURVE: ErrorCode = -61;
-          pub const KEY_REQUIRES_UPGRADE: ErrorCode = -62;
-          pub const ATTESTATION_CHALLENGE_MISSING: ErrorCode = -63;
-          pub const KEYMINT_NOT_CONFIGURED: ErrorCode = -64;
-          pub const ATTESTATION_APPLICATION_ID_MISSING: ErrorCode = -65;
-          pub const CANNOT_ATTEST_IDS: ErrorCode = -66;
-          pub const ROLLBACK_RESISTANCE_UNAVAILABLE: ErrorCode = -67;
-          pub const HARDWARE_TYPE_UNAVAILABLE: ErrorCode = -68;
-          pub const PROOF_OF_PRESENCE_REQUIRED: ErrorCode = -69;
-          pub const CONCURRENT_PROOF_OF_PRESENCE_REQUESTED: ErrorCode = -70;
-          pub const NO_USER_CONFIRMATION: ErrorCode = -71;
-          pub const DEVICE_LOCKED: ErrorCode = -72;
-          pub const EARLY_BOOT_ENDED: ErrorCode = -73;
-          pub const ATTESTATION_KEYS_NOT_PROVISIONED: ErrorCode = -74;
-          pub const ATTESTATION_IDS_NOT_PROVISIONED: ErrorCode = -75;
-          pub const INVALID_OPERATION: ErrorCode = -76;
-          pub const STORAGE_KEY_UNSUPPORTED: ErrorCode = -77;
-          pub const UNIMPLEMENTED: ErrorCode = -100;
-          pub const VERSION_MISMATCH: ErrorCode = -101;
-          pub const UNKNOWN_ERROR: ErrorCode = -1000;
+          use binder::declare_binder_enum;
+          declare_binder_enum! { ErrorCode : i32 {
+            OK = 0,
+            ROOT_OF_TRUST_ALREADY_SET = -1,
+            UNSUPPORTED_PURPOSE = -2,
+            INCOMPATIBLE_PURPOSE = -3,
+            UNSUPPORTED_ALGORITHM = -4,
+            INCOMPATIBLE_ALGORITHM = -5,
+            UNSUPPORTED_KEY_SIZE = -6,
+            UNSUPPORTED_BLOCK_MODE = -7,
+            INCOMPATIBLE_BLOCK_MODE = -8,
+            UNSUPPORTED_MAC_LENGTH = -9,
+            UNSUPPORTED_PADDING_MODE = -10,
+            INCOMPATIBLE_PADDING_MODE = -11,
+            UNSUPPORTED_DIGEST = -12,
+            INCOMPATIBLE_DIGEST = -13,
+            INVALID_EXPIRATION_TIME = -14,
+            INVALID_USER_ID = -15,
+            INVALID_AUTHORIZATION_TIMEOUT = -16,
+            UNSUPPORTED_KEY_FORMAT = -17,
+            INCOMPATIBLE_KEY_FORMAT = -18,
+            UNSUPPORTED_KEY_ENCRYPTION_ALGORITHM = -19,
+            UNSUPPORTED_KEY_VERIFICATION_ALGORITHM = -20,
+            INVALID_INPUT_LENGTH = -21,
+            KEY_EXPORT_OPTIONS_INVALID = -22,
+            DELEGATION_NOT_ALLOWED = -23,
+            KEY_NOT_YET_VALID = -24,
+            KEY_EXPIRED = -25,
+            KEY_USER_NOT_AUTHENTICATED = -26,
+            OUTPUT_PARAMETER_NULL = -27,
+            INVALID_OPERATION_HANDLE = -28,
+            INSUFFICIENT_BUFFER_SPACE = -29,
+            VERIFICATION_FAILED = -30,
+            TOO_MANY_OPERATIONS = -31,
+            UNEXPECTED_NULL_POINTER = -32,
+            INVALID_KEY_BLOB = -33,
+            IMPORTED_KEY_NOT_ENCRYPTED = -34,
+            IMPORTED_KEY_DECRYPTION_FAILED = -35,
+            IMPORTED_KEY_NOT_SIGNED = -36,
+            IMPORTED_KEY_VERIFICATION_FAILED = -37,
+            INVALID_ARGUMENT = -38,
+            UNSUPPORTED_TAG = -39,
+            INVALID_TAG = -40,
+            MEMORY_ALLOCATION_FAILED = -41,
+            IMPORT_PARAMETER_MISMATCH = -44,
+            SECURE_HW_ACCESS_DENIED = -45,
+            OPERATION_CANCELLED = -46,
+            CONCURRENT_ACCESS_CONFLICT = -47,
+            SECURE_HW_BUSY = -48,
+            SECURE_HW_COMMUNICATION_FAILED = -49,
+            UNSUPPORTED_EC_FIELD = -50,
+            MISSING_NONCE = -51,
+            INVALID_NONCE = -52,
+            MISSING_MAC_LENGTH = -53,
+            KEY_RATE_LIMIT_EXCEEDED = -54,
+            CALLER_NONCE_PROHIBITED = -55,
+            KEY_MAX_OPS_EXCEEDED = -56,
+            INVALID_MAC_LENGTH = -57,
+            MISSING_MIN_MAC_LENGTH = -58,
+            UNSUPPORTED_MIN_MAC_LENGTH = -59,
+            UNSUPPORTED_KDF = -60,
+            UNSUPPORTED_EC_CURVE = -61,
+            KEY_REQUIRES_UPGRADE = -62,
+            ATTESTATION_CHALLENGE_MISSING = -63,
+            KEYMINT_NOT_CONFIGURED = -64,
+            ATTESTATION_APPLICATION_ID_MISSING = -65,
+            CANNOT_ATTEST_IDS = -66,
+            ROLLBACK_RESISTANCE_UNAVAILABLE = -67,
+            HARDWARE_TYPE_UNAVAILABLE = -68,
+            PROOF_OF_PRESENCE_REQUIRED = -69,
+            CONCURRENT_PROOF_OF_PRESENCE_REQUESTED = -70,
+            NO_USER_CONFIRMATION = -71,
+            DEVICE_LOCKED = -72,
+            EARLY_BOOT_ENDED = -73,
+            ATTESTATION_KEYS_NOT_PROVISIONED = -74,
+            ATTESTATION_IDS_NOT_PROVISIONED = -75,
+            INVALID_OPERATION = -76,
+            STORAGE_KEY_UNSUPPORTED = -77,
+            UNIMPLEMENTED = -100,
+            VERSION_MISMATCH = -101,
+            UNKNOWN_ERROR = -1000,
+          } }
           pub(crate) mod mangled { pub use super::ErrorCode as _7_android_8_hardware_7_keymint_9_ErrorCode; }
         }
         pub mod HardwareAuthToken {
+          #[derive(Debug)]
           pub struct HardwareAuthToken {
             pub challenge: i64, 
             pub userId: i64, 
@@ -348,33 +359,27 @@ pub mod aidl {
               if parcelable_size < 0 { return Err(binder::StatusCode::BAD_VALUE); }
               let mut result = Self::default();
               result.challenge = parcel.read()?;
-              if (parcel.get_data_position() - start_pos) >= parcelable_size {
-                unsafe { parcel.set_data_position(start_pos + parcelable_size)?; }
+              if (parcel.get_data_position() - start_pos) == parcelable_size {
                 return Ok(Some(result));
               }
               result.userId = parcel.read()?;
-              if (parcel.get_data_position() - start_pos) >= parcelable_size {
-                unsafe { parcel.set_data_position(start_pos + parcelable_size)?; }
+              if (parcel.get_data_position() - start_pos) == parcelable_size {
                 return Ok(Some(result));
               }
               result.authenticatorId = parcel.read()?;
-              if (parcel.get_data_position() - start_pos) >= parcelable_size {
-                unsafe { parcel.set_data_position(start_pos + parcelable_size)?; }
+              if (parcel.get_data_position() - start_pos) == parcelable_size {
                 return Ok(Some(result));
               }
               result.authenticatorType = parcel.read()?;
-              if (parcel.get_data_position() - start_pos) >= parcelable_size {
-                unsafe { parcel.set_data_position(start_pos + parcelable_size)?; }
+              if (parcel.get_data_position() - start_pos) == parcelable_size {
                 return Ok(Some(result));
               }
               result.timestamp = parcel.read()?;
-              if (parcel.get_data_position() - start_pos) >= parcelable_size {
-                unsafe { parcel.set_data_position(start_pos + parcelable_size)?; }
+              if (parcel.get_data_position() - start_pos) == parcelable_size {
                 return Ok(Some(result));
               }
               result.mac = parcel.read()?;
-              if (parcel.get_data_position() - start_pos) >= parcelable_size {
-                unsafe { parcel.set_data_position(start_pos + parcelable_size)?; }
+              if (parcel.get_data_position() - start_pos) == parcelable_size {
                 return Ok(Some(result));
               }
               Ok(Some(result))
@@ -383,14 +388,17 @@ pub mod aidl {
         }
         pub mod HardwareAuthenticatorType {
           #![allow(non_upper_case_globals)]
-          pub type HardwareAuthenticatorType = i32;
-          pub const NONE: HardwareAuthenticatorType = 0;
-          pub const PASSWORD: HardwareAuthenticatorType = 1;
-          pub const FINGERPRINT: HardwareAuthenticatorType = 2;
-          pub const ANY: HardwareAuthenticatorType = -1;
+          use binder::declare_binder_enum;
+          declare_binder_enum! { HardwareAuthenticatorType : i32 {
+            NONE = 0,
+            PASSWORD = 1,
+            FINGERPRINT = 2,
+            ANY = -1,
+          } }
           pub(crate) mod mangled { pub use super::HardwareAuthenticatorType as _7_android_8_hardware_7_keymint_25_HardwareAuthenticatorType; }
         }
         pub mod HmacSharingParameters {
+          #[derive(Debug)]
           pub struct HmacSharingParameters {
             pub seed: Vec<u8>, 
             pub nonce: Vec<u8>, 
@@ -447,13 +455,11 @@ pub mod aidl {
               if parcelable_size < 0 { return Err(binder::StatusCode::BAD_VALUE); }
               let mut result = Self::default();
               result.seed = parcel.read()?;
-              if (parcel.get_data_position() - start_pos) >= parcelable_size {
-                unsafe { parcel.set_data_position(start_pos + parcelable_size)?; }
+              if (parcel.get_data_position() - start_pos) == parcelable_size {
                 return Ok(Some(result));
               }
               result.nonce = parcel.read()?;
-              if (parcel.get_data_position() - start_pos) >= parcelable_size {
-                unsafe { parcel.set_data_position(start_pos + parcelable_size)?; }
+              if (parcel.get_data_position() - start_pos) == parcelable_size {
                 return Ok(Some(result));
               }
               Ok(Some(result))
@@ -507,33 +513,36 @@ pub mod aidl {
             fn begin(&self, _arg_inPurpose: crate::mangled::_7_android_8_hardware_7_keymint_10_KeyPurpose, _arg_inKeyBlob: &[u8], _arg_inParams: &[crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter], _arg_inAuthToken: &crate::mangled::_7_android_8_hardware_7_keymint_17_HardwareAuthToken) -> binder::public_api::Result<crate::mangled::_7_android_8_hardware_7_keymint_11_BeginResult> {
               Err(binder::StatusCode::UNKNOWN_TRANSACTION.into())
             }
-            fn getDefaultImpl() -> DefaultImpl where Self: Sized {
+            fn getDefaultImpl() -> IKeyMintDeviceDefault where Self: Sized {
               DEFAULT_IMPL.lock().unwrap().clone()
             }
-            fn setDefaultImpl(d: DefaultImpl) -> DefaultImpl where Self: Sized {
+            fn setDefaultImpl(d: IKeyMintDeviceDefault) -> IKeyMintDeviceDefault where Self: Sized {
               std::mem::replace(&mut *DEFAULT_IMPL.lock().unwrap(), d)
             }
           }
-          pub const TRANSACTION_getHardwareInfo: binder::TransactionCode = binder::SpIBinder::FIRST_CALL_TRANSACTION + 0;
-          pub const TRANSACTION_verifyAuthorization: binder::TransactionCode = binder::SpIBinder::FIRST_CALL_TRANSACTION + 1;
-          pub const TRANSACTION_addRngEntropy: binder::TransactionCode = binder::SpIBinder::FIRST_CALL_TRANSACTION + 2;
-          pub const TRANSACTION_generateKey: binder::TransactionCode = binder::SpIBinder::FIRST_CALL_TRANSACTION + 3;
-          pub const TRANSACTION_importKey: binder::TransactionCode = binder::SpIBinder::FIRST_CALL_TRANSACTION + 4;
-          pub const TRANSACTION_importWrappedKey: binder::TransactionCode = binder::SpIBinder::FIRST_CALL_TRANSACTION + 5;
-          pub const TRANSACTION_upgradeKey: binder::TransactionCode = binder::SpIBinder::FIRST_CALL_TRANSACTION + 6;
-          pub const TRANSACTION_deleteKey: binder::TransactionCode = binder::SpIBinder::FIRST_CALL_TRANSACTION + 7;
-          pub const TRANSACTION_deleteAllKeys: binder::TransactionCode = binder::SpIBinder::FIRST_CALL_TRANSACTION + 8;
-          pub const TRANSACTION_destroyAttestationIds: binder::TransactionCode = binder::SpIBinder::FIRST_CALL_TRANSACTION + 9;
-          pub const TRANSACTION_begin: binder::TransactionCode = binder::SpIBinder::FIRST_CALL_TRANSACTION + 10;
-          pub type DefaultImpl = Option<std::sync::Arc<dyn IKeyMintDevice + Sync>>;
+          pub mod transactions {
+            #[allow(unused_imports)] use binder::IBinder;
+            pub const getHardwareInfo: binder::TransactionCode = binder::SpIBinder::FIRST_CALL_TRANSACTION + 0;
+            pub const verifyAuthorization: binder::TransactionCode = binder::SpIBinder::FIRST_CALL_TRANSACTION + 1;
+            pub const addRngEntropy: binder::TransactionCode = binder::SpIBinder::FIRST_CALL_TRANSACTION + 2;
+            pub const generateKey: binder::TransactionCode = binder::SpIBinder::FIRST_CALL_TRANSACTION + 3;
+            pub const importKey: binder::TransactionCode = binder::SpIBinder::FIRST_CALL_TRANSACTION + 4;
+            pub const importWrappedKey: binder::TransactionCode = binder::SpIBinder::FIRST_CALL_TRANSACTION + 5;
+            pub const upgradeKey: binder::TransactionCode = binder::SpIBinder::FIRST_CALL_TRANSACTION + 6;
+            pub const deleteKey: binder::TransactionCode = binder::SpIBinder::FIRST_CALL_TRANSACTION + 7;
+            pub const deleteAllKeys: binder::TransactionCode = binder::SpIBinder::FIRST_CALL_TRANSACTION + 8;
+            pub const destroyAttestationIds: binder::TransactionCode = binder::SpIBinder::FIRST_CALL_TRANSACTION + 9;
+            pub const begin: binder::TransactionCode = binder::SpIBinder::FIRST_CALL_TRANSACTION + 10;
+          }
+          pub type IKeyMintDeviceDefault = Option<std::sync::Arc<dyn IKeyMintDevice + Sync>>;
           use lazy_static::lazy_static;
           lazy_static! {
-            static ref DEFAULT_IMPL: std::sync::Mutex<DefaultImpl> = std::sync::Mutex::new(None);
+            static ref DEFAULT_IMPL: std::sync::Mutex<IKeyMintDeviceDefault> = std::sync::Mutex::new(None);
           }
           pub(crate) mod mangled { pub use super::IKeyMintDevice as _7_android_8_hardware_7_keymint_14_IKeyMintDevice; }
           impl IKeyMintDevice for BpKeyMintDevice {
             fn getHardwareInfo(&self) -> binder::public_api::Result<crate::mangled::_7_android_8_hardware_7_keymint_19_KeyMintHardwareInfo> {
-              let _aidl_reply = self.binder.transact(TRANSACTION_getHardwareInfo, 0, |_aidl_data| {
+              let _aidl_reply = self.binder.transact(transactions::getHardwareInfo, 0, |_aidl_data| {
                 Ok(())
               });
               if let Err(binder::StatusCode::UNKNOWN_TRANSACTION) = _aidl_reply {
@@ -548,7 +557,7 @@ pub mod aidl {
               Ok(_aidl_return)
             }
             fn verifyAuthorization(&self, _arg_challenge: i64, _arg_parametersToVerify: &[crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter], _arg_token: &crate::mangled::_7_android_8_hardware_7_keymint_17_HardwareAuthToken) -> binder::public_api::Result<crate::mangled::_7_android_8_hardware_7_keymint_17_VerificationToken> {
-              let _aidl_reply = self.binder.transact(TRANSACTION_verifyAuthorization, 0, |_aidl_data| {
+              let _aidl_reply = self.binder.transact(transactions::verifyAuthorization, 0, |_aidl_data| {
                 _aidl_data.write(&_arg_challenge)?;
                 _aidl_data.write(_arg_parametersToVerify)?;
                 _aidl_data.write(_arg_token)?;
@@ -566,7 +575,7 @@ pub mod aidl {
               Ok(_aidl_return)
             }
             fn addRngEntropy(&self, _arg_data: &[u8]) -> binder::public_api::Result<()> {
-              let _aidl_reply = self.binder.transact(TRANSACTION_addRngEntropy, 0, |_aidl_data| {
+              let _aidl_reply = self.binder.transact(transactions::addRngEntropy, 0, |_aidl_data| {
                 _aidl_data.write(_arg_data)?;
                 Ok(())
               });
@@ -581,7 +590,7 @@ pub mod aidl {
               Ok(())
             }
             fn generateKey(&self, _arg_keyParams: &[crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter], _arg_generatedKeyBlob: &mut Vec<u8>, _arg_generatedKeyCharacteristics: &mut crate::mangled::_7_android_8_hardware_7_keymint_18_KeyCharacteristics, _arg_outCertChain: &mut Vec<crate::mangled::_7_android_8_hardware_7_keymint_11_Certificate>) -> binder::public_api::Result<()> {
-              let _aidl_reply = self.binder.transact(TRANSACTION_generateKey, 0, |_aidl_data| {
+              let _aidl_reply = self.binder.transact(transactions::generateKey, 0, |_aidl_data| {
                 _aidl_data.write(_arg_keyParams)?;
                 _aidl_data.write_slice_size(Some(_arg_generatedKeyBlob))?;
                 _aidl_data.write_slice_size(Some(_arg_outCertChain))?;
@@ -601,7 +610,7 @@ pub mod aidl {
               Ok(())
             }
             fn importKey(&self, _arg_inKeyParams: &[crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter], _arg_inKeyFormat: crate::mangled::_7_android_8_hardware_7_keymint_9_KeyFormat, _arg_inKeyData: &[u8], _arg_outImportedKeyBlob: &mut Vec<u8>, _arg_outImportedKeyCharacteristics: &mut crate::mangled::_7_android_8_hardware_7_keymint_18_KeyCharacteristics, _arg_outCertChain: &mut Vec<crate::mangled::_7_android_8_hardware_7_keymint_11_Certificate>) -> binder::public_api::Result<()> {
-              let _aidl_reply = self.binder.transact(TRANSACTION_importKey, 0, |_aidl_data| {
+              let _aidl_reply = self.binder.transact(transactions::importKey, 0, |_aidl_data| {
                 _aidl_data.write(_arg_inKeyParams)?;
                 _aidl_data.write(&_arg_inKeyFormat)?;
                 _aidl_data.write(_arg_inKeyData)?;
@@ -623,7 +632,7 @@ pub mod aidl {
               Ok(())
             }
             fn importWrappedKey(&self, _arg_inWrappedKeyData: &[u8], _arg_inWrappingKeyBlob: &[u8], _arg_inMaskingKey: &[u8], _arg_inUnwrappingParams: &[crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter], _arg_inPasswordSid: i64, _arg_inBiometricSid: i64, _arg_outImportedKeyBlob: &mut Vec<u8>, _arg_outImportedKeyCharacteristics: &mut crate::mangled::_7_android_8_hardware_7_keymint_18_KeyCharacteristics) -> binder::public_api::Result<()> {
-              let _aidl_reply = self.binder.transact(TRANSACTION_importWrappedKey, 0, |_aidl_data| {
+              let _aidl_reply = self.binder.transact(transactions::importWrappedKey, 0, |_aidl_data| {
                 _aidl_data.write(_arg_inWrappedKeyData)?;
                 _aidl_data.write(_arg_inWrappingKeyBlob)?;
                 _aidl_data.write(_arg_inMaskingKey)?;
@@ -646,7 +655,7 @@ pub mod aidl {
               Ok(())
             }
             fn upgradeKey(&self, _arg_inKeyBlobToUpgrade: &[u8], _arg_inUpgradeParams: &[crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter]) -> binder::public_api::Result<Vec<u8>> {
-              let _aidl_reply = self.binder.transact(TRANSACTION_upgradeKey, 0, |_aidl_data| {
+              let _aidl_reply = self.binder.transact(transactions::upgradeKey, 0, |_aidl_data| {
                 _aidl_data.write(_arg_inKeyBlobToUpgrade)?;
                 _aidl_data.write(_arg_inUpgradeParams)?;
                 Ok(())
@@ -663,7 +672,7 @@ pub mod aidl {
               Ok(_aidl_return)
             }
             fn deleteKey(&self, _arg_inKeyBlob: &[u8]) -> binder::public_api::Result<()> {
-              let _aidl_reply = self.binder.transact(TRANSACTION_deleteKey, 0, |_aidl_data| {
+              let _aidl_reply = self.binder.transact(transactions::deleteKey, 0, |_aidl_data| {
                 _aidl_data.write(_arg_inKeyBlob)?;
                 Ok(())
               });
@@ -678,7 +687,7 @@ pub mod aidl {
               Ok(())
             }
             fn deleteAllKeys(&self) -> binder::public_api::Result<()> {
-              let _aidl_reply = self.binder.transact(TRANSACTION_deleteAllKeys, 0, |_aidl_data| {
+              let _aidl_reply = self.binder.transact(transactions::deleteAllKeys, 0, |_aidl_data| {
                 Ok(())
               });
               if let Err(binder::StatusCode::UNKNOWN_TRANSACTION) = _aidl_reply {
@@ -692,7 +701,7 @@ pub mod aidl {
               Ok(())
             }
             fn destroyAttestationIds(&self) -> binder::public_api::Result<()> {
-              let _aidl_reply = self.binder.transact(TRANSACTION_destroyAttestationIds, 0, |_aidl_data| {
+              let _aidl_reply = self.binder.transact(transactions::destroyAttestationIds, 0, |_aidl_data| {
                 Ok(())
               });
               if let Err(binder::StatusCode::UNKNOWN_TRANSACTION) = _aidl_reply {
@@ -706,7 +715,7 @@ pub mod aidl {
               Ok(())
             }
             fn begin(&self, _arg_inPurpose: crate::mangled::_7_android_8_hardware_7_keymint_10_KeyPurpose, _arg_inKeyBlob: &[u8], _arg_inParams: &[crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter], _arg_inAuthToken: &crate::mangled::_7_android_8_hardware_7_keymint_17_HardwareAuthToken) -> binder::public_api::Result<crate::mangled::_7_android_8_hardware_7_keymint_11_BeginResult> {
-              let _aidl_reply = self.binder.transact(TRANSACTION_begin, 0, |_aidl_data| {
+              let _aidl_reply = self.binder.transact(transactions::begin, 0, |_aidl_data| {
                 _aidl_data.write(&_arg_inPurpose)?;
                 _aidl_data.write(_arg_inKeyBlob)?;
                 _aidl_data.write(_arg_inParams)?;
@@ -740,7 +749,7 @@ pub mod aidl {
           }
           fn on_transact(_aidl_service: &dyn IKeyMintDevice, _aidl_code: binder::TransactionCode, _aidl_data: &binder::parcel::Parcel, _aidl_reply: &mut binder::parcel::Parcel) -> binder::Result<()> {
             match _aidl_code {
-              TRANSACTION_getHardwareInfo => {
+              transactions::getHardwareInfo => {
                 let _aidl_return = _aidl_service.getHardwareInfo();
                 match &_aidl_return {
                   Ok(_aidl_return) => {
@@ -751,7 +760,7 @@ pub mod aidl {
                 }
                 Ok(())
               }
-              TRANSACTION_verifyAuthorization => {
+              transactions::verifyAuthorization => {
                 let _arg_challenge: i64 = _aidl_data.read()?;
                 let _arg_parametersToVerify: Vec<crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter> = _aidl_data.read()?;
                 let _arg_token: crate::mangled::_7_android_8_hardware_7_keymint_17_HardwareAuthToken = _aidl_data.read()?;
@@ -765,7 +774,7 @@ pub mod aidl {
                 }
                 Ok(())
               }
-              TRANSACTION_addRngEntropy => {
+              transactions::addRngEntropy => {
                 let _arg_data: Vec<u8> = _aidl_data.read()?;
                 let _aidl_return = _aidl_service.addRngEntropy(&_arg_data);
                 match &_aidl_return {
@@ -776,7 +785,7 @@ pub mod aidl {
                 }
                 Ok(())
               }
-              TRANSACTION_generateKey => {
+              transactions::generateKey => {
                 let _arg_keyParams: Vec<crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter> = _aidl_data.read()?;
                 let mut _arg_generatedKeyBlob: Vec<u8> = Default::default();
                 _aidl_data.resize_out_vec(&mut _arg_generatedKeyBlob)?;
@@ -795,7 +804,7 @@ pub mod aidl {
                 }
                 Ok(())
               }
-              TRANSACTION_importKey => {
+              transactions::importKey => {
                 let _arg_inKeyParams: Vec<crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter> = _aidl_data.read()?;
                 let _arg_inKeyFormat: crate::mangled::_7_android_8_hardware_7_keymint_9_KeyFormat = _aidl_data.read()?;
                 let _arg_inKeyData: Vec<u8> = _aidl_data.read()?;
@@ -816,7 +825,7 @@ pub mod aidl {
                 }
                 Ok(())
               }
-              TRANSACTION_importWrappedKey => {
+              transactions::importWrappedKey => {
                 let _arg_inWrappedKeyData: Vec<u8> = _aidl_data.read()?;
                 let _arg_inWrappingKeyBlob: Vec<u8> = _aidl_data.read()?;
                 let _arg_inMaskingKey: Vec<u8> = _aidl_data.read()?;
@@ -837,7 +846,7 @@ pub mod aidl {
                 }
                 Ok(())
               }
-              TRANSACTION_upgradeKey => {
+              transactions::upgradeKey => {
                 let _arg_inKeyBlobToUpgrade: Vec<u8> = _aidl_data.read()?;
                 let _arg_inUpgradeParams: Vec<crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter> = _aidl_data.read()?;
                 let _aidl_return = _aidl_service.upgradeKey(&_arg_inKeyBlobToUpgrade, &_arg_inUpgradeParams);
@@ -850,7 +859,7 @@ pub mod aidl {
                 }
                 Ok(())
               }
-              TRANSACTION_deleteKey => {
+              transactions::deleteKey => {
                 let _arg_inKeyBlob: Vec<u8> = _aidl_data.read()?;
                 let _aidl_return = _aidl_service.deleteKey(&_arg_inKeyBlob);
                 match &_aidl_return {
@@ -861,7 +870,7 @@ pub mod aidl {
                 }
                 Ok(())
               }
-              TRANSACTION_deleteAllKeys => {
+              transactions::deleteAllKeys => {
                 let _aidl_return = _aidl_service.deleteAllKeys();
                 match &_aidl_return {
                   Ok(_aidl_return) => {
@@ -871,7 +880,7 @@ pub mod aidl {
                 }
                 Ok(())
               }
-              TRANSACTION_destroyAttestationIds => {
+              transactions::destroyAttestationIds => {
                 let _aidl_return = _aidl_service.destroyAttestationIds();
                 match &_aidl_return {
                   Ok(_aidl_return) => {
@@ -881,7 +890,7 @@ pub mod aidl {
                 }
                 Ok(())
               }
-              TRANSACTION_begin => {
+              transactions::begin => {
                 let _arg_inPurpose: crate::mangled::_7_android_8_hardware_7_keymint_10_KeyPurpose = _aidl_data.read()?;
                 let _arg_inKeyBlob: Vec<u8> = _aidl_data.read()?;
                 let _arg_inParams: Vec<crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter> = _aidl_data.read()?;
@@ -923,25 +932,28 @@ pub mod aidl {
             fn abort(&self) -> binder::public_api::Result<()> {
               Err(binder::StatusCode::UNKNOWN_TRANSACTION.into())
             }
-            fn getDefaultImpl() -> DefaultImpl where Self: Sized {
+            fn getDefaultImpl() -> IKeyMintOperationDefault where Self: Sized {
               DEFAULT_IMPL.lock().unwrap().clone()
             }
-            fn setDefaultImpl(d: DefaultImpl) -> DefaultImpl where Self: Sized {
+            fn setDefaultImpl(d: IKeyMintOperationDefault) -> IKeyMintOperationDefault where Self: Sized {
               std::mem::replace(&mut *DEFAULT_IMPL.lock().unwrap(), d)
             }
           }
-          pub const TRANSACTION_update: binder::TransactionCode = binder::SpIBinder::FIRST_CALL_TRANSACTION + 0;
-          pub const TRANSACTION_finish: binder::TransactionCode = binder::SpIBinder::FIRST_CALL_TRANSACTION + 1;
-          pub const TRANSACTION_abort: binder::TransactionCode = binder::SpIBinder::FIRST_CALL_TRANSACTION + 2;
-          pub type DefaultImpl = Option<std::sync::Arc<dyn IKeyMintOperation + Sync>>;
+          pub mod transactions {
+            #[allow(unused_imports)] use binder::IBinder;
+            pub const update: binder::TransactionCode = binder::SpIBinder::FIRST_CALL_TRANSACTION + 0;
+            pub const finish: binder::TransactionCode = binder::SpIBinder::FIRST_CALL_TRANSACTION + 1;
+            pub const abort: binder::TransactionCode = binder::SpIBinder::FIRST_CALL_TRANSACTION + 2;
+          }
+          pub type IKeyMintOperationDefault = Option<std::sync::Arc<dyn IKeyMintOperation + Sync>>;
           use lazy_static::lazy_static;
           lazy_static! {
-            static ref DEFAULT_IMPL: std::sync::Mutex<DefaultImpl> = std::sync::Mutex::new(None);
+            static ref DEFAULT_IMPL: std::sync::Mutex<IKeyMintOperationDefault> = std::sync::Mutex::new(None);
           }
           pub(crate) mod mangled { pub use super::IKeyMintOperation as _7_android_8_hardware_7_keymint_17_IKeyMintOperation; }
           impl IKeyMintOperation for BpKeyMintOperation {
             fn update(&self, _arg_inParams: &[crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter], _arg_input: &[u8], _arg_inVerificationToken: &crate::mangled::_7_android_8_hardware_7_keymint_17_VerificationToken, _arg_outParams: &mut Vec<crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter>, _arg_output: &mut Vec<u8>) -> binder::public_api::Result<i32> {
-              let _aidl_reply = self.binder.transact(TRANSACTION_update, 0, |_aidl_data| {
+              let _aidl_reply = self.binder.transact(transactions::update, 0, |_aidl_data| {
                 _aidl_data.write(_arg_inParams)?;
                 _aidl_data.write(_arg_input)?;
                 _aidl_data.write(_arg_inVerificationToken)?;
@@ -963,7 +975,7 @@ pub mod aidl {
               Ok(_aidl_return)
             }
             fn finish(&self, _arg_inParams: &[crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter], _arg_input: &[u8], _arg_inSignature: &[u8], _arg_authToken: &crate::mangled::_7_android_8_hardware_7_keymint_17_HardwareAuthToken, _arg_inVerificationToken: &crate::mangled::_7_android_8_hardware_7_keymint_17_VerificationToken, _arg_outParams: &mut Vec<crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter>, _arg_output: &mut Vec<u8>) -> binder::public_api::Result<()> {
-              let _aidl_reply = self.binder.transact(TRANSACTION_finish, 0, |_aidl_data| {
+              let _aidl_reply = self.binder.transact(transactions::finish, 0, |_aidl_data| {
                 _aidl_data.write(_arg_inParams)?;
                 _aidl_data.write(_arg_input)?;
                 _aidl_data.write(_arg_inSignature)?;
@@ -986,7 +998,7 @@ pub mod aidl {
               Ok(())
             }
             fn abort(&self) -> binder::public_api::Result<()> {
-              let _aidl_reply = self.binder.transact(TRANSACTION_abort, 0, |_aidl_data| {
+              let _aidl_reply = self.binder.transact(transactions::abort, 0, |_aidl_data| {
                 Ok(())
               });
               if let Err(binder::StatusCode::UNKNOWN_TRANSACTION) = _aidl_reply {
@@ -1007,7 +1019,7 @@ pub mod aidl {
           }
           fn on_transact(_aidl_service: &dyn IKeyMintOperation, _aidl_code: binder::TransactionCode, _aidl_data: &binder::parcel::Parcel, _aidl_reply: &mut binder::parcel::Parcel) -> binder::Result<()> {
             match _aidl_code {
-              TRANSACTION_update => {
+              transactions::update => {
                 let _arg_inParams: Vec<crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter> = _aidl_data.read()?;
                 let _arg_input: Vec<u8> = _aidl_data.read()?;
                 let _arg_inVerificationToken: crate::mangled::_7_android_8_hardware_7_keymint_17_VerificationToken = _aidl_data.read()?;
@@ -1027,7 +1039,7 @@ pub mod aidl {
                 }
                 Ok(())
               }
-              TRANSACTION_finish => {
+              transactions::finish => {
                 let _arg_inParams: Vec<crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter> = _aidl_data.read()?;
                 let _arg_input: Vec<u8> = _aidl_data.read()?;
                 let _arg_inSignature: Vec<u8> = _aidl_data.read()?;
@@ -1048,7 +1060,7 @@ pub mod aidl {
                 }
                 Ok(())
               }
-              TRANSACTION_abort => {
+              transactions::abort => {
                 let _aidl_return = _aidl_service.abort();
                 match &_aidl_return {
                   Ok(_aidl_return) => {
@@ -1063,6 +1075,7 @@ pub mod aidl {
           }
         }
         pub mod KeyCharacteristics {
+          #[derive(Debug)]
           pub struct KeyCharacteristics {
             pub softwareEnforced: Vec<crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter>, 
             pub hardwareEnforced: Vec<crate::mangled::_7_android_8_hardware_7_keymint_12_KeyParameter>, 
@@ -1119,13 +1132,11 @@ pub mod aidl {
               if parcelable_size < 0 { return Err(binder::StatusCode::BAD_VALUE); }
               let mut result = Self::default();
               result.softwareEnforced = parcel.read()?;
-              if (parcel.get_data_position() - start_pos) >= parcelable_size {
-                unsafe { parcel.set_data_position(start_pos + parcelable_size)?; }
+              if (parcel.get_data_position() - start_pos) == parcelable_size {
                 return Ok(Some(result));
               }
               result.hardwareEnforced = parcel.read()?;
-              if (parcel.get_data_position() - start_pos) >= parcelable_size {
-                unsafe { parcel.set_data_position(start_pos + parcelable_size)?; }
+              if (parcel.get_data_position() - start_pos) == parcelable_size {
                 return Ok(Some(result));
               }
               Ok(Some(result))
@@ -1134,24 +1145,29 @@ pub mod aidl {
         }
         pub mod KeyDerivationFunction {
           #![allow(non_upper_case_globals)]
-          pub type KeyDerivationFunction = i32;
-          pub const NONE: KeyDerivationFunction = 0;
-          pub const RFC5869_SHA256: KeyDerivationFunction = 1;
-          pub const ISO18033_2_KDF1_SHA1: KeyDerivationFunction = 2;
-          pub const ISO18033_2_KDF1_SHA256: KeyDerivationFunction = 3;
-          pub const ISO18033_2_KDF2_SHA1: KeyDerivationFunction = 4;
-          pub const ISO18033_2_KDF2_SHA256: KeyDerivationFunction = 5;
+          use binder::declare_binder_enum;
+          declare_binder_enum! { KeyDerivationFunction : i32 {
+            NONE = 0,
+            RFC5869_SHA256 = 1,
+            ISO18033_2_KDF1_SHA1 = 2,
+            ISO18033_2_KDF1_SHA256 = 3,
+            ISO18033_2_KDF2_SHA1 = 4,
+            ISO18033_2_KDF2_SHA256 = 5,
+          } }
           pub(crate) mod mangled { pub use super::KeyDerivationFunction as _7_android_8_hardware_7_keymint_21_KeyDerivationFunction; }
         }
         pub mod KeyFormat {
           #![allow(non_upper_case_globals)]
-          pub type KeyFormat = i32;
-          pub const X509: KeyFormat = 0;
-          pub const PKCS8: KeyFormat = 1;
-          pub const RAW: KeyFormat = 3;
+          use binder::declare_binder_enum;
+          declare_binder_enum! { KeyFormat : i32 {
+            X509 = 0,
+            PKCS8 = 1,
+            RAW = 3,
+          } }
           pub(crate) mod mangled { pub use super::KeyFormat as _7_android_8_hardware_7_keymint_9_KeyFormat; }
         }
         pub mod KeyMintHardwareInfo {
+          #[derive(Debug)]
           pub struct KeyMintHardwareInfo {
             pub versionNumber: i32, 
             pub securityLevel: crate::mangled::_7_android_8_hardware_7_keymint_13_SecurityLevel, 
@@ -1214,23 +1230,19 @@ pub mod aidl {
               if parcelable_size < 0 { return Err(binder::StatusCode::BAD_VALUE); }
               let mut result = Self::default();
               result.versionNumber = parcel.read()?;
-              if (parcel.get_data_position() - start_pos) >= parcelable_size {
-                unsafe { parcel.set_data_position(start_pos + parcelable_size)?; }
+              if (parcel.get_data_position() - start_pos) == parcelable_size {
                 return Ok(Some(result));
               }
               result.securityLevel = parcel.read()?;
-              if (parcel.get_data_position() - start_pos) >= parcelable_size {
-                unsafe { parcel.set_data_position(start_pos + parcelable_size)?; }
+              if (parcel.get_data_position() - start_pos) == parcelable_size {
                 return Ok(Some(result));
               }
               result.keyMintName = parcel.read()?;
-              if (parcel.get_data_position() - start_pos) >= parcelable_size {
-                unsafe { parcel.set_data_position(start_pos + parcelable_size)?; }
+              if (parcel.get_data_position() - start_pos) == parcelable_size {
                 return Ok(Some(result));
               }
               result.keyMintAuthorName = parcel.read()?;
-              if (parcel.get_data_position() - start_pos) >= parcelable_size {
-                unsafe { parcel.set_data_position(start_pos + parcelable_size)?; }
+              if (parcel.get_data_position() - start_pos) == parcelable_size {
                 return Ok(Some(result));
               }
               Ok(Some(result))
@@ -1239,15 +1251,18 @@ pub mod aidl {
         }
         pub mod KeyOrigin {
           #![allow(non_upper_case_globals)]
-          pub type KeyOrigin = i32;
-          pub const GENERATED: KeyOrigin = 0;
-          pub const DERIVED: KeyOrigin = 1;
-          pub const IMPORTED: KeyOrigin = 2;
-          pub const RESERVED: KeyOrigin = 3;
-          pub const SECURELY_IMPORTED: KeyOrigin = 4;
+          use binder::declare_binder_enum;
+          declare_binder_enum! { KeyOrigin : i32 {
+            GENERATED = 0,
+            DERIVED = 1,
+            IMPORTED = 2,
+            RESERVED = 3,
+            SECURELY_IMPORTED = 4,
+          } }
           pub(crate) mod mangled { pub use super::KeyOrigin as _7_android_8_hardware_7_keymint_9_KeyOrigin; }
         }
         pub mod KeyParameter {
+          #[derive(Debug)]
           pub struct KeyParameter {
             pub tag: crate::mangled::_7_android_8_hardware_7_keymint_3_Tag, 
             pub boolValue: bool, 
@@ -1316,33 +1331,27 @@ pub mod aidl {
               if parcelable_size < 0 { return Err(binder::StatusCode::BAD_VALUE); }
               let mut result = Self::default();
               result.tag = parcel.read()?;
-              if (parcel.get_data_position() - start_pos) >= parcelable_size {
-                unsafe { parcel.set_data_position(start_pos + parcelable_size)?; }
+              if (parcel.get_data_position() - start_pos) == parcelable_size {
                 return Ok(Some(result));
               }
               result.boolValue = parcel.read()?;
-              if (parcel.get_data_position() - start_pos) >= parcelable_size {
-                unsafe { parcel.set_data_position(start_pos + parcelable_size)?; }
+              if (parcel.get_data_position() - start_pos) == parcelable_size {
                 return Ok(Some(result));
               }
               result.integer = parcel.read()?;
-              if (parcel.get_data_position() - start_pos) >= parcelable_size {
-                unsafe { parcel.set_data_position(start_pos + parcelable_size)?; }
+              if (parcel.get_data_position() - start_pos) == parcelable_size {
                 return Ok(Some(result));
               }
               result.longInteger = parcel.read()?;
-              if (parcel.get_data_position() - start_pos) >= parcelable_size {
-                unsafe { parcel.set_data_position(start_pos + parcelable_size)?; }
+              if (parcel.get_data_position() - start_pos) == parcelable_size {
                 return Ok(Some(result));
               }
               result.dateTime = parcel.read()?;
-              if (parcel.get_data_position() - start_pos) >= parcelable_size {
-                unsafe { parcel.set_data_position(start_pos + parcelable_size)?; }
+              if (parcel.get_data_position() - start_pos) == parcelable_size {
                 return Ok(Some(result));
               }
               result.blob = parcel.read()?;
-              if (parcel.get_data_position() - start_pos) >= parcelable_size {
-                unsafe { parcel.set_data_position(start_pos + parcelable_size)?; }
+              if (parcel.get_data_position() - start_pos) == parcelable_size {
                 return Ok(Some(result));
               }
               Ok(Some(result))
@@ -1351,114 +1360,125 @@ pub mod aidl {
         }
         pub mod KeyPurpose {
           #![allow(non_upper_case_globals)]
-          pub type KeyPurpose = i32;
-          pub const ENCRYPT: KeyPurpose = 0;
-          pub const DECRYPT: KeyPurpose = 1;
-          pub const SIGN: KeyPurpose = 2;
-          pub const VERIFY: KeyPurpose = 3;
-          pub const WRAP_KEY: KeyPurpose = 5;
+          use binder::declare_binder_enum;
+          declare_binder_enum! { KeyPurpose : i32 {
+            ENCRYPT = 0,
+            DECRYPT = 1,
+            SIGN = 2,
+            VERIFY = 3,
+            WRAP_KEY = 5,
+          } }
           pub(crate) mod mangled { pub use super::KeyPurpose as _7_android_8_hardware_7_keymint_10_KeyPurpose; }
         }
         pub mod PaddingMode {
           #![allow(non_upper_case_globals)]
-          pub type PaddingMode = i32;
-          pub const NONE: PaddingMode = 1;
-          pub const RSA_OAEP: PaddingMode = 2;
-          pub const RSA_PSS: PaddingMode = 3;
-          pub const RSA_PKCS1_1_5_ENCRYPT: PaddingMode = 4;
-          pub const RSA_PKCS1_1_5_SIGN: PaddingMode = 5;
-          pub const PKCS7: PaddingMode = 64;
+          use binder::declare_binder_enum;
+          declare_binder_enum! { PaddingMode : i32 {
+            NONE = 1,
+            RSA_OAEP = 2,
+            RSA_PSS = 3,
+            RSA_PKCS1_1_5_ENCRYPT = 4,
+            RSA_PKCS1_1_5_SIGN = 5,
+            PKCS7 = 64,
+          } }
           pub(crate) mod mangled { pub use super::PaddingMode as _7_android_8_hardware_7_keymint_11_PaddingMode; }
         }
         pub mod SecurityLevel {
           #![allow(non_upper_case_globals)]
-          pub type SecurityLevel = i32;
-          pub const SOFTWARE: SecurityLevel = 0;
-          pub const TRUSTED_ENVIRONMENT: SecurityLevel = 1;
-          pub const STRONGBOX: SecurityLevel = 2;
+          use binder::declare_binder_enum;
+          declare_binder_enum! { SecurityLevel : i32 {
+            SOFTWARE = 0,
+            TRUSTED_ENVIRONMENT = 1,
+            STRONGBOX = 2,
+          } }
           pub(crate) mod mangled { pub use super::SecurityLevel as _7_android_8_hardware_7_keymint_13_SecurityLevel; }
         }
         pub mod Tag {
           #![allow(non_upper_case_globals)]
-          pub type Tag = i32;
-          pub const INVALID: Tag = 0;
-          pub const PURPOSE: Tag = 536870913;
-          pub const ALGORITHM: Tag = 268435458;
-          pub const KEY_SIZE: Tag = 805306371;
-          pub const BLOCK_MODE: Tag = 536870916;
-          pub const DIGEST: Tag = 536870917;
-          pub const PADDING: Tag = 536870918;
-          pub const CALLER_NONCE: Tag = 1879048199;
-          pub const MIN_MAC_LENGTH: Tag = 805306376;
-          pub const EC_CURVE: Tag = 268435466;
-          pub const RSA_PUBLIC_EXPONENT: Tag = 1342177480;
-          pub const INCLUDE_UNIQUE_ID: Tag = 1879048394;
-          pub const BLOB_USAGE_REQUIREMENTS: Tag = 268435757;
-          pub const BOOTLOADER_ONLY: Tag = 1879048494;
-          pub const ROLLBACK_RESISTANCE: Tag = 1879048495;
-          pub const HARDWARE_TYPE: Tag = 268435760;
-          pub const EARLY_BOOT_ONLY: Tag = 1879048497;
-          pub const ACTIVE_DATETIME: Tag = 1610613136;
-          pub const ORIGINATION_EXPIRE_DATETIME: Tag = 1610613137;
-          pub const USAGE_EXPIRE_DATETIME: Tag = 1610613138;
-          pub const MIN_SECONDS_BETWEEN_OPS: Tag = 805306771;
-          pub const MAX_USES_PER_BOOT: Tag = 805306772;
-          pub const USER_ID: Tag = 805306869;
-          pub const USER_SECURE_ID: Tag = 1073742326;
-          pub const NO_AUTH_REQUIRED: Tag = 1879048695;
-          pub const USER_AUTH_TYPE: Tag = 268435960;
-          pub const AUTH_TIMEOUT: Tag = 805306873;
-          pub const ALLOW_WHILE_ON_BODY: Tag = 1879048698;
-          pub const TRUSTED_USER_PRESENCE_REQUIRED: Tag = 1879048699;
-          pub const TRUSTED_CONFIRMATION_REQUIRED: Tag = 1879048700;
-          pub const UNLOCKED_DEVICE_REQUIRED: Tag = 1879048701;
-          pub const APPLICATION_ID: Tag = -1879047591;
-          pub const APPLICATION_DATA: Tag = -1879047492;
-          pub const CREATION_DATETIME: Tag = 1610613437;
-          pub const ORIGIN: Tag = 268436158;
-          pub const ROOT_OF_TRUST: Tag = -1879047488;
-          pub const OS_VERSION: Tag = 805307073;
-          pub const OS_PATCHLEVEL: Tag = 805307074;
-          pub const UNIQUE_ID: Tag = -1879047485;
-          pub const ATTESTATION_CHALLENGE: Tag = -1879047484;
-          pub const ATTESTATION_APPLICATION_ID: Tag = -1879047483;
-          pub const ATTESTATION_ID_BRAND: Tag = -1879047482;
-          pub const ATTESTATION_ID_DEVICE: Tag = -1879047481;
-          pub const ATTESTATION_ID_PRODUCT: Tag = -1879047480;
-          pub const ATTESTATION_ID_SERIAL: Tag = -1879047479;
-          pub const ATTESTATION_ID_IMEI: Tag = -1879047478;
-          pub const ATTESTATION_ID_MEID: Tag = -1879047477;
-          pub const ATTESTATION_ID_MANUFACTURER: Tag = -1879047476;
-          pub const ATTESTATION_ID_MODEL: Tag = -1879047475;
-          pub const VENDOR_PATCHLEVEL: Tag = 805307086;
-          pub const BOOT_PATCHLEVEL: Tag = 805307087;
-          pub const DEVICE_UNIQUE_ATTESTATION: Tag = 1879048912;
-          pub const IDENTITY_CREDENTIAL_KEY: Tag = 1879048913;
-          pub const STORAGE_KEY: Tag = 1879048914;
-          pub const ASSOCIATED_DATA: Tag = -1879047192;
-          pub const NONCE: Tag = -1879047191;
-          pub const MAC_LENGTH: Tag = 805307371;
-          pub const RESET_SINCE_ID_ROTATION: Tag = 1879049196;
-          pub const CONFIRMATION_TOKEN: Tag = -1879047187;
+          use binder::declare_binder_enum;
+          declare_binder_enum! { Tag : i32 {
+            INVALID = 0,
+            PURPOSE = 536870913,
+            ALGORITHM = 268435458,
+            KEY_SIZE = 805306371,
+            BLOCK_MODE = 536870916,
+            DIGEST = 536870917,
+            PADDING = 536870918,
+            CALLER_NONCE = 1879048199,
+            MIN_MAC_LENGTH = 805306376,
+            EC_CURVE = 268435466,
+            RSA_PUBLIC_EXPONENT = 1342177480,
+            INCLUDE_UNIQUE_ID = 1879048394,
+            BLOB_USAGE_REQUIREMENTS = 268435757,
+            BOOTLOADER_ONLY = 1879048494,
+            ROLLBACK_RESISTANCE = 1879048495,
+            HARDWARE_TYPE = 268435760,
+            EARLY_BOOT_ONLY = 1879048497,
+            ACTIVE_DATETIME = 1610613136,
+            ORIGINATION_EXPIRE_DATETIME = 1610613137,
+            USAGE_EXPIRE_DATETIME = 1610613138,
+            MIN_SECONDS_BETWEEN_OPS = 805306771,
+            MAX_USES_PER_BOOT = 805306772,
+            USER_ID = 805306869,
+            USER_SECURE_ID = 1073742326,
+            NO_AUTH_REQUIRED = 1879048695,
+            USER_AUTH_TYPE = 268435960,
+            AUTH_TIMEOUT = 805306873,
+            ALLOW_WHILE_ON_BODY = 1879048698,
+            TRUSTED_USER_PRESENCE_REQUIRED = 1879048699,
+            TRUSTED_CONFIRMATION_REQUIRED = 1879048700,
+            UNLOCKED_DEVICE_REQUIRED = 1879048701,
+            APPLICATION_ID = -1879047591,
+            APPLICATION_DATA = -1879047492,
+            CREATION_DATETIME = 1610613437,
+            ORIGIN = 268436158,
+            ROOT_OF_TRUST = -1879047488,
+            OS_VERSION = 805307073,
+            OS_PATCHLEVEL = 805307074,
+            UNIQUE_ID = -1879047485,
+            ATTESTATION_CHALLENGE = -1879047484,
+            ATTESTATION_APPLICATION_ID = -1879047483,
+            ATTESTATION_ID_BRAND = -1879047482,
+            ATTESTATION_ID_DEVICE = -1879047481,
+            ATTESTATION_ID_PRODUCT = -1879047480,
+            ATTESTATION_ID_SERIAL = -1879047479,
+            ATTESTATION_ID_IMEI = -1879047478,
+            ATTESTATION_ID_MEID = -1879047477,
+            ATTESTATION_ID_MANUFACTURER = -1879047476,
+            ATTESTATION_ID_MODEL = -1879047475,
+            VENDOR_PATCHLEVEL = 805307086,
+            BOOT_PATCHLEVEL = 805307087,
+            DEVICE_UNIQUE_ATTESTATION = 1879048912,
+            IDENTITY_CREDENTIAL_KEY = 1879048913,
+            STORAGE_KEY = 1879048914,
+            ASSOCIATED_DATA = -1879047192,
+            NONCE = -1879047191,
+            MAC_LENGTH = 805307371,
+            RESET_SINCE_ID_ROTATION = 1879049196,
+            CONFIRMATION_TOKEN = -1879047187,
+          } }
           pub(crate) mod mangled { pub use super::Tag as _7_android_8_hardware_7_keymint_3_Tag; }
         }
         pub mod TagType {
           #![allow(non_upper_case_globals)]
-          pub type TagType = i32;
-          pub const INVALID: TagType = 0;
-          pub const ENUM: TagType = 268435456;
-          pub const ENUM_REP: TagType = 536870912;
-          pub const UINT: TagType = 805306368;
-          pub const UINT_REP: TagType = 1073741824;
-          pub const ULONG: TagType = 1342177280;
-          pub const DATE: TagType = 1610612736;
-          pub const BOOL: TagType = 1879048192;
-          pub const BIGNUM: TagType = -2147483648;
-          pub const BYTES: TagType = -1879048192;
-          pub const ULONG_REP: TagType = -1610612736;
+          use binder::declare_binder_enum;
+          declare_binder_enum! { TagType : i32 {
+            INVALID = 0,
+            ENUM = 268435456,
+            ENUM_REP = 536870912,
+            UINT = 805306368,
+            UINT_REP = 1073741824,
+            ULONG = 1342177280,
+            DATE = 1610612736,
+            BOOL = 1879048192,
+            BIGNUM = -2147483648,
+            BYTES = -1879048192,
+            ULONG_REP = -1610612736,
+          } }
           pub(crate) mod mangled { pub use super::TagType as _7_android_8_hardware_7_keymint_7_TagType; }
         }
         pub mod Timestamp {
+          #[derive(Debug)]
           pub struct Timestamp {
             pub milliSeconds: i64, 
           }
@@ -1512,8 +1532,7 @@ pub mod aidl {
               if parcelable_size < 0 { return Err(binder::StatusCode::BAD_VALUE); }
               let mut result = Self::default();
               result.milliSeconds = parcel.read()?;
-              if (parcel.get_data_position() - start_pos) >= parcelable_size {
-                unsafe { parcel.set_data_position(start_pos + parcelable_size)?; }
+              if (parcel.get_data_position() - start_pos) == parcelable_size {
                 return Ok(Some(result));
               }
               Ok(Some(result))
@@ -1521,6 +1540,7 @@ pub mod aidl {
           }
         }
         pub mod VerificationToken {
+          #[derive(Debug)]
           pub struct VerificationToken {
             pub challenge: i64, 
             pub timestamp: crate::mangled::_7_android_8_hardware_7_keymint_9_Timestamp, 
@@ -1583,23 +1603,19 @@ pub mod aidl {
               if parcelable_size < 0 { return Err(binder::StatusCode::BAD_VALUE); }
               let mut result = Self::default();
               result.challenge = parcel.read()?;
-              if (parcel.get_data_position() - start_pos) >= parcelable_size {
-                unsafe { parcel.set_data_position(start_pos + parcelable_size)?; }
+              if (parcel.get_data_position() - start_pos) == parcelable_size {
                 return Ok(Some(result));
               }
               result.timestamp = parcel.read()?;
-              if (parcel.get_data_position() - start_pos) >= parcelable_size {
-                unsafe { parcel.set_data_position(start_pos + parcelable_size)?; }
+              if (parcel.get_data_position() - start_pos) == parcelable_size {
                 return Ok(Some(result));
               }
               result.securityLevel = parcel.read()?;
-              if (parcel.get_data_position() - start_pos) >= parcelable_size {
-                unsafe { parcel.set_data_position(start_pos + parcelable_size)?; }
+              if (parcel.get_data_position() - start_pos) == parcelable_size {
                 return Ok(Some(result));
               }
               result.mac = parcel.read()?;
-              if (parcel.get_data_position() - start_pos) >= parcelable_size {
-                unsafe { parcel.set_data_position(start_pos + parcelable_size)?; }
+              if (parcel.get_data_position() - start_pos) == parcelable_size {
                 return Ok(Some(result));
               }
               Ok(Some(result))
