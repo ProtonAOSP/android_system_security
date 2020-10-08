@@ -41,14 +41,13 @@
 //! from the database module these functions take permission check
 //! callbacks.
 
-use crate::error::Error as KsError;
-use crate::key_parameter::{KeyParameter, SqlField, TagType};
-use crate::{error, permission::KeyPermSet};
+use crate::error::{Error as KsError, ResponseCode};
+use crate::key_parameter::{KeyParameter, SqlField, Tag};
+use crate::permission::KeyPermSet;
 use anyhow::{anyhow, Context, Result};
 
-use android_hardware_keymint::aidl::android::hardware::keymint::SecurityLevel::SecurityLevel as SecurityLevelType;
-use android_security_keystore2::aidl::android::security::keystore2::{
-    Domain, Domain::Domain as DomainType, KeyDescriptor::KeyDescriptor,
+use android_system_keystore2::aidl::android::system::keystore2::{
+    Domain::Domain, KeyDescriptor::KeyDescriptor, SecurityLevel::SecurityLevel,
 };
 
 #[cfg(not(test))]
@@ -99,7 +98,7 @@ pub struct KeyEntry {
     km_blob: Option<Vec<u8>>,
     cert: Option<Vec<u8>>,
     cert_chain: Option<Vec<u8>>,
-    sec_level: SecurityLevelType,
+    sec_level: SecurityLevel,
     parameters: Vec<KeyParameter>,
 }
 
@@ -133,7 +132,7 @@ impl KeyEntry {
         self.cert_chain.take()
     }
     /// Returns the security level of the key entry.
-    pub fn sec_level(&self) -> SecurityLevelType {
+    pub fn sec_level(&self) -> SecurityLevel {
         self.sec_level
     }
 }
@@ -261,9 +260,9 @@ impl KeystoreDB {
     /// key artifacts, i.e., blobs and parameters have been associated with the new
     /// key id. Finalizing with `rebind_alias` makes the creation of a new key entry
     /// atomic even if key generation is not.
-    pub fn create_key_entry(&self, domain: DomainType, namespace: i64) -> Result<i64> {
+    pub fn create_key_entry(&self, domain: Domain, namespace: i64) -> Result<i64> {
         match domain {
-            Domain::App | Domain::SELinux => {}
+            Domain::APP | Domain::SELINUX => {}
             _ => {
                 return Err(KsError::sys())
                     .context(format!("Domain {:?} must be either App or SELinux.", domain));
@@ -273,7 +272,7 @@ impl KeystoreDB {
             self.conn.execute(
                 "INSERT into persistent.keyentry (id, creation_date, domain, namespace, alias)
                      VALUES(?, datetime('now'), ?, ?, NULL);",
-                params![id, domain as i64, namespace],
+                params![id, domain.0 as u32, namespace],
             )
         })
         .context("In create_key_entry")
@@ -290,13 +289,13 @@ impl KeystoreDB {
         key_id: i64,
         sc_type: SubComponentType,
         blob: &[u8],
-        sec_level: SecurityLevelType,
+        sec_level: SecurityLevel,
     ) -> Result<()> {
         self.conn
             .execute(
                 "INSERT into persistent.blobentry (subcomponent_type, keyentryid, blob, sec_level)
                     VALUES (?, ?, ?, ?);",
-                params![sc_type, key_id, blob, sec_level],
+                params![sc_type, key_id, blob, sec_level.0],
             )
             .context("Failed to insert blob.")?;
         Ok(())
@@ -319,8 +318,13 @@ impl KeystoreDB {
 
         let iter = params.into_iter();
         for p in iter {
-            stmt.insert(params![key_id, p.get_tag(), p.key_parameter_value(), p.security_level()])
-                .with_context(|| format!("In insert_keyparameter: Failed to insert {:?}", p))?;
+            stmt.insert(params![
+                key_id,
+                p.get_tag().0,
+                p.key_parameter_value(),
+                p.security_level().0
+            ])
+            .with_context(|| format!("In insert_keyparameter: Failed to insert {:?}", p))?;
         }
         Ok(())
     }
@@ -332,11 +336,11 @@ impl KeystoreDB {
         &mut self,
         newid: i64,
         alias: &str,
-        domain: DomainType,
+        domain: Domain,
         namespace: i64,
     ) -> Result<()> {
         match domain {
-            Domain::App | Domain::SELinux => {}
+            Domain::APP | Domain::SELINUX => {}
             _ => {
                 return Err(KsError::sys()).context(format!(
                     "In rebind_alias: Domain {:?} must be either App or SELinux.",
@@ -352,7 +356,7 @@ impl KeystoreDB {
             "UPDATE persistent.keyentry
                  SET alias = NULL, domain = NULL, namespace = NULL
                  WHERE alias = ? AND domain = ? AND namespace = ?;",
-            params![alias, domain as i64, namespace],
+            params![alias, domain.0 as u32, namespace],
         )
         .context("In rebind_alias: Failed to rebind existing entry.")?;
         let result = tx
@@ -360,7 +364,7 @@ impl KeystoreDB {
                 "UPDATE persistent.keyentry
                     SET alias = ?
                     WHERE id = ? AND domain = ? AND namespace = ?;",
-                params![alias, newid, domain as i64, namespace],
+                params![alias, newid, domain.0 as u32, namespace],
             )
             .context("In rebind_alias: Failed to set alias.")?;
         if result != 1 {
@@ -395,10 +399,10 @@ impl KeystoreDB {
             )
             .context("In load_key_entry_id: Failed to select from keyentry table.")?;
         let mut rows = stmt
-            .query(params![key.domain, key.namespace_, alias])
+            .query(params![key.domain.0 as u32, key.nspace, alias])
             .context("In load_key_entry_id: Failed to read from keyentry table.")?;
         Self::with_rows_extract_one(&mut rows, |row| {
-            row.map_or_else(|| Err(KsError::Rc(error::Rc::KeyNotFound)), Ok)?
+            row.map_or_else(|| Err(KsError::Rc(ResponseCode::KEY_NOT_FOUND)), Ok)?
                 .get(0)
                 .context("Failed to unpack id.")
         })
@@ -408,13 +412,13 @@ impl KeystoreDB {
     /// This helper function completes the access tuple of a key, which is required
     /// to perform access control. The strategy depends on the `domain` field in the
     /// key descriptor.
-    /// * Domain::SELinux: The access tuple is complete and this function only loads
+    /// * Domain::SELINUX: The access tuple is complete and this function only loads
     ///       the key_id for further processing.
-    /// * Domain::App: Like Domain::SELinux, but the tuple is completed by `caller_uid`
+    /// * Domain::APP: Like Domain::SELINUX, but the tuple is completed by `caller_uid`
     ///       which serves as the namespace.
-    /// * Domain::Grant: The grant table is queried for the `key_id` and the
+    /// * Domain::GRANT: The grant table is queried for the `key_id` and the
     ///       `access_vector`.
-    /// * Domain::KeyId: The keyentry table is queried for the owning `domain` and
+    /// * Domain::KEY_ID: The keyentry table is queried for the owning `domain` and
     ///       `namespace`.
     /// In each case the information returned is sufficient to perform the access
     /// check and the key id can be used to load further key artifacts.
@@ -429,67 +433,69 @@ impl KeystoreDB {
             // We already have the full access tuple to perform access control.
             // The only distinction is that we use the caller_uid instead
             // of the caller supplied namespace if the domain field is
-            // Domain::App.
-            Domain::App | Domain::SELinux => {
+            // Domain::APP.
+            Domain::APP | Domain::SELINUX => {
                 let mut access_key = key;
-                if access_key.domain == Domain::App {
-                    access_key.namespace_ = caller_uid as i64;
+                if access_key.domain == Domain::APP {
+                    access_key.nspace = caller_uid as i64;
                 }
                 let key_id = Self::load_key_entry_id(&access_key, &tx)
-                    .with_context(|| format!("With key.domain = {}.", access_key.domain))?;
+                    .with_context(|| format!("With key.domain = {:?}.", access_key.domain))?;
 
                 Ok((key_id, access_key, None))
             }
 
-            // Domain::Grant. In this case we load the key_id and the access_vector
+            // Domain::GRANT. In this case we load the key_id and the access_vector
             // from the grant table.
-            Domain::Grant => {
+            Domain::GRANT => {
                 let mut stmt = tx
                     .prepare(
                         "SELECT keyentryid, access_vector FROM perboot.grant
                             WHERE grantee = ? AND id = ?;",
                     )
-                    .context("Domain::Grant prepare statement failed")?;
+                    .context("Domain::GRANT prepare statement failed")?;
                 let mut rows = stmt
-                    .query(params![caller_uid as i64, key.namespace_])
+                    .query(params![caller_uid as i64, key.nspace])
                     .context("Domain:Grant: query failed.")?;
                 let (key_id, access_vector): (i64, i32) =
                     Self::with_rows_extract_one(&mut rows, |row| {
-                        let r = row.map_or_else(|| Err(KsError::Rc(error::Rc::KeyNotFound)), Ok)?;
+                        let r =
+                            row.map_or_else(|| Err(KsError::Rc(ResponseCode::KEY_NOT_FOUND)), Ok)?;
                         Ok((
                             r.get(0).context("Failed to unpack key_id.")?,
                             r.get(1).context("Failed to unpack access_vector.")?,
                         ))
                     })
-                    .context("Domain::Grant.")?;
+                    .context("Domain::GRANT.")?;
                 Ok((key_id, key, Some(access_vector.into())))
             }
 
-            // Domain::KeyId. In this case we load the domain and namespace from the
+            // Domain::KEY_ID. In this case we load the domain and namespace from the
             // keyentry database because we need them for access control.
-            Domain::KeyId => {
+            Domain::KEY_ID => {
                 let mut stmt = tx
                     .prepare(
                         "SELECT domain, namespace FROM persistent.keyentry
                             WHERE
                             id = ?;",
                     )
-                    .context("Domain::KeyId: prepare statement failed")?;
+                    .context("Domain::KEY_ID: prepare statement failed")?;
                 let mut rows =
-                    stmt.query(params![key.namespace_]).context("Domain::KeyId: query failed.")?;
-                let (domain, namespace): (DomainType, i64) =
+                    stmt.query(params![key.nspace]).context("Domain::KEY_ID: query failed.")?;
+                let (domain, namespace): (Domain, i64) =
                     Self::with_rows_extract_one(&mut rows, |row| {
-                        let r = row.map_or_else(|| Err(KsError::Rc(error::Rc::KeyNotFound)), Ok)?;
+                        let r =
+                            row.map_or_else(|| Err(KsError::Rc(ResponseCode::KEY_NOT_FOUND)), Ok)?;
                         Ok((
-                            r.get(0).context("Failed to unpack domain.")?,
+                            Domain(r.get(0).context("Failed to unpack domain.")?),
                             r.get(1).context("Failed to unpack namespace.")?,
                         ))
                     })
-                    .context("Domain::KeyId.")?;
-                let key_id = key.namespace_;
+                    .context("Domain::KEY_ID.")?;
+                let key_id = key.nspace;
                 let mut access_key = key;
                 access_key.domain = domain;
-                access_key.namespace_ = namespace;
+                access_key.nspace = namespace;
 
                 Ok((key_id, access_key, None))
             }
@@ -501,7 +507,7 @@ impl KeystoreDB {
         key_id: i64,
         load_bits: KeyEntryLoadBits,
         tx: &Transaction,
-    ) -> Result<(SecurityLevelType, Option<Vec<u8>>, Option<Vec<u8>>, Option<Vec<u8>>)> {
+    ) -> Result<(SecurityLevel, Option<Vec<u8>>, Option<Vec<u8>>, Option<Vec<u8>>)> {
         let mut stmt = tx
             .prepare(
                 "SELECT MAX(id), sec_level, subcomponent_type, blob FROM persistent.blobentry
@@ -512,7 +518,7 @@ impl KeystoreDB {
         let mut rows =
             stmt.query(params![key_id]).context("In load_blob_components: query failed.")?;
 
-        let mut sec_level: SecurityLevelType = Default::default();
+        let mut sec_level: SecurityLevel = Default::default();
         let mut km_blob: Option<Vec<u8>> = None;
         let mut cert_blob: Option<Vec<u8>> = None;
         let mut cert_chain_blob: Option<Vec<u8>> = None;
@@ -521,7 +527,8 @@ impl KeystoreDB {
                 row.get(2).context("Failed to extract subcomponent_type.")?;
             match (sub_type, load_bits.load_public()) {
                 (SubComponentType::KM_BLOB, _) => {
-                    sec_level = row.get(1).context("Failed to extract security level.")?;
+                    sec_level =
+                        SecurityLevel(row.get(1).context("Failed to extract security level.")?);
                     if load_bits.load_km() {
                         km_blob = Some(row.get(3).context("Failed to extract KM blob.")?);
                     }
@@ -557,8 +564,8 @@ impl KeystoreDB {
         let mut rows =
             stmt.query(params![key_id]).context("In load_key_parameters: query failed.")?;
         Self::with_rows_extract_all(&mut rows, |row| {
-            let tag: TagType = row.get(0).context("Failed to read tag.")?;
-            let sec_level: SecurityLevelType = row.get(2).context("Failed to read sec_level.")?;
+            let tag = Tag(row.get(0).context("Failed to read tag.")?);
+            let sec_level = SecurityLevel(row.get(2).context("Failed to read sec_level.")?);
             parameters.push(
                 KeyParameter::new_from_sql(tag, &SqlField::new(1, &row), sec_level)
                     .context("Failed to read KeyParameter.")?,
@@ -634,10 +641,10 @@ impl KeystoreDB {
         // Load the key_id and complete the access control tuple.
         // We ignore the access vector here because grants cannot be granted.
         // The access vector returned here expresses the permissions the
-        // grantee has if key.domain == Domain::Grant. But this vector
+        // grantee has if key.domain == Domain::GRANT. But this vector
         // cannot include the grant permission by design, so there is no way the
         // subsequent permission check can pass.
-        // We could check key.domain == Domain::Grant and fail early.
+        // We could check key.domain == Domain::GRANT and fail early.
         // But even if we load the access tuple by grant here, the permission
         // check denies the attempt to create a grant by grant descriptor.
         let (key_id, access_key_descriptor, _) =
@@ -681,7 +688,7 @@ impl KeystoreDB {
         };
         tx.commit().context("In grant: failed to commit transaction.")?;
 
-        Ok(KeyDescriptor { domain: Domain::Grant, namespace_: grant_id, alias: None, blob: None })
+        Ok(KeyDescriptor { domain: Domain::GRANT, nspace: grant_id, alias: None, blob: None })
     }
 
     /// This function checks permissions like `grant` and `load_key_entry`
@@ -849,7 +856,7 @@ mod tests {
     fn test_no_persistence_for_tests() -> Result<()> {
         let db = new_test_db()?;
 
-        db.create_key_entry(Domain::App, 100)?;
+        db.create_key_entry(Domain::APP, 100)?;
         let entries = get_keyentry(&db)?;
         assert_eq!(entries.len(), 1);
         let db = new_test_db()?;
@@ -865,7 +872,7 @@ mod tests {
         let _file_guard_perboot = TempFile { filename: PERBOOT_TEST_SQL };
         let db = new_test_db_with_persistent_file()?;
 
-        db.create_key_entry(Domain::App, 100)?;
+        db.create_key_entry(Domain::APP, 100)?;
         let entries = get_keyentry(&db)?;
         assert_eq!(entries.len(), 1);
         let db = new_test_db_with_persistent_file()?;
@@ -877,32 +884,32 @@ mod tests {
 
     #[test]
     fn test_create_key_entry() -> Result<()> {
-        fn extractor(ke: &KeyEntryRow) -> (DomainType, i64, Option<&str>) {
+        fn extractor(ke: &KeyEntryRow) -> (Domain, i64, Option<&str>) {
             (ke.domain.unwrap(), ke.namespace.unwrap(), ke.alias.as_deref())
         }
 
         let db = new_test_db()?;
 
-        db.create_key_entry(Domain::App, 100)?;
-        db.create_key_entry(Domain::SELinux, 101)?;
+        db.create_key_entry(Domain::APP, 100)?;
+        db.create_key_entry(Domain::SELINUX, 101)?;
 
         let entries = get_keyentry(&db)?;
         assert_eq!(entries.len(), 2);
-        assert_eq!(extractor(&entries[0]), (Domain::App, 100, None));
-        assert_eq!(extractor(&entries[1]), (Domain::SELinux, 101, None));
+        assert_eq!(extractor(&entries[0]), (Domain::APP, 100, None));
+        assert_eq!(extractor(&entries[1]), (Domain::SELINUX, 101, None));
 
         // Test that we must pass in a valid Domain.
         check_result_is_error_containing_string(
-            db.create_key_entry(Domain::Grant, 102),
-            "Domain 1 must be either App or SELinux.",
+            db.create_key_entry(Domain::GRANT, 102),
+            "Domain Domain(1) must be either App or SELinux.",
         );
         check_result_is_error_containing_string(
-            db.create_key_entry(Domain::Blob, 103),
-            "Domain 3 must be either App or SELinux.",
+            db.create_key_entry(Domain::BLOB, 103),
+            "Domain Domain(3) must be either App or SELinux.",
         );
         check_result_is_error_containing_string(
-            db.create_key_entry(Domain::KeyId, 104),
-            "Domain 4 must be either App or SELinux.",
+            db.create_key_entry(Domain::KEY_ID, 104),
+            "Domain Domain(4) must be either App or SELinux.",
         );
 
         Ok(())
@@ -910,56 +917,56 @@ mod tests {
 
     #[test]
     fn test_rebind_alias() -> Result<()> {
-        fn extractor(ke: &KeyEntryRow) -> (Option<DomainType>, Option<i64>, Option<&str>) {
+        fn extractor(ke: &KeyEntryRow) -> (Option<Domain>, Option<i64>, Option<&str>) {
             (ke.domain, ke.namespace, ke.alias.as_deref())
         }
 
         let mut db = new_test_db()?;
-        db.create_key_entry(Domain::App, 42)?;
-        db.create_key_entry(Domain::App, 42)?;
+        db.create_key_entry(Domain::APP, 42)?;
+        db.create_key_entry(Domain::APP, 42)?;
         let entries = get_keyentry(&db)?;
         assert_eq!(entries.len(), 2);
-        assert_eq!(extractor(&entries[0]), (Some(Domain::App), Some(42), None));
-        assert_eq!(extractor(&entries[1]), (Some(Domain::App), Some(42), None));
+        assert_eq!(extractor(&entries[0]), (Some(Domain::APP), Some(42), None));
+        assert_eq!(extractor(&entries[1]), (Some(Domain::APP), Some(42), None));
 
         // Test that the first call to rebind_alias sets the alias.
-        db.rebind_alias(entries[0].id, "foo", Domain::App, 42)?;
+        db.rebind_alias(entries[0].id, "foo", Domain::APP, 42)?;
         let entries = get_keyentry(&db)?;
         assert_eq!(entries.len(), 2);
-        assert_eq!(extractor(&entries[0]), (Some(Domain::App), Some(42), Some("foo")));
-        assert_eq!(extractor(&entries[1]), (Some(Domain::App), Some(42), None));
+        assert_eq!(extractor(&entries[0]), (Some(Domain::APP), Some(42), Some("foo")));
+        assert_eq!(extractor(&entries[1]), (Some(Domain::APP), Some(42), None));
 
         // Test that the second call to rebind_alias also empties the old one.
-        db.rebind_alias(entries[1].id, "foo", Domain::App, 42)?;
+        db.rebind_alias(entries[1].id, "foo", Domain::APP, 42)?;
         let entries = get_keyentry(&db)?;
         assert_eq!(entries.len(), 2);
         assert_eq!(extractor(&entries[0]), (None, None, None));
-        assert_eq!(extractor(&entries[1]), (Some(Domain::App), Some(42), Some("foo")));
+        assert_eq!(extractor(&entries[1]), (Some(Domain::APP), Some(42), Some("foo")));
 
         // Test that we must pass in a valid Domain.
         check_result_is_error_containing_string(
-            db.rebind_alias(0, "foo", Domain::Grant, 42),
-            "Domain 1 must be either App or SELinux.",
+            db.rebind_alias(0, "foo", Domain::GRANT, 42),
+            "Domain Domain(1) must be either App or SELinux.",
         );
         check_result_is_error_containing_string(
-            db.rebind_alias(0, "foo", Domain::Blob, 42),
-            "Domain 3 must be either App or SELinux.",
+            db.rebind_alias(0, "foo", Domain::BLOB, 42),
+            "Domain Domain(3) must be either App or SELinux.",
         );
         check_result_is_error_containing_string(
-            db.rebind_alias(0, "foo", Domain::KeyId, 42),
-            "Domain 4 must be either App or SELinux.",
+            db.rebind_alias(0, "foo", Domain::KEY_ID, 42),
+            "Domain Domain(4) must be either App or SELinux.",
         );
 
         // Test that we correctly handle setting an alias for something that does not exist.
         check_result_is_error_containing_string(
-            db.rebind_alias(0, "foo", Domain::SELinux, 42),
+            db.rebind_alias(0, "foo", Domain::SELINUX, 42),
             "Expected to update a single entry but instead updated 0",
         );
         // Test that we correctly abort the transaction in this case.
         let entries = get_keyentry(&db)?;
         assert_eq!(entries.len(), 2);
         assert_eq!(extractor(&entries[0]), (None, None, None));
-        assert_eq!(extractor(&entries[1]), (Some(Domain::App), Some(42), Some("foo")));
+        assert_eq!(extractor(&entries[1]), (Some(Domain::APP), Some(42), Some("foo")));
 
         Ok(())
     }
@@ -977,8 +984,8 @@ mod tests {
             NO_PARAMS,
         )?;
         let app_key = KeyDescriptor {
-            domain: super::Domain::App,
-            namespace_: 0,
+            domain: super::Domain::APP,
+            nspace: 0,
             alias: Some("key".to_string()),
             blob: None,
         };
@@ -996,9 +1003,9 @@ mod tests {
                 assert_eq!(
                     *k,
                     KeyDescriptor {
-                        domain: super::Domain::App,
+                        domain: super::Domain::APP,
                         // namespace must be set to the caller_uid.
-                        namespace_: CALLER_UID as i64,
+                        nspace: CALLER_UID as i64,
                         alias: Some("key".to_string()),
                         blob: None,
                     }
@@ -1009,17 +1016,17 @@ mod tests {
         assert_eq!(
             app_granted_key,
             KeyDescriptor {
-                domain: super::Domain::Grant,
+                domain: super::Domain::GRANT,
                 // The grantid is next_random due to the mock random number generator.
-                namespace_: next_random,
+                nspace: next_random,
                 alias: None,
                 blob: None,
             }
         );
 
         let selinux_key = KeyDescriptor {
-            domain: super::Domain::SELinux,
-            namespace_: SELINUX_NAMESPACE,
+            domain: super::Domain::SELINUX,
+            nspace: SELINUX_NAMESPACE,
             alias: Some("yek".to_string()),
             blob: None,
         };
@@ -1030,10 +1037,10 @@ mod tests {
                 assert_eq!(
                     *k,
                     KeyDescriptor {
-                        domain: super::Domain::SELinux,
+                        domain: super::Domain::SELINUX,
                         // namespace must be the supplied SELinux
                         // namespace.
-                        namespace_: SELINUX_NAMESPACE,
+                        nspace: SELINUX_NAMESPACE,
                         alias: Some("yek".to_string()),
                         blob: None,
                     }
@@ -1044,9 +1051,9 @@ mod tests {
         assert_eq!(
             selinux_granted_key,
             KeyDescriptor {
-                domain: super::Domain::Grant,
+                domain: super::Domain::GRANT,
                 // The grantid is next_random + 1 due to the mock random number generator.
-                namespace_: next_random + 1,
+                nspace: next_random + 1,
                 alias: None,
                 blob: None,
             }
@@ -1059,10 +1066,10 @@ mod tests {
                 assert_eq!(
                     *k,
                     KeyDescriptor {
-                        domain: super::Domain::SELinux,
+                        domain: super::Domain::SELINUX,
                         // namespace must be the supplied SELinux
                         // namespace.
-                        namespace_: SELINUX_NAMESPACE,
+                        nspace: SELINUX_NAMESPACE,
                         alias: Some("yek".to_string()),
                         blob: None,
                     }
@@ -1073,9 +1080,9 @@ mod tests {
         assert_eq!(
             selinux_granted_key,
             KeyDescriptor {
-                domain: super::Domain::Grant,
+                domain: super::Domain::GRANT,
                 // Same grant id as before. The entry was only updated.
-                namespace_: next_random + 1,
+                nspace: next_random + 1,
                 alias: None,
                 blob: None,
             }
@@ -1120,9 +1127,19 @@ mod tests {
     #[test]
     fn test_insert_blob() -> Result<()> {
         let mut db = new_test_db()?;
-        db.insert_blob(1, SubComponentType::KM_BLOB, TEST_KM_BLOB, 1)?;
-        db.insert_blob(1, SubComponentType::CERT, TEST_CERT_BLOB, 2)?;
-        db.insert_blob(1, SubComponentType::CERT_CHAIN, TEST_CERT_CHAIN_BLOB, 3)?;
+        db.insert_blob(1, SubComponentType::KM_BLOB, TEST_KM_BLOB, SecurityLevel::SOFTWARE)?;
+        db.insert_blob(
+            1,
+            SubComponentType::CERT,
+            TEST_CERT_BLOB,
+            SecurityLevel::TRUSTED_ENVIRONMENT,
+        )?;
+        db.insert_blob(
+            1,
+            SubComponentType::CERT_CHAIN,
+            TEST_CERT_CHAIN_BLOB,
+            SecurityLevel::STRONGBOX,
+        )?;
 
         let mut stmt = db.conn.prepare(
             "SELECT subcomponent_type, keyentryid, blob, sec_level FROM persistent.blobentry
@@ -1133,11 +1150,11 @@ mod tests {
                 Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
             })?;
         let r = rows.next().unwrap().unwrap();
-        assert_eq!(r, (SubComponentType::KM_BLOB, 1, TEST_KM_BLOB.to_vec(), 1));
+        assert_eq!(r, (SubComponentType::KM_BLOB, 1, TEST_KM_BLOB.to_vec(), 0));
         let r = rows.next().unwrap().unwrap();
-        assert_eq!(r, (SubComponentType::CERT, 1, TEST_CERT_BLOB.to_vec(), 2));
+        assert_eq!(r, (SubComponentType::CERT, 1, TEST_CERT_BLOB.to_vec(), 1));
         let r = rows.next().unwrap().unwrap();
-        assert_eq!(r, (SubComponentType::CERT_CHAIN, 1, TEST_CERT_CHAIN_BLOB.to_vec(), 3));
+        assert_eq!(r, (SubComponentType::CERT_CHAIN, 1, TEST_CERT_CHAIN_BLOB.to_vec(), 2));
 
         Ok(())
     }
@@ -1147,12 +1164,12 @@ mod tests {
     #[test]
     fn test_insert_and_load_full_keyentry_domain_app() -> Result<()> {
         let mut db = new_test_db()?;
-        let key_id = make_test_key_entry(&mut db, Domain::App, 1, TEST_ALIAS)
+        let key_id = make_test_key_entry(&mut db, Domain::APP, 1, TEST_ALIAS)
             .context("test_insert_and_load_full_keyentry_domain_app")?;
         let key_entry = db.load_key_entry(
             KeyDescriptor {
-                domain: Domain::App,
-                namespace_: 0,
+                domain: Domain::APP,
+                nspace: 0,
                 alias: Some(TEST_ALIAS.to_string()),
                 blob: None,
             },
@@ -1167,7 +1184,7 @@ mod tests {
                 km_blob: Some(TEST_KM_BLOB.to_vec()),
                 cert: Some(TEST_CERT_BLOB.to_vec()),
                 cert_chain: Some(TEST_CERT_CHAIN_BLOB.to_vec()),
-                sec_level: 1,
+                sec_level: SecurityLevel::TRUSTED_ENVIRONMENT,
                 parameters: make_test_params()
             }
         );
@@ -1177,12 +1194,12 @@ mod tests {
     #[test]
     fn test_insert_and_load_full_keyentry_domain_selinux() -> Result<()> {
         let mut db = new_test_db()?;
-        let key_id = make_test_key_entry(&mut db, Domain::SELinux, 1, TEST_ALIAS)
+        let key_id = make_test_key_entry(&mut db, Domain::SELINUX, 1, TEST_ALIAS)
             .context("test_insert_and_load_full_keyentry_domain_selinux")?;
         let key_entry = db.load_key_entry(
             KeyDescriptor {
-                domain: Domain::SELinux,
-                namespace_: 1,
+                domain: Domain::SELINUX,
+                nspace: 1,
                 alias: Some(TEST_ALIAS.to_string()),
                 blob: None,
             },
@@ -1197,7 +1214,7 @@ mod tests {
                 km_blob: Some(TEST_KM_BLOB.to_vec()),
                 cert: Some(TEST_CERT_BLOB.to_vec()),
                 cert_chain: Some(TEST_CERT_CHAIN_BLOB.to_vec()),
-                sec_level: 1,
+                sec_level: SecurityLevel::TRUSTED_ENVIRONMENT,
                 parameters: make_test_params()
             }
         );
@@ -1207,10 +1224,10 @@ mod tests {
     #[test]
     fn test_insert_and_load_full_keyentry_domain_key_id() -> Result<()> {
         let mut db = new_test_db()?;
-        let key_id = make_test_key_entry(&mut db, Domain::SELinux, 1, TEST_ALIAS)
+        let key_id = make_test_key_entry(&mut db, Domain::SELINUX, 1, TEST_ALIAS)
             .context("test_insert_and_load_full_keyentry_domain_key_id")?;
         let key_entry = db.load_key_entry(
-            KeyDescriptor { domain: Domain::KeyId, namespace_: key_id, alias: None, blob: None },
+            KeyDescriptor { domain: Domain::KEY_ID, nspace: key_id, alias: None, blob: None },
             KeyEntryLoadBits::BOTH,
             1,
             |_k, _av| Ok(()),
@@ -1222,7 +1239,7 @@ mod tests {
                 km_blob: Some(TEST_KM_BLOB.to_vec()),
                 cert: Some(TEST_CERT_BLOB.to_vec()),
                 cert_chain: Some(TEST_CERT_CHAIN_BLOB.to_vec()),
-                sec_level: 1,
+                sec_level: SecurityLevel::TRUSTED_ENVIRONMENT,
                 parameters: make_test_params()
             }
         );
@@ -1233,13 +1250,13 @@ mod tests {
     #[test]
     fn test_insert_and_load_full_keyentry_from_grant() -> Result<()> {
         let mut db = new_test_db()?;
-        let key_id = make_test_key_entry(&mut db, Domain::App, 1, TEST_ALIAS)
+        let key_id = make_test_key_entry(&mut db, Domain::APP, 1, TEST_ALIAS)
             .context("test_insert_and_load_full_keyentry_from_grant")?;
 
         let granted_key = db.grant(
             KeyDescriptor {
-                domain: Domain::App,
-                namespace_: 0,
+                domain: Domain::APP,
+                nspace: 0,
                 alias: Some(TEST_ALIAS.to_string()),
                 blob: None,
             },
@@ -1252,7 +1269,7 @@ mod tests {
         debug_dump_grant_table(&mut db)?;
 
         let key_entry = db.load_key_entry(granted_key, KeyEntryLoadBits::BOTH, 2, |k, av| {
-            assert_eq!(Domain::Grant, k.domain);
+            assert_eq!(Domain::GRANT, k.domain);
             assert!(av.unwrap().includes(KeyPerm::use_()));
             Ok(())
         })?;
@@ -1264,7 +1281,7 @@ mod tests {
                 km_blob: Some(TEST_KM_BLOB.to_vec()),
                 cert: Some(TEST_CERT_BLOB.to_vec()),
                 cert_chain: Some(TEST_CERT_CHAIN_BLOB.to_vec()),
-                sec_level: 1,
+                sec_level: SecurityLevel::TRUSTED_ENVIRONMENT,
                 parameters: make_test_params()
             }
         );
@@ -1292,7 +1309,7 @@ mod tests {
     struct KeyEntryRow {
         id: i64,
         creation_date: String,
-        domain: Option<DomainType>,
+        domain: Option<Domain>,
         namespace: Option<i64>,
         alias: Option<String>,
     }
@@ -1304,7 +1321,10 @@ mod tests {
                 Ok(KeyEntryRow {
                     id: row.get(0)?,
                     creation_date: row.get(1)?,
-                    domain: row.get(2)?,
+                    domain: match row.get(2)? {
+                        Some(i) => Some(Domain(i)),
+                        None => None,
+                    },
                     namespace: row.get(3)?,
                     alias: row.get(4)?,
                 })
@@ -1537,14 +1557,29 @@ mod tests {
 
     fn make_test_key_entry(
         db: &mut KeystoreDB,
-        domain: DomainType,
+        domain: Domain,
         namespace: i64,
         alias: &str,
     ) -> Result<i64> {
         let key_id = db.create_key_entry(domain, namespace)?;
-        db.insert_blob(key_id, SubComponentType::KM_BLOB, TEST_KM_BLOB, 1)?;
-        db.insert_blob(key_id, SubComponentType::CERT, TEST_CERT_BLOB, 1)?;
-        db.insert_blob(key_id, SubComponentType::CERT_CHAIN, TEST_CERT_CHAIN_BLOB, 1)?;
+        db.insert_blob(
+            key_id,
+            SubComponentType::KM_BLOB,
+            TEST_KM_BLOB,
+            SecurityLevel::TRUSTED_ENVIRONMENT,
+        )?;
+        db.insert_blob(
+            key_id,
+            SubComponentType::CERT,
+            TEST_CERT_BLOB,
+            SecurityLevel::TRUSTED_ENVIRONMENT,
+        )?;
+        db.insert_blob(
+            key_id,
+            SubComponentType::CERT_CHAIN,
+            TEST_CERT_CHAIN_BLOB,
+            SecurityLevel::TRUSTED_ENVIRONMENT,
+        )?;
         db.insert_keyparameter(key_id, &make_test_params())?;
         db.rebind_alias(key_id, alias, domain, namespace)?;
         Ok(key_id)
