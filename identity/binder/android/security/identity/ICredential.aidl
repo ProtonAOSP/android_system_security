@@ -16,6 +16,8 @@
 
 package android.security.identity;
 
+import android.security.identity.IWritableCredential;
+
 import android.security.identity.RequestNamespaceParcel;
 import android.security.identity.GetEntriesResultParcel;
 import android.security.identity.AuthKeyParcel;
@@ -40,23 +42,35 @@ interface ICredential {
     void setReaderEphemeralPublicKey(in byte[] publicKey);
 
     byte[] deleteCredential();
+    byte[] deleteWithChallenge(in byte[] challenge);
+
+    byte[] proveOwnership(in byte[] challenge);
 
     byte[] getCredentialKeyCertificateChain();
 
-    long selectAuthKey(in boolean allowUsingExhaustedKeys);
+    long selectAuthKey(in boolean allowUsingExhaustedKeys,
+                       in boolean allowUsingExpiredKeys);
 
     GetEntriesResultParcel getEntries(in byte[] requestMessage,
                                       in RequestNamespaceParcel[] requestNamespaces,
                                       in byte[] sessionTranscript,
                                       in byte[] readerSignature,
-                                      in boolean allowUsingExhaustedKeys);
+                                      in boolean allowUsingExhaustedKeys,
+                                      in boolean allowUsingExpiredKeys);
 
     void setAvailableAuthenticationKeys(in int keyCount, in int maxUsesPerKey);
 
     AuthKeyParcel[] getAuthKeysNeedingCertification();
 
-    void storeStaticAuthenticationData(in AuthKeyParcel authenticationKey, in byte[] staticAuthData);
+    void storeStaticAuthenticationData(in AuthKeyParcel authenticationKey,
+                                       in byte[] staticAuthData);
+
+    void storeStaticAuthenticationDataWithExpiration(in AuthKeyParcel authenticationKey,
+                                       in long expirationDateMillisSinceEpoch,
+                                       in byte[] staticAuthData);
 
     int[] getAuthenticationDataUsageCount();
+
+    IWritableCredential update();
 }
 
