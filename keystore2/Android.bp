@@ -53,6 +53,18 @@ rust_test {
     ],
 }
 
+rust_binary {
+    name: "keystore2",
+    srcs: ["src/keystore2_main.rs"],
+    rustlibs: [
+        "libandroid_logger",
+        "libbinder_rs",
+        "libkeystore2",
+        "liblog_rust",
+    ],
+    init_rc: ["keystore2.rc"],
+}
+
 // This is a placeholder for the libraries that will be generated from the AIDL specs
 // eventually.
 rust_library {
