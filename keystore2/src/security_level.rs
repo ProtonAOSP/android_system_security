@@ -17,7 +17,7 @@
 //! This crate implements the IKeystoreSecurityLevel interface.
 
 use android_hardware_keymint::aidl::android::hardware::keymint::{
-    Algorithm::Algorithm, Certificate::Certificate as KmCertificate,
+    Algorithm::Algorithm, ByteArray::ByteArray, Certificate::Certificate as KmCertificate,
     IKeyMintDevice::IKeyMintDevice, KeyCharacteristics::KeyCharacteristics, KeyFormat::KeyFormat,
     KeyParameter::KeyParameter as KmParam, KeyPurpose::KeyPurpose, Tag::Tag,
 };
@@ -84,7 +84,7 @@ impl KeystoreSecurityLevel {
         &self,
         key: KeyDescriptor,
         km_cert_chain: Option<Vec<KmCertificate>>,
-        blob: Vec<u8>,
+        blob: ByteArray,
     ) -> Result<KeyMetadata> {
         let (cert, cert_chain): (Option<Vec<u8>>, Option<Vec<u8>>) = match km_cert_chain {
             Some(mut chain) => (
@@ -109,7 +109,7 @@ impl KeystoreSecurityLevel {
 
         let key = match key.domain {
             Domain::BLOB => {
-                KeyDescriptor { domain: Domain::BLOB, blob: Some(blob), ..Default::default() }
+                KeyDescriptor { domain: Domain::BLOB, blob: Some(blob.data), ..Default::default() }
             }
             _ => DB
                 .with(|db| {
@@ -117,8 +117,13 @@ impl KeystoreSecurityLevel {
                     let key_id = db
                         .create_key_entry(key.domain, key.nspace)
                         .context("Trying to create a key entry.")?;
-                    db.insert_blob(key_id, SubComponentType::KM_BLOB, &blob, self.security_level)
-                        .context("Trying to insert km blob.")?;
+                    db.insert_blob(
+                        key_id,
+                        SubComponentType::KM_BLOB,
+                        &blob.data,
+                        self.security_level,
+                    )
+                    .context("Trying to insert km blob.")?;
                     if let Some(c) = &cert {
                         db.insert_blob(key_id, SubComponentType::CERT, c, self.security_level)
                             .context("Trying to insert cert blob.")?;
@@ -345,7 +350,7 @@ impl KeystoreSecurityLevel {
 
         let km_dev: Box<dyn IKeyMintDevice> = self.keymint.get_interface()?;
         map_km_error(km_dev.addRngEntropy(entropy))?;
-        let mut blob: Vec<u8> = Default::default();
+        let mut blob: ByteArray = Default::default();
         let mut key_characteristics: KeyCharacteristics = Default::default();
         let mut certificate_chain: Vec<KmCertificate> = Default::default();
         map_km_error(km_dev.generateKey(
@@ -384,7 +389,7 @@ impl KeystoreSecurityLevel {
         // import_key requires the rebind permission.
         check_key_permission(KeyPerm::rebind(), &key, &None).context("In import_key.")?;
 
-        let mut blob: Vec<u8> = Default::default();
+        let mut blob: ByteArray = Default::default();
         let mut key_characteristics: KeyCharacteristics = Default::default();
         let mut certificate_chain: Vec<KmCertificate> = Default::default();
 
@@ -469,7 +474,7 @@ impl KeystoreSecurityLevel {
             }
         };
 
-        let mut blob: Vec<u8> = Default::default();
+        let mut blob: ByteArray = Default::default();
         let mut key_characteristics: KeyCharacteristics = Default::default();
         // km_dev.importWrappedKey does not return a certificate chain.
         // TODO Do we assume that all wrapped keys are symmetric?

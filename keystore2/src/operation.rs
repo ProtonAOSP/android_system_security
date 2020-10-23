@@ -135,7 +135,8 @@ use std::{
 use crate::error::{map_km_error, map_or_log_err, Error, ErrorCode, ResponseCode};
 use crate::utils::Asp;
 use android_hardware_keymint::aidl::android::hardware::keymint::{
-    IKeyMintOperation::IKeyMintOperation, KeyParameter::KeyParameter as KmParam, Tag::Tag,
+    ByteArray::ByteArray, IKeyMintOperation::IKeyMintOperation,
+    KeyParameter::KeyParameter as KmParam, KeyParameterArray::KeyParameterArray, Tag::Tag,
 };
 use android_system_keystore2::aidl::android::system::keystore2::{
     IKeystoreOperation::BnKeystoreOperation, IKeystoreOperation::IKeystoreOperation,
@@ -174,7 +175,6 @@ struct PruningInfo {
     index: usize,
 }
 
-static EMPTY_BLOB: &[u8] = &[];
 // We don't except more than 32KiB of data in `update`, `updateAad`, and `finish`.
 const MAX_RECEIVE_DATA: usize = 0x8000;
 
@@ -302,11 +302,16 @@ impl Operation {
         Self::check_input_length(aad_input).context("In update_aad")?;
         self.touch();
 
-        let params =
-            [KmParam { tag: Tag::ASSOCIATED_DATA, blob: aad_input.into(), ..Default::default() }];
+        let params = KeyParameterArray {
+            params: vec![KmParam {
+                tag: Tag::ASSOCIATED_DATA,
+                blob: aad_input.into(),
+                ..Default::default()
+            }],
+        };
 
-        let mut out_params: Vec<KmParam> = Vec::new();
-        let mut output: Vec<u8> = Vec::new();
+        let mut out_params: Option<KeyParameterArray> = None;
+        let mut output: Option<ByteArray> = None;
 
         let km_op: Box<dyn IKeyMintOperation> =
             self.km_op.get_interface().context("In update: Failed to get KeyMintOperation.")?;
@@ -314,10 +319,12 @@ impl Operation {
         self.update_outcome(
             &mut *outcome,
             map_km_error(km_op.update(
-                &params,
-                &[],
-                // TODO HardwareAuthtoken missing
-                &Default::default(),
+                Some(&params),
+                None,
+                // TODO Get auth token from enforcement module if required.
+                None,
+                // TODO Get verification token from enforcement module if required.
+                None,
                 &mut out_params,
                 &mut output,
             )),
@@ -334,8 +341,8 @@ impl Operation {
         Self::check_input_length(input).context("In update")?;
         self.touch();
 
-        let mut out_params: Vec<KmParam> = Vec::new();
-        let mut output: Vec<u8> = Vec::new();
+        let mut out_params: Option<KeyParameterArray> = None;
+        let mut output: Option<ByteArray> = None;
 
         let km_op: Box<dyn IKeyMintOperation> =
             self.km_op.get_interface().context("In update: Failed to get KeyMintOperation.")?;
@@ -343,20 +350,21 @@ impl Operation {
         self.update_outcome(
             &mut *outcome,
             map_km_error(km_op.update(
-                &[],
-                input,
-                // TODO HardwareAuthtoken missing
-                &Default::default(),
+                None,
+                Some(input),
+                // TODO Get auth token from enforcement module if required.
+                None,
+                // TODO Get verification token from enforcement module if required.
+                None,
                 &mut out_params,
                 &mut output,
             )),
         )
         .context("In update: KeyMint::update failed.")?;
 
-        if output.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(output))
+        match output {
+            Some(blob) => Ok(Some(blob.data)),
+            None => Ok(None),
         }
     }
 
@@ -368,28 +376,27 @@ impl Operation {
             Self::check_input_length(input).context("In finish")?;
         }
         self.touch();
-        let input = input.unwrap_or(EMPTY_BLOB);
-        let signature = signature.unwrap_or(EMPTY_BLOB);
 
-        let mut out_params: Vec<KmParam> = Vec::new();
-        let mut output: Vec<u8> = Vec::new();
+        let mut out_params: Option<KeyParameterArray> = None;
 
         let km_op: Box<dyn IKeyMintOperation> =
             self.km_op.get_interface().context("In finish: Failed to get KeyMintOperation.")?;
 
-        self.update_outcome(
-            &mut *outcome,
-            map_km_error(km_op.finish(
-                &[],
-                &input,
-                &signature,
-                &Default::default(),
-                &Default::default(),
-                &mut out_params,
-                &mut output,
-            )),
-        )
-        .context("In finish: KeyMint::finish failed.")?;
+        let output = self
+            .update_outcome(
+                &mut *outcome,
+                map_km_error(km_op.finish(
+                    None,
+                    input,
+                    signature,
+                    // TODO Get auth token from enforcement module if required.
+                    None,
+                    // TODO Get verification token from enforcement module if required.
+                    None,
+                    &mut out_params,
+                )),
+            )
+            .context("In finish: KeyMint::finish failed.")?;
 
         // At this point the operation concluded successfully.
         *outcome = Outcome::Success;

@@ -87,7 +87,6 @@ pub fn keyparam_ks_to_km(p: &KeyParameter) -> KmParam {
         boolValue: p.boolValue,
         integer: p.integer,
         longInteger: p.longInteger,
-        dateTime: p.dateTime,
         blob: match &p.blob {
             Some(b) => b.clone(),
             None => vec![],
@@ -105,7 +104,6 @@ pub fn keyparam_km_to_ks(p: &KmParam) -> KeyParameter {
         boolValue: p.boolValue,
         integer: p.integer,
         longInteger: p.longInteger,
-        dateTime: p.dateTime,
         blob: match p.blob.len() {
             0 => None,
             _ => Some(p.blob.clone()),
