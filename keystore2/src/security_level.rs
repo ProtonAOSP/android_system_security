@@ -19,7 +19,8 @@
 use android_hardware_keymint::aidl::android::hardware::keymint::{
     Algorithm::Algorithm, ByteArray::ByteArray, Certificate::Certificate as KmCertificate,
     IKeyMintDevice::IKeyMintDevice, KeyCharacteristics::KeyCharacteristics, KeyFormat::KeyFormat,
-    KeyParameter::KeyParameter as KmParam, KeyPurpose::KeyPurpose, Tag::Tag,
+    KeyParameter::KeyParameter as KmParam, KeyPurpose::KeyPurpose, SecurityLevel::SecurityLevel,
+    Tag::Tag,
 };
 use android_system_keystore2::aidl::android::system::keystore2::{
     AuthenticatorSpec::AuthenticatorSpec, AuthenticatorType::AuthenticatorType,
@@ -27,10 +28,9 @@ use android_system_keystore2::aidl::android::system::keystore2::{
     IKeystoreOperation::IKeystoreOperation, IKeystoreSecurityLevel::BnKeystoreSecurityLevel,
     IKeystoreSecurityLevel::IKeystoreSecurityLevel, KeyDescriptor::KeyDescriptor,
     KeyMetadata::KeyMetadata, KeyParameter::KeyParameter, KeyParameters::KeyParameters,
-    SecurityLevel::SecurityLevel,
+    SecurityLevel::SecurityLevel as KsSecurityLevel,
 };
 
-use crate::error::{self, map_km_error, map_or_log_err, Error, ErrorCode};
 use crate::globals::DB;
 use crate::permission::KeyPerm;
 use crate::utils::{check_key_permission, keyparam_km_to_ks, keyparam_ks_to_km, Asp};
@@ -38,6 +38,10 @@ use crate::{
     database::{KeyEntry, KeyEntryLoadBits, SubComponentType},
     operation::KeystoreOperation,
     operation::OperationDb,
+};
+use crate::{
+    error::{self, map_km_error, map_or_log_err, Error, ErrorCode},
+    utils::key_characteristics_to_internal,
 };
 use anyhow::{anyhow, Context, Result};
 use binder::{IBinder, Interface, ThreadState};
@@ -83,6 +87,7 @@ impl KeystoreSecurityLevel {
     fn store_new_key(
         &self,
         key: KeyDescriptor,
+        key_characteristics: KeyCharacteristics,
         km_cert_chain: Option<Vec<KmCertificate>>,
         blob: ByteArray,
     ) -> Result<KeyMetadata> {
@@ -106,6 +111,9 @@ impl KeystoreSecurityLevel {
             ),
             None => (None, None),
         };
+
+        let key_parameters =
+            key_characteristics_to_internal(key_characteristics, self.security_level);
 
         let key = match key.domain {
             Domain::BLOB => {
@@ -137,6 +145,8 @@ impl KeystoreSecurityLevel {
                         )
                         .context("Trying to insert cert chain blob.")?;
                     }
+                    db.insert_keyparameter(key_id, &key_parameters)
+                        .context("Trying to insert key parameters.")?;
                     match &key.alias {
                         Some(alias) => db
                             .rebind_alias(key_id, alias, key.domain, key.nspace)
@@ -158,10 +168,10 @@ impl KeystoreSecurityLevel {
 
         Ok(KeyMetadata {
             key,
-            keySecurityLevel: self.security_level,
+            keySecurityLevel: KsSecurityLevel(self.security_level.0),
             certificate: cert,
             certificateChain: cert_chain,
-            // TODO initialize the authorizations.
+            authorizations: crate::utils::key_parameters_to_authorizations(key_parameters),
             ..Default::default()
         })
     }
@@ -360,7 +370,8 @@ impl KeystoreSecurityLevel {
             &mut certificate_chain,
         ))?;
 
-        self.store_new_key(key, Some(certificate_chain), blob).context("In generate_key.")
+        self.store_new_key(key, key_characteristics, Some(certificate_chain), blob)
+            .context("In generate_key.")
     }
 
     fn import_key(
@@ -416,7 +427,8 @@ impl KeystoreSecurityLevel {
             &mut certificate_chain,
         ))?;
 
-        self.store_new_key(key, Some(certificate_chain), blob).context("In import_key.")
+        self.store_new_key(key, key_characteristics, Some(certificate_chain), blob)
+            .context("In import_key.")
     }
 
     fn import_wrapped_key(
@@ -512,7 +524,7 @@ impl KeystoreSecurityLevel {
             &mut key_characteristics,
         ))?;
 
-        self.store_new_key(key, None, blob).context("In import_wrapped_key.")
+        self.store_new_key(key, key_characteristics, None, blob).context("In import_wrapped_key.")
     }
 }
 
