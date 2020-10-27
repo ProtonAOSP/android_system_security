@@ -30,9 +30,9 @@ import android.security.keystore.IKeystoreCertificateChainCallback;
  * @hide
  */
 interface IKeystoreService {
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = 30, trackingBug = 170729553)
     int getState(int userId);
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = 30, trackingBug = 170729553)
     byte[] get(String name, int uid);
     @UnsupportedAppUsage
     int insert(String name, in byte[] item, int uid, int flags);
@@ -40,7 +40,7 @@ interface IKeystoreService {
     int del(String name, int uid);
     @UnsupportedAppUsage
     int exist(String name, int uid);
-    @UnsupportedAppUsage
+    @UnsupportedAppUsage(maxTargetSdk = 30, trackingBug = 170729553)
     String[] list(String namePrefix, int uid);
     int onUserPasswordChanged(int userId, String newPassword);
     int lock(int userId);
