@@ -44,6 +44,7 @@ rust_test {
         "libandroid_hardware_keymint",
         "libanyhow",
         "libbinder_rs",
+        "libkeystore2_crypto_bindgen",
         "libkeystore2_selinux",
         "liblazy_static",
         "liblibsqlite3_sys",
@@ -51,6 +52,24 @@ rust_test {
         "librusqlite",
         "libthiserror",
     ],
+    shared_libs: ["libkeystore2_crypto"],
+}
+
+cc_library {
+    name: "libkeystore2_crypto",
+    srcs: ["src/crypto.cpp"],
+    shared_libs: [
+        "libcrypto",
+        "liblog",
+    ],
+}
+
+rust_bindgen {
+    name: "libkeystore2_crypto_bindgen",
+    wrapper_src: "src/crypto.hpp",
+    crate_name: "keystore2_crypto_bindgen",
+    source_stem: "bindings",
+    host_supported: true,
 }
 
 rust_binary {
