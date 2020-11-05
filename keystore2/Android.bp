@@ -57,7 +57,11 @@ rust_test {
 
 cc_library {
     name: "libkeystore2_crypto",
-    srcs: ["src/crypto.cpp"],
+    srcs: [
+        "src/crypto.cpp",
+        "src/certificate_utils.cpp",
+    ],
+    export_include_dirs: ["include",],
     shared_libs: [
         "libcrypto",
         "liblog",
@@ -84,6 +88,25 @@ rust_binary {
     init_rc: ["keystore2.rc"],
 }
 
+cc_test {
+    cflags: [
+        "-Wall",
+        "-Werror",
+        "-Wextra",
+    ],
+    srcs: [
+        "src/tests/certificate_utils_test.cpp",
+        "src/tests/gtest_main.cpp",
+    ],
+    static_libs: [
+        "libkeystore2_crypto",
+    ],
+    shared_libs: [
+        "libcrypto",
+    ],
+    name: "keystore2_crypto_test",
+}
+
 // This is a placeholder for the libraries that will be generated from the AIDL specs
 // eventually.
 rust_library {
@@ -97,3 +120,4 @@ rust_library {
         "liblazy_static",
     ],
 }
+
