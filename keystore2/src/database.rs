@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//TODO: remove this in the future CLs in the stack.
+#![allow(dead_code)]
+
 //! This is the Keystore 2.0 database module.
 //! The database module provides a connection to the backing SQLite store.
 //! We have two databases one for persistent key blob storage and one for
@@ -47,7 +50,10 @@ use crate::key_parameter::{KeyParameter, SqlField, Tag};
 use crate::permission::KeyPermSet;
 use anyhow::{anyhow, Context, Result};
 
-use android_hardware_security_keymint::aidl::android::hardware::security::keymint::SecurityLevel::SecurityLevel;
+use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
+    HardwareAuthToken::HardwareAuthToken, HardwareAuthenticatorType::HardwareAuthenticatorType,
+    SecurityLevel::SecurityLevel,
+};
 use android_system_keystore2::aidl::android::system::keystore2::{
     Domain::Domain, KeyDescriptor::KeyDescriptor,
 };
@@ -242,6 +248,42 @@ impl FromSql for SubComponentType {
 /// ownership. It also implements all of Keystore 2.0's database functionality.
 pub struct KeystoreDB {
     conn: Connection,
+}
+
+/// This struct encapsulates the information to be stored in the database about the auth tokens
+/// received by keystore.
+pub struct AuthTokenEntry {
+    auth_token: HardwareAuthToken,
+    time_received: i32,
+}
+
+impl AuthTokenEntry {
+    fn new(auth_token: HardwareAuthToken, time_received: i32) -> Self {
+        AuthTokenEntry { auth_token, time_received }
+    }
+
+    /// Checks if this auth token satisfies the given authentication information.
+    pub fn satisfies_auth(
+        auth_token: &HardwareAuthToken,
+        user_secure_ids: &[i64],
+        auth_type: HardwareAuthenticatorType,
+    ) -> bool {
+        user_secure_ids.iter().any(|&sid| {
+            (sid == auth_token.userId || sid == auth_token.authenticatorId)
+                && (((auth_type.0 as i32) & (auth_token.authenticatorType.0 as i32)) != 0)
+        })
+    }
+
+    fn is_newer_than(&self, other: &AuthTokenEntry) -> bool {
+        // NOTE: Although in legacy keystore both timestamp and time_received are involved in this
+        // check, we decided to only consider time_received in keystore2 code.
+        self.time_received > other.time_received
+    }
+
+    /// Returns the auth token wrapped by the AuthTokenEntry
+    pub fn get_auth_token(self) -> HardwareAuthToken {
+        self.auth_token
+    }
 }
 
 impl KeystoreDB {
