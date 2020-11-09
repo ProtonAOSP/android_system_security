@@ -22,13 +22,15 @@ use crate::database::AuthTokenEntry;
 use crate::error::Error as KeystoreError;
 use crate::key_parameter::{KeyParameter, KeyParameterValue};
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
-    ErrorCode::ErrorCode as Ec, HardwareAuthToken::HardwareAuthToken,
-    HardwareAuthenticatorType::HardwareAuthenticatorType,
+    Algorithm::Algorithm, ErrorCode::ErrorCode as Ec, HardwareAuthToken::HardwareAuthToken,
+    HardwareAuthenticatorType::HardwareAuthenticatorType, KeyPurpose::KeyPurpose,
+    SecurityLevel::SecurityLevel, Tag::Tag,
 };
 use android_system_keystore2::aidl::android::system::keystore2::OperationChallenge::OperationChallenge;
 use anyhow::{Context, Result};
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
+use std::time::SystemTime;
 
 /// Enforcements data structure
 pub struct Enforcements {
@@ -128,6 +130,212 @@ impl Enforcements {
         // TODO: METRICS: count how many times (if any) this code path is executed, in order
         // to identify if any such keys are in use
         Ok(AuthTokenHandler::NoAuthRequired)
+    }
+
+    /// Checks if a create call is authorized, given key parameters and operation parameters.
+    /// With regard to auth tokens, the following steps are taken:
+    /// If the key is time-bound, find a matching auth token from the database.
+    /// If the above step is successful, and if the security level is STRONGBOX, return a
+    /// VerificationRequired variant of the AuthTokenHandler with the found auth token to signal
+    /// the operation that it may need to obtain a verification token from TEE KeyMint.
+    /// If the security level is not STRONGBOX, return a Token variant of the AuthTokenHandler with
+    /// the found auth token to signal the operation that no more authorization required.
+    /// If the key is per-op, return an OpAuthRequired variant of the AuthTokenHandler to signal
+    /// create_operation() that it needs to add the operation challenge to the op_auth_map, once it
+    /// is received from the keymint, and that operation needs to be authorized before update/finish
+    /// is called.
+    pub fn authorize_create(
+        &self,
+        purpose: KeyPurpose,
+        key_params: &[KeyParameter],
+        op_params: &[KeyParameter],
+        // security_level will be used in the next CL
+        _security_level: SecurityLevel,
+    ) -> Result<AuthTokenHandler> {
+        match purpose {
+            // Allow SIGN, DECRYPT for both symmetric and asymmetric keys.
+            KeyPurpose::SIGN | KeyPurpose::DECRYPT => {}
+            // Rule out WRAP_KEY purpose
+            KeyPurpose::WRAP_KEY => {
+                return Err(KeystoreError::Km(Ec::INCOMPATIBLE_PURPOSE))
+                    .context("In authorize_create: WRAP_KEY purpose is not allowed here.");
+            }
+            KeyPurpose::VERIFY | KeyPurpose::ENCRYPT => {
+                // We do not support ENCRYPT and VERIFY (the remaining two options of purpose) for
+                // asymmetric keys.
+                for kp in key_params.iter() {
+                    match *kp.key_parameter_value() {
+                        KeyParameterValue::Algorithm(Algorithm::RSA)
+                        | KeyParameterValue::Algorithm(Algorithm::EC) => {
+                            return Err(KeystoreError::Km(Ec::UNSUPPORTED_PURPOSE)).context(
+                                "In authorize_create: public operations on asymmetric keys are not
+                                 supported.",
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {
+                return Err(KeystoreError::Km(Ec::UNSUPPORTED_PURPOSE))
+                    .context("In authorize_create: specified purpose is not supported.");
+            }
+        }
+        // The following variables are to record information from key parameters to be used in
+        // enforcements, when two or more such pieces of information are required for enforcements.
+        // There is only one additional variable than what legacy keystore has, but this helps
+        // reduce the number of for loops on key parameters from 3 to 1, compared to legacy keystore
+        let mut key_purpose_authorized: bool = false;
+        let mut is_time_out_key: bool = false;
+        let mut auth_type: Option<HardwareAuthenticatorType> = None;
+        let mut no_auth_required: bool = false;
+        let mut caller_nonce_allowed = false;
+        let mut user_id: i32 = -1;
+        let mut user_secure_ids = Vec::<i64>::new();
+
+        // iterate through key parameters, recording information we need for authorization
+        // enforcements later, or enforcing authorizations in place, where applicable
+        for key_param in key_params.iter() {
+            match key_param.key_parameter_value() {
+                KeyParameterValue::NoAuthRequired => {
+                    no_auth_required = true;
+                }
+                KeyParameterValue::AuthTimeout(_) => {
+                    is_time_out_key = true;
+                }
+                KeyParameterValue::HardwareAuthenticatorType(a) => {
+                    auth_type = Some(*a);
+                }
+                KeyParameterValue::KeyPurpose(p) => {
+                    // Note: if there can be multiple KeyPurpose key parameters (TODO: confirm this),
+                    // following check has the effect of key_params.contains(purpose)
+                    // Also, authorizing purpose can not be completed here, if there can be multiple
+                    // key parameters for KeyPurpose
+                    if !key_purpose_authorized && *p == purpose {
+                        key_purpose_authorized = true;
+                    }
+                }
+                KeyParameterValue::CallerNonce => {
+                    caller_nonce_allowed = true;
+                }
+                KeyParameterValue::ActiveDateTime(a) => {
+                    if !Enforcements::is_given_time_passed(*a, true) {
+                        return Err(KeystoreError::Km(Ec::KEY_NOT_YET_VALID))
+                            .context("In authorize_create: key is not yet active.");
+                    }
+                }
+                KeyParameterValue::OriginationExpireDateTime(o) => {
+                    if (purpose == KeyPurpose::ENCRYPT || purpose == KeyPurpose::SIGN)
+                        && Enforcements::is_given_time_passed(*o, false)
+                    {
+                        return Err(KeystoreError::Km(Ec::KEY_EXPIRED))
+                            .context("In authorize_create: key is expired.");
+                    }
+                }
+                KeyParameterValue::UsageExpireDateTime(u) => {
+                    if (purpose == KeyPurpose::DECRYPT || purpose == KeyPurpose::VERIFY)
+                        && Enforcements::is_given_time_passed(*u, false)
+                    {
+                        return Err(KeystoreError::Km(Ec::KEY_EXPIRED))
+                            .context("In authorize_create: key is expired.");
+                    }
+                }
+                KeyParameterValue::UserSecureID(s) => {
+                    user_secure_ids.push(*s);
+                }
+                KeyParameterValue::UserID(u) => {
+                    user_id = *u;
+                }
+                KeyParameterValue::UnlockedDeviceRequired => {
+                    // check the device locked status. If locked, operations on the key are not
+                    // allowed.
+                    if self.is_device_locked(user_id) {
+                        return Err(KeystoreError::Km(Ec::DEVICE_LOCKED))
+                            .context("In authorize_create: device is locked.");
+                    }
+                }
+                // NOTE: as per offline discussion, sanitizing key parameters and rejecting
+                // create operation if any non-allowed tags are present, is not done in
+                // authorize_create (unlike in legacy keystore where AuthorizeBegin is rejected if
+                // a subset of non-allowed tags are present). Because santizing key parameters
+                // should have been done during generate/import key, by KeyMint.
+                _ => { /*Do nothing on all the other key parameters, as in legacy keystore*/ }
+            }
+        }
+
+        // authorize the purpose
+        if !key_purpose_authorized {
+            return Err(KeystoreError::Km(Ec::INCOMPATIBLE_PURPOSE))
+                .context("In authorize_create: the purpose is not authorized.");
+        }
+
+        // if both NO_AUTH_REQUIRED and USER_SECURE_ID tags are present, return error
+        if !user_secure_ids.is_empty() && no_auth_required {
+            return Err(KeystoreError::Km(Ec::INVALID_KEY_BLOB)).context(
+                "In authorize_create: key has both NO_AUTH_REQUIRED
+                and USER_SECURE_ID tags.",
+            );
+        }
+
+        // if either of auth_type or secure_id is present and the other is not present, return error
+        if (auth_type.is_some() && user_secure_ids.is_empty())
+            || (auth_type.is_none() && !user_secure_ids.is_empty())
+        {
+            return Err(KeystoreError::Km(Ec::KEY_USER_NOT_AUTHENTICATED)).context(
+                "In authorize_create: Auth required, but either auth type or secure ids
+                are not present.",
+            );
+        }
+        // validate caller nonce for origination purposes
+        if (purpose == KeyPurpose::ENCRYPT || purpose == KeyPurpose::SIGN)
+            && !caller_nonce_allowed
+            && op_params.iter().any(|kp| kp.get_tag() == Tag::NONCE)
+        {
+            return Err(KeystoreError::Km(Ec::CALLER_NONCE_PROHIBITED)).context(
+                "In authorize_create, NONCE is present,
+                    although CALLER_NONCE is not present",
+            );
+        }
+
+        if !user_secure_ids.is_empty() {
+            // per op auth token
+            if !is_time_out_key {
+                return Ok(AuthTokenHandler::OpAuthRequired);
+            } else {
+                //time out token
+                // TODO: retrieve it from the database
+                // - in an upcoming CL
+            }
+        }
+
+        // If we reach here, all authorization enforcements have passed and no auth token required.
+        Ok(AuthTokenHandler::NoAuthRequired)
+    }
+
+    /// Checks if the time now since epoch is greater than (or equal, if is_given_time_inclusive is
+    /// set) the given time (in milliseconds)
+    fn is_given_time_passed(given_time: i64, is_given_time_inclusive: bool) -> bool {
+        let duration_since_epoch = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH);
+
+        let time_since_epoch = match duration_since_epoch {
+            Ok(duration) => duration.as_millis(),
+            Err(_) => return false,
+        };
+
+        if is_given_time_inclusive {
+            time_since_epoch >= (given_time as u128)
+        } else {
+            time_since_epoch > (given_time as u128)
+        }
+    }
+
+    /// Check if the device is locked for the given user. If there's no entry yet for the user,
+    /// we assume that the device is locked
+    fn is_device_locked(&self, user_id: i32) -> bool {
+        // unwrap here because there's no way this mutex guard can be poisoned and
+        // because there's no way to recover, even if it is poisoned.
+        let set = self.device_unlocked_set.lock().unwrap();
+        !set.contains(&user_id)
     }
 }
 
