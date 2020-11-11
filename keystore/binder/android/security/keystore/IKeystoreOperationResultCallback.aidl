@@ -22,6 +22,7 @@ import android.security.keymaster.OperationResult;
 /**
  * @hide
  */
+@SensitiveData
 oneway interface IKeystoreOperationResultCallback {
     void onFinished(in OperationResult result);
 }
