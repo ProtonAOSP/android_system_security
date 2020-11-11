@@ -29,6 +29,7 @@ import android.security.keystore.IKeystoreCertificateChainCallback;
 /**
  * @hide
  */
+@SensitiveData
 interface IKeystoreService {
     @UnsupportedAppUsage(maxTargetSdk = 30, trackingBug = 170729553)
     int getState(int userId);
