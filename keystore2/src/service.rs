@@ -26,9 +26,9 @@ use crate::permission::KeyPerm;
 use crate::security_level::KeystoreSecurityLevel;
 use crate::utils::{check_grant_permission, check_key_permission, Asp};
 use android_system_keystore2::aidl::android::system::keystore2::{
-    Certificate::Certificate, CertificateChain::CertificateChain, Domain::Domain,
-    IKeystoreSecurityLevel::IKeystoreSecurityLevel, IKeystoreService::BnKeystoreService,
-    IKeystoreService::IKeystoreService, KeyDescriptor::KeyDescriptor, KeyMetadata::KeyMetadata,
+    Domain::Domain, IKeystoreSecurityLevel::IKeystoreSecurityLevel,
+    IKeystoreService::BnKeystoreService, IKeystoreService::IKeystoreService,
+    KeyDescriptor::KeyDescriptor, KeyEntryResponse::KeyEntryResponse, KeyMetadata::KeyMetadata,
     SecurityLevel::SecurityLevel,
 };
 use anyhow::{anyhow, Context, Result};
@@ -67,15 +67,7 @@ impl KeystoreService {
         }
     }
 
-    fn get_key_entry(
-        &self,
-        key: &KeyDescriptor,
-    ) -> Result<(
-        KeyMetadata,
-        Option<Certificate>,
-        Option<CertificateChain>,
-        Box<dyn IKeystoreSecurityLevel>,
-    )> {
+    fn get_key_entry(&self, key: &KeyDescriptor) -> Result<KeyEntryResponse> {
         let mut key_entry: KeyEntry = DB
             .with(|db| {
                 db.borrow_mut().load_key_entry(
@@ -95,28 +87,28 @@ impl KeystoreService {
             _ => return Err(anyhow!(error::Error::Km(ErrorCode::HARDWARE_TYPE_UNAVAILABLE))),
         };
 
-        Ok((
-            KeyMetadata {
+        Ok(KeyEntryResponse {
+            iSecurityLevel: Some(i_sec_level),
+            metadata: KeyMetadata {
                 key: KeyDescriptor {
                     domain: Domain::KEY_ID,
                     nspace: key_entry.id(),
                     ..Default::default()
                 },
-                securityLevel: key_entry.sec_level(),
+                keySecurityLevel: key_entry.sec_level(),
+                certificate: key_entry.take_cert(),
+                certificateChain: key_entry.take_cert_chain(),
                 // TODO add key characteristics here.
                 ..Default::default()
             },
-            key_entry.take_cert().map(|v| Certificate { data: v }),
-            key_entry.take_cert_chain().map(|v| CertificateChain { data: v }),
-            i_sec_level,
-        ))
+        })
     }
 
     fn update_subcomponent(
         &self,
         key: &KeyDescriptor,
-        public_cert: Option<&Certificate>,
-        certificate_chain: Option<&CertificateChain>,
+        public_cert: Option<&[u8]>,
+        certificate_chain: Option<&[u8]>,
     ) -> Result<()> {
         DB.with::<_, Result<()>>(|db| {
             let mut db = db.borrow_mut();
@@ -133,20 +125,15 @@ impl KeystoreService {
                 .context("Failed to load key_entry.")?;
 
             if let Some(cert) = public_cert {
-                db.insert_blob(
-                    key_entry.id(),
-                    SubComponentType::CERT,
-                    &cert.data,
-                    key_entry.sec_level(),
-                )
-                .context("Failed to update cert subcomponent.")?;
+                db.insert_blob(key_entry.id(), SubComponentType::CERT, cert, key_entry.sec_level())
+                    .context("Failed to update cert subcomponent.")?;
             }
 
             if let Some(cert_chain) = certificate_chain {
                 db.insert_blob(
                     key_entry.id(),
                     SubComponentType::CERT_CHAIN,
-                    &cert_chain.data,
+                    cert_chain,
                     key_entry.sec_level(),
                 )
                 .context("Failed to update cert chain subcomponent.")?;
@@ -208,25 +195,14 @@ impl IKeystoreService for KeystoreService {
     ) -> binder::public_api::Result<Box<dyn IKeystoreSecurityLevel>> {
         map_or_log_err(self.get_security_level(security_level), Ok)
     }
-    fn getKeyEntry(
-        &self,
-        key: &KeyDescriptor,
-        metadata: &mut KeyMetadata,
-        public_cert: &mut Option<Certificate>,
-        certificate_chain: &mut Option<CertificateChain>,
-    ) -> binder::public_api::Result<Box<dyn IKeystoreSecurityLevel>> {
-        map_or_log_err(self.get_key_entry(key), |v| {
-            *metadata = v.0;
-            *public_cert = v.1;
-            *certificate_chain = v.2;
-            Ok(v.3)
-        })
+    fn getKeyEntry(&self, key: &KeyDescriptor) -> binder::public_api::Result<KeyEntryResponse> {
+        map_or_log_err(self.get_key_entry(key), Ok)
     }
     fn updateSubcomponent(
         &self,
         key: &KeyDescriptor,
-        public_cert: Option<&Certificate>,
-        certificate_chain: Option<&CertificateChain>,
+        public_cert: Option<&[u8]>,
+        certificate_chain: Option<&[u8]>,
     ) -> binder::public_api::Result<()> {
         map_or_log_err(self.update_subcomponent(key, public_cert, certificate_chain), Ok)
     }
