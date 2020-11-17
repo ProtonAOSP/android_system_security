@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! This crate implements Keystore 2.0.
+//! This crate implements the Keystore 2.0 service entry point.
 
 use binder::Interface;
 use keystore2::service::KeystoreService;
@@ -53,7 +53,10 @@ fn main() {
     });
 
     info!("Successfully registered Keystore 2.0 service.");
-    info!("Joining threadpool now.");
 
+    info!("Starting thread pool now.");
+    binder::ProcessState::start_thread_pool();
+
+    info!("Joining thread pool now.");
     binder::ProcessState::join_thread_pool();
 }
