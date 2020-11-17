@@ -14,6 +14,7 @@
 
 //! This crate implements the Android Keystore 2.0 service.
 
+pub mod auth_token_handler;
 pub mod database;
 pub mod error;
 pub mod globals;
