@@ -53,10 +53,13 @@ impl Enforcements {
     /// try to receive the auth token from the op_auth_map. We assume that by the time update/finish
     /// is called, the auth token has been delivered to keystore. Therefore, we do not wait for it
     /// and if the auth token is not found in the map, an error is returned.
+    /// This method is called only during the first call to update or if finish is called right
+    /// after create operation, because the operation caches the authorization decisions and tokens
+    /// from previous calls to enforcement module.
     pub fn authorize_update_or_finish(
         &self,
         key_params: &[KeyParameter],
-        op_challenge: Option<OperationChallenge>,
+        op_challenge: Option<&OperationChallenge>,
     ) -> Result<AuthTokenHandler> {
         let mut user_auth_type: Option<HardwareAuthenticatorType> = None;
         let mut user_secure_ids = Vec::<i64>::new();
@@ -402,6 +405,15 @@ impl Enforcements {
         DB.with(|db| db.borrow_mut().insert_auth_token(&auth_token))
             .context("In add_auth_token.")?;
         Ok(())
+    }
+
+    /// This allows adding an entry to the op_auth_map, indexed by the operation challenge.
+    /// This is to be called by create_operation, once it has received the operation challenge
+    /// from keymint for an operation whose authorization decision is OpAuthRequired, as signalled
+    /// by the AuthTokenHandler.
+    pub fn insert_to_op_auth_map(&self, op_challenge: i64) {
+        let mut op_auth_map_guard = self.op_auth_map.lock().unwrap();
+        op_auth_map_guard.insert(op_challenge, None);
     }
 }
 
