@@ -15,14 +15,15 @@
 //! This module implements utility functions used by the Keystore 2.0 service
 //! implementation.
 
-use crate::error::Error;
 use crate::permission;
 use crate::permission::{KeyPerm, KeyPermSet, KeystorePerm};
+use crate::{error::Error, key_parameter::KeyParameterValue};
 use android_hardware_keymint::aidl::android::hardware::keymint::{
-    KeyParameter::KeyParameter as KmParam, Tag::Tag,
+    KeyCharacteristics::KeyCharacteristics, KeyParameter::KeyParameter as KmParam,
+    SecurityLevel::SecurityLevel, Tag::Tag,
 };
 use android_system_keystore2::aidl::android::system::keystore2::{
-    KeyDescriptor::KeyDescriptor, KeyParameter::KeyParameter,
+    Authorization::Authorization, KeyDescriptor::KeyDescriptor, KeyParameter::KeyParameter,
 };
 use anyhow::{anyhow, Context};
 use binder::{FromIBinder, SpIBinder, ThreadState};
@@ -135,4 +136,38 @@ impl Asp {
             .into_interface()
             .map_err(|e| anyhow!(format!("get_interface failed with error code {:?}", e)))
     }
+}
+
+/// Converts a set of key characteristics as returned from KeyMint into the internal
+/// representation of the keystore service.
+/// The parameter `hw_security_level` indicates which security level shall be used for
+/// parameters found in the hardware enforced parameter list.
+pub fn key_characteristics_to_internal(
+    key_characteristics: KeyCharacteristics,
+    hw_security_level: SecurityLevel,
+) -> Vec<crate::key_parameter::KeyParameter> {
+    key_characteristics
+        .hardwareEnforced
+        .into_iter()
+        .map(|aidl_kp| {
+            crate::key_parameter::KeyParameter::new(
+                KeyParameterValue::convert_from_wire(aidl_kp),
+                hw_security_level,
+            )
+        })
+        .chain(key_characteristics.softwareEnforced.into_iter().map(|aidl_kp| {
+            crate::key_parameter::KeyParameter::new(
+                KeyParameterValue::convert_from_wire(aidl_kp),
+                SecurityLevel::SOFTWARE,
+            )
+        }))
+        .collect()
+}
+
+/// Converts a set of key characteristics from the internal representation into a set of
+/// Authorizations as they are used to convey key characteristics to the clients of keystore.
+pub fn key_parameters_to_authorizations(
+    parameters: Vec<crate::key_parameter::KeyParameter>,
+) -> Vec<Authorization> {
+    parameters.into_iter().map(|p| p.into_authorization()).collect()
 }
