@@ -271,7 +271,7 @@ StatusOr<std::vector<uint8_t>> gather_attestation_application_id(uid_t uid) {
 
     if (uid == AID_SYSTEM) {
         /* Use a fixed ID for system callers */
-        auto pinfo = std::make_unique<KeyAttestationPackageInfo>(
+        auto pinfo = std::make_optional<KeyAttestationPackageInfo>(
             String16(kAttestationSystemPackageName), 1 /* version code */,
             std::make_shared<KeyAttestationPackageInfo::SignaturesVector>());
         key_attestation_id = KeyAttestationApplicationId(std::move(pinfo));
@@ -284,7 +284,7 @@ StatusOr<std::vector<uint8_t>> gather_attestation_application_id(uid_t uid) {
         if (!status.isOk()) {
             ALOGW("package manager request for key attestation ID failed with: %s %d",
                   status.exceptionMessage().string(), status.exceptionCode());
-            auto pinfo = std::make_unique<KeyAttestationPackageInfo>(
+            auto pinfo = std::make_optional<KeyAttestationPackageInfo>(
                 String16(kUnknownPackageName), 1 /* version code */,
                 std::make_shared<KeyAttestationPackageInfo::SignaturesVector>());
             key_attestation_id = KeyAttestationApplicationId(std::move(pinfo));
