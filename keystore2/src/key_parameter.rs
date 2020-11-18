@@ -606,7 +606,6 @@ impl KeyParameter {
 ///         CallerNonce, CALLER_NONCE, boolValue;
 ///         UserSecureID, USER_SECURE_ID, longInteger;
 ///         ApplicationID, APPLICATION_ID, blob;
-///         ActiveDateTime, ACTIVE_DATETIME, dateTime;
 /// }
 /// ```
 /// expands to:
@@ -635,11 +634,6 @@ impl KeyParameter {
 ///                 KeyParameterValue::ApplicationID(v) => KmKeyParameter {
 ///                         tag: Tag::APPLICATION_ID,
 ///                         blob: v,
-///                         ..Default::default()
-///                 },
-///                 KeyParameterValue::ActiveDateTime(v) => KmKeyParameter {
-///                         tag: Tag::ACTIVE_DATETIME,
-///                         dateTime: v,
 ///                         ..Default::default()
 ///                 },
 ///         }
@@ -673,11 +667,6 @@ impl KeyParameter {
 ///                          blob: v,
 ///                          ..
 ///                 } => KeyParameterValue::ApplicationID(v),
-///                 KmKeyParameter {
-///                          tag: Tag::ACTIVE_DATETIME,
-///                          dateTime: v,
-///                          ..
-///                 } => KeyParameterValue::ActiveDateTime(v),
 ///                 _ => KeyParameterValue::Invalid,
 ///         }
 /// }
@@ -771,7 +760,7 @@ macro_rules! implement_key_parameter_conversion_to_from_wire {
        }
     };
     // This rule handles all variants that are neither invalid nor bool values nor enums
-    // (i.e. all variants which correspond to integer, longInteger, dateTime and blob fields in
+    // (i.e. all variants which correspond to integer, longInteger, and blob fields in
     // KmKeyParameter).
     // On an input like: 'ConfirmationToken, CONFIRMATION_TOKEN, blob;' it generates a match arm
     // like: KeyParameterValue::ConfirmationToken(v) => KmKeyParameter {
@@ -855,7 +844,7 @@ macro_rules! implement_key_parameter_conversion_to_from_wire {
         }
     };
     // This rule handles all variants that are neither invalid nor bool values nor enums
-    // (i.e. all variants which correspond to integer, longInteger, dateTime and blob fields in
+    // (i.e. all variants which correspond to integer, longInteger, and blob fields in
     // KmKeyParameter).
     // On an input like: 'ConfirmationToken, CONFIRMATION_TOKEN, blob;' it generates a match arm
     // like:
@@ -892,7 +881,7 @@ impl KeyParameterValue {
     // Invoke the macro that generates the code for key parameter conversion to/from wire type
     // with all possible variants of KeyParameterValue. Each line corresponding to a variant
     // contains: variant identifier, tag value, and the related field name (i.e.
-    // boolValue/integer/longInteger/dateTime/blob) in the KmKeyParameter.
+    // boolValue/integer/longInteger/blob) in the KmKeyParameter.
     implement_key_parameter_conversion_to_from_wire! {
         Invalid, INVALID, na;
         KeyPurpose, PURPOSE, integer, KeyPurpose;
@@ -908,9 +897,9 @@ impl KeyParameterValue {
         IncludeUniqueID, INCLUDE_UNIQUE_ID, boolValue;
         BootLoaderOnly, BOOTLOADER_ONLY, boolValue;
         RollbackResistance, ROLLBACK_RESISTANCE, boolValue;
-        ActiveDateTime, ACTIVE_DATETIME, dateTime;
-        OriginationExpireDateTime, ORIGINATION_EXPIRE_DATETIME, dateTime;
-        UsageExpireDateTime, USAGE_EXPIRE_DATETIME, dateTime;
+        ActiveDateTime, ACTIVE_DATETIME, longInteger;
+        OriginationExpireDateTime, ORIGINATION_EXPIRE_DATETIME, longInteger;
+        UsageExpireDateTime, USAGE_EXPIRE_DATETIME, longInteger;
         MinSecondsBetweenOps, MIN_SECONDS_BETWEEN_OPS, integer;
         MaxUsesPerBoot, MAX_USES_PER_BOOT, integer;
         UserID, USER_ID, integer;
@@ -924,7 +913,7 @@ impl KeyParameterValue {
         UnlockedDeviceRequired, UNLOCKED_DEVICE_REQUIRED, boolValue;
         ApplicationID, APPLICATION_ID, blob;
         ApplicationData, APPLICATION_DATA, blob;
-        CreationDateTime, CREATION_DATETIME, dateTime;
+        CreationDateTime, CREATION_DATETIME, longInteger;
         KeyOrigin, ORIGIN, integer, KeyOrigin;
         RootOfTrust, ROOT_OF_TRUST, blob;
         OSVersion, OS_VERSION, integer;
@@ -1243,13 +1232,12 @@ mod storage_tests {
 }
 
 /// The wire_tests module tests the 'convert_to_wire' and 'convert_from_wire' methods for
-/// KeyParameter, for the five different types used in KmKeyParameter, in addition to Invalid
+/// KeyParameter, for the four different types used in KmKeyParameter, in addition to Invalid
 /// key parameter.
 /// i) bool
 /// ii) integer
 /// iii) longInteger
-/// iv) dateTime
-/// v) blob
+/// iv) blob
 #[cfg(test)]
 mod wire_tests {
     use crate::key_parameter::*;
@@ -1284,16 +1272,6 @@ mod wire_tests {
         let actual = KeyParameterValue::convert_to_wire(kp.key_parameter_value);
         assert_eq!(Tag::USER_SECURE_ID, actual.tag);
         assert_eq!(i64::MAX, actual.longInteger);
-    }
-    #[test]
-    fn test_convert_to_wire_date_time() {
-        let kp = KeyParameter::new(
-            KeyParameterValue::ActiveDateTime(i64::MAX),
-            SecurityLevel::STRONGBOX,
-        );
-        let actual = KeyParameterValue::convert_to_wire(kp.key_parameter_value);
-        assert_eq!(Tag::ACTIVE_DATETIME, actual.tag);
-        assert_eq!(i64::MAX, actual.dateTime);
     }
     #[test]
     fn test_convert_to_wire_blob() {
@@ -1339,13 +1317,6 @@ mod wire_tests {
         };
         let actual = KeyParameterValue::convert_from_wire(aidl_kp);
         assert_eq!(KeyParameterValue::UserSecureID(i64::MAX), actual);
-    }
-    #[test]
-    fn test_convert_from_wire_date_time() {
-        let aidl_kp =
-            KmKeyParameter { tag: Tag::ACTIVE_DATETIME, dateTime: i64::MAX, ..Default::default() };
-        let actual = KeyParameterValue::convert_from_wire(aidl_kp);
-        assert_eq!(KeyParameterValue::ActiveDateTime(i64::MAX), actual);
     }
     #[test]
     fn test_convert_from_wire_blob() {
