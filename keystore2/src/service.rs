@@ -32,7 +32,6 @@ use android_system_keystore2::aidl::android::system::keystore2::{
     Domain::Domain, IKeystoreSecurityLevel::IKeystoreSecurityLevel,
     IKeystoreService::BnKeystoreService, IKeystoreService::IKeystoreService,
     KeyDescriptor::KeyDescriptor, KeyEntryResponse::KeyEntryResponse, KeyMetadata::KeyMetadata,
-    SecurityLevel::SecurityLevel as KsSecurityLevel,
 };
 use anyhow::{anyhow, Context, Result};
 use binder::{IBinder, Interface, ThreadState};
@@ -98,7 +97,7 @@ impl KeystoreService {
                     nspace: key_entry.id(),
                     ..Default::default()
                 },
-                keySecurityLevel: KsSecurityLevel(key_entry.sec_level().0),
+                keySecurityLevel: key_entry.sec_level(),
                 certificate: key_entry.take_cert(),
                 certificateChain: key_entry.take_cert_chain(),
                 authorizations: key_parameters_to_authorizations(key_entry.into_key_parameters()),
@@ -194,7 +193,7 @@ impl binder::Interface for KeystoreService {}
 impl IKeystoreService for KeystoreService {
     fn getSecurityLevel(
         &self,
-        security_level: KsSecurityLevel,
+        security_level: SecurityLevel,
     ) -> binder::public_api::Result<Box<dyn IKeystoreSecurityLevel>> {
         map_or_log_err(self.get_security_level(SecurityLevel(security_level.0)), Ok)
     }
