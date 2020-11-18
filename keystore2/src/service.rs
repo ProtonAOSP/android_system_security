@@ -18,7 +18,7 @@
 //! This crate implement the core Keystore 2.0 service API as defined by the Keystore 2.0
 //! AIDL spec.
 
-use crate::database::{KeyEntry, KeyEntryLoadBits, SubComponentType};
+use crate::database::{KeyEntryLoadBits, SubComponentType};
 use crate::error::{self, map_or_log_err, ErrorCode};
 use crate::globals::DB;
 use crate::permission;
@@ -70,7 +70,7 @@ impl KeystoreService {
     }
 
     fn get_key_entry(&self, key: &KeyDescriptor) -> Result<KeyEntryResponse> {
-        let mut key_entry: KeyEntry = DB
+        let (key_id_guard, mut key_entry) = DB
             .with(|db| {
                 db.borrow_mut().load_key_entry(
                     key.clone(),
@@ -94,7 +94,7 @@ impl KeystoreService {
             metadata: KeyMetadata {
                 key: KeyDescriptor {
                     domain: Domain::KEY_ID,
-                    nspace: key_entry.id(),
+                    nspace: key_id_guard.id(),
                     ..Default::default()
                 },
                 keySecurityLevel: key_entry.sec_level(),
@@ -114,7 +114,7 @@ impl KeystoreService {
     ) -> Result<()> {
         DB.with::<_, Result<()>>(|db| {
             let mut db = db.borrow_mut();
-            let key_entry = db
+            let (key_id_guard, key_entry) = db
                 .load_key_entry(
                     key.clone(),
                     KeyEntryLoadBits::NONE,
@@ -127,13 +127,13 @@ impl KeystoreService {
                 .context("Failed to load key_entry.")?;
 
             if let Some(cert) = public_cert {
-                db.insert_blob(key_entry.id(), SubComponentType::CERT, cert, key_entry.sec_level())
+                db.insert_blob(&key_id_guard, SubComponentType::CERT, cert, key_entry.sec_level())
                     .context("Failed to update cert subcomponent.")?;
             }
 
             if let Some(cert_chain) = certificate_chain {
                 db.insert_blob(
-                    key_entry.id(),
+                    &key_id_guard,
                     SubComponentType::CERT_CHAIN,
                     cert_chain,
                     key_entry.sec_level(),
