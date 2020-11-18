@@ -25,9 +25,7 @@ pub use android_hardware_keymint::aidl::android::hardware::keymint::{
     KeyParameter::KeyParameter as KmKeyParameter, KeyPurpose::KeyPurpose, PaddingMode::PaddingMode,
     SecurityLevel::SecurityLevel, Tag::Tag,
 };
-use android_system_keystore2::aidl::android::system::keystore2::{
-    Authorization::Authorization, SecurityLevel::SecurityLevel as KsSecurityLevel,
-};
+use android_system_keystore2::aidl::android::system::keystore2::Authorization::Authorization;
 use anyhow::{Context, Result};
 use rusqlite::types::{FromSql, Null, ToSql, ToSqlOutput};
 use rusqlite::{Result as SqlResult, Row};
@@ -241,10 +239,8 @@ impl KeyParameter {
     /// an internal KeyParameter representation to produce the Authorization wire type.
     pub fn into_authorization(self) -> Authorization {
         Authorization {
-            securityLevel: KsSecurityLevel(self.security_level.0),
-            keyParameter: crate::utils::keyparam_km_to_ks(
-                &self.key_parameter_value.convert_to_wire(),
-            ),
+            securityLevel: self.security_level,
+            keyParameter: self.key_parameter_value.convert_to_wire(),
         }
     }
 }

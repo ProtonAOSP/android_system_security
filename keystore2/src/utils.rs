@@ -19,11 +19,10 @@ use crate::permission;
 use crate::permission::{KeyPerm, KeyPermSet, KeystorePerm};
 use crate::{error::Error, key_parameter::KeyParameterValue};
 use android_hardware_keymint::aidl::android::hardware::keymint::{
-    KeyCharacteristics::KeyCharacteristics, KeyParameter::KeyParameter as KmParam,
-    SecurityLevel::SecurityLevel, Tag::Tag,
+    KeyCharacteristics::KeyCharacteristics, SecurityLevel::SecurityLevel,
 };
 use android_system_keystore2::aidl::android::system::keystore2::{
-    Authorization::Authorization, KeyDescriptor::KeyDescriptor, KeyParameter::KeyParameter,
+    Authorization::Authorization, KeyDescriptor::KeyDescriptor,
 };
 use anyhow::{anyhow, Context};
 use binder::{FromIBinder, SpIBinder, ThreadState};
@@ -76,40 +75,6 @@ pub fn check_key_permission(
             access_vector,
         )
     })
-}
-
-/// This function converts a `KeyParameter` from the keystore2 AIDL
-/// bindings into a `KeyParameter` from the keymint AIDL bindings.
-/// TODO This is a temporary workaround until the keymint AIDL spec
-/// lands.
-pub fn keyparam_ks_to_km(p: &KeyParameter) -> KmParam {
-    KmParam {
-        tag: Tag(p.tag),
-        boolValue: p.boolValue,
-        integer: p.integer,
-        longInteger: p.longInteger,
-        blob: match &p.blob {
-            Some(b) => b.clone(),
-            None => vec![],
-        },
-    }
-}
-
-/// This function converts a `KeyParameter` from the keymint AIDL
-/// bindings into a `KeyParameter` from the keystore2 AIDL bindings.
-/// TODO This is a temporary workaround until the keymint AIDL spec
-/// lands.
-pub fn keyparam_km_to_ks(p: &KmParam) -> KeyParameter {
-    KeyParameter {
-        tag: p.tag.0,
-        boolValue: p.boolValue,
-        integer: p.integer,
-        longInteger: p.longInteger,
-        blob: match p.blob.len() {
-            0 => None,
-            _ => Some(p.blob.clone()),
-        },
-    }
 }
 
 /// Thread safe wrapper around SpIBinder. It is safe to have SpIBinder smart pointers to the
