@@ -46,8 +46,9 @@ use crate::key_parameter::{KeyParameter, SqlField, Tag};
 use crate::permission::KeyPermSet;
 use anyhow::{anyhow, Context, Result};
 
+use android_hardware_keymint::aidl::android::hardware::keymint::SecurityLevel::SecurityLevel;
 use android_system_keystore2::aidl::android::system::keystore2::{
-    Domain::Domain, KeyDescriptor::KeyDescriptor, SecurityLevel::SecurityLevel,
+    Domain::Domain, KeyDescriptor::KeyDescriptor,
 };
 
 #[cfg(not(test))]
@@ -134,6 +135,14 @@ impl KeyEntry {
     /// Returns the security level of the key entry.
     pub fn sec_level(&self) -> SecurityLevel {
         self.sec_level
+    }
+    /// Exposes the key parameters of this key entry.
+    pub fn key_parameters(&self) -> &Vec<KeyParameter> {
+        &self.parameters
+    }
+    /// Consumes this key entry and extracts the keyparameters from it.
+    pub fn into_key_parameters(self) -> Vec<KeyParameter> {
+        self.parameters
     }
 }
 
