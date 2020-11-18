@@ -23,9 +23,11 @@ pub use android_hardware_keymint::aidl::android::hardware::keymint::{
     Algorithm::Algorithm, BlockMode::BlockMode, Digest::Digest, EcCurve::EcCurve,
     HardwareAuthenticatorType::HardwareAuthenticatorType, KeyOrigin::KeyOrigin,
     KeyParameter::KeyParameter as KmKeyParameter, KeyPurpose::KeyPurpose, PaddingMode::PaddingMode,
-    Tag::Tag,
+    SecurityLevel::SecurityLevel, Tag::Tag,
 };
-pub use android_system_keystore2::aidl::android::system::keystore2::SecurityLevel::SecurityLevel;
+use android_system_keystore2::aidl::android::system::keystore2::{
+    Authorization::Authorization, SecurityLevel::SecurityLevel as KsSecurityLevel,
+};
 use anyhow::{Context, Result};
 use rusqlite::types::{FromSql, Null, ToSql, ToSqlOutput};
 use rusqlite::{Result as SqlResult, Row};
@@ -232,6 +234,18 @@ impl KeyParameter {
     /// Returns the security level of a KeyParameter.
     pub fn security_level(&self) -> &SecurityLevel {
         &self.security_level
+    }
+
+    /// An authorization is a KeyParameter with an associated security level that is used
+    /// to convey the key characteristics to keystore clients. This function consumes
+    /// an internal KeyParameter representation to produce the Authorization wire type.
+    pub fn into_authorization(self) -> Authorization {
+        Authorization {
+            securityLevel: KsSecurityLevel(self.security_level.0),
+            keyParameter: crate::utils::keyparam_km_to_ks(
+                &self.key_parameter_value.convert_to_wire(),
+            ),
+        }
     }
 }
 
