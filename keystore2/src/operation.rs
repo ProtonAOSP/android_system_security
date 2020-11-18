@@ -190,15 +190,29 @@ impl Operation {
         }
     }
 
-    fn get_pruning_info(&self) -> PruningInfo {
-        // Expect safety:
-        // `last_usage` is locked only for primitive single line statements.
-        // There is no chance to panic and poison the mutex.
-        PruningInfo {
+    fn get_pruning_info(&self) -> Option<PruningInfo> {
+        // An operation may be finalized.
+        if let Ok(guard) = self.outcome.try_lock() {
+            match *guard {
+                Outcome::Unknown => {}
+                // If the outcome is any other than unknown, it has been finalized,
+                // and we can no longer consider it for pruning.
+                _ => return None,
+            }
+        }
+        // Else: If we could not grab the lock, this means that the operation is currently
+        //       being used and it may be transitioning to finalized or it was simply updated.
+        //       In any case it is fair game to consider it for pruning. If the operation
+        //       transitioned to a final state, we will notice when we attempt to prune, and
+        //       a subsequent attempt to create a new operation will succeed.
+        Some(PruningInfo {
+            // Expect safety:
+            // `last_usage` is locked only for primitive single line statements.
+            // There is no chance to panic and poison the mutex.
             last_usage: *self.last_usage.lock().expect("In get_pruning_info."),
             owner: self.owner,
             index: self.index,
-        }
+        })
     }
 
     fn prune(&self, last_usage: Instant) -> Result<(), Error> {
@@ -497,14 +511,17 @@ impl OperationDb {
     /// To find a suitable candidate we compute the malus for the caller and each existing
     /// operation. The malus is the inverse of the pruning power (caller) or pruning
     /// resistance (existing operation).
+    ///
     /// The malus is based on the number of sibling operations and age. Sibling
     /// operations are operations that have the same owner (UID).
+    ///
     /// Every operation, existing or new, starts with a malus of 1. Every sibling
     /// increases the malus by one. The age is the time since an operation was last touched.
     /// It increases the malus by log6(<age in seconds> + 1) rounded down to the next
     /// integer. So the malus increases stepwise after 5s, 35s, 215s, ...
     /// Of two operations with the same malus the least recently used one is considered
     /// weaker.
+    ///
     /// For the caller to be able to prune an operation it must find an operation
     /// with a malus higher than its own.
     ///
@@ -541,12 +558,17 @@ impl OperationDb {
     /// guaranteed that new operations can always be started. With the increased usage
     /// of Keystore we saw increased pruning activity which can lead to a livelock
     /// situation in the worst case.
+    ///
     /// With the new pruning strategy we want to provide well behaved clients with
     /// progress assurances while punishing DoS attempts. As a result of this
     /// strategy we can be in the situation where no operation can be pruned and the
     /// creation of a new operation fails. This allows single child operations which
     /// are frequently updated to complete, thereby breaking up livelock situations
     /// and facilitating system wide progress.
+    ///
+    /// ## Update
+    /// We also allow callers to cannibalize their own sibling operations if no other
+    /// slot can be found. In this case the least recently used sibling is pruned.
     pub fn prune(&self, caller: u32) -> Result<(), Error> {
         loop {
             // Maps the uid of the owner to the number of operations that owner has
@@ -563,11 +585,12 @@ impl OperationDb {
                 .iter()
                 .for_each(|op| {
                     if let Some(op) = op.upgrade() {
-                        let p_info = op.get_pruning_info();
-                        let owner = p_info.owner;
-                        pruning_info.push(p_info);
-                        // Count operations per owner.
-                        *owners.entry(owner).or_insert(0) += 1;
+                        if let Some(p_info) = op.get_pruning_info() {
+                            let owner = p_info.owner;
+                            pruning_info.push(p_info);
+                            // Count operations per owner.
+                            *owners.entry(owner).or_insert(0) += 1;
+                        }
                     }
                 });
 
@@ -582,6 +605,7 @@ impl OperationDb {
                 last_usage: Instant,
                 age: Duration,
             }
+            let mut oldest_caller_op: Option<CandidateInfo> = None;
             let candidate = pruning_info.iter().fold(
                 None,
                 |acc: Option<CandidateInfo>, &PruningInfo { last_usage, owner, index }| {
@@ -589,6 +613,19 @@ impl OperationDb {
                     let age = now
                         .checked_duration_since(last_usage)
                         .unwrap_or_else(|| Duration::new(0, 0));
+
+                    // Find the least recently used sibling as an alternative pruning candidate.
+                    if owner == caller {
+                        if let Some(CandidateInfo { age: a, .. }) = oldest_caller_op {
+                            if age > a {
+                                oldest_caller_op =
+                                    Some(CandidateInfo { index, malus: 0, last_usage, age });
+                            }
+                        } else {
+                            oldest_caller_op =
+                                Some(CandidateInfo { index, malus: 0, last_usage, age });
+                        }
+                    }
 
                     // Compute the malus of the current operation.
                     // Expect safety: Every owner in pruning_info was counted in
@@ -621,6 +658,9 @@ impl OperationDb {
                     }
                 },
             );
+
+            // If we did not find a suitable candidate we may cannibalize our oldest sibling.
+            let candidate = candidate.or(oldest_caller_op);
 
             match candidate {
                 Some(CandidateInfo { index, malus: _, last_usage, age: _ }) => {
