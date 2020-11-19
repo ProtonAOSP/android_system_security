@@ -18,6 +18,7 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include <binder/Parcelable.h>
@@ -33,8 +34,7 @@ class KeyAttestationPackageInfo : public Parcelable {
   public:
     typedef SharedNullableIterator<const content::pm::Signature, std::vector>
         ConstSignatureIterator;
-    typedef std::vector<std::unique_ptr<content::pm::Signature>>
-        SignaturesVector;
+    typedef std::vector<std::optional<content::pm::Signature>> SignaturesVector;
     typedef std::shared_ptr<SignaturesVector> SharedSignaturesVector;
 
     KeyAttestationPackageInfo(const String16& packageName, int64_t versionCode,
@@ -44,14 +44,14 @@ class KeyAttestationPackageInfo : public Parcelable {
     status_t writeToParcel(Parcel*) const override;
     status_t readFromParcel(const Parcel* parcel) override;
 
-    const std::unique_ptr<String16>& package_name() const { return packageName_; }
+    const std::optional<String16>& package_name() const { return packageName_; }
     int64_t version_code() const { return versionCode_; }
 
     ConstSignatureIterator sigs_begin() const { return ConstSignatureIterator(signatures_); }
     ConstSignatureIterator sigs_end() const { return ConstSignatureIterator(); }
 
   private:
-    std::unique_ptr<String16> packageName_;
+    std::optional<String16> packageName_;
     int64_t versionCode_;
     SharedSignaturesVector signatures_;
 };
