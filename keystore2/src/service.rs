@@ -24,12 +24,14 @@ use crate::globals::DB;
 use crate::permission;
 use crate::permission::KeyPerm;
 use crate::security_level::KeystoreSecurityLevel;
-use crate::utils::{check_grant_permission, check_key_permission, Asp};
+use crate::utils::{
+    check_grant_permission, check_key_permission, key_parameters_to_authorizations, Asp,
+};
+use android_hardware_keymint::aidl::android::hardware::keymint::SecurityLevel::SecurityLevel;
 use android_system_keystore2::aidl::android::system::keystore2::{
     Domain::Domain, IKeystoreSecurityLevel::IKeystoreSecurityLevel,
     IKeystoreService::BnKeystoreService, IKeystoreService::IKeystoreService,
     KeyDescriptor::KeyDescriptor, KeyEntryResponse::KeyEntryResponse, KeyMetadata::KeyMetadata,
-    SecurityLevel::SecurityLevel,
 };
 use anyhow::{anyhow, Context, Result};
 use binder::{IBinder, Interface, ThreadState};
@@ -98,7 +100,7 @@ impl KeystoreService {
                 keySecurityLevel: key_entry.sec_level(),
                 certificate: key_entry.take_cert(),
                 certificateChain: key_entry.take_cert_chain(),
-                // TODO add key characteristics here.
+                authorizations: key_parameters_to_authorizations(key_entry.into_key_parameters()),
                 ..Default::default()
             },
         })
@@ -193,7 +195,7 @@ impl IKeystoreService for KeystoreService {
         &self,
         security_level: SecurityLevel,
     ) -> binder::public_api::Result<Box<dyn IKeystoreSecurityLevel>> {
-        map_or_log_err(self.get_security_level(security_level), Ok)
+        map_or_log_err(self.get_security_level(SecurityLevel(security_level.0)), Ok)
     }
     fn getKeyEntry(&self, key: &KeyDescriptor) -> binder::public_api::Result<KeyEntryResponse> {
         map_or_log_err(self.get_key_entry(key), Ok)
