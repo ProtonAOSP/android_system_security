@@ -1077,7 +1077,7 @@ mod tests {
         db.rebind_alias(&KEY_ID_LOCK.get(entries[1].id), "foo", Domain::APP, 42)?;
         let entries = get_keyentry(&db)?;
         assert_eq!(entries.len(), 2);
-        assert_eq!(extractor(&entries[0]), (Some(Domain::APP), Some(42), None));
+        assert_eq!(extractor(&entries[0]), (None, None, None));
         assert_eq!(extractor(&entries[1]), (Some(Domain::APP), Some(42), Some("foo")));
 
         // Test that we must pass in a valid Domain.
@@ -1102,7 +1102,7 @@ mod tests {
         // Test that we correctly abort the transaction in this case.
         let entries = get_keyentry(&db)?;
         assert_eq!(entries.len(), 2);
-        assert_eq!(extractor(&entries[0]), (Some(Domain::APP), Some(42), None));
+        assert_eq!(extractor(&entries[0]), (None, None, None));
         assert_eq!(extractor(&entries[1]), (Some(Domain::APP), Some(42), Some("foo")));
 
         Ok(())
