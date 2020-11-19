@@ -5,6 +5,7 @@
 
 #include <iterator>
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace android {
@@ -12,7 +13,7 @@ namespace security {
 
 /*
  * This iterator abstracts from a collection of the form
- * std::shared_ptr<COLLECTION_TYPE<std::unique_ptr<T>>>
+ * std::shared_ptr<COLLECTION_TYPE<std::optional<T>>>
  * such that it is defined both for nulled outer pointer and
  * nulled entries. If shared_ptr(nullptr) is passed in, the iterator behaves
  * like the end iterator yielding an empty collection. Nulled
@@ -25,7 +26,7 @@ namespace security {
 template <typename T, template <typename...> class Coll = std::vector>
 class SharedNullableIterator {
   public:
-    typedef Coll<std::unique_ptr<typename std::remove_const<T>::type>> CollectionType;
+    typedef Coll<std::optional<typename std::remove_const<T>::type>> CollectionType;
     typedef std::shared_ptr<CollectionType> CollectionPtr;
 
     SharedNullableIterator() {}

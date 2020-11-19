@@ -31,29 +31,24 @@ struct KeystoreResponse : public ::android::Parcelable {
   public:
     KeystoreResponse() = default;
     explicit KeystoreResponse(const int response_code, const String16& error_msg)
-        : response_code_(response_code), error_msg_(std::make_unique<String16>(error_msg)) {}
+        : response_code_(response_code), error_msg_(error_msg) {}
     explicit KeystoreResponse(const int response_code)
         : response_code_(response_code), error_msg_() {}
     // NOLINTNEXTLINE(google-explicit-constructor)
     KeystoreResponse(const ::keystore::KeyStoreServiceReturnCode& rc)
         : response_code_(rc.getErrorCode()), error_msg_() {}
-    KeystoreResponse(const KeystoreResponse& other)
-        : response_code_(other.response_code_), error_msg_() {
-        if (other.error_msg_) {
-            error_msg_ = std::make_unique<String16>(*other.error_msg_);
-        }
-    }
+    KeystoreResponse(const KeystoreResponse& other) = default;
     KeystoreResponse(KeystoreResponse&& other) = default;
 
     status_t readFromParcel(const Parcel* in) override;
     status_t writeToParcel(Parcel* out) const override;
 
     int response_code() const { return response_code_; }
-    const String16* error_msg() const { return error_msg_.get(); }
+    const std::optional<String16>& error_msg() const { return error_msg_; }
 
   private:
     int response_code_;
-    std::unique_ptr<String16> error_msg_;
+    std::optional<String16> error_msg_;
 };
 
 }  // namespace keystore
