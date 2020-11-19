@@ -75,15 +75,15 @@ constexpr const size_t kTooManySignatures = 35;
 using ::android::content::pm::Signature;
 using ::android::security::build_attestation_application_id;
 
-std::unique_ptr<KeyAttestationPackageInfo>
+std::optional<KeyAttestationPackageInfo>
 make_package_info_with_signatures(const char* package_name,
                                   KeyAttestationPackageInfo::SignaturesVector signatures) {
-    return std::make_unique<KeyAttestationPackageInfo>(
+    return std::make_optional<KeyAttestationPackageInfo>(
         String16(package_name), 1 /* version code */,
         std::make_shared<KeyAttestationPackageInfo::SignaturesVector>(std::move(signatures)));
 }
 
-std::unique_ptr<KeyAttestationPackageInfo> make_package_info(const char* package_name) {
+std::optional<KeyAttestationPackageInfo> make_package_info(const char* package_name) {
     return make_package_info_with_signatures(package_name,
                                              KeyAttestationPackageInfo::SignaturesVector());
 }
@@ -111,7 +111,7 @@ TEST(AaidTruncationTest, tooManySignaturesTest) {
     KeyAttestationPackageInfo::SignaturesVector signatures;
     // Add 35 signatures which will surely exceed the 1K limit.
     for (size_t i = 0; i < kTooManySignatures; ++i) {
-        signatures.push_back(std::make_unique<Signature>(dummy_sig_data));
+        signatures.push_back(std::make_optional<Signature>(dummy_sig_data));
     }
 
     KeyAttestationApplicationId app_id(
@@ -131,7 +131,7 @@ TEST(AaidTruncationTest, combinedPackagesAndSignaturesTest) {
         KeyAttestationPackageInfo::SignaturesVector signatures;
         // Add a few signatures for each package
         for (int j = 0; j < 3; ++j) {
-            signatures.push_back(std::make_unique<Signature>(dummy_sig_data));
+            signatures.push_back(std::make_optional<Signature>(dummy_sig_data));
         }
         packages.push_back(
             make_package_info_with_signatures(kReasonablePackageName, std::move(signatures)));
