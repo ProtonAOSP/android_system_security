@@ -18,10 +18,12 @@ rust_library {
     srcs: ["src/lib.rs"],
 
     rustlibs: [
-        "android.system.keystore2-rust",
         "android.hardware.security.keymint-rust",
+        "android.security.apc-rust",
+        "android.system.keystore2-rust",
         "libanyhow",
         "libbinder_rs",
+        "libkeystore2_apc_compat-rust",
         "libkeystore2_crypto_rust",
         "libkeystore2_selinux",
         "liblazy_static",
@@ -42,11 +44,13 @@ rust_test {
     auto_gen_config: false,
     test_config: "AndroidTest.xml",
     rustlibs: [
-        "android.system.keystore2-rust",
         "android.hardware.security.keymint-rust",
+        "android.security.apc-rust",
+        "android.system.keystore2-rust",
         "libandroid_logger",
         "libanyhow",
         "libbinder_rs",
+        "libkeystore2_apc_compat-rust",
         "libkeystore2_crypto_rust",
         "libkeystore2_selinux",
         "liblazy_static",
