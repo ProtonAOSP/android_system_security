@@ -30,9 +30,9 @@ use android_system_keystore2::aidl::android::system::keystore2::{
     KeyMetadata::KeyMetadata, KeyParameters::KeyParameters,
 };
 
-use crate::globals::DB;
 use crate::permission::KeyPerm;
 use crate::utils::{check_key_permission, Asp};
+use crate::{database::KeyIdGuard, globals::DB};
 use crate::{
     database::{KeyEntry, KeyEntryLoadBits, SubComponentType},
     operation::KeystoreOperation,
@@ -125,30 +125,30 @@ impl KeystoreSecurityLevel {
                         .create_key_entry(key.domain, key.nspace)
                         .context("Trying to create a key entry.")?;
                     db.insert_blob(
-                        key_id,
+                        &key_id,
                         SubComponentType::KM_BLOB,
                         &blob.data,
                         self.security_level,
                     )
                     .context("Trying to insert km blob.")?;
                     if let Some(c) = &cert {
-                        db.insert_blob(key_id, SubComponentType::CERT, c, self.security_level)
+                        db.insert_blob(&key_id, SubComponentType::CERT, c, self.security_level)
                             .context("Trying to insert cert blob.")?;
                     }
                     if let Some(c) = &cert_chain {
                         db.insert_blob(
-                            key_id,
+                            &key_id,
                             SubComponentType::CERT_CHAIN,
                             c,
                             self.security_level,
                         )
                         .context("Trying to insert cert chain blob.")?;
                     }
-                    db.insert_keyparameter(key_id, &key_parameters)
+                    db.insert_keyparameter(&key_id, &key_parameters)
                         .context("Trying to insert key parameters.")?;
                     match &key.alias {
                         Some(alias) => db
-                            .rebind_alias(key_id, alias, key.domain, key.nspace)
+                            .rebind_alias(&key_id, alias, key.domain, key.nspace)
                             .context("Failed to rebind alias.")?,
                         None => {
                             return Err(error::Error::sys()).context(
@@ -158,7 +158,7 @@ impl KeystoreSecurityLevel {
                     }
                     Ok(KeyDescriptor {
                         domain: Domain::KEY_ID,
-                        nspace: key_id,
+                        nspace: key_id.id(),
                         ..Default::default()
                     })
                 })
@@ -186,7 +186,7 @@ impl KeystoreSecurityLevel {
         // so that we can use it by reference like the blob provided by the key descriptor.
         // Otherwise, we would have to clone the blob from the key descriptor.
         let scoping_blob: Vec<u8>;
-        let (km_blob, key_id) = match key.domain {
+        let (km_blob, key_id_guard) = match key.domain {
             Domain::BLOB => {
                 check_key_permission(KeyPerm::use_(), key, &None)
                     .context("In create_operation: checking use permission for Domain::BLOB.")?;
@@ -204,8 +204,8 @@ impl KeystoreSecurityLevel {
                 )
             }
             _ => {
-                let mut key_entry = DB
-                    .with::<_, Result<KeyEntry>>(|db| {
+                let (key_id_guard, mut key_entry) = DB
+                    .with::<_, Result<(KeyIdGuard, KeyEntry)>>(|db| {
                         db.borrow_mut().load_key_entry(
                             key.clone(),
                             KeyEntryLoadBits::KM,
@@ -223,7 +223,7 @@ impl KeystoreSecurityLevel {
                         ))
                     }
                 };
-                (&scoping_blob, Some(key_entry.id()))
+                (&scoping_blob, Some(key_id_guard))
             }
         };
 
@@ -242,68 +242,28 @@ impl KeystoreSecurityLevel {
             .get_interface()
             .context("In create_operation: Failed to get KeyMint device")?;
 
-        let (begin_result, upgraded_blob) = loop {
-            match map_km_error(km_dev.begin(
-                purpose,
+        let (begin_result, upgraded_blob) = self
+            .upgrade_keyblob_if_required_with(
+                &*km_dev,
+                key_id_guard,
                 &km_blob,
                 &operation_parameters,
-                &Default::default(),
-            )) {
-                Ok(result) => break (result, None),
-                Err(Error::Km(ErrorCode::TOO_MANY_OPERATIONS)) => {
-                    self.operation_db
-                        .prune(caller_uid)
-                        .context("In create_operation: Outer loop.")?;
-                    continue;
-                }
-                Err(Error::Km(ErrorCode::KEY_REQUIRES_UPGRADE)) => {
-                    let upgraded_blob =
-                        map_km_error(km_dev.upgradeKey(&km_blob, &operation_parameters))
-                            .context("In create_operation: Upgrade failed.")?;
-                    break loop {
-                        match map_km_error(km_dev.begin(
-                            purpose,
-                            &upgraded_blob,
-                            &operation_parameters,
-                            &Default::default(),
-                        )) {
-                            Ok(result) => break (result, Some(upgraded_blob)),
-                            // If Keystore 2.0 is multi threaded another request may have
-                            // snatched up our previously pruned operation slot. So we might
-                            // need to prune again.
-                            Err(Error::Km(ErrorCode::TOO_MANY_OPERATIONS)) => {
-                                self.operation_db
-                                    .prune(caller_uid)
-                                    .context("In create_operation: Inner loop.")?;
-                                continue;
-                            }
-                            Err(e) => {
-                                return Err(e).context(
-                                    "In create_operation: Begin operation failed after upgrade.",
-                                )
-                            }
+                |blob| loop {
+                    match map_km_error(km_dev.begin(
+                        purpose,
+                        blob,
+                        &operation_parameters,
+                        &Default::default(),
+                    )) {
+                        Err(Error::Km(ErrorCode::TOO_MANY_OPERATIONS)) => {
+                            self.operation_db.prune(caller_uid)?;
+                            continue;
                         }
-                    };
-                }
-                Err(e) => return Err(e).context("In create_operation: Begin operation failed."),
-            };
-        };
-
-        if let Some(upgraded_blob) = upgraded_blob {
-            if let Some(key_id) = key_id {
-                DB.with(|db| {
-                    db.borrow_mut().insert_blob(
-                        key_id,
-                        SubComponentType::KM_BLOB,
-                        &upgraded_blob,
-                        self.security_level,
-                    )
-                })
-                .context(
-                    "In create_operation: Failed to insert upgraded blob into the database.",
-                )?;
-            }
-        }
+                        v => return v,
+                    }
+                },
+            )
+            .context("In create_operation: Failed to begin operation.")?;
 
         let operation = match begin_result.operation {
             Some(km_op) => self.operation_db.create_operation(km_op, caller_uid),
@@ -440,6 +400,12 @@ impl KeystoreSecurityLevel {
                 .context("In import_wrapped_key: Alias must be specified.");
         }
 
+        if wrapping_key.domain == Domain::BLOB {
+            return Err(error::Error::Km(ErrorCode::INVALID_ARGUMENT)).context(
+                "In import_wrapped_key: Import wrapped key not supported for self managed blobs.",
+            );
+        }
+
         let wrapped_data = match &key.blob {
             Some(d) => d,
             None => {
@@ -462,7 +428,7 @@ impl KeystoreSecurityLevel {
         // import_wrapped_key requires the rebind permission for the new key.
         check_key_permission(KeyPerm::rebind(), &key, &None).context("In import_wrapped_key.")?;
 
-        let wrapping_key_entry = DB
+        let (wrapping_key_id_guard, wrapping_key_entry) = DB
             .with(|db| {
                 db.borrow_mut().load_key_entry(
                     wrapping_key.clone(),
@@ -482,8 +448,6 @@ impl KeystoreSecurityLevel {
             }
         };
 
-        let mut blob: ByteArray = Default::default();
-        let mut key_characteristics: KeyCharacteristics = Default::default();
         // km_dev.importWrappedKey does not return a certificate chain.
         // TODO Do we assume that all wrapped keys are symmetric?
         // let certificate_chain: Vec<KmCertificate> = Default::default();
@@ -509,18 +473,73 @@ impl KeystoreSecurityLevel {
         let masking_key = masking_key.unwrap_or(ZERO_BLOB_32);
 
         let km_dev: Box<dyn IKeyMintDevice> = self.keymint.get_interface()?;
-        map_km_error(km_dev.importWrappedKey(
-            wrapped_data,
+        let ((blob, key_characteristics), _) = self.upgrade_keyblob_if_required_with(
+            &*km_dev,
+            Some(wrapping_key_id_guard),
             wrapping_key_blob,
-            masking_key,
-            &params,
-            pw_sid,
-            fp_sid,
-            &mut blob,
-            &mut key_characteristics,
-        ))?;
+            &[],
+            |wrapping_blob| {
+                let mut blob: ByteArray = Default::default();
+                let mut key_characteristics: KeyCharacteristics = Default::default();
+                map_km_error(km_dev.importWrappedKey(
+                    wrapped_data,
+                    wrapping_key_blob,
+                    masking_key,
+                    &params,
+                    pw_sid,
+                    fp_sid,
+                    &mut blob,
+                    &mut key_characteristics,
+                ))?;
+                Ok((blob, key_characteristics))
+            },
+        )?;
 
         self.store_new_key(key, key_characteristics, None, blob).context("In import_wrapped_key.")
+    }
+
+    fn upgrade_keyblob_if_required_with<T, F>(
+        &self,
+        km_dev: &dyn IKeyMintDevice,
+        key_id_guard: Option<KeyIdGuard>,
+        blob: &[u8],
+        params: &[KeyParameter],
+        f: F,
+    ) -> Result<(T, Option<Vec<u8>>)>
+    where
+        F: Fn(&[u8]) -> Result<T, Error>,
+    {
+        match f(blob) {
+            Err(Error::Km(ErrorCode::KEY_REQUIRES_UPGRADE)) => {
+                let upgraded_blob = map_km_error(km_dev.upgradeKey(blob, params))
+                    .context("In upgrade_keyblob_if_required_with: Upgrade failed.")?;
+                key_id_guard.map_or(Ok(()), |key_id_guard| {
+                    DB.with(|db| {
+                        db.borrow_mut().insert_blob(
+                            &key_id_guard,
+                            SubComponentType::KM_BLOB,
+                            &upgraded_blob,
+                            self.security_level,
+                        )
+                    })
+                    .context(concat!(
+                        "In upgrade_keyblob_if_required_with: ",
+                        "Failed to insert upgraded blob into the database.",
+                    ))
+                })?;
+                match f(&upgraded_blob) {
+                    Ok(v) => Ok((v, Some(upgraded_blob))),
+                    Err(e) => Err(e).context(concat!(
+                        "In upgrade_keyblob_if_required_with: ",
+                        "Failed to perform operation on second try."
+                    )),
+                }
+            }
+            Err(e) => {
+                Err(e).context("In upgrade_keyblob_if_required_with: Failed perform operation.")
+            }
+            Ok(v) => Ok((v, None)),
+        }
     }
 }
 

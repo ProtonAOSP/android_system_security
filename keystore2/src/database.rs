@@ -51,13 +51,17 @@ use android_system_keystore2::aidl::android::system::keystore2::{
     Domain::Domain, KeyDescriptor::KeyDescriptor,
 };
 
+use lazy_static::lazy_static;
 #[cfg(not(test))]
 use rand::prelude::random;
 use rusqlite::{
     params, types::FromSql, types::FromSqlResult, types::ToSqlOutput, types::ValueRef, Connection,
     OptionalExtension, Row, Rows, ToSql, Transaction, TransactionBehavior, NO_PARAMS,
 };
-use std::sync::Once;
+use std::{
+    collections::HashSet,
+    sync::{Condvar, Mutex, Once},
+};
 #[cfg(test)]
 use tests::random;
 
@@ -89,11 +93,72 @@ impl KeyEntryLoadBits {
     }
 }
 
+lazy_static! {
+    static ref KEY_ID_LOCK: KeyIdLockDb = KeyIdLockDb::new();
+}
+
+struct KeyIdLockDb {
+    locked_keys: Mutex<HashSet<i64>>,
+    cond_var: Condvar,
+}
+
+/// A locked key. While a guard exists for a given key id, the same key cannot be loaded
+/// from the database a second time. Most functions manipulating the key blob database
+/// require a KeyIdGuard.
+#[derive(Debug)]
+pub struct KeyIdGuard(i64);
+
+impl KeyIdLockDb {
+    fn new() -> Self {
+        Self { locked_keys: Mutex::new(HashSet::new()), cond_var: Condvar::new() }
+    }
+
+    /// This function blocks until an exclusive lock for the given key entry id can
+    /// be acquired. It returns a guard object, that represents the lifecycle of the
+    /// acquired lock.
+    pub fn get(&self, key_id: i64) -> KeyIdGuard {
+        let mut locked_keys = self.locked_keys.lock().unwrap();
+        while locked_keys.contains(&key_id) {
+            locked_keys = self.cond_var.wait(locked_keys).unwrap();
+        }
+        locked_keys.insert(key_id);
+        KeyIdGuard(key_id)
+    }
+
+    /// This function attempts to acquire an exclusive lock on a given key id. If the
+    /// given key id is already taken the function returns None immediately. If a lock
+    /// can be acquired this function returns a guard object, that represents the
+    /// lifecycle of the acquired lock.
+    pub fn try_get(&self, key_id: i64) -> Option<KeyIdGuard> {
+        let mut locked_keys = self.locked_keys.lock().unwrap();
+        if locked_keys.insert(key_id) {
+            Some(KeyIdGuard(key_id))
+        } else {
+            None
+        }
+    }
+}
+
+impl KeyIdGuard {
+    /// Get the numeric key id of the locked key.
+    pub fn id(&self) -> i64 {
+        self.0
+    }
+}
+
+impl Drop for KeyIdGuard {
+    fn drop(&mut self) {
+        let mut locked_keys = KEY_ID_LOCK.locked_keys.lock().unwrap();
+        locked_keys.remove(&self.0);
+        KEY_ID_LOCK.cond_var.notify_all();
+    }
+}
+
 /// This type represents a Keystore 2.0 key entry.
 /// An entry has a unique `id` by which it can be found in the database.
 /// It has a security level field, key parameters, and three optional fields
 /// for the KeyMint blob, public certificate and a public certificate chain.
-#[derive(Debug, Default, Clone, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Debug, Default, Eq, PartialEq, Ord, PartialOrd)]
 pub struct KeyEntry {
     id: i64,
     km_blob: Option<Vec<u8>>,
@@ -269,7 +334,7 @@ impl KeystoreDB {
     /// key artifacts, i.e., blobs and parameters have been associated with the new
     /// key id. Finalizing with `rebind_alias` makes the creation of a new key entry
     /// atomic even if key generation is not.
-    pub fn create_key_entry(&self, domain: Domain, namespace: i64) -> Result<i64> {
+    pub fn create_key_entry(&self, domain: Domain, namespace: i64) -> Result<KeyIdGuard> {
         match domain {
             Domain::APP | Domain::SELINUX => {}
             _ => {
@@ -277,14 +342,16 @@ impl KeystoreDB {
                     .context(format!("Domain {:?} must be either App or SELinux.", domain));
             }
         }
-        Self::insert_with_retry(|id| {
-            self.conn.execute(
-                "INSERT into persistent.keyentry (id, creation_date, domain, namespace, alias)
+        Ok(KEY_ID_LOCK.get(
+            Self::insert_with_retry(|id| {
+                self.conn.execute(
+                    "INSERT into persistent.keyentry (id, creation_date, domain, namespace, alias)
                      VALUES(?, datetime('now'), ?, ?, NULL);",
-                params![id, domain.0 as u32, namespace],
-            )
-        })
-        .context("In create_key_entry")
+                    params![id, domain.0 as u32, namespace],
+                )
+            })
+            .context("In create_key_entry")?,
+        ))
     }
 
     /// Inserts a new blob and associates it with the given key id. Each blob
@@ -295,7 +362,7 @@ impl KeystoreDB {
     /// other than `SubComponentType::KM_BLOB` are ignored.
     pub fn insert_blob(
         &mut self,
-        key_id: i64,
+        key_id: &KeyIdGuard,
         sc_type: SubComponentType,
         blob: &[u8],
         sec_level: SecurityLevel,
@@ -304,7 +371,7 @@ impl KeystoreDB {
             .execute(
                 "INSERT into persistent.blobentry (subcomponent_type, keyentryid, blob, sec_level)
                     VALUES (?, ?, ?, ?);",
-                params![sc_type, key_id, blob, sec_level.0],
+                params![sc_type, key_id.0, blob, sec_level.0],
             )
             .context("Failed to insert blob.")?;
         Ok(())
@@ -314,7 +381,7 @@ impl KeystoreDB {
     /// and associates them with the given `key_id`.
     pub fn insert_keyparameter<'a>(
         &mut self,
-        key_id: i64,
+        key_id: &KeyIdGuard,
         params: impl IntoIterator<Item = &'a KeyParameter>,
     ) -> Result<()> {
         let mut stmt = self
@@ -328,7 +395,7 @@ impl KeystoreDB {
         let iter = params.into_iter();
         for p in iter {
             stmt.insert(params![
-                key_id,
+                key_id.0,
                 p.get_tag().0,
                 p.key_parameter_value(),
                 p.security_level().0
@@ -343,7 +410,7 @@ impl KeystoreDB {
     /// with the same alias-domain-namespace tuple if such row exits.
     pub fn rebind_alias(
         &mut self,
-        newid: i64,
+        newid: &KeyIdGuard,
         alias: &str,
         domain: Domain,
         namespace: i64,
@@ -373,7 +440,7 @@ impl KeystoreDB {
                 "UPDATE persistent.keyentry
                     SET alias = ?
                     WHERE id = ? AND domain = ? AND namespace = ?;",
-                params![alias, newid, domain.0 as u32, namespace],
+                params![alias, newid.0, domain.0 as u32, namespace],
             )
             .context("In rebind_alias: Failed to set alias.")?;
         if result != 1 {
@@ -597,10 +664,18 @@ impl KeystoreDB {
         load_bits: KeyEntryLoadBits,
         caller_uid: u32,
         check_permission: impl FnOnce(&KeyDescriptor, Option<KeyPermSet>) -> Result<()>,
-    ) -> Result<KeyEntry> {
+    ) -> Result<(KeyIdGuard, KeyEntry)> {
+        // KEY ID LOCK 1/2
+        // If we got a key descriptor with a key id we can get the lock right away.
+        // Otherwise we have to defer it until we know the key id.
+        let key_id_guard = match key.domain {
+            Domain::KEY_ID => Some(KEY_ID_LOCK.get(key.nspace)),
+            _ => None,
+        };
+
         let tx = self
             .conn
-            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .unchecked_transaction()
             .context("In load_key_entry: Failed to initialize transaction.")?;
 
         // Load the key_id and complete the access control tuple.
@@ -611,21 +686,71 @@ impl KeystoreDB {
         // So do not touch that '?' at the end.
         check_permission(&access_key_descriptor, access_vector).context("In load_key_entry.")?;
 
-        let (sec_level, km_blob, cert_blob, cert_chain_blob) =
-            Self::load_blob_components(key_id, load_bits, &tx).context("In load_key_entry.")?;
+        // KEY ID LOCK 2/2
+        // If we did not get a key id lock by now, it was because we got a key descriptor
+        // without a key id. At this point we got the key id, so we can try and get a lock.
+        // However, we cannot block here, because we are in the middle of the transaction.
+        // So first we try to get the lock non blocking. If that fails, we roll back the
+        // transaction and block until we get the lock. After we successfully got the lock,
+        // we start a new transaction and load the access tuple again.
+        //
+        // We don't need to perform access control again, because we already established
+        // that the caller had access to the given key. But we need to make sure that the
+        // key id still exists. So we have to load the key entry by key id this time.
+        let (key_id_guard, tx) = match key_id_guard {
+            None => match KEY_ID_LOCK.try_get(key_id) {
+                None => {
+                    // Roll back the transaction.
+                    tx.rollback().context("In load_key_entry: Failed to roll back transaction.")?;
 
-        let parameters = Self::load_key_parameters(key_id, &tx).context("In load_key_entry.")?;
+                    // Block until we have a key id lock.
+                    let key_id_guard = KEY_ID_LOCK.get(key_id);
+
+                    // Create a new transaction.
+                    let tx = self.conn.unchecked_transaction().context(
+                        "In load_key_entry: Failed to initialize transaction. (deferred key lock)",
+                    )?;
+
+                    Self::load_access_tuple(
+                        &tx,
+                        // This time we have to load the key by the retrieved key id, because the
+                        // alias may have been rebound after we rolled back the transaction.
+                        KeyDescriptor {
+                            domain: Domain::KEY_ID,
+                            nspace: key_id,
+                            ..Default::default()
+                        },
+                        caller_uid,
+                    )
+                    .context("In load_key_entry. (deferred key lock)")?;
+                    (key_id_guard, tx)
+                }
+                Some(l) => (l, tx),
+            },
+            Some(key_id_guard) => (key_id_guard, tx),
+        };
+
+        let (sec_level, km_blob, cert_blob, cert_chain_blob) =
+            Self::load_blob_components(key_id_guard.id(), load_bits, &tx)
+                .context("In load_key_entry.")?;
+
+        let parameters =
+            Self::load_key_parameters(key_id_guard.id(), &tx).context("In load_key_entry.")?;
 
         tx.commit().context("In load_key_entry: Failed to commit transaction.")?;
 
-        Ok(KeyEntry {
-            id: key_id,
-            km_blob,
-            cert: cert_blob,
-            cert_chain: cert_chain_blob,
-            sec_level,
-            parameters,
-        })
+        let key_id = key_id_guard.id();
+        Ok((
+            key_id_guard,
+            KeyEntry {
+                id: key_id,
+                km_blob,
+                cert: cert_blob,
+                cert_chain: cert_chain_blob,
+                sec_level,
+                parameters,
+            },
+        ))
     }
 
     /// Adds a grant to the grant table.
@@ -806,6 +931,9 @@ mod tests {
     use crate::permission::{KeyPerm, KeyPermSet};
     use rusqlite::NO_PARAMS;
     use std::cell::RefCell;
+    use std::sync::atomic::{AtomicU8, Ordering};
+    use std::sync::Arc;
+    use std::thread;
 
     static PERSISTENT_TEST_SQL: &str = "/data/local/tmp/persistent.sqlite";
     static PERBOOT_TEST_SQL: &str = "/data/local/tmp/perboot.sqlite";
@@ -939,14 +1067,14 @@ mod tests {
         assert_eq!(extractor(&entries[1]), (Some(Domain::APP), Some(42), None));
 
         // Test that the first call to rebind_alias sets the alias.
-        db.rebind_alias(entries[0].id, "foo", Domain::APP, 42)?;
+        db.rebind_alias(&KEY_ID_LOCK.get(entries[0].id), "foo", Domain::APP, 42)?;
         let entries = get_keyentry(&db)?;
         assert_eq!(entries.len(), 2);
         assert_eq!(extractor(&entries[0]), (Some(Domain::APP), Some(42), Some("foo")));
         assert_eq!(extractor(&entries[1]), (Some(Domain::APP), Some(42), None));
 
         // Test that the second call to rebind_alias also empties the old one.
-        db.rebind_alias(entries[1].id, "foo", Domain::APP, 42)?;
+        db.rebind_alias(&KEY_ID_LOCK.get(entries[1].id), "foo", Domain::APP, 42)?;
         let entries = get_keyentry(&db)?;
         assert_eq!(entries.len(), 2);
         assert_eq!(extractor(&entries[0]), (None, None, None));
@@ -954,21 +1082,21 @@ mod tests {
 
         // Test that we must pass in a valid Domain.
         check_result_is_error_containing_string(
-            db.rebind_alias(0, "foo", Domain::GRANT, 42),
+            db.rebind_alias(&KEY_ID_LOCK.get(0), "foo", Domain::GRANT, 42),
             "Domain Domain(1) must be either App or SELinux.",
         );
         check_result_is_error_containing_string(
-            db.rebind_alias(0, "foo", Domain::BLOB, 42),
+            db.rebind_alias(&KEY_ID_LOCK.get(0), "foo", Domain::BLOB, 42),
             "Domain Domain(3) must be either App or SELinux.",
         );
         check_result_is_error_containing_string(
-            db.rebind_alias(0, "foo", Domain::KEY_ID, 42),
+            db.rebind_alias(&KEY_ID_LOCK.get(0), "foo", Domain::KEY_ID, 42),
             "Domain Domain(4) must be either App or SELinux.",
         );
 
         // Test that we correctly handle setting an alias for something that does not exist.
         check_result_is_error_containing_string(
-            db.rebind_alias(0, "foo", Domain::SELINUX, 42),
+            db.rebind_alias(&KEY_ID_LOCK.get(0), "foo", Domain::SELINUX, 42),
             "Expected to update a single entry but instead updated 0",
         );
         // Test that we correctly abort the transaction in this case.
@@ -1136,15 +1264,20 @@ mod tests {
     #[test]
     fn test_insert_blob() -> Result<()> {
         let mut db = new_test_db()?;
-        db.insert_blob(1, SubComponentType::KM_BLOB, TEST_KM_BLOB, SecurityLevel::SOFTWARE)?;
         db.insert_blob(
-            1,
+            &KEY_ID_LOCK.get(1),
+            SubComponentType::KM_BLOB,
+            TEST_KM_BLOB,
+            SecurityLevel::SOFTWARE,
+        )?;
+        db.insert_blob(
+            &KEY_ID_LOCK.get(1),
             SubComponentType::CERT,
             TEST_CERT_BLOB,
             SecurityLevel::TRUSTED_ENVIRONMENT,
         )?;
         db.insert_blob(
-            1,
+            &KEY_ID_LOCK.get(1),
             SubComponentType::CERT_CHAIN,
             TEST_CERT_CHAIN_BLOB,
             SecurityLevel::STRONGBOX,
@@ -1174,8 +1307,9 @@ mod tests {
     fn test_insert_and_load_full_keyentry_domain_app() -> Result<()> {
         let mut db = new_test_db()?;
         let key_id = make_test_key_entry(&mut db, Domain::APP, 1, TEST_ALIAS)
-            .context("test_insert_and_load_full_keyentry_domain_app")?;
-        let key_entry = db.load_key_entry(
+            .context("test_insert_and_load_full_keyentry_domain_app")?
+            .0;
+        let (_key_guard, key_entry) = db.load_key_entry(
             KeyDescriptor {
                 domain: Domain::APP,
                 nspace: 0,
@@ -1194,7 +1328,7 @@ mod tests {
                 cert: Some(TEST_CERT_BLOB.to_vec()),
                 cert_chain: Some(TEST_CERT_CHAIN_BLOB.to_vec()),
                 sec_level: SecurityLevel::TRUSTED_ENVIRONMENT,
-                parameters: make_test_params()
+                parameters: make_test_params(),
             }
         );
         Ok(())
@@ -1204,8 +1338,9 @@ mod tests {
     fn test_insert_and_load_full_keyentry_domain_selinux() -> Result<()> {
         let mut db = new_test_db()?;
         let key_id = make_test_key_entry(&mut db, Domain::SELINUX, 1, TEST_ALIAS)
-            .context("test_insert_and_load_full_keyentry_domain_selinux")?;
-        let key_entry = db.load_key_entry(
+            .context("test_insert_and_load_full_keyentry_domain_selinux")?
+            .0;
+        let (_key_guard, key_entry) = db.load_key_entry(
             KeyDescriptor {
                 domain: Domain::SELINUX,
                 nspace: 1,
@@ -1224,7 +1359,7 @@ mod tests {
                 cert: Some(TEST_CERT_BLOB.to_vec()),
                 cert_chain: Some(TEST_CERT_CHAIN_BLOB.to_vec()),
                 sec_level: SecurityLevel::TRUSTED_ENVIRONMENT,
-                parameters: make_test_params()
+                parameters: make_test_params(),
             }
         );
         Ok(())
@@ -1234,8 +1369,9 @@ mod tests {
     fn test_insert_and_load_full_keyentry_domain_key_id() -> Result<()> {
         let mut db = new_test_db()?;
         let key_id = make_test_key_entry(&mut db, Domain::SELINUX, 1, TEST_ALIAS)
-            .context("test_insert_and_load_full_keyentry_domain_key_id")?;
-        let key_entry = db.load_key_entry(
+            .context("test_insert_and_load_full_keyentry_domain_key_id")?
+            .0;
+        let (_key_guard, key_entry) = db.load_key_entry(
             KeyDescriptor { domain: Domain::KEY_ID, nspace: key_id, alias: None, blob: None },
             KeyEntryLoadBits::BOTH,
             1,
@@ -1249,7 +1385,7 @@ mod tests {
                 cert: Some(TEST_CERT_BLOB.to_vec()),
                 cert_chain: Some(TEST_CERT_CHAIN_BLOB.to_vec()),
                 sec_level: SecurityLevel::TRUSTED_ENVIRONMENT,
-                parameters: make_test_params()
+                parameters: make_test_params(),
             }
         );
 
@@ -1260,7 +1396,8 @@ mod tests {
     fn test_insert_and_load_full_keyentry_from_grant() -> Result<()> {
         let mut db = new_test_db()?;
         let key_id = make_test_key_entry(&mut db, Domain::APP, 1, TEST_ALIAS)
-            .context("test_insert_and_load_full_keyentry_from_grant")?;
+            .context("test_insert_and_load_full_keyentry_from_grant")?
+            .0;
 
         let granted_key = db.grant(
             KeyDescriptor {
@@ -1277,11 +1414,12 @@ mod tests {
 
         debug_dump_grant_table(&mut db)?;
 
-        let key_entry = db.load_key_entry(granted_key, KeyEntryLoadBits::BOTH, 2, |k, av| {
-            assert_eq!(Domain::GRANT, k.domain);
-            assert!(av.unwrap().includes(KeyPerm::use_()));
-            Ok(())
-        })?;
+        let (_key_guard, key_entry) =
+            db.load_key_entry(granted_key, KeyEntryLoadBits::BOTH, 2, |k, av| {
+                assert_eq!(Domain::GRANT, k.domain);
+                assert!(av.unwrap().includes(KeyPerm::use_()));
+                Ok(())
+            })?;
 
         assert_eq!(
             key_entry,
@@ -1291,9 +1429,102 @@ mod tests {
                 cert: Some(TEST_CERT_BLOB.to_vec()),
                 cert_chain: Some(TEST_CERT_CHAIN_BLOB.to_vec()),
                 sec_level: SecurityLevel::TRUSTED_ENVIRONMENT,
-                parameters: make_test_params()
+                parameters: make_test_params(),
             }
         );
+        Ok(())
+    }
+
+    static KEY_LOCK_TEST_ALIAS: &str = "my super duper locked key";
+
+    static KEY_LOCK_TEST_SQL: &str = "/data/local/tmp/persistent_key_lock.sqlite";
+    static KEY_LOCK_PERBOOT_TEST_SQL: &str = "/data/local/tmp/perboot_key_lock.sqlite";
+
+    fn new_test_db_with_persistent_file_key_lock() -> Result<KeystoreDB> {
+        let conn = KeystoreDB::make_connection(KEY_LOCK_TEST_SQL, KEY_LOCK_PERBOOT_TEST_SQL)?;
+
+        KeystoreDB::init_tables(&conn).context("Failed to initialize tables.")?;
+        Ok(KeystoreDB { conn })
+    }
+
+    #[test]
+    fn test_insert_and_load_full_keyentry_domain_app_concurrently() -> Result<()> {
+        let handle = {
+            let _file_guard_persistent = Arc::new(TempFile { filename: KEY_LOCK_TEST_SQL });
+            let _file_guard_perboot = Arc::new(TempFile { filename: KEY_LOCK_PERBOOT_TEST_SQL });
+            let mut db = new_test_db_with_persistent_file_key_lock()?;
+            let key_id = make_test_key_entry(&mut db, Domain::APP, 33, KEY_LOCK_TEST_ALIAS)
+                .context("test_insert_and_load_full_keyentry_domain_app")?
+                .0;
+            let (_key_guard, key_entry) = db.load_key_entry(
+                KeyDescriptor {
+                    domain: Domain::APP,
+                    nspace: 0,
+                    alias: Some(KEY_LOCK_TEST_ALIAS.to_string()),
+                    blob: None,
+                },
+                KeyEntryLoadBits::BOTH,
+                33,
+                |_k, _av| Ok(()),
+            )?;
+            assert_eq!(
+                key_entry,
+                KeyEntry {
+                    id: key_id,
+                    km_blob: Some(TEST_KM_BLOB.to_vec()),
+                    cert: Some(TEST_CERT_BLOB.to_vec()),
+                    cert_chain: Some(TEST_CERT_CHAIN_BLOB.to_vec()),
+                    sec_level: SecurityLevel::TRUSTED_ENVIRONMENT,
+                    parameters: make_test_params(),
+                }
+            );
+            let state = Arc::new(AtomicU8::new(1));
+            let state2 = state.clone();
+
+            // Spawning a second thread that attempts to acquire the key id lock
+            // for the same key as the primary thread. The primary thread then
+            // waits, thereby forcing the secondary thread into the second stage
+            // of acquiring the lock (see KEY ID LOCK 2/2 above).
+            // The test succeeds if the secondary thread observes the transition
+            // of `state` from 1 to 2, despite having a whole second to overtake
+            // the primary thread.
+            let handle = thread::spawn(move || {
+                let _file_a = _file_guard_persistent;
+                let _file_b = _file_guard_perboot;
+                let mut db = new_test_db_with_persistent_file_key_lock().unwrap();
+                assert!(db
+                    .load_key_entry(
+                        KeyDescriptor {
+                            domain: Domain::APP,
+                            nspace: 0,
+                            alias: Some(KEY_LOCK_TEST_ALIAS.to_string()),
+                            blob: None,
+                        },
+                        KeyEntryLoadBits::BOTH,
+                        33,
+                        |_k, _av| Ok(()),
+                    )
+                    .is_ok());
+                // We should only see a 2 here because we can only return
+                // from load_key_entry when the `_key_guard` expires,
+                // which happens at the end of the scope.
+                assert_eq!(2, state2.load(Ordering::Relaxed));
+            });
+
+            thread::sleep(std::time::Duration::from_millis(1000));
+
+            assert_eq!(Ok(1), state.compare_exchange(1, 2, Ordering::Relaxed, Ordering::Relaxed));
+
+            // Return the handle from this scope so we can join with the
+            // secondary thread after the key id lock has expired.
+            handle
+            // This is where the `_key_guard` goes out of scope,
+            // which is the reason for concurrent load_key_entry on the same key
+            // to unblock.
+        };
+        // Join with the secondary thread and unwrap, to propagate failing asserts to the
+        // main test thread. We will not see failing asserts in secondary threads otherwise.
+        handle.join().unwrap();
         Ok(())
     }
 
@@ -1569,28 +1800,28 @@ mod tests {
         domain: Domain,
         namespace: i64,
         alias: &str,
-    ) -> Result<i64> {
+    ) -> Result<KeyIdGuard> {
         let key_id = db.create_key_entry(domain, namespace)?;
         db.insert_blob(
-            key_id,
+            &key_id,
             SubComponentType::KM_BLOB,
             TEST_KM_BLOB,
             SecurityLevel::TRUSTED_ENVIRONMENT,
         )?;
         db.insert_blob(
-            key_id,
+            &key_id,
             SubComponentType::CERT,
             TEST_CERT_BLOB,
             SecurityLevel::TRUSTED_ENVIRONMENT,
         )?;
         db.insert_blob(
-            key_id,
+            &key_id,
             SubComponentType::CERT_CHAIN,
             TEST_CERT_CHAIN_BLOB,
             SecurityLevel::TRUSTED_ENVIRONMENT,
         )?;
-        db.insert_keyparameter(key_id, &make_test_params())?;
-        db.rebind_alias(key_id, alias, domain, namespace)?;
+        db.insert_keyparameter(&key_id, &make_test_params())?;
+        db.rebind_alias(&key_id, alias, domain, namespace)?;
         Ok(key_id)
     }
 
