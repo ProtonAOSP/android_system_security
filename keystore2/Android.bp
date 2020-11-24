@@ -36,8 +36,9 @@ rust_test {
     name: "keystore2_test",
     crate_name: "keystore2",
     srcs: ["src/lib.rs"],
-    test_suites: ["general-tests"],
-    auto_gen_config: true,
+    test_suites: ["device-tests"],
+    auto_gen_config: false,
+    test_config: "AndroidTest.xml",
     rustlibs: [
         "android.system.keystore2-rust",
         "android.hardware.keymint-rust",
