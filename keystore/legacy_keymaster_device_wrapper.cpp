@@ -532,7 +532,7 @@ Return<ErrorCode> LegacyKeymasterDeviceWrapper::abort(uint64_t operationHandle) 
 
 sp<IKeymasterDevice> makeSoftwareKeymasterDevice() {
     keymaster2_device_t* dev = nullptr;
-    dev = (new SoftKeymasterDevice)->keymaster2_device();
+    dev = (new SoftKeymasterDevice(keymaster::KmVersion::KEYMASTER_2))->keymaster2_device();
 
     auto kmrc = ::keymaster::ConfigureDevice(dev);
     if (kmrc != KM_ERROR_OK) {
