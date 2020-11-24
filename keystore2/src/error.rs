@@ -99,34 +99,34 @@ pub fn map_km_error<T>(r: BinderResult<T>) -> Result<T, Error> {
 }
 
 /// This function should be used by Keystore service calls to translate error conditions
-/// into `android.system.keystore2.Result` which is imported here as `aidl::Result`
-/// and newtyped as AidlResult.
-/// All error conditions get logged by this function.
-/// All `Error::Rc(x)` variants get mapped onto `aidl::Result{x, 0}`.
-/// All `Error::Km(x)` variants get mapped onto
-/// `aidl::Result{aidl::ResponseCode::KeymintErrorCode, x}`.
-/// `selinux::Error::perm()` is mapped on `aidl::Result{aidl::ResponseCode::PERMISSION_DENIED, 0}`.
+/// into service specific exceptions.
 ///
-/// All non `Error` error conditions get mapped onto
-/// `aidl::Result{aidl::ResponseCode::SYSTEM_ERROR}`.
+/// All error conditions get logged by this function.
+///
+/// All `Error::Rc(x)` and `Error::Km(x)` variants get mapped onto a service specific error
+/// code of x. This is possible because KeyMint `ErrorCode` errors are always negative and
+/// `ResponseCode` codes are always positive.
+/// `selinux::Error::PermissionDenied` is mapped on `ResponseCode::PERMISSION_DENIED`.
+///
+/// All non `Error` error conditions and the Error::Binder variant get mapped onto
+/// ResponseCode::SYSTEM_ERROR`.
 ///
 /// `handle_ok` will be called if `result` is `Ok(value)` where `value` will be passed
-/// as argument to `handle_ok`. `handle_ok` must generate an `AidlResult`, typically
-/// `AidlResult::ok()`, but other response codes may be used, e.g.,
-/// `aidl::ResponseCode::OpAuthNeeded` which does not required logging.
+/// as argument to `handle_ok`. `handle_ok` must generate a `BinderResult<T>`, but it
+/// typically returns Ok(value).
 ///
 /// # Examples
 ///
 /// ```
-/// fn loadKey() -> anyhow::Result<aidl::ResponseCode> {
+/// fn loadKey() -> anyhow::Result<Vec<u8>> {
 ///     if (good_but_auth_required) {
-///         Ok(aidl::ResponseCode::OpAuthRequired)
+///         Ok(vec!['k', 'e', 'y'])
 ///     } else {
-///         Err(anyhow!(Error::Rc(aidl::ResponseCode::KEY_NOT_FOUND)))
+///         Err(anyhow!(Error::Rc(ResponseCode::KEY_NOT_FOUND)))
 ///     }
 /// }
 ///
-/// aidl_result_ = map_or_log_err(loadKey(), |r| { some_side_effect(); AidlResult::rc(r) });
+/// map_or_log_err(loadKey(), Ok)
 /// ```
 pub fn map_or_log_err<T, U, F>(result: anyhow::Result<U>, handle_ok: F) -> BinderResult<T>
 where
