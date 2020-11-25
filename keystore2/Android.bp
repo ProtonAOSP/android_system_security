@@ -36,15 +36,15 @@ rust_test {
     name: "keystore2_test",
     crate_name: "keystore2",
     srcs: ["src/lib.rs"],
-    test_suites: ["general-tests"],
-    auto_gen_config: true,
+    test_suites: ["device-tests"],
+    auto_gen_config: false,
+    test_config: "AndroidTest.xml",
     rustlibs: [
         "android.system.keystore2-rust",
         "android.hardware.keymint-rust",
         "libandroid_logger",
         "libanyhow",
         "libbinder_rs",
-        "libkeystore2_crypto_bindgen",
         "libkeystore2_selinux",
         "liblazy_static",
         "liblibsqlite3_sys",
@@ -52,28 +52,6 @@ rust_test {
         "librusqlite",
         "libthiserror",
     ],
-    shared_libs: ["libkeystore2_crypto"],
-}
-
-cc_library {
-    name: "libkeystore2_crypto",
-    srcs: [
-        "src/crypto.cpp",
-        "src/certificate_utils.cpp",
-    ],
-    export_include_dirs: ["include",],
-    shared_libs: [
-        "libcrypto",
-        "liblog",
-    ],
-}
-
-rust_bindgen {
-    name: "libkeystore2_crypto_bindgen",
-    wrapper_src: "src/crypto.hpp",
-    crate_name: "keystore2_crypto_bindgen",
-    source_stem: "bindings",
-    host_supported: true,
 }
 
 rust_binary {
@@ -86,23 +64,4 @@ rust_binary {
         "liblog_rust",
     ],
     init_rc: ["keystore2.rc"],
-}
-
-cc_test {
-    cflags: [
-        "-Wall",
-        "-Werror",
-        "-Wextra",
-    ],
-    srcs: [
-        "src/tests/certificate_utils_test.cpp",
-        "src/tests/gtest_main.cpp",
-    ],
-    static_libs: [
-        "libkeystore2_crypto",
-    ],
-    shared_libs: [
-        "libcrypto",
-    ],
-    name: "keystore2_crypto_test",
 }

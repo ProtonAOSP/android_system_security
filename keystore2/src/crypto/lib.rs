@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// TODO: Once this is complete, remove this and document everything public.
+#![allow(missing_docs)]
+
 #[cfg(test)]
 mod tests {
 

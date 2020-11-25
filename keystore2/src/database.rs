@@ -150,6 +150,7 @@ impl Drop for KeyIdGuard {
     fn drop(&mut self) {
         let mut locked_keys = KEY_ID_LOCK.locked_keys.lock().unwrap();
         locked_keys.remove(&self.0);
+        drop(locked_keys);
         KEY_ID_LOCK.cond_var.notify_all();
     }
 }
