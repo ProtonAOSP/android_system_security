@@ -21,7 +21,6 @@ use android_hardware_security_keymint::aidl::android::hardware::security::keymin
     HardwareAuthenticatorType::HardwareAuthenticatorType, IKeyMintDevice::IKeyMintDevice,
     KeyCreationResult::KeyCreationResult, KeyFormat::KeyFormat, KeyParameter::KeyParameter,
     KeyParameterValue::KeyParameterValue, SecurityLevel::SecurityLevel, Tag::Tag,
-    VerificationToken::VerificationToken,
 };
 use android_system_keystore2::aidl::android::system::keystore2::{
     AuthenticatorSpec::AuthenticatorSpec, CreateOperationResponse::CreateOperationResponse,
@@ -51,7 +50,6 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use binder::{IBinder, Interface, ThreadState};
-use std::sync::mpsc::channel;
 
 /// Implementation of the IKeystoreSecurityLevel Interface.
 pub struct KeystoreSecurityLevel {
@@ -284,9 +282,13 @@ impl KeystoreSecurityLevel {
                 ENFORCEMENTS.insert_to_op_auth_map(begin_result.challenge);
             }
             AuthTokenHandler::VerificationRequired(auth_token) => {
-                let (_sender, receiver) = channel::<(HardwareAuthToken, VerificationToken)>();
-                //TODO: call the worker thread and hand over the sender, auth token and challenge
-                auth_token_handler = AuthTokenHandler::Channel(receiver);
+                //request a verification token, given the auth token and the challenge
+                auth_token_handler = ENFORCEMENTS
+                    .request_verification_token(
+                        auth_token,
+                        OperationChallenge { challenge: begin_result.challenge },
+                    )
+                    .context("In create_operation.")?;
             }
             _ => {}
         }
