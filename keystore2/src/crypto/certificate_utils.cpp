@@ -537,7 +537,7 @@ CertUtilsError signCertWith(X509* certificate,
     }
 
     uint8_t* cert_buf = nullptr;
-    size_t buf_len = i2d_re_X509_tbs(certificate, &cert_buf);
+    int buf_len = i2d_re_X509_tbs(certificate, &cert_buf);
     if (buf_len < 0) {
         return CertUtilsError::Encoding;
     }
