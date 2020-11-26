@@ -16,7 +16,7 @@
 
 use crate::{
     database::EncryptedBy, database::KeyMetaData, database::KeyMetaEntry, database::KeystoreDB,
-    error::Error, error::ResponseCode,
+    error::Error, error::ResponseCode, legacy_blob::LegacyBlobLoader,
 };
 use android_system_keystore2::aidl::android::system::keystore2::Domain::Domain;
 use anyhow::{Context, Result};
@@ -107,12 +107,31 @@ impl SuperKeyManager {
     /// This means the key is loaded from the database, decrypted and placed in the
     /// super key cache. If there is no such key a new key is created, encrypted with
     /// a key derived from the given password and stored in the database.
-    pub fn unlock_user_key(&self, user: UserId, pw: &[u8], db: &mut KeystoreDB) -> Result<()> {
+    pub fn unlock_user_key(
+        &self,
+        user: UserId,
+        pw: &[u8],
+        db: &mut KeystoreDB,
+        legacy_blob_loader: &LegacyBlobLoader,
+    ) -> Result<()> {
         let (_, entry) = db
             .get_or_create_key_with(Domain::APP, user as u64 as i64, &"USER_SUPER_KEY", || {
-                let super_key = keystore2_crypto::generate_aes256_key()
-                    .context("In create_new_key: Failed to generate AES 256 key.")?;
-
+                // For backward compatibility we need to check if there is a super key present.
+                let super_key = legacy_blob_loader
+                    .load_super_key(user, pw)
+                    .context("In create_new_key: Failed to load legacy key blob.")?;
+                let super_key = match super_key {
+                    None => {
+                        // No legacy file was found. So we generate a new key.
+                        keystore2_crypto::generate_aes256_key()
+                            .context("In create_new_key: Failed to generate AES 256 key.")?
+                    }
+                    Some(key) => key,
+                };
+                // Regardless of whether we loaded an old AES128 key or a new AES256 key,
+                // we derive a AES256 key and re-encrypt the key before we insert it in the
+                // database. The length of the key is preserved by the encryption so we don't
+                // need any extra flags to inform us which algorithm to use it with.
                 let salt =
                     generate_salt().context("In create_new_key: Failed to generate salt.")?;
                 let derived_key = derive_key_from_password(pw, Some(&salt), AES_256_KEY_LENGTH)
