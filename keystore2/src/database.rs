@@ -264,7 +264,7 @@ impl KeystoreDB {
                      creation_date DATETIME,
                      domain INTEGER,
                      namespace INTEGER,
-                     alias TEXT);",
+                     alias BLOB);",
             NO_PARAMS,
         )
         .context("Failed to initialize \"keyentry\" table.")?;
