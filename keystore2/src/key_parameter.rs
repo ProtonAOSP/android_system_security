@@ -19,7 +19,7 @@
 use crate::error::Error as KeystoreError;
 use crate::error::ResponseCode;
 
-pub use android_hardware_keymint::aidl::android::hardware::keymint::{
+pub use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
     Algorithm::Algorithm, BlockMode::BlockMode, Digest::Digest, EcCurve::EcCurve,
     HardwareAuthenticatorType::HardwareAuthenticatorType, KeyOrigin::KeyOrigin,
     KeyParameter::KeyParameter as KmKeyParameter, KeyPurpose::KeyPurpose, PaddingMode::PaddingMode,
