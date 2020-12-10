@@ -17,7 +17,7 @@
 package android.security.attestationmanager;
 
 import android.security.attestationmanager.ByteArray;
-import android.hardware.keymint.KeyParameter;
+import android.hardware.security.keymint.KeyParameter;
 
 /**
  * Internal interface for performing device attestation.

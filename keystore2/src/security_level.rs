@@ -16,7 +16,7 @@
 
 //! This crate implements the IKeystoreSecurityLevel interface.
 
-use android_hardware_keymint::aidl::android::hardware::keymint::{
+use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
     Algorithm::Algorithm, ByteArray::ByteArray, Certificate::Certificate as KmCertificate,
     HardwareAuthenticatorType::HardwareAuthenticatorType, IKeyMintDevice::IKeyMintDevice,
     KeyCharacteristics::KeyCharacteristics, KeyFormat::KeyFormat, KeyParameter::KeyParameter,
