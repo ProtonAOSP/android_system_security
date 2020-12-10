@@ -46,7 +46,7 @@ use crate::key_parameter::{KeyParameter, SqlField, Tag};
 use crate::permission::KeyPermSet;
 use anyhow::{anyhow, Context, Result};
 
-use android_hardware_keymint::aidl::android::hardware::keymint::SecurityLevel::SecurityLevel;
+use android_hardware_security_keymint::aidl::android::hardware::security::keymint::SecurityLevel::SecurityLevel;
 use android_system_keystore2::aidl::android::system::keystore2::{
     Domain::Domain, KeyDescriptor::KeyDescriptor,
 };
