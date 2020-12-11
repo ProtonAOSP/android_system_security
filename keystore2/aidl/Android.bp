@@ -17,7 +17,7 @@ aidl_interface {
     srcs: [
         "android/security/attestationmanager/*.aidl",
     ],
-    imports: [ "android.hardware.security.keymint" ],
+    imports: [ "android.hardware.keymint" ],
     unstable: true,
     backend: {
         java: {
