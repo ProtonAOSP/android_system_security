@@ -18,6 +18,8 @@
 
 #include <aidl/android/hardware/security/keymint/BnKeyMintDevice.h>
 #include <aidl/android/hardware/security/keymint/BnKeyMintOperation.h>
+#include <aidl/android/hardware/security/secureclock/BnSecureClock.h>
+#include <aidl/android/hardware/security/sharedsecret/BnSharedSecret.h>
 #include <aidl/android/security/compat/BnKeystoreCompatService.h>
 #include <keymasterV4_1/Keymaster4.h>
 #include <unordered_map>
@@ -40,6 +42,10 @@ using ::aidl::android::hardware::security::keymint::VerificationToken;
 using KeyMintSecurityLevel = ::aidl::android::hardware::security::keymint::SecurityLevel;
 using V4_0_ErrorCode = ::android::hardware::keymaster::V4_0::ErrorCode;
 using ::aidl::android::hardware::security::keymint::IKeyMintDevice;
+using ::aidl::android::hardware::security::secureclock::ISecureClock;
+using ::aidl::android::hardware::security::secureclock::TimeStampToken;
+using ::aidl::android::hardware::security::sharedsecret::ISharedSecret;
+using ::aidl::android::hardware::security::sharedsecret::SharedSecretParameters;
 using ::aidl::android::security::compat::BnKeystoreCompatService;
 using ::android::hardware::keymaster::V4_1::support::Keymaster;
 using ::ndk::ScopedAStatus;
@@ -148,12 +154,41 @@ class KeyMintOperation : public aidl::android::hardware::security::keymint::BnKe
     ScopedAStatus abort();
 };
 
+class SharedSecret : public aidl::android::hardware::security::sharedsecret::BnSharedSecret {
+  private:
+    ::android::sp<Keymaster> mDevice;
+
+  public:
+    SharedSecret(::android::sp<Keymaster> device) : mDevice(device) {}
+    static std::shared_ptr<SharedSecret> createSharedSecret(KeyMintSecurityLevel securityLevel);
+
+    virtual ScopedAStatus getSharedSecretParameters(SharedSecretParameters* _aidl_return) override;
+    virtual ScopedAStatus computeSharedSecret(const std::vector<SharedSecretParameters>& in_params,
+                                              std::vector<uint8_t>* _aidl_return) override;
+};
+
+class SecureClock : public aidl::android::hardware::security::secureclock::BnSecureClock {
+  private:
+    ::android::sp<Keymaster> mDevice;
+
+  public:
+    SecureClock(::android::sp<Keymaster> device) : mDevice(device) {}
+    static std::shared_ptr<SecureClock> createSecureClock(KeyMintSecurityLevel securityLevel);
+
+    ScopedAStatus generateTimeStamp(int64_t in_challenge, TimeStampToken* _aidl_return) override;
+};
+
 class KeystoreCompatService : public BnKeystoreCompatService {
   private:
     std::unordered_map<KeyMintSecurityLevel, std::shared_ptr<IKeyMintDevice>> mDeviceCache;
+    std::shared_ptr<ISharedSecret> mSharedSecret;
+    std::shared_ptr<ISecureClock> mSecureClock;
 
   public:
     KeystoreCompatService() {}
     ScopedAStatus getKeyMintDevice(KeyMintSecurityLevel in_securityLevel,
                                    std::shared_ptr<IKeyMintDevice>* _aidl_return) override;
+    ScopedAStatus getSharedSecret(KeyMintSecurityLevel in_securityLevel,
+                                  std::shared_ptr<ISharedSecret>* _aidl_return) override;
+    ScopedAStatus getSecureClock(std::shared_ptr<ISecureClock>* _aidl_return) override;
 };

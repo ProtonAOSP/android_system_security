@@ -37,10 +37,12 @@ mod tests {
     use android_hardware_security_keymint::binder;
     use android_security_compat::aidl::android::security::compat::IKeystoreCompatService::IKeystoreCompatService;
 
+    static COMPAT_NAME: &str = "android.security.compat";
+
     fn get_device() -> Box<dyn IKeyMintDevice> {
         add_keymint_device_service();
         let compat_service: Box<dyn IKeystoreCompatService> =
-            binder::get_interface("android.security.compat").unwrap();
+            binder::get_interface(COMPAT_NAME).unwrap();
         compat_service.getKeyMintDevice(SecurityLevel::TRUSTED_ENVIRONMENT).unwrap()
     }
 
@@ -52,15 +54,6 @@ mod tests {
         assert_ne!(hinfo.securityLevel, SecurityLevel::SOFTWARE);
         assert_eq!(hinfo.keyMintName, "RemoteKeymaster");
         assert_eq!(hinfo.keyMintAuthorName, "Google");
-    }
-
-    #[test]
-    fn test_verify_authorization() {
-        use android_hardware_security_keymint::aidl::android::hardware::security::keymint::HardwareAuthToken::HardwareAuthToken;
-        let legacy = get_device();
-        let result = legacy.verifyAuthorization(0, &HardwareAuthToken::default());
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err().service_specific_error(), ErrorCode::UNIMPLEMENTED.0,);
     }
 
     #[test]
@@ -305,5 +298,37 @@ mod tests {
         let result = operation.finish(Some(&params), None, None, None, None, &mut out_params);
         assert!(result.is_ok(), "{:?}", result);
         assert!(out_params.is_some());
+    }
+
+    #[test]
+    fn test_secure_clock() {
+        add_keymint_device_service();
+        let compat_service: Box<dyn IKeystoreCompatService> =
+            binder::get_interface(COMPAT_NAME).unwrap();
+        let secure_clock = compat_service.getSecureClock().unwrap();
+
+        let challenge = 42;
+        let result = secure_clock.generateTimeStamp(challenge);
+        assert!(result.is_ok(), "{:?}", result);
+        let result = result.unwrap();
+        assert_eq!(result.challenge, challenge);
+        assert_eq!(result.mac.len(), 32);
+    }
+
+    #[test]
+    fn test_shared_secret() {
+        add_keymint_device_service();
+        let compat_service: Box<dyn IKeystoreCompatService> =
+            binder::get_interface(COMPAT_NAME).unwrap();
+        let shared_secret =
+            compat_service.getSharedSecret(SecurityLevel::TRUSTED_ENVIRONMENT).unwrap();
+
+        let result = shared_secret.getSharedSecretParameters();
+        assert!(result.is_ok(), "{:?}", result);
+        let params = result.unwrap();
+
+        let result = shared_secret.computeSharedSecret(&[params]);
+        assert!(result.is_ok(), "{:?}", result);
+        assert_ne!(result.unwrap().len(), 0);
     }
 }
