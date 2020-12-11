@@ -18,7 +18,7 @@
 use crate::permission;
 use crate::permission::{KeyPerm, KeyPermSet, KeystorePerm};
 use crate::{error::Error, key_parameter::KeyParameterValue};
-use android_hardware_keymint::aidl::android::hardware::keymint::{
+use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
     KeyCharacteristics::KeyCharacteristics, SecurityLevel::SecurityLevel,
 };
 use android_system_keystore2::aidl::android::system::keystore2::{
