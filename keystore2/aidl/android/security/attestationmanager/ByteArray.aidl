@@ -14,24 +14,13 @@
  * limitations under the License.
  */
 
-package android.security;
-
-import android.security.ByteArray;
-import android.hardware.keymint.KeyParameter;
+package android.security.attestationmanager;
 
 /**
- * Internal interface for performing device attestation.
+ * Simple data holder for a byte array, allowing for multidimensional arrays in AIDL.
  *
  * @hide
  */
-interface IAttestationManager {
-    /**
-     * Attest a provided list of device identifiers.
-     *
-     * @return The signed certificate chain, with each individual certificate encoded as a byte
-     *         array.
-     */
-    ByteArray[] attestDevice(
-            in KeyParameter[] deviceIdentifiers, boolean useIndividualAttestation,
-            in byte[] attestationChallenge, int securityLevel);
+parcelable ByteArray {
+    byte[] data;
 }
