@@ -1,0 +1,6 @@
+service odsign /system/bin/odsign
+    class core
+    user root
+    group system
+    oneshot
+    disabled # does not start with the core class
