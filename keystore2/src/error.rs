@@ -32,7 +32,7 @@
 
 use std::cmp::PartialEq;
 
-pub use android_hardware_keymint::aidl::android::hardware::keymint::ErrorCode::ErrorCode;
+pub use android_hardware_security_keymint::aidl::android::hardware::security::keymint::ErrorCode::ErrorCode;
 pub use android_system_keystore2::aidl::android::system::keystore2::ResponseCode::ResponseCode;
 
 use keystore2_selinux as selinux;
