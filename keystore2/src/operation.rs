@@ -134,7 +134,7 @@ use std::{
 
 use crate::error::{map_km_error, map_or_log_err, Error, ErrorCode, ResponseCode};
 use crate::utils::Asp;
-use android_hardware_keymint::aidl::android::hardware::keymint::{
+use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
     ByteArray::ByteArray, IKeyMintOperation::IKeyMintOperation,
     KeyParameter::KeyParameter as KmParam, KeyParameterArray::KeyParameterArray, Tag::Tag,
 };
