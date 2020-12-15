@@ -390,24 +390,30 @@ impl KeystoreDB {
         key_id: &KeyIdGuard,
         params: impl IntoIterator<Item = &'a KeyParameter>,
     ) -> Result<()> {
-        let mut stmt = self
+        let tx = self
             .conn
-            .prepare(
-                "INSERT into persistent.keyparameter (keyentryid, tag, data, security_level)
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .context("In insert_keyparameter: Failed to start transaction.")?;
+        {
+            let mut stmt = tx
+                .prepare(
+                    "INSERT into persistent.keyparameter (keyentryid, tag, data, security_level)
                     VALUES (?, ?, ?, ?);",
-            )
-            .context("In insert_keyparameter: Failed to prepare statement.")?;
+                )
+                .context("In insert_keyparameter: Failed to prepare statement.")?;
 
-        let iter = params.into_iter();
-        for p in iter {
-            stmt.insert(params![
-                key_id.0,
-                p.get_tag().0,
-                p.key_parameter_value(),
-                p.security_level().0
-            ])
-            .with_context(|| format!("In insert_keyparameter: Failed to insert {:?}", p))?;
+            let iter = params.into_iter();
+            for p in iter {
+                stmt.insert(params![
+                    key_id.0,
+                    p.get_tag().0,
+                    p.key_parameter_value(),
+                    p.security_level().0
+                ])
+                .with_context(|| format!("In insert_keyparameter: Failed to insert {:?}", p))?;
+            }
         }
+        tx.commit().context("In insert_keyparameter: Failed to commit transaction.")?;
         Ok(())
     }
 
@@ -757,6 +763,35 @@ impl KeystoreDB {
                 parameters,
             },
         ))
+    }
+
+    /// Returns a list of KeyDescriptors in the selected domain/namespace.
+    /// The key descriptors will have the domain, nspace, and alias field set.
+    /// Domain must be APP or SELINUX, the caller must make sure of that.
+    pub fn list(&mut self, domain: Domain, namespace: i64) -> Result<Vec<KeyDescriptor>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT alias FROM persistent.keyentry
+             WHERE domain = ? AND namespace = ? AND alias IS NOT NULL;",
+            )
+            .context("In list: Failed to prepare.")?;
+
+        let mut rows =
+            stmt.query(params![domain.0 as u32, namespace]).context("In list: Failed to query.")?;
+
+        let mut descriptors: Vec<KeyDescriptor> = Vec::new();
+        db_utils::with_rows_extract_all(&mut rows, |row| {
+            descriptors.push(KeyDescriptor {
+                domain,
+                nspace: namespace,
+                alias: Some(row.get(0).context("Trying to extract alias.")?),
+                blob: None,
+            });
+            Ok(())
+        })
+        .context("In list.")?;
+        Ok(descriptors)
     }
 
     /// Adds a grant to the grant table.
@@ -1462,6 +1497,90 @@ mod tests {
         // Join with the secondary thread and unwrap, to propagate failing asserts to the
         // main test thread. We will not see failing asserts in secondary threads otherwise.
         handle.join().unwrap();
+        Ok(())
+    }
+
+    #[test]
+    fn list() -> Result<()> {
+        let temp_dir = TempDir::new("list_test")?;
+        let mut db = KeystoreDB::new(temp_dir.path())?;
+        static LIST_O_ENTRIES: &[(Domain, i64, &str)] = &[
+            (Domain::APP, 1, "test1"),
+            (Domain::APP, 1, "test2"),
+            (Domain::APP, 1, "test3"),
+            (Domain::APP, 1, "test4"),
+            (Domain::APP, 1, "test5"),
+            (Domain::APP, 1, "test6"),
+            (Domain::APP, 1, "test7"),
+            (Domain::APP, 2, "test1"),
+            (Domain::APP, 2, "test2"),
+            (Domain::APP, 2, "test3"),
+            (Domain::APP, 2, "test4"),
+            (Domain::APP, 2, "test5"),
+            (Domain::APP, 2, "test6"),
+            (Domain::APP, 2, "test8"),
+            (Domain::SELINUX, 100, "test1"),
+            (Domain::SELINUX, 100, "test2"),
+            (Domain::SELINUX, 100, "test3"),
+            (Domain::SELINUX, 100, "test4"),
+            (Domain::SELINUX, 100, "test5"),
+            (Domain::SELINUX, 100, "test6"),
+            (Domain::SELINUX, 100, "test9"),
+        ];
+
+        let list_o_keys: Vec<(i64, i64)> = LIST_O_ENTRIES
+            .iter()
+            .map(|(domain, ns, alias)| {
+                let entry =
+                    make_test_key_entry(&mut db, *domain, *ns, *alias).unwrap_or_else(|e| {
+                        panic!("Failed to insert {:?} {} {}. Error {:?}", domain, ns, alias, e)
+                    });
+                (entry.id(), *ns)
+            })
+            .collect();
+
+        for (domain, namespace) in
+            &[(Domain::APP, 1i64), (Domain::APP, 2i64), (Domain::SELINUX, 100i64)]
+        {
+            let mut list_o_descriptors: Vec<KeyDescriptor> = LIST_O_ENTRIES
+                .iter()
+                .filter_map(|(domain, ns, alias)| match ns {
+                    ns if *ns == *namespace => Some(KeyDescriptor {
+                        domain: *domain,
+                        nspace: *ns,
+                        alias: Some(alias.to_string()),
+                        blob: None,
+                    }),
+                    _ => None,
+                })
+                .collect();
+            list_o_descriptors.sort();
+            let mut list_result = db.list(*domain, *namespace)?;
+            list_result.sort();
+            assert_eq!(list_o_descriptors, list_result);
+
+            let mut list_o_ids: Vec<i64> = list_o_descriptors
+                .into_iter()
+                .map(|d| {
+                    let (_, entry) = db
+                        .load_key_entry(d, KeyEntryLoadBits::NONE, *namespace as u32, |_, _| Ok(()))
+                        .unwrap();
+                    entry.id()
+                })
+                .collect();
+            list_o_ids.sort_unstable();
+            let mut loaded_entries: Vec<i64> = list_o_keys
+                .iter()
+                .filter_map(|(id, ns)| match ns {
+                    ns if *ns == *namespace => Some(*id),
+                    _ => None,
+                })
+                .collect();
+            loaded_entries.sort_unstable();
+            assert_eq!(list_o_ids, loaded_entries);
+        }
+        assert_eq!(Vec::<KeyDescriptor>::new(), db.list(Domain::SELINUX, 101)?);
+
         Ok(())
     }
 
