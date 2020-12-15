@@ -24,3 +24,10 @@ pub mod permission;
 pub mod security_level;
 pub mod service;
 pub mod utils;
+
+mod db_utils;
+
+#[cfg(test)]
+mod test {
+    pub mod utils;
+}
