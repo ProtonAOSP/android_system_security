@@ -37,6 +37,9 @@ fn main() {
 
     let mut args = std::env::args();
     args.next().expect("That's odd. How is there not even a first argument?");
+
+    // Keystore changes to the database directory on startup (typically /data/misc/keystore).
+    // For the ground truth check the service startup rule for init (typically in keystore2.rc).
     if let Some(dir) = args.next() {
         if std::env::set_current_dir(dir.clone()).is_err() {
             panic!("Failed to set working directory {}.", dir)

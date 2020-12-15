@@ -49,6 +49,7 @@ rust_test {
         "liblazy_static",
         "liblibsqlite3_sys",
         "liblog_rust",
+        "librand",
         "librusqlite",
         "libthiserror",
     ],
