@@ -41,6 +41,7 @@
 //! from the database module these functions take permission check
 //! callbacks.
 
+use crate::db_utils;
 use crate::error::{Error as KsError, ResponseCode};
 use crate::key_parameter::{KeyParameter, SqlField, Tag};
 use crate::permission::KeyPermSet;
@@ -56,11 +57,12 @@ use lazy_static::lazy_static;
 use rand::prelude::random;
 use rusqlite::{
     params, types::FromSql, types::FromSqlResult, types::ToSqlOutput, types::ValueRef, Connection,
-    OptionalExtension, Row, Rows, ToSql, Transaction, TransactionBehavior, NO_PARAMS,
+    OptionalExtension, ToSql, Transaction, TransactionBehavior, NO_PARAMS,
 };
 use std::{
     collections::HashSet,
-    sync::{Condvar, Mutex, Once},
+    path::Path,
+    sync::{Condvar, Mutex},
 };
 #[cfg(test)]
 use tests::random;
@@ -236,8 +238,6 @@ impl FromSql for SubComponentType {
     }
 }
 
-static INIT_TABLES: Once = Once::new();
-
 /// KeystoreDB wraps a connection to an SQLite database and tracks its
 /// ownership. It also implements all of Keystore 2.0's database functionality.
 pub struct KeystoreDB {
@@ -246,15 +246,26 @@ pub struct KeystoreDB {
 
 impl KeystoreDB {
     /// This will create a new database connection connecting the two
-    /// files persistent.sqlite and perboot.sqlite in the current working
-    /// directory, which is usually `/data/misc/keystore/`.
-    /// It also attempts to initialize all of the tables on the first instantiation
-    /// per service startup. KeystoreDB cannot be used by multiple threads.
+    /// files persistent.sqlite and perboot.sqlite in the given directory.
+    /// It also attempts to initialize all of the tables.
+    /// KeystoreDB cannot be used by multiple threads.
     /// Each thread should open their own connection using `thread_local!`.
-    pub fn new() -> Result<Self> {
-        let conn = Self::make_connection("file:persistent.sqlite", "file:perboot.sqlite")?;
+    pub fn new(db_root: &Path) -> Result<Self> {
+        // Build the path to the sqlite files.
+        let mut persistent_path = db_root.to_path_buf();
+        persistent_path.push("persistent.sqlite");
+        let mut perboot_path = db_root.to_path_buf();
+        perboot_path.push("perboot.sqlite");
 
-        INIT_TABLES.call_once(|| Self::init_tables(&conn).expect("Failed to initialize tables."));
+        // Now convert them to strings prefixed with "file:"
+        let mut persistent_path_str = "file:".to_owned();
+        persistent_path_str.push_str(&persistent_path.to_string_lossy());
+        let mut perboot_path_str = "file:".to_owned();
+        perboot_path_str.push_str(&perboot_path.to_string_lossy());
+
+        let conn = Self::make_connection(&persistent_path_str, &perboot_path_str)?;
+
+        Self::init_tables(&conn)?;
         Ok(Self { conn })
     }
 
@@ -298,14 +309,8 @@ impl KeystoreDB {
         )
         .context("Failed to initialize \"keyparameter\" table.")?;
 
-        // TODO only drop the perboot table if we start up for the first time per boot.
-        // Right now this is done once per startup which will lose some information
-        // upon a crash.
-        // Note: This is no regression with respect to the legacy Keystore.
-        conn.execute("DROP TABLE IF EXISTS perboot.grant;", NO_PARAMS)
-            .context("Failed to drop perboot.grant table")?;
         conn.execute(
-            "CREATE TABLE perboot.grant (
+            "CREATE TABLE IF NOT EXISTS persistent.grant (
                     id INTEGER UNIQUE,
                     grantee INTEGER,
                     keyentryid INTEGER,
@@ -385,24 +390,30 @@ impl KeystoreDB {
         key_id: &KeyIdGuard,
         params: impl IntoIterator<Item = &'a KeyParameter>,
     ) -> Result<()> {
-        let mut stmt = self
+        let tx = self
             .conn
-            .prepare(
-                "INSERT into persistent.keyparameter (keyentryid, tag, data, security_level)
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .context("In insert_keyparameter: Failed to start transaction.")?;
+        {
+            let mut stmt = tx
+                .prepare(
+                    "INSERT into persistent.keyparameter (keyentryid, tag, data, security_level)
                     VALUES (?, ?, ?, ?);",
-            )
-            .context("In insert_keyparameter: Failed to prepare statement.")?;
+                )
+                .context("In insert_keyparameter: Failed to prepare statement.")?;
 
-        let iter = params.into_iter();
-        for p in iter {
-            stmt.insert(params![
-                key_id.0,
-                p.get_tag().0,
-                p.key_parameter_value(),
-                p.security_level().0
-            ])
-            .with_context(|| format!("In insert_keyparameter: Failed to insert {:?}", p))?;
+            let iter = params.into_iter();
+            for p in iter {
+                stmt.insert(params![
+                    key_id.0,
+                    p.get_tag().0,
+                    p.key_parameter_value(),
+                    p.security_level().0
+                ])
+                .with_context(|| format!("In insert_keyparameter: Failed to insert {:?}", p))?;
+            }
         }
+        tx.commit().context("In insert_keyparameter: Failed to commit transaction.")?;
         Ok(())
     }
 
@@ -478,7 +489,7 @@ impl KeystoreDB {
         let mut rows = stmt
             .query(params![key.domain.0 as u32, key.nspace, alias])
             .context("In load_key_entry_id: Failed to read from keyentry table.")?;
-        Self::with_rows_extract_one(&mut rows, |row| {
+        db_utils::with_rows_extract_one(&mut rows, |row| {
             row.map_or_else(|| Err(KsError::Rc(ResponseCode::KEY_NOT_FOUND)), Ok)?
                 .get(0)
                 .context("Failed to unpack id.")
@@ -527,7 +538,7 @@ impl KeystoreDB {
             Domain::GRANT => {
                 let mut stmt = tx
                     .prepare(
-                        "SELECT keyentryid, access_vector FROM perboot.grant
+                        "SELECT keyentryid, access_vector FROM persistent.grant
                             WHERE grantee = ? AND id = ?;",
                     )
                     .context("Domain::GRANT prepare statement failed")?;
@@ -535,7 +546,7 @@ impl KeystoreDB {
                     .query(params![caller_uid as i64, key.nspace])
                     .context("Domain:Grant: query failed.")?;
                 let (key_id, access_vector): (i64, i32) =
-                    Self::with_rows_extract_one(&mut rows, |row| {
+                    db_utils::with_rows_extract_one(&mut rows, |row| {
                         let r =
                             row.map_or_else(|| Err(KsError::Rc(ResponseCode::KEY_NOT_FOUND)), Ok)?;
                         Ok((
@@ -560,7 +571,7 @@ impl KeystoreDB {
                 let mut rows =
                     stmt.query(params![key.nspace]).context("Domain::KEY_ID: query failed.")?;
                 let (domain, namespace): (Domain, i64) =
-                    Self::with_rows_extract_one(&mut rows, |row| {
+                    db_utils::with_rows_extract_one(&mut rows, |row| {
                         let r =
                             row.map_or_else(|| Err(KsError::Rc(ResponseCode::KEY_NOT_FOUND)), Ok)?;
                         Ok((
@@ -599,7 +610,7 @@ impl KeystoreDB {
         let mut km_blob: Option<Vec<u8>> = None;
         let mut cert_blob: Option<Vec<u8>> = None;
         let mut cert_chain_blob: Option<Vec<u8>> = None;
-        Self::with_rows_extract_all(&mut rows, |row| {
+        db_utils::with_rows_extract_all(&mut rows, |row| {
             let sub_type: SubComponentType =
                 row.get(2).context("Failed to extract subcomponent_type.")?;
             match (sub_type, load_bits.load_public()) {
@@ -640,7 +651,7 @@ impl KeystoreDB {
 
         let mut rows =
             stmt.query(params![key_id]).context("In load_key_parameters: query failed.")?;
-        Self::with_rows_extract_all(&mut rows, |row| {
+        db_utils::with_rows_extract_all(&mut rows, |row| {
             let tag = Tag(row.get(0).context("Failed to read tag.")?);
             let sec_level = SecurityLevel(row.get(2).context("Failed to read sec_level.")?);
             parameters.push(
@@ -754,6 +765,35 @@ impl KeystoreDB {
         ))
     }
 
+    /// Returns a list of KeyDescriptors in the selected domain/namespace.
+    /// The key descriptors will have the domain, nspace, and alias field set.
+    /// Domain must be APP or SELINUX, the caller must make sure of that.
+    pub fn list(&mut self, domain: Domain, namespace: i64) -> Result<Vec<KeyDescriptor>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT alias FROM persistent.keyentry
+             WHERE domain = ? AND namespace = ? AND alias IS NOT NULL;",
+            )
+            .context("In list: Failed to prepare.")?;
+
+        let mut rows =
+            stmt.query(params![domain.0 as u32, namespace]).context("In list: Failed to query.")?;
+
+        let mut descriptors: Vec<KeyDescriptor> = Vec::new();
+        db_utils::with_rows_extract_all(&mut rows, |row| {
+            descriptors.push(KeyDescriptor {
+                domain,
+                nspace: namespace,
+                alias: Some(row.get(0).context("Trying to extract alias.")?),
+                blob: None,
+            });
+            Ok(())
+        })
+        .context("In list.")?;
+        Ok(descriptors)
+    }
+
     /// Adds a grant to the grant table.
     /// Like `load_key_entry` this function loads the access tuple before
     /// it uses the callback for a permission check. Upon success,
@@ -795,7 +835,7 @@ impl KeystoreDB {
 
         let grant_id = if let Some(grant_id) = tx
             .query_row(
-                "SELECT id FROM perboot.grant
+                "SELECT id FROM persistent.grant
                 WHERE keyentryid = ? AND grantee = ?;",
                 params![key_id, grantee_uid],
                 |row| row.get(0),
@@ -804,7 +844,7 @@ impl KeystoreDB {
             .context("In grant: Failed get optional existing grant id.")?
         {
             tx.execute(
-                "UPDATE perboot.grant
+                "UPDATE persistent.grant
                     SET access_vector = ?
                     WHERE id = ?;",
                 params![i32::from(access_vector), grant_id],
@@ -814,7 +854,7 @@ impl KeystoreDB {
         } else {
             Self::insert_with_retry(|id| {
                 tx.execute(
-                    "INSERT INTO perboot.grant (id, grantee, keyentryid, access_vector)
+                    "INSERT INTO persistent.grant (id, grantee, keyentryid, access_vector)
                         VALUES (?, ?, ?, ?);",
                     params![id, grantee_uid, key_id, i32::from(access_vector)],
                 )
@@ -850,7 +890,7 @@ impl KeystoreDB {
         check_permission(&access_key_descriptor).context("In grant: check_permission failed.")?;
 
         tx.execute(
-            "DELETE FROM perboot.grant
+            "DELETE FROM persistent.grant
                 WHERE keyentryid = ? AND grantee = ?;",
             params![key_id, grantee_uid],
         )
@@ -883,41 +923,6 @@ impl KeystoreDB {
             }
         }
     }
-
-    // Takes Rows as returned by a query call on prepared statement.
-    // Extracts exactly one row with the `row_extractor` and fails if more
-    // rows are available.
-    // If no row was found, `None` is passed to the `row_extractor`.
-    // This allows the row extractor to decide on an error condition or
-    // a different default behavior.
-    fn with_rows_extract_one<'a, T, F>(rows: &mut Rows<'a>, row_extractor: F) -> Result<T>
-    where
-        F: FnOnce(Option<&Row<'a>>) -> Result<T>,
-    {
-        let result =
-            row_extractor(rows.next().context("with_rows_extract_one: Failed to unpack row.")?);
-
-        rows.next()
-            .context("In with_rows_extract_one: Failed to unpack unexpected row.")?
-            .map_or_else(|| Ok(()), |_| Err(KsError::sys()))
-            .context("In with_rows_extract_one: Unexpected row.")?;
-
-        result
-    }
-
-    fn with_rows_extract_all<'a, F>(rows: &mut Rows<'a>, mut row_extractor: F) -> Result<()>
-    where
-        F: FnMut(&Row<'a>) -> Result<()>,
-    {
-        loop {
-            match rows.next().context("In with_rows_extract_all: Failed to unpack row")? {
-                Some(row) => {
-                    row_extractor(&row).context("In with_rows_extract_all.")?;
-                }
-                None => break Ok(()),
-            }
-        }
-    }
 }
 
 #[cfg(test)]
@@ -930,24 +935,15 @@ mod tests {
     };
     use crate::key_perm_set;
     use crate::permission::{KeyPerm, KeyPermSet};
+    use crate::test::utils::TempDir;
     use rusqlite::NO_PARAMS;
     use std::cell::RefCell;
     use std::sync::atomic::{AtomicU8, Ordering};
     use std::sync::Arc;
     use std::thread;
 
-    static PERSISTENT_TEST_SQL: &str = "/data/local/tmp/persistent.sqlite";
-    static PERBOOT_TEST_SQL: &str = "/data/local/tmp/perboot.sqlite";
-
     fn new_test_db() -> Result<KeystoreDB> {
         let conn = KeystoreDB::make_connection("file::memory:", "file::memory:")?;
-
-        KeystoreDB::init_tables(&conn).context("Failed to initialize tables.")?;
-        Ok(KeystoreDB { conn })
-    }
-
-    fn new_test_db_with_persistent_file() -> Result<KeystoreDB> {
-        let conn = KeystoreDB::make_connection(PERSISTENT_TEST_SQL, PERBOOT_TEST_SQL)?;
 
         KeystoreDB::init_tables(&conn).context("Failed to initialize tables.")?;
         Ok(KeystoreDB { conn })
@@ -976,44 +972,30 @@ mod tests {
             .prepare("SELECT name from persistent.sqlite_master WHERE type='table' ORDER BY name;")?
             .query_map(params![], |row| row.get(0))?
             .collect::<rusqlite::Result<Vec<String>>>()?;
-        assert_eq!(tables.len(), 3);
+        assert_eq!(tables.len(), 4);
         assert_eq!(tables[0], "blobentry");
-        assert_eq!(tables[1], "keyentry");
-        assert_eq!(tables[2], "keyparameter");
+        assert_eq!(tables[1], "grant");
+        assert_eq!(tables[2], "keyentry");
+        assert_eq!(tables[3], "keyparameter");
         let tables = db
             .conn
             .prepare("SELECT name from perboot.sqlite_master WHERE type='table' ORDER BY name;")?
             .query_map(params![], |row| row.get(0))?
             .collect::<rusqlite::Result<Vec<String>>>()?;
-        assert_eq!(tables.len(), 1);
-        assert_eq!(tables[0], "grant");
-        Ok(())
-    }
-
-    #[test]
-    fn test_no_persistence_for_tests() -> Result<()> {
-        let db = new_test_db()?;
-
-        db.create_key_entry(Domain::APP, 100)?;
-        let entries = get_keyentry(&db)?;
-        assert_eq!(entries.len(), 1);
-        let db = new_test_db()?;
-
-        let entries = get_keyentry(&db)?;
-        assert_eq!(entries.len(), 0);
+        assert_eq!(tables.len(), 0);
         Ok(())
     }
 
     #[test]
     fn test_persistence_for_files() -> Result<()> {
-        let _file_guard_persistent = TempFile { filename: PERSISTENT_TEST_SQL };
-        let _file_guard_perboot = TempFile { filename: PERBOOT_TEST_SQL };
-        let db = new_test_db_with_persistent_file()?;
+        let temp_dir = TempDir::new("persistent_db_test")?;
+        let db = KeystoreDB::new(temp_dir.path())?;
 
         db.create_key_entry(Domain::APP, 100)?;
         let entries = get_keyentry(&db)?;
         assert_eq!(entries.len(), 1);
-        let db = new_test_db_with_persistent_file()?;
+
+        let db = KeystoreDB::new(temp_dir.path())?;
 
         let entries_new = get_keyentry(&db)?;
         assert_eq!(entries, entries_new);
@@ -1230,7 +1212,7 @@ mod tests {
             // Limiting scope of stmt, because it borrows db.
             let mut stmt = db
                 .conn
-                .prepare("SELECT id, grantee, keyentryid, access_vector FROM perboot.grant;")?;
+                .prepare("SELECT id, grantee, keyentryid, access_vector FROM persistent.grant;")?;
             let mut rows =
                 stmt.query_map::<(i64, u32, i64, KeyPermSet), _, _>(NO_PARAMS, |row| {
                     Ok((
@@ -1438,22 +1420,12 @@ mod tests {
 
     static KEY_LOCK_TEST_ALIAS: &str = "my super duper locked key";
 
-    static KEY_LOCK_TEST_SQL: &str = "/data/local/tmp/persistent_key_lock.sqlite";
-    static KEY_LOCK_PERBOOT_TEST_SQL: &str = "/data/local/tmp/perboot_key_lock.sqlite";
-
-    fn new_test_db_with_persistent_file_key_lock() -> Result<KeystoreDB> {
-        let conn = KeystoreDB::make_connection(KEY_LOCK_TEST_SQL, KEY_LOCK_PERBOOT_TEST_SQL)?;
-
-        KeystoreDB::init_tables(&conn).context("Failed to initialize tables.")?;
-        Ok(KeystoreDB { conn })
-    }
-
     #[test]
     fn test_insert_and_load_full_keyentry_domain_app_concurrently() -> Result<()> {
         let handle = {
-            let _file_guard_persistent = Arc::new(TempFile { filename: KEY_LOCK_TEST_SQL });
-            let _file_guard_perboot = Arc::new(TempFile { filename: KEY_LOCK_PERBOOT_TEST_SQL });
-            let mut db = new_test_db_with_persistent_file_key_lock()?;
+            let temp_dir = Arc::new(TempDir::new("id_lock_test")?);
+            let temp_dir_clone = temp_dir.clone();
+            let mut db = KeystoreDB::new(temp_dir.path())?;
             let key_id = make_test_key_entry(&mut db, Domain::APP, 33, KEY_LOCK_TEST_ALIAS)
                 .context("test_insert_and_load_full_keyentry_domain_app")?
                 .0;
@@ -1490,9 +1462,8 @@ mod tests {
             // of `state` from 1 to 2, despite having a whole second to overtake
             // the primary thread.
             let handle = thread::spawn(move || {
-                let _file_a = _file_guard_persistent;
-                let _file_b = _file_guard_perboot;
-                let mut db = new_test_db_with_persistent_file_key_lock().unwrap();
+                let temp_dir = temp_dir_clone;
+                let mut db = KeystoreDB::new(temp_dir.path()).unwrap();
                 assert!(db
                     .load_key_entry(
                         KeyDescriptor {
@@ -1526,6 +1497,90 @@ mod tests {
         // Join with the secondary thread and unwrap, to propagate failing asserts to the
         // main test thread. We will not see failing asserts in secondary threads otherwise.
         handle.join().unwrap();
+        Ok(())
+    }
+
+    #[test]
+    fn list() -> Result<()> {
+        let temp_dir = TempDir::new("list_test")?;
+        let mut db = KeystoreDB::new(temp_dir.path())?;
+        static LIST_O_ENTRIES: &[(Domain, i64, &str)] = &[
+            (Domain::APP, 1, "test1"),
+            (Domain::APP, 1, "test2"),
+            (Domain::APP, 1, "test3"),
+            (Domain::APP, 1, "test4"),
+            (Domain::APP, 1, "test5"),
+            (Domain::APP, 1, "test6"),
+            (Domain::APP, 1, "test7"),
+            (Domain::APP, 2, "test1"),
+            (Domain::APP, 2, "test2"),
+            (Domain::APP, 2, "test3"),
+            (Domain::APP, 2, "test4"),
+            (Domain::APP, 2, "test5"),
+            (Domain::APP, 2, "test6"),
+            (Domain::APP, 2, "test8"),
+            (Domain::SELINUX, 100, "test1"),
+            (Domain::SELINUX, 100, "test2"),
+            (Domain::SELINUX, 100, "test3"),
+            (Domain::SELINUX, 100, "test4"),
+            (Domain::SELINUX, 100, "test5"),
+            (Domain::SELINUX, 100, "test6"),
+            (Domain::SELINUX, 100, "test9"),
+        ];
+
+        let list_o_keys: Vec<(i64, i64)> = LIST_O_ENTRIES
+            .iter()
+            .map(|(domain, ns, alias)| {
+                let entry =
+                    make_test_key_entry(&mut db, *domain, *ns, *alias).unwrap_or_else(|e| {
+                        panic!("Failed to insert {:?} {} {}. Error {:?}", domain, ns, alias, e)
+                    });
+                (entry.id(), *ns)
+            })
+            .collect();
+
+        for (domain, namespace) in
+            &[(Domain::APP, 1i64), (Domain::APP, 2i64), (Domain::SELINUX, 100i64)]
+        {
+            let mut list_o_descriptors: Vec<KeyDescriptor> = LIST_O_ENTRIES
+                .iter()
+                .filter_map(|(domain, ns, alias)| match ns {
+                    ns if *ns == *namespace => Some(KeyDescriptor {
+                        domain: *domain,
+                        nspace: *ns,
+                        alias: Some(alias.to_string()),
+                        blob: None,
+                    }),
+                    _ => None,
+                })
+                .collect();
+            list_o_descriptors.sort();
+            let mut list_result = db.list(*domain, *namespace)?;
+            list_result.sort();
+            assert_eq!(list_o_descriptors, list_result);
+
+            let mut list_o_ids: Vec<i64> = list_o_descriptors
+                .into_iter()
+                .map(|d| {
+                    let (_, entry) = db
+                        .load_key_entry(d, KeyEntryLoadBits::NONE, *namespace as u32, |_, _| Ok(()))
+                        .unwrap();
+                    entry.id()
+                })
+                .collect();
+            list_o_ids.sort_unstable();
+            let mut loaded_entries: Vec<i64> = list_o_keys
+                .iter()
+                .filter_map(|(id, ns)| match ns {
+                    ns if *ns == *namespace => Some(*id),
+                    _ => None,
+                })
+                .collect();
+            loaded_entries.sort_unstable();
+            assert_eq!(list_o_ids, loaded_entries);
+        }
+        assert_eq!(Vec::<KeyDescriptor>::new(), db.list(Domain::SELINUX, 101)?);
+
         Ok(())
     }
 
@@ -1846,8 +1901,9 @@ mod tests {
     }
 
     fn debug_dump_grant_table(db: &mut KeystoreDB) -> Result<()> {
-        let mut stmt =
-            db.conn.prepare("SELECT id, grantee, keyentryid, access_vector FROM perboot.grant;")?;
+        let mut stmt = db
+            .conn
+            .prepare("SELECT id, grantee, keyentryid, access_vector FROM persistent.grant;")?;
         let rows = stmt.query_map::<(i64, i64, i64, i64), _, _>(NO_PARAMS, |row| {
             Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
         })?;
@@ -1858,18 +1914,6 @@ mod tests {
             println!("    id: {} grantee: {} key_id: {} access_vector: {}", id, gt, ki, av);
         }
         Ok(())
-    }
-
-    // A class that deletes a file when it is dropped.
-    // TODO: If we ever add a crate that does this, we can use it instead.
-    struct TempFile {
-        filename: &'static str,
-    }
-
-    impl Drop for TempFile {
-        fn drop(&mut self) {
-            std::fs::remove_file(self.filename).expect("Cannot delete temporary file");
-        }
     }
 
     // Use a custom random number generator that repeats each number once.
