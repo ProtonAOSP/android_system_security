@@ -28,7 +28,7 @@ use android_security_apc::aidl::android::security::apc::{
     ResponseCode::ResponseCode,
 };
 use android_security_apc::binder::{
-    ExceptionCode, Interface, Result as BinderResult, SpIBinder, Status as BinderStatus,
+    ExceptionCode, Interface, Result as BinderResult, SpIBinder, Status as BinderStatus, Strong,
 };
 use anyhow::{Context, Result};
 use binder::{IBinder, ThreadState};
@@ -202,7 +202,7 @@ impl ApcManager {
     /// Create a new instance of the Android Protected Confirmation service.
     pub fn new_native_binder(
         confirmation_token_sender: Sender<Vec<u8>>,
-    ) -> Result<impl IProtectedConfirmation> {
+    ) -> Result<Strong<dyn IProtectedConfirmation>> {
         let result = BnProtectedConfirmation::new_binder(Self {
             state: Arc::new(Mutex::new(ApcState::new(confirmation_token_sender))),
         });

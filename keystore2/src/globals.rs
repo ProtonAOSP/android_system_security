@@ -30,7 +30,7 @@ use crate::{enforcements::Enforcements, error::map_km_error};
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
     KeyMintHardwareInfo::KeyMintHardwareInfo, SecurityLevel::SecurityLevel,
 };
-use android_hardware_security_keymint::binder::StatusCode;
+use android_hardware_security_keymint::binder::{StatusCode, Strong};
 use android_security_compat::aidl::android::security::compat::IKeystoreCompatService::IKeystoreCompatService;
 use anyhow::{Context, Result};
 use lazy_static::lazy_static;
@@ -152,7 +152,7 @@ fn connect_keymint(security_level: &SecurityLevel) -> Result<(Asp, KeyMintHardwa
                     // This is a no-op if it was called before.
                     keystore2_km_compat::add_keymint_device_service();
 
-                    let keystore_compat_service: Box<dyn IKeystoreCompatService> =
+                    let keystore_compat_service: Strong<dyn IKeystoreCompatService> =
                         map_binder_status_code(binder::get_interface("android.security.compat"))
                             .context("In connect_keymint: Trying to connect to compat service.")?;
                     map_binder_status(keystore_compat_service.getKeyMintDevice(*security_level))
@@ -218,7 +218,7 @@ fn connect_secureclock() -> Result<Asp> {
                     // This is a no-op if it was called before.
                     keystore2_km_compat::add_keymint_device_service();
 
-                    let keystore_compat_service: Box<dyn IKeystoreCompatService> =
+                    let keystore_compat_service: Strong<dyn IKeystoreCompatService> =
                         map_binder_status_code(binder::get_interface("android.security.compat"))
                             .context(
                                 "In connect_secureclock: Trying to connect to compat service.",

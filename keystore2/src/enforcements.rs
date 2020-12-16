@@ -30,6 +30,7 @@ use android_hardware_security_secureclock::aidl::android::hardware::security::se
     ISecureClock::ISecureClock, TimeStampToken::TimeStampToken,
 };
 use android_system_keystore2::aidl::android::system::keystore2::OperationChallenge::OperationChallenge;
+use android_system_keystore2::binder::Strong;
 use anyhow::{Context, Result};
 use std::sync::{
     mpsc::{channel, Receiver, Sender},
@@ -202,7 +203,7 @@ impl TokenReceiver {
 }
 
 fn get_timestamp_token(challenge: i64) -> Result<TimeStampToken, Error> {
-    let dev: Box<dyn ISecureClock> = get_timestamp_service()
+    let dev: Strong<dyn ISecureClock> = get_timestamp_service()
         .expect(concat!(
             "Secure Clock service must be present ",
             "if TimeStampTokens are required."

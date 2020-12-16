@@ -14,7 +14,6 @@
 
 //! This crate implements the Keystore 2.0 service entry point.
 
-use binder::Interface;
 use keystore2::apc::ApcManager;
 use keystore2::authorization::AuthorizationManager;
 use keystore2::globals::ENFORCEMENTS;
