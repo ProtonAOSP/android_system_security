@@ -18,9 +18,14 @@ rust_library {
     srcs: ["lib.rs"],
     rustlibs: [
         "libkeystore2_crypto_bindgen",
+        "liblog_rust",
+        "libnix",
+        "libthiserror",
     ],
-    static_libs: ["libkeystore2_crypto"],
-    shared_libs: ["libcrypto"],
+    shared_libs: [
+        "libkeystore2_crypto",
+        "libcrypto",
+    ],
 }
 
 cc_library {
@@ -29,7 +34,7 @@ cc_library {
         "crypto.cpp",
         "certificate_utils.cpp",
     ],
-    export_include_dirs: ["include",],
+    export_include_dirs: ["include"],
     shared_libs: [
         "libcrypto",
         "liblog",
@@ -52,7 +57,9 @@ rust_test {
     auto_gen_config: true,
     rustlibs: [
         "libkeystore2_crypto_bindgen",
-        "libkeystore2_crypto_rust",
+        "liblog_rust",
+        "libnix",
+        "libthiserror",
     ],
     static_libs: [
         "libkeystore2_crypto",
@@ -60,11 +67,12 @@ rust_test {
     shared_libs: [
         "libc++",
         "libcrypto",
-	"liblog",
+        "liblog",
     ],
 }
 
 cc_test {
+    name: "keystore2_crypto_test",
     cflags: [
         "-Wall",
         "-Werror",
@@ -74,11 +82,11 @@ cc_test {
         "tests/certificate_utils_test.cpp",
         "tests/gtest_main.cpp",
     ],
+    test_suites: ["general-tests"],
     static_libs: [
         "libkeystore2_crypto",
     ],
     shared_libs: [
         "libcrypto",
     ],
-    name: "keystore2_crypto_test",
 }

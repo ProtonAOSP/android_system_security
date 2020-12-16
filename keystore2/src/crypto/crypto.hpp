@@ -22,6 +22,7 @@
 #include <stddef.h>
 
 extern "C" {
+  bool randomBytes(uint8_t* out, size_t len);
   bool AES_gcm_encrypt(const uint8_t* in, uint8_t* out, size_t len,
                        const uint8_t* key, size_t key_size, const uint8_t* iv, uint8_t* tag);
   bool AES_gcm_decrypt(const uint8_t* in, uint8_t* out, size_t len,
@@ -34,7 +35,7 @@ extern "C" {
   bool CreateKeyId(const uint8_t* key_blob, size_t len, km_id_t* out_id);
 
   void generateKeyFromPassword(uint8_t* key, size_t key_len, const char* pw,
-                               size_t pw_len, uint8_t* salt);
+                               size_t pw_len, const uint8_t* salt);
 }
 
 #endif  //  __CRYPTO_H__
