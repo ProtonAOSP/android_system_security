@@ -52,7 +52,7 @@ pub struct KeystoreSecurityLevel {
     operation_db: OperationDb,
 }
 
-static KEYMINT_SERVICE_NAME: &str = "android.hardware.keymint.IKeyMintDevice";
+static KEYMINT_SERVICE_NAME: &str = "android.hardware.security.keymint.IKeyMintDevice";
 
 // Blob of 32 zeroes used as empty masking key.
 static ZERO_BLOB_32: &[u8] = &[0; 32];
