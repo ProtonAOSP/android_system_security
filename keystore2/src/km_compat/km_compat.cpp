@@ -16,6 +16,7 @@
 
 #include "km_compat.h"
 
+#include "km_compat_type_conversion.h"
 #include <aidl/android/hardware/security/keymint/Algorithm.h>
 #include <aidl/android/hardware/security/keymint/Digest.h>
 #include <aidl/android/hardware/security/keymint/PaddingMode.h>
@@ -23,10 +24,12 @@
 #include <android-base/logging.h>
 #include <android/hidl/manager/1.2/IServiceManager.h>
 #include <binder/IServiceManager.h>
+#include <hardware/keymaster_defs.h>
 #include <keymasterV4_1/Keymaster.h>
 #include <keymasterV4_1/Keymaster3.h>
 #include <keymasterV4_1/Keymaster4.h>
-#include <keymasterV4_1/keymaster_tags.h>
+
+#include "certificate_utils.h"
 
 using ::aidl::android::hardware::security::keymint::Algorithm;
 using ::aidl::android::hardware::security::keymint::Digest;
@@ -42,6 +45,9 @@ using V4_0_KeyCharacteristics = ::android::hardware::keymaster::V4_0::KeyCharact
 using V4_0_KeyFormat = ::android::hardware::keymaster::V4_0::KeyFormat;
 using V4_0_KeyParameter = ::android::hardware::keymaster::V4_0::KeyParameter;
 using V4_0_VerificationToken = ::android::hardware::keymaster::V4_0::VerificationToken;
+namespace V4_0 = ::android::hardware::keymaster::V4_0;
+namespace V4_1 = ::android::hardware::keymaster::V4_1;
+namespace KMV1 = ::aidl::android::hardware::security::keymint;
 
 // Utility functions
 
@@ -53,73 +59,11 @@ ScopedAStatus convertErrorCode(V4_0_ErrorCode result) {
     return ScopedAStatus::fromServiceSpecificError(static_cast<int32_t>(result));
 }
 
-// TODO: The enum representation will need to be updated when we get unions.
-static V4_0_KeyParameter convertKeyParameterToLegacy(const KeyParameter& kp) {
-    V4_0_KeyParameter lkp;
-    lkp.tag = static_cast<::android::hardware::keymaster::V4_0::Tag>(kp.tag);
-    switch (::android::hardware::keymaster::V4_0::typeFromTag(lkp.tag)) {
-    case TagType::ENUM:
-    case TagType::ENUM_REP:
-    case TagType::UINT:
-    case TagType::UINT_REP:
-        lkp.f.integer = kp.integer;
-        break;
-    case TagType::ULONG:
-    case TagType::ULONG_REP:
-        lkp.f.longInteger = kp.longInteger;
-        break;
-    case TagType::DATE:
-        lkp.f.dateTime = kp.longInteger;
-        break;
-    case TagType::BOOL:
-        lkp.f.boolValue = kp.boolValue;
-        break;
-    case TagType::BIGNUM:
-    case TagType::BYTES:
-        lkp.blob = kp.blob;
-        break;
-    case TagType::INVALID:
-        break;
-    }
-    return lkp;
-}
-
-static std::vector<V4_0_KeyParameter>
+static std::vector<V4_0::KeyParameter>
 convertKeyParametersToLegacy(const std::vector<KeyParameter>& kps) {
-    std::vector<V4_0_KeyParameter> legacyKps(kps.size());
+    std::vector<V4_0::KeyParameter> legacyKps(kps.size());
     std::transform(kps.begin(), kps.end(), legacyKps.begin(), convertKeyParameterToLegacy);
     return legacyKps;
-}
-
-// TODO: The enum representation will need to be updated when we get unions.
-static KeyParameter convertKeyParameterFromLegacy(const V4_0_KeyParameter& lkp) {
-    KeyParameter kp;
-    kp.tag = static_cast<Tag>(lkp.tag);
-    switch (::android::hardware::keymaster::V4_0::typeFromTag(lkp.tag)) {
-    case TagType::ENUM:
-    case TagType::ENUM_REP:
-    case TagType::UINT:
-    case TagType::UINT_REP:
-        kp.integer = lkp.f.integer;
-        break;
-    case TagType::ULONG:
-    case TagType::ULONG_REP:
-        kp.longInteger = lkp.f.longInteger;
-        break;
-    case TagType::DATE:
-        kp.longInteger = lkp.f.dateTime;
-        break;
-    case TagType::BOOL:
-        kp.boolValue = lkp.f.boolValue;
-        break;
-    case TagType::BIGNUM:
-    case TagType::BYTES:
-        kp.blob = lkp.blob;
-        break;
-    case TagType::INVALID:
-        break;
-    }
-    return kp;
 }
 
 static std::vector<KeyParameter>
@@ -487,29 +431,32 @@ KeyMintOperation::~KeyMintOperation() {
 
 // Certificate implementation
 
-static std::optional<KeyParameter> getParam(const std::vector<KeyParameter>& keyParams, Tag tag) {
-    auto it = find_if(keyParams.begin(), keyParams.end(),
-                      [&](const KeyParameter& kp) { return kp.tag == tag; });
-    if (it == keyParams.end()) {
-        return std::nullopt;
+template <KMV1::Tag tag, KMV1::TagType type>
+static auto getParam(const std::vector<KeyParameter>& keyParams, KMV1::TypedTag<type, tag> ttag)
+    -> decltype(authorizationValue(ttag, KeyParameter())) {
+    for (const auto& p : keyParams) {
+        if (auto v = authorizationValue(ttag, p)) {
+            return v;
+        }
     }
-    return std::optional(*it);
+    return {};
 }
 
-static bool containsParam(const std::vector<KeyParameter>& keyParams, Tag tag) {
-    return getParam(keyParams, tag).has_value();
+template <typename T>
+static bool containsParam(const std::vector<KeyParameter>& keyParams, T ttag) {
+    return static_cast<bool>(getParam(keyParams, ttag));
 }
 
 // Prefer the smallest.
 // If no options are found, return the first.
 template <typename T>
-static T getMaximum(const std::vector<KeyParameter>& keyParams, Tag tag,
-                    std::vector<T> sortedOptions) {
+static typename KMV1::TypedTag2ValueType<T>::type
+getMaximum(const std::vector<KeyParameter>& keyParams, T tag,
+           std::vector<typename KMV1::TypedTag2ValueType<T>::type> sortedOptions) {
     auto bestSoFar = sortedOptions.end();
     for (const KeyParameter& kp : keyParams) {
-        if (kp.tag == tag) {
-            auto it =
-                std::find(sortedOptions.begin(), sortedOptions.end(), static_cast<T>(kp.integer));
+        if (auto value = authorizationValue(tag, kp)) {
+            auto it = std::find(sortedOptions.begin(), sortedOptions.end(), *value);
             if (std::distance(it, bestSoFar) < 0) {
                 bestSoFar = it;
             }
@@ -521,40 +468,23 @@ static T getMaximum(const std::vector<KeyParameter>& keyParams, Tag tag,
     return *bestSoFar;
 }
 
-// TODO: What should I do if these tags don't exist?  An empty blob might be okay, but what about
-// the integers and longs?
-// TODO: Migrate to using accessTagValue when possible.
-static std::vector<uint8_t> getBlob(const std::optional<KeyParameter> kp) {
-    if (!kp.has_value()) {
-        return {};
-    }
-    return kp->blob;
-}
-
-static int32_t getLong(std::optional<KeyParameter> kp) {
-    if (!kp.has_value()) {
-        return -1;
-    }
-    return kp->longInteger;
-}
-
-static int64_t getInteger(std::optional<KeyParameter> kp) {
-    if (!kp.has_value()) {
-        return -1;
-    }
-    return kp->integer;
-}
-
 static std::variant<keystore::X509_Ptr, V4_0_ErrorCode>
 makeCert(::android::sp<Keymaster> mDevice, const std::vector<KeyParameter>& keyParams,
          const std::vector<uint8_t>& keyBlob) {
     // Start generating the certificate.
     // Get public key for makeCert.
-    V4_0_ErrorCode errorCode = V4_0_ErrorCode::OK;
+    V4_0_ErrorCode errorCode;
     std::vector<uint8_t> key;
+    static std::vector<uint8_t> empty_vector;
+    auto unwrapBlob = [&](auto b) -> const std::vector<uint8_t>& {
+        if (b)
+            return *b;
+        else
+            return empty_vector;
+    };
     auto result = mDevice->exportKey(
-        V4_0_KeyFormat::X509, keyBlob, getBlob(getParam(keyParams, Tag::APPLICATION_ID)),
-        getBlob(getParam(keyParams, Tag::APPLICATION_DATA)),
+        V4_0_KeyFormat::X509, keyBlob, unwrapBlob(getParam(keyParams, KMV1::TAG_APPLICATION_ID)),
+        unwrapBlob(getParam(keyParams, KMV1::TAG_APPLICATION_DATA)),
         [&](V4_0_ErrorCode error, const hidl_vec<uint8_t>& keyMaterial) {
             errorCode = error;
             key = keyMaterial;
@@ -572,13 +502,21 @@ makeCert(::android::sp<Keymaster> mDevice, const std::vector<KeyParameter>& keyP
     // makeCert
     // TODO: Get the serial and subject from key params once the tags are added.  Also use new tags
     // for the two datetime parameters once we get those.
+
+    uint64_t activation = 0;
+    if (auto date = getParam(keyParams, KMV1::TAG_ACTIVE_DATETIME)) {
+        activation = *date;
+    }
+    uint64_t expiration = std::numeric_limits<uint64_t>::max();
+    if (auto date = getParam(keyParams, KMV1::TAG_USAGE_EXPIRE_DATETIME)) {
+        expiration = *date;
+    }
+
     auto certOrError = keystore::makeCert(
-        pkey, 42, "TODO", getLong(getParam(keyParams, Tag::ACTIVE_DATETIME)),
-        getLong(getParam(keyParams, Tag::USAGE_EXPIRE_DATETIME)),
-        false /* intentionally left blank */, std::nullopt /* intentionally left blank */,
-        std::nullopt /* intentionally left blank */);
+        pkey, 42, "TODO", activation, expiration, false /* intentionally left blank */,
+        std::nullopt /* intentionally left blank */, std::nullopt /* intentionally left blank */);
     if (std::holds_alternative<keystore::CertUtilsError>(certOrError)) {
-        // TODO: What error should I actually return?  And the same everywhere below.
+        LOG(ERROR) << __func__ << ": Failed to make certificate";
         return V4_0_ErrorCode::UNKNOWN_ERROR;
     }
     return std::move(std::get<keystore::X509_Ptr>(certOrError));
@@ -591,6 +529,7 @@ static std::variant<keystore::Algo, V4_0_ErrorCode> getKeystoreAlgorithm(Algorit
     case Algorithm::EC:
         return keystore::Algo::ECDSA;
     default:
+        LOG(ERROR) << __func__ << ": This should not be called with symmetric algorithm.";
         return V4_0_ErrorCode::UNKNOWN_ERROR;
     }
 }
@@ -620,6 +559,7 @@ static std::variant<keystore::Digest, V4_0_ErrorCode> getKeystoreDigest(Digest d
     case Digest::SHA_2_512:
         return keystore::Digest::SHA512;
     default:
+        LOG(ERROR) << __func__ << ": Unknown digest.";
         return V4_0_ErrorCode::UNKNOWN_ERROR;
     }
 }
@@ -627,21 +567,21 @@ static std::variant<keystore::Digest, V4_0_ErrorCode> getKeystoreDigest(Digest d
 std::optional<V4_0_ErrorCode>
 KeyMintDevice::signCertificate(const std::vector<KeyParameter>& keyParams,
                                const std::vector<uint8_t>& keyBlob, X509* cert) {
-    auto algorithm = static_cast<Algorithm>(getInteger(getParam(keyParams, Tag::ALGORITHM)));
-    auto algoOrError = getKeystoreAlgorithm(algorithm);
+    auto algorithm = getParam(keyParams, KMV1::TAG_ALGORITHM);
+    auto algoOrError = getKeystoreAlgorithm(*algorithm);
     if (std::holds_alternative<V4_0_ErrorCode>(algoOrError)) {
         return std::get<V4_0_ErrorCode>(algoOrError);
     }
     auto algo = std::get<keystore::Algo>(algoOrError);
-    auto origPadding = getMaximum<PaddingMode>(
-        keyParams, Tag::PADDING, {PaddingMode::RSA_PSS, PaddingMode::RSA_PKCS1_1_5_SIGN});
+    auto origPadding = getMaximum(keyParams, KMV1::TAG_PADDING,
+                                  {PaddingMode::RSA_PSS, PaddingMode::RSA_PKCS1_1_5_SIGN});
     auto paddingOrError = getKeystorePadding(origPadding);
     if (std::holds_alternative<V4_0_ErrorCode>(paddingOrError)) {
         return std::get<V4_0_ErrorCode>(paddingOrError);
     }
     auto padding = std::get<keystore::Padding>(paddingOrError);
-    auto origDigest = getMaximum<Digest>(
-        keyParams, Tag::DIGEST,
+    auto origDigest = getMaximum(
+        keyParams, KMV1::TAG_DIGEST,
         {Digest::SHA_2_256, Digest::SHA_2_512, Digest::SHA_2_384, Digest::SHA_2_224, Digest::SHA1});
     auto digestOrError = getKeystoreDigest(origDigest);
     if (std::holds_alternative<V4_0_ErrorCode>(digestOrError)) {
@@ -655,8 +595,8 @@ KeyMintDevice::signCertificate(const std::vector<KeyParameter>& keyParams,
         [&](const uint8_t* data, size_t len) {
             std::vector<uint8_t> dataVec(data, data + len);
             std::vector<KeyParameter> kps = {
-                KeyParameter{.tag = Tag::PADDING, .integer = static_cast<int32_t>(origPadding)},
-                KeyParameter{.tag = Tag::DIGEST, .integer = static_cast<int32_t>(origDigest)},
+                KMV1::makeKeyParameter(KMV1::TAG_PADDING, origPadding),
+                KMV1::makeKeyParameter(KMV1::TAG_DIGEST, origDigest),
             };
             BeginResult beginResult;
             auto error = begin(KeyPurpose::SIGN, keyBlob, kps, HardwareAuthToken(), &beginResult);
@@ -683,6 +623,8 @@ KeyMintDevice::signCertificate(const std::vector<KeyParameter>& keyParams,
         },
         algo, padding, digest);
     if (error) {
+        LOG(ERROR) << __func__
+                   << ": signCertWith failed. (Callback diagnosed: " << toString(errorCode) << ")";
         return V4_0_ErrorCode::UNKNOWN_ERROR;
     }
     if (errorCode != V4_0_ErrorCode::OK) {
@@ -695,16 +637,21 @@ std::variant<std::vector<Certificate>, V4_0_ErrorCode>
 KeyMintDevice::getCertificate(const std::vector<KeyParameter>& keyParams,
                               const std::vector<uint8_t>& keyBlob) {
     // There are no certificates for symmetric keys.
-    auto algorithm = static_cast<Algorithm>(getInteger(getParam(keyParams, Tag::ALGORITHM)));
-    switch (algorithm) {
+    auto algorithm = getParam(keyParams, KMV1::TAG_ALGORITHM);
+    if (!algorithm) {
+        LOG(ERROR) << __func__ << ": Unable to determine key algorithm.";
+        return V4_0_ErrorCode::UNKNOWN_ERROR;
+    }
+    switch (*algorithm) {
     case Algorithm::RSA:
     case Algorithm::EC:
         break;
     default:
         return V4_0_ErrorCode::OK;
     }
+
     // If attestation was requested, call and use attestKey.
-    if (containsParam(keyParams, Tag::ATTESTATION_CHALLENGE)) {
+    if (containsParam(keyParams, KMV1::TAG_ATTESTATION_CHALLENGE)) {
         auto legacyParams = convertKeyParametersToLegacy(keyParams);
         std::vector<Certificate> certs;
         V4_0_ErrorCode errorCode = V4_0_ErrorCode::OK;
@@ -743,10 +690,12 @@ KeyMintDevice::getCertificate(const std::vector<KeyParameter>& keyParams,
     // Signing
     auto canSelfSign =
         std::find_if(keyParams.begin(), keyParams.end(), [&](const KeyParameter& kp) {
-            return kp.tag == Tag::PURPOSE &&
-                   static_cast<KeyPurpose>(kp.integer) == KeyPurpose::SIGN;
+            if (auto v = KMV1::authorizationValue(KMV1::TAG_PURPOSE, kp)) {
+                return *v == KeyPurpose::SIGN;
+            }
+            return false;
         }) != keyParams.end();
-    auto noAuthRequired = containsParam(keyParams, Tag::NO_AUTH_REQUIRED);
+    auto noAuthRequired = containsParam(keyParams, KMV1::TAG_NO_AUTH_REQUIRED);
     if (canSelfSign && noAuthRequired) {
         auto errorCode = signCertificate(keyParams, keyBlob, &*cert);
         if (errorCode.has_value()) {
@@ -900,13 +849,19 @@ void KeyMintDevice::setNumFreeSlots(uint8_t numFreeSlots) {
 
 std::shared_ptr<KeyMintDevice>
 KeyMintDevice::createKeyMintDevice(KeyMintSecurityLevel securityLevel) {
-    auto secLevel = static_cast<SecurityLevel>(securityLevel);
-    auto devices = initializeKeymasters();
-    auto device = devices[secLevel];
-    if (!device) {
-        return {};
+    static std::mutex mutex;
+    std::lock_guard<std::mutex> lock(mutex);
+    static std::shared_ptr<KeyMintDevice> device_ptr;
+    if (!device_ptr) {
+        auto secLevel = static_cast<SecurityLevel>(securityLevel);
+        auto devices = initializeKeymasters();
+        auto device = devices[secLevel];
+        if (!device) {
+            return {};
+        }
+        device_ptr = ndk::SharedRefBase::make<KeyMintDevice>(std::move(device), securityLevel);
     }
-    return ndk::SharedRefBase::make<KeyMintDevice>(std::move(device), securityLevel);
+    return device_ptr;
 }
 
 ScopedAStatus

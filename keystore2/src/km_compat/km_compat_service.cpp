@@ -17,13 +17,24 @@
 #include "km_compat.h"
 #include <android/binder_manager.h>
 
+#include <mutex>
+
 extern "C" {
 
 // Create a KeyMintDevice and add it as a service.
 int32_t addKeyMintDeviceService() {
-    std::shared_ptr<KeystoreCompatService> ti = ndk::SharedRefBase::make<KeystoreCompatService>();
-    const auto instanceName = "android.security.compat";
-    binder_status_t status = AServiceManager_addService(ti->asBinder().get(), instanceName);
+    static std::mutex mutex;
+    std::lock_guard<std::mutex> lock(mutex);
+    static std::shared_ptr<KeystoreCompatService> ti;
+    binder_status_t status = STATUS_OK;
+    if (!ti) {
+        ti = ndk::SharedRefBase::make<KeystoreCompatService>();
+        const auto instanceName = "android.security.compat";
+        status = AServiceManager_addService(ti->asBinder().get(), instanceName);
+        if (status != STATUS_OK) {
+            ti.reset();
+        }
+    }
     return status;
 }
 }

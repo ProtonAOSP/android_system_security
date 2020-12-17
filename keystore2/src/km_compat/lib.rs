@@ -32,8 +32,8 @@ mod tests {
         Certificate::Certificate, Digest::Digest, ErrorCode::ErrorCode,
         HardwareAuthToken::HardwareAuthToken, IKeyMintDevice::IKeyMintDevice,
         KeyCharacteristics::KeyCharacteristics, KeyFormat::KeyFormat, KeyParameter::KeyParameter,
-        KeyParameterArray::KeyParameterArray, KeyPurpose::KeyPurpose, PaddingMode::PaddingMode,
-        SecurityLevel::SecurityLevel, Tag::Tag,
+        KeyParameterArray::KeyParameterArray, KeyParameterValue::KeyParameterValue,
+        KeyPurpose::KeyPurpose, PaddingMode::PaddingMode, SecurityLevel::SecurityLevel, Tag::Tag,
     };
     use android_hardware_security_keymint::binder;
     use android_security_compat::aidl::android::security::compat::IKeystoreCompatService::IKeystoreCompatService;
@@ -87,39 +87,40 @@ mod tests {
 
     fn generate_rsa_key(legacy: &dyn IKeyMintDevice, encrypt: bool, attest: bool) -> Vec<u8> {
         let mut kps = vec![
-            KeyParameter { tag: Tag::ALGORITHM, integer: Algorithm::RSA.0, ..Default::default() },
-            KeyParameter { tag: Tag::KEY_SIZE, integer: 2048, ..Default::default() },
+            KeyParameter {
+                tag: Tag::ALGORITHM,
+                value: KeyParameterValue::Algorithm(Algorithm::RSA),
+            },
+            KeyParameter { tag: Tag::KEY_SIZE, value: KeyParameterValue::Integer(2048) },
             KeyParameter {
                 tag: Tag::RSA_PUBLIC_EXPONENT,
-                longInteger: 65537,
-                ..Default::default()
+                value: KeyParameterValue::LongInteger(65537),
             },
-            KeyParameter { tag: Tag::DIGEST, integer: Digest::SHA_2_256.0, ..Default::default() },
+            KeyParameter { tag: Tag::DIGEST, value: KeyParameterValue::Digest(Digest::SHA_2_256) },
             KeyParameter {
                 tag: Tag::PADDING,
-                integer: PaddingMode::RSA_PSS.0,
-                ..Default::default()
+                value: KeyParameterValue::PaddingMode(PaddingMode::RSA_PSS),
             },
-            KeyParameter { tag: Tag::NO_AUTH_REQUIRED, boolValue: true, ..Default::default() },
-            KeyParameter { tag: Tag::PURPOSE, integer: KeyPurpose::SIGN.0, ..Default::default() },
+            KeyParameter { tag: Tag::NO_AUTH_REQUIRED, value: KeyParameterValue::BoolValue(true) },
+            KeyParameter {
+                tag: Tag::PURPOSE,
+                value: KeyParameterValue::KeyPurpose(KeyPurpose::SIGN),
+            },
         ];
         if encrypt {
             kps.push(KeyParameter {
                 tag: Tag::PURPOSE,
-                integer: KeyPurpose::ENCRYPT.0,
-                ..Default::default()
+                value: KeyParameterValue::KeyPurpose(KeyPurpose::ENCRYPT),
             });
         }
         if attest {
             kps.push(KeyParameter {
                 tag: Tag::ATTESTATION_CHALLENGE,
-                blob: vec![42; 8],
-                ..Default::default()
+                value: KeyParameterValue::Blob(vec![42; 8]),
             });
             kps.push(KeyParameter {
                 tag: Tag::ATTESTATION_APPLICATION_ID,
-                blob: vec![42; 8],
-                ..Default::default()
+                value: KeyParameterValue::Blob(vec![42; 8]),
             });
         }
         let (blob, _, cert_chain) = generate_key(legacy, kps);
@@ -153,8 +154,10 @@ mod tests {
     #[test]
     fn test_import_key() {
         let legacy = get_device();
-        let kps =
-            [KeyParameter { tag: Tag::ALGORITHM, integer: Algorithm::AES.0, ..Default::default() }];
+        let kps = [KeyParameter {
+            tag: Tag::ALGORITHM,
+            value: KeyParameterValue::Algorithm(Algorithm::AES),
+        }];
         let kf = KeyFormat::RAW;
         let kd = [0; 16];
         let mut blob = ByteArray { data: vec![] };
@@ -212,20 +215,27 @@ mod tests {
 
     fn generate_aes_key(legacy: &dyn IKeyMintDevice) -> Vec<u8> {
         let kps = vec![
-            KeyParameter { tag: Tag::ALGORITHM, integer: Algorithm::AES.0, ..Default::default() },
-            KeyParameter { tag: Tag::KEY_SIZE, integer: 128, ..Default::default() },
-            KeyParameter { tag: Tag::BLOCK_MODE, integer: BlockMode::CBC.0, ..Default::default() },
-            KeyParameter { tag: Tag::PADDING, integer: PaddingMode::NONE.0, ..Default::default() },
-            KeyParameter { tag: Tag::NO_AUTH_REQUIRED, boolValue: true, ..Default::default() },
+            KeyParameter {
+                tag: Tag::ALGORITHM,
+                value: KeyParameterValue::Algorithm(Algorithm::AES),
+            },
+            KeyParameter { tag: Tag::KEY_SIZE, value: KeyParameterValue::Integer(128) },
+            KeyParameter {
+                tag: Tag::BLOCK_MODE,
+                value: KeyParameterValue::BlockMode(BlockMode::CBC),
+            },
+            KeyParameter {
+                tag: Tag::PADDING,
+                value: KeyParameterValue::PaddingMode(PaddingMode::NONE),
+            },
+            KeyParameter { tag: Tag::NO_AUTH_REQUIRED, value: KeyParameterValue::BoolValue(true) },
             KeyParameter {
                 tag: Tag::PURPOSE,
-                integer: KeyPurpose::ENCRYPT.0,
-                ..Default::default()
+                value: KeyParameterValue::KeyPurpose(KeyPurpose::ENCRYPT),
             },
             KeyParameter {
                 tag: Tag::PURPOSE,
-                integer: KeyPurpose::DECRYPT.0,
-                ..Default::default()
+                value: KeyParameterValue::KeyPurpose(KeyPurpose::DECRYPT),
             },
         ];
         let (blob, _, cert_chain) = generate_key(legacy, kps);
@@ -240,8 +250,14 @@ mod tests {
         extra_params: Option<Vec<KeyParameter>>,
     ) -> BeginResult {
         let mut kps = vec![
-            KeyParameter { tag: Tag::BLOCK_MODE, integer: BlockMode::CBC.0, ..Default::default() },
-            KeyParameter { tag: Tag::PADDING, integer: PaddingMode::NONE.0, ..Default::default() },
+            KeyParameter {
+                tag: Tag::BLOCK_MODE,
+                value: KeyParameterValue::BlockMode(BlockMode::CBC),
+            },
+            KeyParameter {
+                tag: Tag::PADDING,
+                value: KeyParameterValue::PaddingMode(PaddingMode::NONE),
+            },
         ];
         if let Some(mut extras) = extra_params {
             kps.append(&mut extras);
@@ -273,8 +289,7 @@ mod tests {
         let params = KeyParameterArray {
             params: vec![KeyParameter {
                 tag: Tag::ASSOCIATED_DATA,
-                blob: b"foobar".to_vec(),
-                ..Default::default()
+                value: KeyParameterValue::Blob(b"foobar".to_vec()),
             }],
         };
         let message = [42; 128];

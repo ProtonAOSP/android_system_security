@@ -56,6 +56,7 @@ cc_library {
         "libcrypto",
         "libhidlbase",
         "libkeymaster4_1support",
+        "libkeymint_support",
         "libkeystore2_crypto",
         "libutils",
     ],
@@ -75,6 +76,7 @@ cc_library {
 }
 
 cc_test {
+    name: "keystore2_km_compat_test_cpp",
     cflags: [
         "-Wall",
         "-Werror",
@@ -83,6 +85,7 @@ cc_test {
     srcs: [
         "certificate_test.cpp",
         "gtest_main.cpp",
+        "parameter_conversion_test.cpp",
         "slot_test.cpp",
     ],
     shared_libs: [
@@ -97,9 +100,9 @@ cc_test {
         "libcrypto",
         "libhidlbase",
         "libkeymaster4_1support",
+        "libkeymint_support",
         "libkeystore2_crypto",
         "libkm_compat",
         "libutils",
     ],
-    name: "keystore2_certificate_test",
 }

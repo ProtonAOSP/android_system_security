@@ -17,6 +17,7 @@
 #include <gtest/gtest.h>
 
 #include "km_compat.h"
+#include <keymint_support/keymint_tags.h>
 
 #include <aidl/android/hardware/security/keymint/Algorithm.h>
 #include <aidl/android/hardware/security/keymint/BlockMode.h>
@@ -39,10 +40,15 @@ using ::aidl::android::hardware::security::keymint::PaddingMode;
 using ::aidl::android::hardware::security::keymint::SecurityLevel;
 using ::aidl::android::hardware::security::keymint::Tag;
 
+namespace KMV1 = ::aidl::android::hardware::security::keymint;
+
 static std::variant<std::vector<Certificate>, ScopedAStatus>
 getCertificate(const std::vector<KeyParameter>& keyParams) {
     static std::shared_ptr<KeyMintDevice> device =
         KeyMintDevice::createKeyMintDevice(SecurityLevel::TRUSTED_ENVIRONMENT);
+    if (!device) {
+        return ScopedAStatus::fromStatus(STATUS_NAME_NOT_FOUND);
+    }
     ByteArray blob;
     KeyCharacteristics characteristics;
     std::vector<Certificate> certChain;
@@ -69,9 +75,9 @@ static void verify(const Certificate& certificate) {
 
 static std::vector<KeyParameter> getRSAKeyParams(const std::vector<KeyParameter>& extraParams) {
     auto keyParams = std::vector<KeyParameter>({
-        KeyParameter{.tag = Tag::ALGORITHM, .integer = static_cast<int32_t>(Algorithm::RSA)},
-        KeyParameter{.tag = Tag::KEY_SIZE, .integer = 2048},
-        KeyParameter{.tag = Tag::RSA_PUBLIC_EXPONENT, .longInteger = 65537},
+        KMV1::makeKeyParameter(KMV1::TAG_ALGORITHM, Algorithm::RSA),
+        KMV1::makeKeyParameter(KMV1::TAG_KEY_SIZE, 2048),
+        KMV1::makeKeyParameter(KMV1::TAG_RSA_PUBLIC_EXPONENT, 65537),
     });
     keyParams.insert(keyParams.end(), extraParams.begin(), extraParams.end());
     return keyParams;
@@ -79,11 +85,11 @@ static std::vector<KeyParameter> getRSAKeyParams(const std::vector<KeyParameter>
 
 TEST(CertificateTest, TestRSAKeygen) {
     auto keyParams = getRSAKeyParams({
-        KeyParameter{.tag = Tag::DIGEST, .integer = static_cast<int32_t>(Digest::SHA_2_256)},
-        KeyParameter{.tag = Tag::PADDING, .integer = static_cast<int32_t>(PaddingMode::RSA_PSS)},
-        KeyParameter{.tag = Tag::NO_AUTH_REQUIRED, .boolValue = true},
-        KeyParameter{.tag = Tag::PURPOSE, .integer = static_cast<int32_t>(KeyPurpose::SIGN)},
-        KeyParameter{.tag = Tag::PURPOSE, .integer = static_cast<int32_t>(KeyPurpose::ENCRYPT)},
+        KMV1::makeKeyParameter(KMV1::TAG_DIGEST, Digest::SHA_2_256),
+        KMV1::makeKeyParameter(KMV1::TAG_PADDING, PaddingMode::RSA_PSS),
+        KMV1::makeKeyParameter(KMV1::TAG_NO_AUTH_REQUIRED),
+        KMV1::makeKeyParameter(KMV1::TAG_PURPOSE, KeyPurpose::SIGN),
+        KMV1::makeKeyParameter(KMV1::TAG_PURPOSE, KeyPurpose::ENCRYPT),
     });
     auto result = getCertificate(keyParams);
     ensureCertChainSize(result, 1);
@@ -91,21 +97,21 @@ TEST(CertificateTest, TestRSAKeygen) {
 
 TEST(CertificateTest, TestAES) {
     auto keyParams = {
-        KeyParameter{.tag = Tag::ALGORITHM, .integer = static_cast<int32_t>(Algorithm::AES)},
-        KeyParameter{.tag = Tag::KEY_SIZE, .integer = 128},
-        KeyParameter{.tag = Tag::BLOCK_MODE, .integer = static_cast<int32_t>(BlockMode::CBC)},
-        KeyParameter{.tag = Tag::PADDING, .integer = static_cast<int32_t>(PaddingMode::NONE)},
-        KeyParameter{.tag = Tag::PURPOSE, .integer = static_cast<int32_t>(KeyPurpose::ENCRYPT)},
+        KMV1::makeKeyParameter(KMV1::TAG_ALGORITHM, Algorithm::AES),
+        KMV1::makeKeyParameter(KMV1::TAG_KEY_SIZE, 128),
+        KMV1::makeKeyParameter(KMV1::TAG_BLOCK_MODE, BlockMode::CBC),
+        KMV1::makeKeyParameter(KMV1::TAG_PADDING, PaddingMode::NONE),
+        KMV1::makeKeyParameter(KMV1::TAG_PURPOSE, KeyPurpose::ENCRYPT),
     };
     auto result = getCertificate(keyParams);
     ensureCertChainSize(result, 0);
 }
 
-TEST(CertificateTest, TestAttestion) {
+TEST(CertificateTest, TestAttestation) {
     auto keyParams = getRSAKeyParams({
-        KeyParameter{.tag = Tag::PURPOSE, .integer = static_cast<int32_t>(KeyPurpose::SIGN)},
-        KeyParameter{.tag = Tag::ATTESTATION_CHALLENGE, .blob = {42}},
-        KeyParameter{.tag = Tag::ATTESTATION_APPLICATION_ID, .blob = {42}},
+        KMV1::makeKeyParameter(KMV1::TAG_PURPOSE, KeyPurpose::SIGN),
+        KMV1::makeKeyParameter(KMV1::TAG_ATTESTATION_CHALLENGE, 42),
+        KMV1::makeKeyParameter(KMV1::TAG_ATTESTATION_APPLICATION_ID, 42),
     });
     auto result = getCertificate(keyParams);
     ensureCertChainSize(result, 3);
@@ -114,10 +120,10 @@ TEST(CertificateTest, TestAttestion) {
 
 TEST(CertificateTest, TestRSAKeygenNoEncryptNoAuthRequired) {
     auto keyParams = getRSAKeyParams({
-        KeyParameter{.tag = Tag::DIGEST, .integer = static_cast<int32_t>(Digest::SHA_2_256)},
-        KeyParameter{.tag = Tag::PADDING, .integer = static_cast<int32_t>(PaddingMode::RSA_PSS)},
-        KeyParameter{.tag = Tag::NO_AUTH_REQUIRED, .boolValue = true},
-        KeyParameter{.tag = Tag::PURPOSE, .integer = static_cast<int32_t>(KeyPurpose::SIGN)},
+        KMV1::makeKeyParameter(KMV1::TAG_DIGEST, Digest::SHA_2_256),
+        KMV1::makeKeyParameter(KMV1::TAG_PADDING, PaddingMode::RSA_PSS),
+        KMV1::makeKeyParameter(KMV1::TAG_NO_AUTH_REQUIRED, true),
+        KMV1::makeKeyParameter(KMV1::TAG_PURPOSE, KeyPurpose::SIGN),
     });
     auto result = getCertificate(keyParams);
     ensureCertChainSize(result, 1);
@@ -126,9 +132,9 @@ TEST(CertificateTest, TestRSAKeygenNoEncryptNoAuthRequired) {
 
 TEST(CertificateTest, TestRSAKeygenNoEncryptAuthRequired) {
     auto keyParams = getRSAKeyParams({
-        KeyParameter{.tag = Tag::DIGEST, .integer = static_cast<int32_t>(Digest::SHA_2_256)},
-        KeyParameter{.tag = Tag::PADDING, .integer = static_cast<int32_t>(PaddingMode::RSA_PSS)},
-        KeyParameter{.tag = Tag::PURPOSE, .integer = static_cast<int32_t>(KeyPurpose::SIGN)},
+        KMV1::makeKeyParameter(KMV1::TAG_DIGEST, Digest::SHA_2_256),
+        KMV1::makeKeyParameter(KMV1::TAG_PADDING, PaddingMode::RSA_PSS),
+        KMV1::makeKeyParameter(KMV1::TAG_PURPOSE, KeyPurpose::SIGN),
     });
     auto result = getCertificate(keyParams);
     ensureCertChainSize(result, 1);
