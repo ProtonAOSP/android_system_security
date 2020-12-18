@@ -21,6 +21,7 @@
 #include <log/log.h>
 #include <openssl/aes.h>
 #include <openssl/evp.h>
+#include <openssl/rand.h>
 
 #include <vector>
 
@@ -58,6 +59,10 @@ const EVP_CIPHER* getAesCipherForKey(size_t key_size) {
         cipher = EVP_aes_128_gcm();
     }
     return cipher;
+}
+
+bool randomBytes(uint8_t* out, size_t len) {
+    return RAND_bytes(out, len);
 }
 
 /*
@@ -172,13 +177,13 @@ static constexpr size_t SALT_SIZE = 16;
 // Copied from system/security/keystore/user_state.cpp.
 
 void generateKeyFromPassword(uint8_t* key, size_t key_len, const char* pw, size_t pw_len,
-                             uint8_t* salt) {
+                             const uint8_t* salt) {
     size_t saltSize;
     if (salt != nullptr) {
         saltSize = SALT_SIZE;
     } else {
         // Pre-gingerbread used this hardwired salt, readMasterKey will rewrite these when found
-        salt = (uint8_t*)"keystore";
+        salt = reinterpret_cast<const uint8_t*>("keystore");
         // sizeof = 9, not strlen = 8
         saltSize = sizeof("keystore");
     }
