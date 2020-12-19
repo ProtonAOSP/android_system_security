@@ -16,6 +16,7 @@
 //! and enforced by the OEMs. This module implements the internal representation of KeyParameter
 //! and the methods to work with KeyParameter.
 
+use crate::db_utils::SqlField;
 use crate::error::Error as KeystoreError;
 use crate::error::ResponseCode;
 
@@ -27,8 +28,8 @@ pub use android_hardware_security_keymint::aidl::android::hardware::security::ke
 };
 use android_system_keystore2::aidl::android::system::keystore2::Authorization::Authorization;
 use anyhow::{Context, Result};
-use rusqlite::types::{FromSql, Null, ToSql, ToSqlOutput};
-use rusqlite::{Result as SqlResult, Row};
+use rusqlite::types::{Null, ToSql, ToSqlOutput};
+use rusqlite::Result as SqlResult;
 
 /// KeyParameter wraps the KeyParameterValue and the security level at which it is enforced.
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
@@ -242,22 +243,6 @@ impl KeyParameter {
             securityLevel: self.security_level,
             keyParameter: self.key_parameter_value.convert_to_wire(),
         }
-    }
-}
-
-/// This struct is defined to postpone converting rusqlite column value to the
-/// appropriate key parameter value until we know the corresponding tag value.
-/// Wraps the column index and a rusqlite row.
-pub struct SqlField<'a>(usize, &'a Row<'a>);
-
-impl<'a> SqlField<'a> {
-    /// Creates a new SqlField with the given index and row.
-    pub fn new(index: usize, row: &'a Row<'a>) -> Self {
-        Self(index, row)
-    }
-    /// Returns the column value from the row, when we know the expected type.
-    pub fn get<T: FromSql>(&self) -> SqlResult<T> {
-        self.1.get(self.0)
     }
 }
 
@@ -1235,7 +1220,7 @@ mod storage_tests {
         let row = rows.next()?.unwrap();
         Ok(KeyParameter::new_from_sql(
             Tag(row.get(0)?),
-            &SqlField(1, row),
+            &SqlField::new(1, row),
             SecurityLevel(row.get(2)?),
         )?)
     }
