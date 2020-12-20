@@ -377,7 +377,13 @@ impl Operation {
         .context("In update: KeyMint::update failed.")?;
 
         match output {
-            Some(blob) => Ok(Some(blob.data)),
+            Some(blob) => {
+                if blob.data.is_empty() {
+                    Ok(None)
+                } else {
+                    Ok(Some(blob.data))
+                }
+            }
             None => Ok(None),
         }
     }

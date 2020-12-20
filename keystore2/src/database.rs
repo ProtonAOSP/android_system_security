@@ -41,9 +41,9 @@
 //! from the database module these functions take permission check
 //! callbacks.
 
-use crate::db_utils;
+use crate::db_utils::{self, SqlField};
 use crate::error::{Error as KsError, ResponseCode};
-use crate::key_parameter::{KeyParameter, SqlField, Tag};
+use crate::key_parameter::{KeyParameter, Tag};
 use crate::permission::KeyPermSet;
 use anyhow::{anyhow, Context, Result};
 
