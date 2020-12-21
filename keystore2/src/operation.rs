@@ -136,7 +136,8 @@ use crate::error::{map_km_error, map_or_log_err, Error, ErrorCode, ResponseCode}
 use crate::utils::Asp;
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
     ByteArray::ByteArray, IKeyMintOperation::IKeyMintOperation,
-    KeyParameter::KeyParameter as KmParam, KeyParameterArray::KeyParameterArray, Tag::Tag,
+    KeyParameter::KeyParameter as KmParam, KeyParameterArray::KeyParameterArray,
+    KeyParameterValue::KeyParameterValue as KmParamValue, Tag::Tag,
 };
 use android_system_keystore2::aidl::android::system::keystore2::{
     IKeystoreOperation::BnKeystoreOperation, IKeystoreOperation::IKeystoreOperation,
@@ -319,8 +320,7 @@ impl Operation {
         let params = KeyParameterArray {
             params: vec![KmParam {
                 tag: Tag::ASSOCIATED_DATA,
-                blob: aad_input.into(),
-                ..Default::default()
+                value: KmParamValue::Blob(aad_input.into()),
             }],
         };
 
