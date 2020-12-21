@@ -20,7 +20,7 @@ use android_hardware_security_keymint::aidl::android::hardware::security::keymin
     Algorithm::Algorithm, ByteArray::ByteArray, Certificate::Certificate as KmCertificate,
     HardwareAuthenticatorType::HardwareAuthenticatorType, IKeyMintDevice::IKeyMintDevice,
     KeyCharacteristics::KeyCharacteristics, KeyFormat::KeyFormat, KeyParameter::KeyParameter,
-    KeyPurpose::KeyPurpose, SecurityLevel::SecurityLevel, Tag::Tag,
+    KeyParameterValue::KeyParameterValue, SecurityLevel::SecurityLevel, Tag::Tag,
 };
 use android_system_keystore2::aidl::android::system::keystore2::{
     AuthenticatorSpec::AuthenticatorSpec, CreateOperationResponse::CreateOperationResponse,
@@ -234,7 +234,11 @@ impl KeystoreSecurityLevel {
         let purpose = operation_parameters.iter().find(|p| p.tag == Tag::PURPOSE).map_or(
             Err(Error::Km(ErrorCode::INVALID_ARGUMENT))
                 .context("In create_operation: No operation purpose specified."),
-            |kp| Ok(KeyPurpose(kp.integer)),
+            |kp| match kp.value {
+                KeyParameterValue::KeyPurpose(p) => Ok(p),
+                _ => Err(Error::Km(ErrorCode::INVALID_ARGUMENT))
+                    .context("In create_operation: Malformed KeyParameter."),
+            },
         )?;
 
         let km_dev: Box<dyn IKeyMintDevice> = self
@@ -365,11 +369,14 @@ impl KeystoreSecurityLevel {
             .find(|p| p.tag == Tag::ALGORITHM)
             .ok_or(error::Error::Km(ErrorCode::INVALID_ARGUMENT))
             .context("No KeyParameter 'Algorithm'.")
-            .and_then(|p| match Algorithm(p.integer) {
-                Algorithm::AES | Algorithm::HMAC | Algorithm::TRIPLE_DES => Ok(KeyFormat::RAW),
-                Algorithm::RSA | Algorithm::EC => Ok(KeyFormat::PKCS8),
-                algorithm => Err(error::Error::Km(ErrorCode::INVALID_ARGUMENT))
-                    .context(format!("Unknown Algorithm {:?}.", algorithm)),
+            .and_then(|p| match &p.value {
+                KeyParameterValue::Algorithm(Algorithm::AES)
+                | KeyParameterValue::Algorithm(Algorithm::HMAC)
+                | KeyParameterValue::Algorithm(Algorithm::TRIPLE_DES) => Ok(KeyFormat::RAW),
+                KeyParameterValue::Algorithm(Algorithm::RSA)
+                | KeyParameterValue::Algorithm(Algorithm::EC) => Ok(KeyFormat::PKCS8),
+                v => Err(error::Error::Km(ErrorCode::INVALID_ARGUMENT))
+                    .context(format!("Unknown Algorithm {:?}.", v)),
             })
             .context("In import_key.")?;
 

@@ -23,8 +23,9 @@ use crate::error::ResponseCode;
 pub use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
     Algorithm::Algorithm, BlockMode::BlockMode, Digest::Digest, EcCurve::EcCurve,
     HardwareAuthenticatorType::HardwareAuthenticatorType, KeyOrigin::KeyOrigin,
-    KeyParameter::KeyParameter as KmKeyParameter, KeyPurpose::KeyPurpose, PaddingMode::PaddingMode,
-    SecurityLevel::SecurityLevel, Tag::Tag,
+    KeyParameter::KeyParameter as KmKeyParameter,
+    KeyParameterValue::KeyParameterValue as KmKeyParameterValue, KeyPurpose::KeyPurpose,
+    PaddingMode::PaddingMode, SecurityLevel::SecurityLevel, Tag::Tag,
 };
 use android_system_keystore2::aidl::android::system::keystore2::Authorization::Authorization;
 use anyhow::{Context, Result};
@@ -690,11 +691,11 @@ macro_rules! implement_key_parameter_conversion_to_from_wire {
     ($($variant:ident, $tag_name:ident, $field_name:ident $(,$enum_type:ident)?;)*) => {
         // pre-processes input to target the rules that generate convert_to_wire() method.
         implement_key_parameter_conversion_to_from_wire! {@to
-            [], $($variant, $tag_name, $field_name $(,$enum_type)?;)*
+            [], $($variant, $tag_name, $field_name;)*
         }
         // pre-processes input to target the rules that generate convert_from_wire() method.
         implement_key_parameter_conversion_to_from_wire! {@from
-            [], $($variant, $tag_name, $field_name $(,$enum_type)?;)*
+            [], $($variant, $tag_name, $field_name;)*
         }
     };
 
@@ -702,74 +703,52 @@ macro_rules! implement_key_parameter_conversion_to_from_wire {
     // convert_to_wire() conversion method.
     // -----------------------------------------------------------------------
     // This rule handles Invalid variant.
-    // On an input: 'Invalid, INVALID, na;' it generates a match arm like:
+    // On an input: `Invalid, INVALID, Invalid;` it generates a match arm like:
     // KeyParameterValue::Invalid => KmKeyParameter {
-    //                                   tag: Tag::INVALID,
-    //                                   ..Default::default()
-    //                               },
-    (@to [$($out:tt)*], Invalid, INVALID, na; $($in:tt)*) => {
+    //     tag: Tag::INVALID,
+    //     value: KmKeyParameterValue::Invalid(0),
+    // },
+    (@to [$($out:tt)*], Invalid, INVALID, Invalid; $($in:tt)*) => {
         implement_key_parameter_conversion_to_from_wire! {@to
             [$($out)*
                 KeyParameterValue::Invalid => KmKeyParameter {
                     tag: Tag::INVALID,
-                    ..Default::default()
+                    value: KmKeyParameterValue::Invalid(0),
                 },
             ], $($in)*
         }
     };
     // This rule handles all variants that correspond to bool values.
-    // On an input like: 'CallerNonce, CALLER_NONCE, boolValue;' it generates
+    // On an input like: `CallerNonce, CALLER_NONCE, BoolValue;` it generates
     // a match arm like:
     // KeyParameterValue::CallerNonce => KmKeyParameter {
-    //                                       tag: Tag::CALLER_NONCE,
-    //                                       boolValue: true,
-    //                                       ..Default::default()
-    //                                   },
-    (@to [$($out:tt)*], $variant:ident, $tag_val:ident, boolValue; $($in:tt)*) => {
+    //     tag: Tag::CALLER_NONCE,
+    //     value: KmKeyParameterValue::BoolValue(true),
+    // },
+    (@to [$($out:tt)*], $variant:ident, $tag_val:ident, BoolValue; $($in:tt)*) => {
         implement_key_parameter_conversion_to_from_wire! {@to
             [$($out)*
                 KeyParameterValue::$variant => KmKeyParameter {
                     tag: Tag::$tag_val,
-                    boolValue: true,
-                    ..Default::default()
+                    value: KmKeyParameterValue::BoolValue(true),
                 },
             ], $($in)*
         }
     };
-    // This rule handles all enum variants.
-    // On an input like: 'KeyPurpose, PURPOSE, integer, KeyPurpose;' it generates a match arm
-    // like: KeyParameterValue::KeyPurpose(v) => KmKeyParameter {
-    //                                               tag: Tag::PURPOSE,
-    //                                               integer: v.0,
-    //                                               ..Default::default(),
-    //                                           },
-    (@to [$($out:tt)*], $variant:ident, $tag_val:ident, $field:ident, $enum_type:ident; $($in:tt)*) => {
-       implement_key_parameter_conversion_to_from_wire! {@to
-           [$($out)*
-               KeyParameterValue::$variant(v) => KmKeyParameter {
-                   tag: Tag::$tag_val,
-                   $field: v.0,
-                   ..Default::default()
-               },
-           ], $($in)*
-       }
-    };
     // This rule handles all variants that are neither invalid nor bool values nor enums
     // (i.e. all variants which correspond to integer, longInteger, and blob fields in
     // KmKeyParameter).
-    // On an input like: 'ConfirmationToken, CONFIRMATION_TOKEN, blob;' it generates a match arm
+    // On an input like: `ConfirmationToken, CONFIRMATION_TOKEN, Blob;` it generates a match arm
     // like: KeyParameterValue::ConfirmationToken(v) => KmKeyParameter {
-    //                                                      tag: Tag::CONFIRMATION_TOKEN,
-    //                                                      blob: v,
-    //                                                      ..Default::default(),
-    //                                                  },
+    //     tag: Tag::CONFIRMATION_TOKEN,
+    //     value: KmKeyParameterValue::$field(v),
+    // },
     (@to [$($out:tt)*], $variant:ident, $tag_val:ident, $field:ident; $($in:tt)*) => {
         implement_key_parameter_conversion_to_from_wire! {@to
             [$($out)*
                 KeyParameterValue::$variant(v) => KmKeyParameter {
                     tag: Tag::$tag_val,
-                    $field: v,
-                    ..Default::default()
+                    value: KmKeyParameterValue::$field(v),
                 },
             ], $($in)*
         }
@@ -789,9 +768,9 @@ macro_rules! implement_key_parameter_conversion_to_from_wire {
     // convert_from_wire() conversion method.
     // ------------------------------------------------------------------------
     // This rule handles Invalid variant.
-    // On an input: 'Invalid, INVALID, na;' it generates a match arm like:
+    // On an input: `Invalid, INVALID, Invalid;` it generates a match arm like:
     // KmKeyParameter { tag: Tag::INVALID, .. } => KeyParameterValue::Invalid,
-    (@from [$($out:tt)*], Invalid, INVALID, na; $($in:tt)*) => {
+    (@from [$($out:tt)*], Invalid, INVALID, Invalid; $($in:tt)*) => {
         implement_key_parameter_conversion_to_from_wire! {@from
             [$($out)*
                 KmKeyParameter {
@@ -802,59 +781,37 @@ macro_rules! implement_key_parameter_conversion_to_from_wire {
         }
     };
     // This rule handles all variants that correspond to bool values.
-    // On an input like: 'CallerNonce, CALLER_NONCE, boolValue;' it generates a match arm like:
+    // On an input like: `CallerNonce, CALLER_NONCE, BoolValue;` it generates a match arm like:
     // KmKeyParameter {
     //      tag: Tag::CALLER_NONCE,
     //      boolValue: true,
     //      ..
     // } => KeyParameterValue::CallerNonce,
-    (@from [$($out:tt)*], $variant:ident, $tag_val:ident, boolValue; $($in:tt)*) => {
+    (@from [$($out:tt)*], $variant:ident, $tag_val:ident, BoolValue; $($in:tt)*) => {
         implement_key_parameter_conversion_to_from_wire! {@from
             [$($out)*
                 KmKeyParameter {
                     tag: Tag::$tag_val,
-                    boolValue: true,
-                    ..
+                    value: KmKeyParameterValue::BoolValue(true),
                 } => KeyParameterValue::$variant,
-            ], $($in)*
-        }
-    };
-    // This rule handles all enum variants.
-    // On an input like: 'KeyPurpose, PURPOSE, integer, KeyPurpose;' it generates a match arm
-    // like:
-    // KmKeyParameter {
-    //         tag: Tag::PURPOSE,
-    //         integer: v,
-    //         ..,
-    // } => KeyParameterValue::KeyPurpose(KeyPurpose(v)),
-    (@from [$($out:tt)*], $variant:ident, $tag_val:ident, $field:ident, $enum_type:ident; $($in:tt)*) => {
-        implement_key_parameter_conversion_to_from_wire! {@from
-            [$($out)*
-                KmKeyParameter {
-                    tag: Tag::$tag_val,
-                    $field: v,
-                    ..
-                } => KeyParameterValue::$variant($enum_type(v)),
             ], $($in)*
         }
     };
     // This rule handles all variants that are neither invalid nor bool values nor enums
     // (i.e. all variants which correspond to integer, longInteger, and blob fields in
     // KmKeyParameter).
-    // On an input like: 'ConfirmationToken, CONFIRMATION_TOKEN, blob;' it generates a match arm
+    // On an input like: `ConfirmationToken, CONFIRMATION_TOKEN, Blob;` it generates a match arm
     // like:
     // KmKeyParameter {
     //         tag: Tag::CONFIRMATION_TOKEN,
-    //         blob: v,
-    //         ..,
+    //         value: KmKeyParameterValue::Blob(v),
     // } => KeyParameterValue::ConfirmationToken(v),
     (@from [$($out:tt)*], $variant:ident, $tag_val:ident, $field:ident; $($in:tt)*) => {
         implement_key_parameter_conversion_to_from_wire! {@from
             [$($out)*
                 KmKeyParameter {
                     tag: Tag::$tag_val,
-                    $field: v,
-                    ..
+                    value: KmKeyParameterValue::$field(v),
                 } => KeyParameterValue::$variant(v),
             ], $($in)*
         }
@@ -878,59 +835,59 @@ impl KeyParameterValue {
     // contains: variant identifier, tag value, and the related field name (i.e.
     // boolValue/integer/longInteger/blob) in the KmKeyParameter.
     implement_key_parameter_conversion_to_from_wire! {
-        Invalid, INVALID, na;
-        KeyPurpose, PURPOSE, integer, KeyPurpose;
-        Algorithm, ALGORITHM, integer, Algorithm;
-        KeySize, KEY_SIZE, integer;
-        BlockMode, BLOCK_MODE, integer, BlockMode;
-        Digest, DIGEST, integer, Digest;
-        PaddingMode, PADDING, integer, PaddingMode;
-        CallerNonce, CALLER_NONCE, boolValue;
-        MinMacLength, MIN_MAC_LENGTH, integer;
-        EcCurve, EC_CURVE, integer, EcCurve;
-        RSAPublicExponent, RSA_PUBLIC_EXPONENT, longInteger;
-        IncludeUniqueID, INCLUDE_UNIQUE_ID, boolValue;
-        BootLoaderOnly, BOOTLOADER_ONLY, boolValue;
-        RollbackResistance, ROLLBACK_RESISTANCE, boolValue;
-        ActiveDateTime, ACTIVE_DATETIME, longInteger;
-        OriginationExpireDateTime, ORIGINATION_EXPIRE_DATETIME, longInteger;
-        UsageExpireDateTime, USAGE_EXPIRE_DATETIME, longInteger;
-        MinSecondsBetweenOps, MIN_SECONDS_BETWEEN_OPS, integer;
-        MaxUsesPerBoot, MAX_USES_PER_BOOT, integer;
-        UserID, USER_ID, integer;
-        UserSecureID, USER_SECURE_ID, longInteger;
-        NoAuthRequired, NO_AUTH_REQUIRED, boolValue;
-        HardwareAuthenticatorType, USER_AUTH_TYPE, integer, HardwareAuthenticatorType;
-        AuthTimeout, AUTH_TIMEOUT, integer;
-        AllowWhileOnBody, ALLOW_WHILE_ON_BODY, boolValue;
-        TrustedUserPresenceRequired, TRUSTED_USER_PRESENCE_REQUIRED, boolValue;
-        TrustedConfirmationRequired, TRUSTED_CONFIRMATION_REQUIRED, boolValue;
-        UnlockedDeviceRequired, UNLOCKED_DEVICE_REQUIRED, boolValue;
-        ApplicationID, APPLICATION_ID, blob;
-        ApplicationData, APPLICATION_DATA, blob;
-        CreationDateTime, CREATION_DATETIME, longInteger;
-        KeyOrigin, ORIGIN, integer, KeyOrigin;
-        RootOfTrust, ROOT_OF_TRUST, blob;
-        OSVersion, OS_VERSION, integer;
-        OSPatchLevel, OS_PATCHLEVEL, integer;
-        UniqueID, UNIQUE_ID, blob;
-        AttestationChallenge, ATTESTATION_CHALLENGE, blob;
-        AttestationApplicationID, ATTESTATION_APPLICATION_ID, blob;
-        AttestationIdBrand, ATTESTATION_ID_BRAND, blob;
-        AttestationIdDevice, ATTESTATION_ID_DEVICE, blob;
-        AttestationIdProduct, ATTESTATION_ID_PRODUCT, blob;
-        AttestationIdSerial, ATTESTATION_ID_SERIAL, blob;
-        AttestationIdIMEI, ATTESTATION_ID_IMEI, blob;
-        AttestationIdMEID, ATTESTATION_ID_MEID, blob;
-        AttestationIdManufacturer, ATTESTATION_ID_MANUFACTURER, blob;
-        AttestationIdModel, ATTESTATION_ID_MODEL, blob;
-        VendorPatchLevel, VENDOR_PATCHLEVEL, integer;
-        BootPatchLevel, BOOT_PATCHLEVEL, integer;
-        AssociatedData, ASSOCIATED_DATA, blob;
-        Nonce, NONCE, blob;
-        MacLength, MAC_LENGTH, integer;
-        ResetSinceIdRotation, RESET_SINCE_ID_ROTATION, boolValue;
-        ConfirmationToken, CONFIRMATION_TOKEN, blob;
+        Invalid, INVALID, Invalid;
+        KeyPurpose, PURPOSE, KeyPurpose;
+        Algorithm, ALGORITHM, Algorithm;
+        KeySize, KEY_SIZE, Integer;
+        BlockMode, BLOCK_MODE, BlockMode;
+        Digest, DIGEST, Digest;
+        PaddingMode, PADDING, PaddingMode;
+        CallerNonce, CALLER_NONCE, BoolValue;
+        MinMacLength, MIN_MAC_LENGTH, Integer;
+        EcCurve, EC_CURVE, EcCurve;
+        RSAPublicExponent, RSA_PUBLIC_EXPONENT, LongInteger;
+        IncludeUniqueID, INCLUDE_UNIQUE_ID, BoolValue;
+        BootLoaderOnly, BOOTLOADER_ONLY, BoolValue;
+        RollbackResistance, ROLLBACK_RESISTANCE, BoolValue;
+        ActiveDateTime, ACTIVE_DATETIME, DateTime;
+        OriginationExpireDateTime, ORIGINATION_EXPIRE_DATETIME, DateTime;
+        UsageExpireDateTime, USAGE_EXPIRE_DATETIME, DateTime;
+        MinSecondsBetweenOps, MIN_SECONDS_BETWEEN_OPS, Integer;
+        MaxUsesPerBoot, MAX_USES_PER_BOOT, Integer;
+        UserID, USER_ID, Integer;
+        UserSecureID, USER_SECURE_ID, LongInteger;
+        NoAuthRequired, NO_AUTH_REQUIRED, BoolValue;
+        HardwareAuthenticatorType, USER_AUTH_TYPE, HardwareAuthenticatorType;
+        AuthTimeout, AUTH_TIMEOUT, Integer;
+        AllowWhileOnBody, ALLOW_WHILE_ON_BODY, BoolValue;
+        TrustedUserPresenceRequired, TRUSTED_USER_PRESENCE_REQUIRED, BoolValue;
+        TrustedConfirmationRequired, TRUSTED_CONFIRMATION_REQUIRED, BoolValue;
+        UnlockedDeviceRequired, UNLOCKED_DEVICE_REQUIRED, BoolValue;
+        ApplicationID, APPLICATION_ID, Blob;
+        ApplicationData, APPLICATION_DATA, Blob;
+        CreationDateTime, CREATION_DATETIME, DateTime;
+        KeyOrigin, ORIGIN, Origin;
+        RootOfTrust, ROOT_OF_TRUST, Blob;
+        OSVersion, OS_VERSION, Integer;
+        OSPatchLevel, OS_PATCHLEVEL, Integer;
+        UniqueID, UNIQUE_ID, Blob;
+        AttestationChallenge, ATTESTATION_CHALLENGE, Blob;
+        AttestationApplicationID, ATTESTATION_APPLICATION_ID, Blob;
+        AttestationIdBrand, ATTESTATION_ID_BRAND, Blob;
+        AttestationIdDevice, ATTESTATION_ID_DEVICE, Blob;
+        AttestationIdProduct, ATTESTATION_ID_PRODUCT, Blob;
+        AttestationIdSerial, ATTESTATION_ID_SERIAL, Blob;
+        AttestationIdIMEI, ATTESTATION_ID_IMEI, Blob;
+        AttestationIdMEID, ATTESTATION_ID_MEID, Blob;
+        AttestationIdManufacturer, ATTESTATION_ID_MANUFACTURER, Blob;
+        AttestationIdModel, ATTESTATION_ID_MODEL, Blob;
+        VendorPatchLevel, VENDOR_PATCHLEVEL, Integer;
+        BootPatchLevel, BOOT_PATCHLEVEL, Integer;
+        AssociatedData, ASSOCIATED_DATA, Blob;
+        Nonce, NONCE, Blob;
+        MacLength, MAC_LENGTH, Integer;
+        ResetSinceIdRotation, RESET_SINCE_ID_ROTATION, BoolValue;
+        ConfirmationToken, CONFIRMATION_TOKEN, Blob;
     }
 }
 
@@ -1248,7 +1205,7 @@ mod wire_tests {
         let kp = KeyParameter::new(KeyParameterValue::CallerNonce, SecurityLevel::STRONGBOX);
         let actual = KeyParameterValue::convert_to_wire(kp.key_parameter_value);
         assert_eq!(Tag::CALLER_NONCE, actual.tag);
-        assert_eq!(true, actual.boolValue);
+        assert_eq!(KmKeyParameterValue::BoolValue(true), actual.value);
     }
     #[test]
     fn test_convert_to_wire_integer() {
@@ -1258,7 +1215,7 @@ mod wire_tests {
         );
         let actual = KeyParameterValue::convert_to_wire(kp.key_parameter_value);
         assert_eq!(Tag::PURPOSE, actual.tag);
-        assert_eq!(KeyPurpose::ENCRYPT.0, actual.integer);
+        assert_eq!(KmKeyParameterValue::KeyPurpose(KeyPurpose::ENCRYPT), actual.value);
     }
     #[test]
     fn test_convert_to_wire_long_integer() {
@@ -1266,7 +1223,7 @@ mod wire_tests {
             KeyParameter::new(KeyParameterValue::UserSecureID(i64::MAX), SecurityLevel::STRONGBOX);
         let actual = KeyParameterValue::convert_to_wire(kp.key_parameter_value);
         assert_eq!(Tag::USER_SECURE_ID, actual.tag);
-        assert_eq!(i64::MAX, actual.longInteger);
+        assert_eq!(KmKeyParameterValue::LongInteger(i64::MAX), actual.value);
     }
     #[test]
     fn test_convert_to_wire_blob() {
@@ -1276,7 +1233,10 @@ mod wire_tests {
         );
         let actual = KeyParameterValue::convert_to_wire(kp.key_parameter_value);
         assert_eq!(Tag::CONFIRMATION_TOKEN, actual.tag);
-        assert_eq!(String::from("ConfirmationToken").into_bytes(), actual.blob);
+        assert_eq!(
+            KmKeyParameterValue::Blob(String::from("ConfirmationToken").into_bytes()),
+            actual.value
+        );
     }
 
     /// unit tests for from conversion
@@ -1289,7 +1249,7 @@ mod wire_tests {
     #[test]
     fn test_convert_from_wire_bool() {
         let aidl_kp =
-            KmKeyParameter { tag: Tag::CALLER_NONCE, boolValue: true, ..Default::default() };
+            KmKeyParameter { tag: Tag::CALLER_NONCE, value: KmKeyParameterValue::BoolValue(true) };
         let actual = KeyParameterValue::convert_from_wire(aidl_kp);
         assert_eq!(KeyParameterValue::CallerNonce, actual);
     }
@@ -1297,8 +1257,7 @@ mod wire_tests {
     fn test_convert_from_wire_integer() {
         let aidl_kp = KmKeyParameter {
             tag: Tag::PURPOSE,
-            integer: KeyPurpose::ENCRYPT.0,
-            ..Default::default()
+            value: KmKeyParameterValue::KeyPurpose(KeyPurpose::ENCRYPT),
         };
         let actual = KeyParameterValue::convert_from_wire(aidl_kp);
         assert_eq!(KeyParameterValue::KeyPurpose(KeyPurpose::ENCRYPT), actual);
@@ -1307,8 +1266,7 @@ mod wire_tests {
     fn test_convert_from_wire_long_integer() {
         let aidl_kp = KmKeyParameter {
             tag: Tag::USER_SECURE_ID,
-            longInteger: i64::MAX,
-            ..Default::default()
+            value: KmKeyParameterValue::LongInteger(i64::MAX),
         };
         let actual = KeyParameterValue::convert_from_wire(aidl_kp);
         assert_eq!(KeyParameterValue::UserSecureID(i64::MAX), actual);
@@ -1317,8 +1275,7 @@ mod wire_tests {
     fn test_convert_from_wire_blob() {
         let aidl_kp = KmKeyParameter {
             tag: Tag::CONFIRMATION_TOKEN,
-            blob: String::from("ConfirmationToken").into_bytes(),
-            ..Default::default()
+            value: KmKeyParameterValue::Blob(String::from("ConfirmationToken").into_bytes()),
         };
         let actual = KeyParameterValue::convert_from_wire(aidl_kp);
         assert_eq!(
