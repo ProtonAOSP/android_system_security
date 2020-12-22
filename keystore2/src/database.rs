@@ -48,7 +48,7 @@ use crate::db_utils::{self, SqlField};
 use crate::error::{Error as KsError, ResponseCode};
 use crate::key_parameter::{KeyParameter, Tag};
 use crate::permission::KeyPermSet;
-use anyhow::{anyhow, Context, Result};
+use crate::utils::get_current_time_in_seconds;
 
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
     HardwareAuthToken::HardwareAuthToken, HardwareAuthenticatorType::HardwareAuthenticatorType,
@@ -57,13 +57,15 @@ use android_hardware_security_keymint::aidl::android::hardware::security::keymin
 use android_system_keystore2::aidl::android::system::keystore2::{
     Domain::Domain, KeyDescriptor::KeyDescriptor,
 };
+use anyhow::{anyhow, Context, Result};
 
 use lazy_static::lazy_static;
 #[cfg(not(test))]
 use rand::prelude::random;
 use rusqlite::{
-    params, types::FromSql, types::FromSqlResult, types::ToSqlOutput, types::ValueRef, Connection,
-    OptionalExtension, ToSql, Transaction, TransactionBehavior, NO_PARAMS,
+    params, types::FromSql, types::FromSqlResult, types::ToSqlOutput, types::Value,
+    types::ValueRef, Connection, OptionalExtension, ToSql, Transaction, TransactionBehavior,
+    NO_PARAMS,
 };
 use std::{
     collections::HashSet,
@@ -250,15 +252,44 @@ pub struct KeystoreDB {
     conn: Connection,
 }
 
+/// Database representation of the monotonic time retrieved from the system call clock_gettime with
+/// CLOCK_MONOTONIC_RAW. Stores monotonic time as i64 in seconds.
+#[derive(Debug, Copy, Clone, Default, Eq, PartialEq, Ord, PartialOrd)]
+pub struct MonotonicRawTime(i64);
+
+impl MonotonicRawTime {
+    /// Constructs a new MonotonicRawTime
+    pub fn now() -> Self {
+        Self(get_current_time_in_seconds())
+    }
+
+    /// Returns the integer value of MonotonicRawTime as i64
+    pub fn seconds(&self) -> i64 {
+        self.0
+    }
+}
+
+impl ToSql for MonotonicRawTime {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput> {
+        Ok(ToSqlOutput::Owned(Value::Integer(self.0)))
+    }
+}
+
+impl FromSql for MonotonicRawTime {
+    fn column_result(value: ValueRef) -> FromSqlResult<Self> {
+        Ok(Self(i64::column_result(value)?))
+    }
+}
+
 /// This struct encapsulates the information to be stored in the database about the auth tokens
 /// received by keystore.
 pub struct AuthTokenEntry {
     auth_token: HardwareAuthToken,
-    time_received: i32,
+    time_received: MonotonicRawTime,
 }
 
 impl AuthTokenEntry {
-    fn new(auth_token: HardwareAuthToken, time_received: i32) -> Self {
+    fn new(auth_token: HardwareAuthToken, time_received: MonotonicRawTime) -> Self {
         AuthTokenEntry { auth_token, time_received }
     }
 
@@ -277,7 +308,7 @@ impl AuthTokenEntry {
     fn is_newer_than(&self, other: &AuthTokenEntry) -> bool {
         // NOTE: Although in legacy keystore both timestamp and time_received are involved in this
         // check, we decided to only consider time_received in keystore2 code.
-        self.time_received > other.time_received
+        self.time_received.seconds() > other.time_received.seconds()
     }
 
     /// Returns the auth token wrapped by the AuthTokenEntry
@@ -360,6 +391,38 @@ impl KeystoreDB {
             NO_PARAMS,
         )
         .context("Failed to initialize \"grant\" table.")?;
+
+        //TODO: only drop the following two perboot tables if this is the first start up
+        //during the boot (b/175716626).
+        // conn.execute("DROP TABLE IF EXISTS perboot.authtoken;", NO_PARAMS)
+        //     .context("Failed to drop perboot.authtoken table")?;
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS perboot.authtoken (
+                        id INTEGER PRIMARY KEY,
+                        challenge INTEGER,
+                        user_id INTEGER,
+                        auth_id INTEGER,
+                        authenticator_type INTEGER,
+                        timestamp INTEGER,
+                        mac BLOB,
+                        time_received INTEGER,
+                        UNIQUE(user_id, auth_id, authenticator_type));",
+            NO_PARAMS,
+        )
+        .context("Failed to initialize \"authtoken\" table.")?;
+
+        // conn.execute("DROP TABLE IF EXISTS perboot.metadata;", NO_PARAMS)
+        //     .context("Failed to drop perboot.metadata table")?;
+        // metadata table stores certain miscellaneous information required for keystore functioning
+        // during a boot cycle, as key-value pairs.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS perboot.metadata (
+                        key TEXT,
+                        value BLOB,
+                        UNIQUE(key));",
+            NO_PARAMS,
+        )
+        .context("Failed to initialize \"metadata\" table.")?;
 
         Ok(())
     }
@@ -965,6 +1028,26 @@ impl KeystoreDB {
             }
         }
     }
+
+    /// Insert or replace the auth token based on the UNIQUE constraint of the auth token table
+    pub fn insert_auth_token(&mut self, auth_token: &HardwareAuthToken) -> Result<()> {
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO perboot.authtoken (challenge, user_id, auth_id,
+            authenticator_type, timestamp, mac, time_received) VALUES(?, ?, ?, ?, ?, ?, ?);",
+                params![
+                    auth_token.challenge,
+                    auth_token.userId,
+                    auth_token.authenticatorId,
+                    auth_token.authenticatorType.0 as i32,
+                    auth_token.timestamp.milliSeconds as i64,
+                    auth_token.mac,
+                    MonotonicRawTime::now(),
+                ],
+            )
+            .context("In insert_auth_token: failed to insert auth token into the database")?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -978,6 +1061,12 @@ mod tests {
     use crate::key_perm_set;
     use crate::permission::{KeyPerm, KeyPermSet};
     use crate::test::utils::TempDir;
+    use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
+        HardwareAuthToken::HardwareAuthToken,
+        HardwareAuthenticatorType::HardwareAuthenticatorType as kmhw_authenticator_type,
+        Timestamp::Timestamp,
+    };
+    use rusqlite::Error;
     use rusqlite::NO_PARAMS;
     use std::cell::RefCell;
     use std::sync::atomic::{AtomicU8, Ordering};
@@ -1024,8 +1113,85 @@ mod tests {
             .prepare("SELECT name from perboot.sqlite_master WHERE type='table' ORDER BY name;")?
             .query_map(params![], |row| row.get(0))?
             .collect::<rusqlite::Result<Vec<String>>>()?;
-        assert_eq!(tables.len(), 0);
+
+        assert_eq!(tables.len(), 2);
+        assert_eq!(tables[0], "authtoken");
+        assert_eq!(tables[1], "metadata");
         Ok(())
+    }
+
+    #[test]
+    fn test_auth_token_table_invariant() -> Result<()> {
+        let mut db = new_test_db()?;
+        let auth_token1 = HardwareAuthToken {
+            challenge: i64::MAX,
+            userId: 200,
+            authenticatorId: 200,
+            authenticatorType: kmhw_authenticator_type(kmhw_authenticator_type::PASSWORD.0),
+            timestamp: Timestamp { milliSeconds: 500 },
+            mac: String::from("mac").into_bytes(),
+        };
+        db.insert_auth_token(&auth_token1)?;
+        let auth_tokens_returned = get_auth_tokens(&mut db)?;
+        assert_eq!(auth_tokens_returned.len(), 1);
+
+        // insert another auth token with the same values for the columns in the UNIQUE constraint
+        // of the auth token table and different value for timestamp
+        let auth_token2 = HardwareAuthToken {
+            challenge: i64::MAX,
+            userId: 200,
+            authenticatorId: 200,
+            authenticatorType: kmhw_authenticator_type(kmhw_authenticator_type::PASSWORD.0),
+            timestamp: Timestamp { milliSeconds: 600 },
+            mac: String::from("mac").into_bytes(),
+        };
+
+        db.insert_auth_token(&auth_token2)?;
+        let mut auth_tokens_returned = get_auth_tokens(&mut db)?;
+        assert_eq!(auth_tokens_returned.len(), 1);
+
+        if let Some(auth_token) = auth_tokens_returned.pop() {
+            assert_eq!(auth_token.auth_token.timestamp.milliSeconds, 600);
+        }
+
+        // insert another auth token with the different values for the columns in the UNIQUE
+        // constraint of the auth token table
+        let auth_token3 = HardwareAuthToken {
+            challenge: i64::MAX,
+            userId: 201,
+            authenticatorId: 200,
+            authenticatorType: kmhw_authenticator_type(kmhw_authenticator_type::PASSWORD.0),
+            timestamp: Timestamp { milliSeconds: 600 },
+            mac: String::from("mac").into_bytes(),
+        };
+
+        db.insert_auth_token(&auth_token3)?;
+        let auth_tokens_returned = get_auth_tokens(&mut db)?;
+        assert_eq!(auth_tokens_returned.len(), 2);
+
+        Ok(())
+    }
+
+    // utility function for test_auth_token_table_invariant()
+    fn get_auth_tokens(db: &mut KeystoreDB) -> Result<Vec<AuthTokenEntry>> {
+        let mut stmt = db.conn.prepare("SELECT * from perboot.authtoken;")?;
+
+        let auth_token_entries: Vec<AuthTokenEntry> = stmt
+            .query_map(NO_PARAMS, |row| {
+                Ok(AuthTokenEntry::new(
+                    HardwareAuthToken {
+                        challenge: row.get(1)?,
+                        userId: row.get(2)?,
+                        authenticatorId: row.get(3)?,
+                        authenticatorType: HardwareAuthenticatorType(row.get(4)?),
+                        timestamp: Timestamp { milliSeconds: row.get(5)? },
+                        mac: row.get(6)?,
+                    },
+                    row.get(7)?,
+                ))
+            })?
+            .collect::<Result<Vec<AuthTokenEntry>, Error>>()?;
+        Ok(auth_token_entries)
     }
 
     #[test]
