@@ -20,11 +20,12 @@
 use crate::auth_token_handler::AuthTokenHandler;
 use crate::database::AuthTokenEntry;
 use crate::error::Error as KeystoreError;
+use crate::globals::DB;
 use crate::key_parameter::{KeyParameter, KeyParameterValue};
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
     Algorithm::Algorithm, ErrorCode::ErrorCode as Ec, HardwareAuthToken::HardwareAuthToken,
     HardwareAuthenticatorType::HardwareAuthenticatorType, KeyPurpose::KeyPurpose,
-    SecurityLevel::SecurityLevel, Tag::Tag,
+    SecurityLevel::SecurityLevel, Tag::Tag, Timestamp::Timestamp,
 };
 use android_system_keystore2::aidl::android::system::keystore2::OperationChallenge::OperationChallenge;
 use anyhow::{Context, Result};
@@ -336,6 +337,45 @@ impl Enforcements {
         // because there's no way to recover, even if it is poisoned.
         let set = self.device_unlocked_set.lock().unwrap();
         !set.contains(&user_id)
+    }
+
+    /// Sets the device locked status for the user. This method is called externally.
+    pub fn set_device_locked(&self, user_id: i32, device_locked_status: bool) {
+        // unwrap here because there's no way this mutex guard can be poisoned and
+        // because there's no way to recover, even if it is poisoned.
+        let mut set = self.device_unlocked_set.lock().unwrap();
+        if device_locked_status {
+            set.remove(&user_id);
+        } else {
+            set.insert(user_id);
+        }
+    }
+
+    /// Add this auth token to the database.
+    /// Then check if there is an entry in the op_auth_map, indexed by the challenge of this
+    /// auth token (which could have been inserted during create_operation of an operation on a
+    /// per-op-auth key). If so, add a copy of this auth token to the map indexed by the
+    /// challenge.
+    pub fn add_auth_token(&self, auth_token: HardwareAuthToken) -> Result<()> {
+        //it is ok to unwrap here, because there is no way this lock can get poisoned and
+        //and there is no way to recover if it is poisoned.
+        let mut op_auth_map_guard = self.op_auth_map.lock().unwrap();
+
+        if op_auth_map_guard.contains_key(&auth_token.challenge) {
+            let auth_token_copy = HardwareAuthToken {
+                challenge: auth_token.challenge,
+                userId: auth_token.userId,
+                authenticatorId: auth_token.authenticatorId,
+                authenticatorType: HardwareAuthenticatorType(auth_token.authenticatorType.0),
+                timestamp: Timestamp { milliSeconds: auth_token.timestamp.milliSeconds },
+                mac: auth_token.mac.clone(),
+            };
+            op_auth_map_guard.insert(auth_token.challenge, Some(auth_token_copy));
+        }
+
+        DB.with(|db| db.borrow_mut().insert_auth_token(&auth_token))
+            .context("In add_auth_token.")?;
+        Ok(())
     }
 }
 
