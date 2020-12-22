@@ -44,11 +44,16 @@
 //! from the database module these functions take permission check
 //! callbacks.
 
+#![allow(dead_code)]
+
 use crate::db_utils::{self, SqlField};
 use crate::error::{Error as KsError, ResponseCode};
+use crate::impl_metadata; // This is in db_utils.rs
 use crate::key_parameter::{KeyParameter, Tag};
 use crate::permission::KeyPermSet;
 use crate::utils::get_current_time_in_seconds;
+use anyhow::{anyhow, Context, Result};
+use std::{convert::TryFrom, convert::TryInto, time::SystemTimeError};
 
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
     HardwareAuthToken::HardwareAuthToken, HardwareAuthenticatorType::HardwareAuthenticatorType,
@@ -57,23 +62,257 @@ use android_hardware_security_keymint::aidl::android::hardware::security::keymin
 use android_system_keystore2::aidl::android::system::keystore2::{
     Domain::Domain, KeyDescriptor::KeyDescriptor,
 };
-use anyhow::{anyhow, Context, Result};
 
 use lazy_static::lazy_static;
 #[cfg(not(test))]
 use rand::prelude::random;
 use rusqlite::{
-    params, types::FromSql, types::FromSqlResult, types::ToSqlOutput, types::Value,
-    types::ValueRef, Connection, OptionalExtension, ToSql, Transaction, TransactionBehavior,
-    NO_PARAMS,
+    params,
+    types::FromSql,
+    types::FromSqlResult,
+    types::ToSqlOutput,
+    types::{FromSqlError, Value, ValueRef},
+    Connection, OptionalExtension, ToSql, Transaction, TransactionBehavior, NO_PARAMS,
 };
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     path::Path,
     sync::{Condvar, Mutex},
+    time::{Duration, SystemTime},
 };
 #[cfg(test)]
 use tests::random;
+
+impl_metadata!(
+    /// A set of metadata for key entries.
+    #[derive(Debug, Default, Eq, PartialEq)]
+    pub struct KeyMetaData;
+    /// A metadata entry for key entries.
+    #[derive(Debug, Eq, PartialEq, Ord, PartialOrd)]
+    pub enum KeyMetaEntry {
+        /// If present, indicates that the sensitive part of key
+        /// is encrypted with another key or a key derived from a password.
+        EncryptedBy(EncryptedBy) with accessor encrypted_by,
+        /// If the blob is password encrypted this field is set to the
+        /// salt used for the key derivation.
+        Salt(Vec<u8>) with accessor salt,
+        /// If the blob is encrypted, this field is set to the initialization vector.
+        Iv(Vec<u8>) with accessor iv,
+        /// If the blob is encrypted, this field holds the AEAD TAG.
+        AeadTag(Vec<u8>) with accessor aead_tag,
+        /// Creation date of a the key entry.
+        CreationDate(DateTime) with accessor creation_date,
+        /// Expiration date for attestation keys.
+        AttestationExpirationDate(DateTime) with accessor attestation_expiration_date,
+        //  --- ADD NEW META DATA FIELDS HERE ---
+        // For backwards compatibility add new entries only to
+        // end of this list and above this comment.
+    };
+);
+
+impl KeyMetaData {
+    fn load_from_db(key_id: i64, tx: &Transaction) -> Result<Self> {
+        let mut stmt = tx
+            .prepare(
+                "SELECT tag, data from persistent.keymetadata
+                    WHERE keyentryid = ?;",
+            )
+            .context("In KeyMetaData::load_from_db: prepare statement failed.")?;
+
+        let mut metadata: HashMap<i64, KeyMetaEntry> = Default::default();
+
+        let mut rows =
+            stmt.query(params![key_id]).context("In KeyMetaData::load_from_db: query failed.")?;
+        db_utils::with_rows_extract_all(&mut rows, |row| {
+            let db_tag: i64 = row.get(0).context("Failed to read tag.")?;
+            metadata.insert(
+                db_tag,
+                KeyMetaEntry::new_from_sql(db_tag, &SqlField::new(1, &row))
+                    .context("Failed to read KeyMetaEntry.")?,
+            );
+            Ok(())
+        })
+        .context("In KeyMetaData::load_from_db.")?;
+
+        Ok(Self { data: metadata })
+    }
+
+    fn store_in_db(&self, key_id: i64, tx: &Transaction) -> Result<()> {
+        let mut stmt = tx
+            .prepare(
+                "INSERT into persistent.keymetadata (keyentryid, tag, data)
+                    VALUES (?, ?, ?);",
+            )
+            .context("In KeyMetaData::store_in_db: Failed to prepare statement.")?;
+
+        let iter = self.data.iter();
+        for (tag, entry) in iter {
+            stmt.insert(params![key_id, tag, entry,]).with_context(|| {
+                format!("In KeyMetaData::store_in_db: Failed to insert {:?}", entry)
+            })?;
+        }
+        Ok(())
+    }
+}
+
+/// Indicates the type of the keyentry.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
+pub enum KeyType {
+    /// This is a client key type. These keys are created or imported through the Keystore 2.0
+    /// AIDL interface android.system.keystore2.
+    Client,
+    /// This is a super key type. These keys are created by keystore itself and used to encrypt
+    /// other key blobs to provide LSKF binding.
+    Super,
+    /// This is an attestation key. These keys are created by the remote provisioning mechanism.
+    Attestation,
+}
+
+impl ToSql for KeyType {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput> {
+        Ok(ToSqlOutput::Owned(Value::Integer(match self {
+            KeyType::Client => 0,
+            KeyType::Super => 1,
+            KeyType::Attestation => 2,
+        })))
+    }
+}
+
+impl FromSql for KeyType {
+    fn column_result(value: ValueRef) -> FromSqlResult<Self> {
+        match i64::column_result(value)? {
+            0 => Ok(KeyType::Client),
+            1 => Ok(KeyType::Super),
+            2 => Ok(KeyType::Attestation),
+            v => Err(FromSqlError::OutOfRange(v)),
+        }
+    }
+}
+
+/// Indicates how the sensitive part of this key blob is encrypted.
+#[derive(Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub enum EncryptedBy {
+    /// The keyblob is encrypted by a user password.
+    /// In the database this variant is represented as NULL.
+    Password,
+    /// The keyblob is encrypted by another key with wrapped key id.
+    /// In the database this variant is represented as non NULL value
+    /// that is convertible to i64, typically NUMERIC.
+    KeyId(i64),
+}
+
+impl ToSql for EncryptedBy {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput> {
+        match self {
+            Self::Password => Ok(ToSqlOutput::Owned(Value::Null)),
+            Self::KeyId(id) => id.to_sql(),
+        }
+    }
+}
+
+impl FromSql for EncryptedBy {
+    fn column_result(value: ValueRef) -> FromSqlResult<Self> {
+        match value {
+            ValueRef::Null => Ok(Self::Password),
+            _ => Ok(Self::KeyId(i64::column_result(value)?)),
+        }
+    }
+}
+
+/// A database representation of wall clock time. DateTime stores unix epoch time as
+/// i64 in milliseconds.
+#[derive(Debug, Copy, Clone, Default, Eq, PartialEq, Ord, PartialOrd)]
+pub struct DateTime(i64);
+
+/// Error type returned when creating DateTime or converting it from and to
+/// SystemTime.
+#[derive(thiserror::Error, Debug)]
+pub enum DateTimeError {
+    /// This is returned when SystemTime and Duration computations fail.
+    #[error(transparent)]
+    SystemTimeError(#[from] SystemTimeError),
+
+    /// This is returned when type conversions fail.
+    #[error(transparent)]
+    TypeConversion(#[from] std::num::TryFromIntError),
+
+    /// This is returned when checked time arithmetic failed.
+    #[error("Time arithmetic failed.")]
+    TimeArithmetic,
+}
+
+impl DateTime {
+    /// Constructs a new DateTime object denoting the current time. This may fail during
+    /// conversion to unix epoch time and during conversion to the internal i64 representation.
+    pub fn now() -> Result<Self, DateTimeError> {
+        Ok(Self(SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)?.as_millis().try_into()?))
+    }
+
+    /// Constructs a new DateTime object from milliseconds.
+    pub fn from_millis_epoch(millis: i64) -> Self {
+        Self(millis)
+    }
+
+    /// Returns unix epoch time in milliseconds.
+    pub fn to_millis_epoch(&self) -> i64 {
+        self.0
+    }
+
+    /// Returns unix epoch time in seconds.
+    pub fn to_secs_epoch(&self) -> i64 {
+        self.0 / 1000
+    }
+}
+
+impl ToSql for DateTime {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput> {
+        Ok(ToSqlOutput::Owned(Value::Integer(self.0)))
+    }
+}
+
+impl FromSql for DateTime {
+    fn column_result(value: ValueRef) -> FromSqlResult<Self> {
+        Ok(Self(i64::column_result(value)?))
+    }
+}
+
+impl TryInto<SystemTime> for DateTime {
+    type Error = DateTimeError;
+
+    fn try_into(self) -> Result<SystemTime, Self::Error> {
+        // We want to construct a SystemTime representation equivalent to self, denoting
+        // a point in time THEN, but we cannot set the time directly. We can only construct
+        // a SystemTime denoting NOW, and we can get the duration between EPOCH and NOW,
+        // and between EPOCH and THEN. With this common reference we can construct the
+        // duration between NOW and THEN which we can add to our SystemTime representation
+        // of NOW to get a SystemTime representation of THEN.
+        // Durations can only be positive, thus the if statement below.
+        let now = SystemTime::now();
+        let now_epoch = now.duration_since(SystemTime::UNIX_EPOCH)?;
+        let then_epoch = Duration::from_millis(self.0.try_into()?);
+        Ok(if now_epoch > then_epoch {
+            // then = now - (now_epoch - then_epoch)
+            now_epoch
+                .checked_sub(then_epoch)
+                .and_then(|d| now.checked_sub(d))
+                .ok_or(DateTimeError::TimeArithmetic)?
+        } else {
+            // then = now + (then_epoch - now_epoch)
+            then_epoch
+                .checked_sub(now_epoch)
+                .and_then(|d| now.checked_add(d))
+                .ok_or(DateTimeError::TimeArithmetic)?
+        })
+    }
+}
+
+impl TryFrom<SystemTime> for DateTime {
+    type Error = DateTimeError;
+
+    fn try_from(t: SystemTime) -> Result<Self, Self::Error> {
+        Ok(Self(t.duration_since(SystemTime::UNIX_EPOCH)?.as_millis().try_into()?))
+    }
+}
 
 /// Keys have a KeyMint blob component and optional public certificate and
 /// certificate chain components.
@@ -169,7 +408,7 @@ impl Drop for KeyIdGuard {
 /// An entry has a unique `id` by which it can be found in the database.
 /// It has a security level field, key parameters, and three optional fields
 /// for the KeyMint blob, public certificate and a public certificate chain.
-#[derive(Debug, Default, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Debug, Default, Eq, PartialEq)]
 pub struct KeyEntry {
     id: i64,
     km_blob: Option<Vec<u8>>,
@@ -177,6 +416,7 @@ pub struct KeyEntry {
     cert_chain: Option<Vec<u8>>,
     sec_level: SecurityLevel,
     parameters: Vec<KeyParameter>,
+    metadata: KeyMetaData,
 }
 
 impl KeyEntry {
@@ -220,14 +460,18 @@ impl KeyEntry {
     pub fn into_key_parameters(self) -> Vec<KeyParameter> {
         self.parameters
     }
+    /// Exposes the key metadata of this key entry.
+    pub fn metadata(&self) -> &KeyMetaData {
+        &self.metadata
+    }
 }
 
 /// Indicates the sub component of a key entry for persistent storage.
 #[derive(Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub struct SubComponentType(u32);
 impl SubComponentType {
-    /// Persistent identifier for a KeyMint blob.
-    pub const KM_BLOB: SubComponentType = Self(0);
+    /// Persistent identifier for a key blob.
+    pub const KEY_BLOB: SubComponentType = Self(0);
     /// Persistent identifier for a certificate blob.
     pub const CERT: SubComponentType = Self(1);
     /// Persistent identifier for a certificate chain blob.
@@ -346,7 +590,7 @@ impl KeystoreDB {
         conn.execute(
             "CREATE TABLE IF NOT EXISTS persistent.keyentry (
                      id INTEGER UNIQUE,
-                     creation_date DATETIME,
+                     key_type INTEGER,
                      domain INTEGER,
                      namespace INTEGER,
                      alias BLOB);",
@@ -381,6 +625,15 @@ impl KeystoreDB {
             NO_PARAMS,
         )
         .context("Failed to initialize \"keyparameter\" table.")?;
+
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS persistent.keymetadata (
+                     keyentryid INTEGER,
+                     tag INTEGER,
+                     data ANY);",
+            NO_PARAMS,
+        )
+        .context("Failed to initialize \"keymetadata\" table.")?;
 
         conn.execute(
             "CREATE TABLE IF NOT EXISTS persistent.grant (
@@ -439,6 +692,84 @@ impl KeystoreDB {
         Ok(conn)
     }
 
+    /// Atomically loads a key entry and associated metadata or creates it using the
+    /// callback create_new_key callback. The callback is called during a database
+    /// transaction. This means that implementers should be mindful about using
+    /// blocking operations such as IPC or grabbing mutexes.
+    pub fn get_or_create_key_with<F>(
+        &mut self,
+        domain: Domain,
+        namespace: i64,
+        alias: &str,
+        create_new_key: F,
+    ) -> Result<(KeyIdGuard, KeyEntry)>
+    where
+        F: FnOnce() -> Result<(Vec<u8>, KeyMetaData)>,
+    {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .context("In get_or_create_key_with: Failed to initialize transaction.")?;
+
+        let id = {
+            let mut stmt = tx
+                .prepare(
+                    "SELECT id FROM persistent.keyentry
+                    WHERE
+                    key_type = ?
+                    AND domain = ?
+                    AND namespace = ?
+                    AND alias = ?;",
+                )
+                .context("In get_or_create_key_with: Failed to select from keyentry table.")?;
+            let mut rows = stmt
+                .query(params![KeyType::Super, domain.0, namespace, alias])
+                .context("In get_or_create_key_with: Failed to query from keyentry table.")?;
+
+            db_utils::with_rows_extract_one(&mut rows, |row| {
+                Ok(match row {
+                    Some(r) => r.get(0).context("Failed to unpack id.")?,
+                    None => None,
+                })
+            })
+            .context("In get_or_create_key_with.")?
+        };
+
+        let (id, entry) = match id {
+            Some(id) => (
+                id,
+                Self::load_key_components(&tx, KeyEntryLoadBits::KM, id)
+                    .context("In get_or_create_key_with.")?,
+            ),
+
+            None => {
+                let id = Self::insert_with_retry(|id| {
+                    tx.execute(
+                        "INSERT into persistent.keyentry
+                        (id, key_type, domain, namespace, alias)
+                        VALUES(?, ?, ?, ?, ?);",
+                        params![id, KeyType::Super, domain.0, namespace, alias],
+                    )
+                })
+                .context("In get_or_create_key_with.")?;
+
+                let (blob, metadata) = create_new_key().context("In get_or_create_key_with.")?;
+                Self::insert_blob_internal(
+                    &tx,
+                    id,
+                    SubComponentType::KEY_BLOB,
+                    &blob,
+                    SecurityLevel::SOFTWARE,
+                )
+                .context("In get_of_create_key_with.")?;
+                metadata.store_in_db(id, &tx).context("In get_or_create_key_with.")?;
+                (id, KeyEntry { id, km_blob: Some(blob), metadata, ..Default::default() })
+            }
+        };
+        tx.commit().context("In get_or_create_key_with: Failed to commit transaction.")?;
+        Ok((KEY_ID_LOCK.get(id), entry))
+    }
+
     /// Creates a new key entry and allocates a new randomized id for the new key.
     /// The key id gets associated with a domain and namespace but not with an alias.
     /// To complete key generation `rebind_alias` should be called after all of the
@@ -456,9 +787,10 @@ impl KeystoreDB {
         Ok(KEY_ID_LOCK.get(
             Self::insert_with_retry(|id| {
                 self.conn.execute(
-                    "INSERT into persistent.keyentry (id, creation_date, domain, namespace, alias)
-                     VALUES(?, datetime('now'), ?, ?, NULL);",
-                    params![id, domain.0 as u32, namespace],
+                    "INSERT into persistent.keyentry
+                     (id, key_type, domain, namespace, alias)
+                     VALUES(?, ?, ?, ?, NULL);",
+                    params![id, KeyType::Client, domain.0 as u32, namespace],
                 )
             })
             .context("In create_key_entry")?,
@@ -470,7 +802,7 @@ impl KeystoreDB {
     /// Each key can have one of each sub component type associated. If more
     /// are added only the most recent can be retrieved, and superseded blobs
     /// will get garbage collected. The security level field of components
-    /// other than `SubComponentType::KM_BLOB` are ignored.
+    /// other than `SubComponentType::KEY_BLOB` are ignored.
     pub fn insert_blob(
         &mut self,
         key_id: &KeyIdGuard,
@@ -478,13 +810,30 @@ impl KeystoreDB {
         blob: &[u8],
         sec_level: SecurityLevel,
     ) -> Result<()> {
-        self.conn
-            .execute(
-                "INSERT into persistent.blobentry (subcomponent_type, keyentryid, blob, sec_level)
-                    VALUES (?, ?, ?, ?);",
-                params![sc_type, key_id.0, blob, sec_level.0],
-            )
-            .context("Failed to insert blob.")?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .context("In insert_blob: Failed to initialize transaction.")?;
+
+        Self::insert_blob_internal(&tx, key_id.0, sc_type, blob, sec_level)
+            .context("In insert_blob.")?;
+
+        tx.commit().context("In insert_blob: Failed to commit transaction.")
+    }
+
+    fn insert_blob_internal(
+        tx: &Transaction,
+        key_id: i64,
+        sc_type: SubComponentType,
+        blob: &[u8],
+        sec_level: SecurityLevel,
+    ) -> Result<()> {
+        tx.execute(
+            "INSERT into persistent.blobentry (subcomponent_type, keyentryid, blob, sec_level)
+                VALUES (?, ?, ?, ?);",
+            params![sc_type, key_id, blob, sec_level.0],
+        )
+        .context("In insert_blob_internal: Failed to insert blob.")?;
         Ok(())
     }
 
@@ -520,6 +869,20 @@ impl KeystoreDB {
         }
         tx.commit().context("In insert_keyparameter: Failed to commit transaction.")?;
         Ok(())
+    }
+
+    /// Insert a set of key entry specific metadata into the database.
+    pub fn insert_key_metadata(
+        &mut self,
+        key_id: &KeyIdGuard,
+        metadata: &KeyMetaData,
+    ) -> Result<()> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .context("In insert_key_metadata: Failed to initialize transaction.")?;
+        metadata.store_in_db(key_id.0, &tx).context("In insert_key_metadata")?;
+        tx.commit().context("In insert_key_metadata: Failed to commit transaction")
     }
 
     /// Updates the alias column of the given key id `newid` with the given alias,
@@ -576,7 +939,7 @@ impl KeystoreDB {
     // Helper function loading the key_id given the key descriptor
     // tuple comprising domain, namespace, and alias.
     // Requires a valid transaction.
-    fn load_key_entry_id(key: &KeyDescriptor, tx: &Transaction) -> Result<i64> {
+    fn load_key_entry_id(tx: &Transaction, key: &KeyDescriptor, key_type: KeyType) -> Result<i64> {
         let alias = key
             .alias
             .as_ref()
@@ -586,13 +949,14 @@ impl KeystoreDB {
             .prepare(
                 "SELECT id FROM persistent.keyentry
                     WHERE
-                    domain = ?
+                    key_type =  ?
+                    AND domain = ?
                     AND namespace = ?
                     AND alias = ?;",
             )
             .context("In load_key_entry_id: Failed to select from keyentry table.")?;
         let mut rows = stmt
-            .query(params![key.domain.0 as u32, key.nspace, alias])
+            .query(params![key_type, key.domain.0 as u32, key.nspace, alias])
             .context("In load_key_entry_id: Failed to read from keyentry table.")?;
         db_utils::with_rows_extract_one(&mut rows, |row| {
             row.map_or_else(|| Err(KsError::Rc(ResponseCode::KEY_NOT_FOUND)), Ok)?
@@ -618,6 +982,7 @@ impl KeystoreDB {
     fn load_access_tuple(
         tx: &Transaction,
         key: KeyDescriptor,
+        key_type: KeyType,
         caller_uid: u32,
     ) -> Result<(i64, KeyDescriptor, Option<KeyPermSet>)> {
         match key.domain {
@@ -632,7 +997,7 @@ impl KeystoreDB {
                 if access_key.domain == Domain::APP {
                     access_key.nspace = caller_uid as i64;
                 }
-                let key_id = Self::load_key_entry_id(&access_key, &tx)
+                let key_id = Self::load_key_entry_id(&tx, &access_key, key_type)
                     .with_context(|| format!("With key.domain = {:?}.", access_key.domain))?;
 
                 Ok((key_id, access_key, None))
@@ -719,7 +1084,7 @@ impl KeystoreDB {
             let sub_type: SubComponentType =
                 row.get(2).context("Failed to extract subcomponent_type.")?;
             match (sub_type, load_bits.load_public()) {
-                (SubComponentType::KM_BLOB, _) => {
+                (SubComponentType::KEY_BLOB, _) => {
                     sec_level =
                         SecurityLevel(row.get(1).context("Failed to extract security level.")?);
                     if load_bits.load_km() {
@@ -778,6 +1143,7 @@ impl KeystoreDB {
     pub fn load_key_entry(
         &mut self,
         key: KeyDescriptor,
+        key_type: KeyType,
         load_bits: KeyEntryLoadBits,
         caller_uid: u32,
         check_permission: impl FnOnce(&KeyDescriptor, Option<KeyPermSet>) -> Result<()>,
@@ -797,7 +1163,8 @@ impl KeystoreDB {
 
         // Load the key_id and complete the access control tuple.
         let (key_id, access_key_descriptor, access_vector) =
-            Self::load_access_tuple(&tx, key, caller_uid).context("In load_key_entry.")?;
+            Self::load_access_tuple(&tx, key, key_type, caller_uid)
+                .context("In load_key_entry.")?;
 
         // Perform access control. It is vital that we return here if the permission is denied.
         // So do not touch that '?' at the end.
@@ -837,6 +1204,7 @@ impl KeystoreDB {
                             nspace: key_id,
                             ..Default::default()
                         },
+                        key_type,
                         caller_uid,
                     )
                     .context("In load_key_entry. (deferred key lock)")?;
@@ -847,27 +1215,37 @@ impl KeystoreDB {
             Some(key_id_guard) => (key_id_guard, tx),
         };
 
-        let (sec_level, km_blob, cert_blob, cert_chain_blob) =
-            Self::load_blob_components(key_id_guard.id(), load_bits, &tx)
-                .context("In load_key_entry.")?;
-
-        let parameters =
-            Self::load_key_parameters(key_id_guard.id(), &tx).context("In load_key_entry.")?;
+        let key_entry = Self::load_key_components(&tx, load_bits, key_id_guard.id())
+            .context("In load_key_entry.")?;
 
         tx.commit().context("In load_key_entry: Failed to commit transaction.")?;
 
-        let key_id = key_id_guard.id();
-        Ok((
-            key_id_guard,
-            KeyEntry {
-                id: key_id,
-                km_blob,
-                cert: cert_blob,
-                cert_chain: cert_chain_blob,
-                sec_level,
-                parameters,
-            },
-        ))
+        Ok((key_id_guard, key_entry))
+    }
+
+    fn load_key_components(
+        tx: &Transaction,
+        load_bits: KeyEntryLoadBits,
+        key_id: i64,
+    ) -> Result<KeyEntry> {
+        let metadata = KeyMetaData::load_from_db(key_id, &tx).context("In load_key_components.")?;
+
+        let (sec_level, km_blob, cert_blob, cert_chain_blob) =
+            Self::load_blob_components(key_id, load_bits, &tx)
+                .context("In load_key_components.")?;
+
+        let parameters =
+            Self::load_key_parameters(key_id, &tx).context("In load_key_components.")?;
+
+        Ok(KeyEntry {
+            id: key_id,
+            km_blob,
+            cert: cert_blob,
+            cert_chain: cert_chain_blob,
+            sec_level,
+            parameters,
+            metadata,
+        })
     }
 
     /// Returns a list of KeyDescriptors in the selected domain/namespace.
@@ -928,7 +1306,7 @@ impl KeystoreDB {
         // But even if we load the access tuple by grant here, the permission
         // check denies the attempt to create a grant by grant descriptor.
         let (key_id, access_key_descriptor, _) =
-            Self::load_access_tuple(&tx, key, caller_uid).context("In grant")?;
+            Self::load_access_tuple(&tx, key, KeyType::Client, caller_uid).context("In grant")?;
 
         // Perform access control. It is vital that we return here if the permission
         // was denied. So do not touch that '?' at the end of the line.
@@ -988,7 +1366,8 @@ impl KeystoreDB {
         // Load the key_id and complete the access control tuple.
         // We ignore the access vector here because grants cannot be granted.
         let (key_id, access_key_descriptor, _) =
-            Self::load_access_tuple(&tx, key, caller_uid).context("In ungrant.")?;
+            Self::load_access_tuple(&tx, key, KeyType::Client, caller_uid)
+                .context("In ungrant.")?;
 
         // Perform access control. We must return here if the permission
         // was denied. So do not touch the '?' at the end of this line.
@@ -1072,12 +1451,37 @@ mod tests {
     use std::sync::atomic::{AtomicU8, Ordering};
     use std::sync::Arc;
     use std::thread;
+    use std::time::SystemTime;
 
     fn new_test_db() -> Result<KeystoreDB> {
         let conn = KeystoreDB::make_connection("file::memory:", "file::memory:")?;
 
         KeystoreDB::init_tables(&conn).context("Failed to initialize tables.")?;
         Ok(KeystoreDB { conn })
+    }
+
+    #[test]
+    fn datetime() -> Result<()> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute("CREATE TABLE test (ts DATETIME);", NO_PARAMS)?;
+        let now = SystemTime::now();
+        let duration = Duration::from_secs(1000);
+        let then = now.checked_sub(duration).unwrap();
+        let soon = now.checked_add(duration).unwrap();
+        conn.execute(
+            "INSERT INTO test (ts) VALUES (?), (?), (?);",
+            params![DateTime::try_from(now)?, DateTime::try_from(then)?, DateTime::try_from(soon)?],
+        )?;
+        let mut stmt = conn.prepare("SELECT ts FROM test ORDER BY ts ASC;")?;
+        let mut rows = stmt.query(NO_PARAMS)?;
+        assert_eq!(DateTime::try_from(then)?, rows.next()?.unwrap().get(0)?);
+        assert_eq!(DateTime::try_from(now)?, rows.next()?.unwrap().get(0)?);
+        assert_eq!(DateTime::try_from(soon)?, rows.next()?.unwrap().get(0)?);
+        assert!(rows.next()?.is_none());
+        assert!(DateTime::try_from(then)? < DateTime::try_from(now)?);
+        assert!(DateTime::try_from(then)? < DateTime::try_from(soon)?);
+        assert!(DateTime::try_from(now)? < DateTime::try_from(soon)?);
+        Ok(())
     }
 
     // Ensure that we're using the "injected" random function, not the real one.
@@ -1103,11 +1507,12 @@ mod tests {
             .prepare("SELECT name from persistent.sqlite_master WHERE type='table' ORDER BY name;")?
             .query_map(params![], |row| row.get(0))?
             .collect::<rusqlite::Result<Vec<String>>>()?;
-        assert_eq!(tables.len(), 4);
+        assert_eq!(tables.len(), 5);
         assert_eq!(tables[0], "blobentry");
         assert_eq!(tables[1], "grant");
         assert_eq!(tables[2], "keyentry");
-        assert_eq!(tables[3], "keyparameter");
+        assert_eq!(tables[3], "keymetadata");
+        assert_eq!(tables[4], "keyparameter");
         let tables = db
             .conn
             .prepare("SELECT name from perboot.sqlite_master WHERE type='table' ORDER BY name;")?
@@ -1307,8 +1712,8 @@ mod tests {
 
         let mut db = new_test_db()?;
         db.conn.execute(
-            "INSERT INTO persistent.keyentry (id, creation_date, domain, namespace, alias)
-                VALUES (1, '1980', 0, 15, 'key'), (2, '1980', 2, 7, 'yek');",
+            "INSERT INTO persistent.keyentry (id, key_type, domain, namespace, alias)
+                VALUES (1, 0, 0, 15, 'key'), (2, 0, 2, 7, 'yek');",
             NO_PARAMS,
         )?;
         let app_key = KeyDescriptor {
@@ -1448,7 +1853,7 @@ mod tests {
         Ok(())
     }
 
-    static TEST_KM_BLOB: &[u8] = b"my test blob";
+    static TEST_KEY_BLOB: &[u8] = b"my test blob";
     static TEST_CERT_BLOB: &[u8] = b"my test cert";
     static TEST_CERT_CHAIN_BLOB: &[u8] = b"my test cert_chain";
 
@@ -1457,8 +1862,8 @@ mod tests {
         let mut db = new_test_db()?;
         db.insert_blob(
             &KEY_ID_LOCK.get(1),
-            SubComponentType::KM_BLOB,
-            TEST_KM_BLOB,
+            SubComponentType::KEY_BLOB,
+            TEST_KEY_BLOB,
             SecurityLevel::SOFTWARE,
         )?;
         db.insert_blob(
@@ -1483,7 +1888,7 @@ mod tests {
                 Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
             })?;
         let r = rows.next().unwrap().unwrap();
-        assert_eq!(r, (SubComponentType::KM_BLOB, 1, TEST_KM_BLOB.to_vec(), 0));
+        assert_eq!(r, (SubComponentType::KEY_BLOB, 1, TEST_KEY_BLOB.to_vec(), 0));
         let r = rows.next().unwrap().unwrap();
         assert_eq!(r, (SubComponentType::CERT, 1, TEST_CERT_BLOB.to_vec(), 1));
         let r = rows.next().unwrap().unwrap();
@@ -1507,21 +1912,12 @@ mod tests {
                 alias: Some(TEST_ALIAS.to_string()),
                 blob: None,
             },
+            KeyType::Client,
             KeyEntryLoadBits::BOTH,
             1,
             |_k, _av| Ok(()),
         )?;
-        assert_eq!(
-            key_entry,
-            KeyEntry {
-                id: key_id,
-                km_blob: Some(TEST_KM_BLOB.to_vec()),
-                cert: Some(TEST_CERT_BLOB.to_vec()),
-                cert_chain: Some(TEST_CERT_CHAIN_BLOB.to_vec()),
-                sec_level: SecurityLevel::TRUSTED_ENVIRONMENT,
-                parameters: make_test_params(),
-            }
-        );
+        assert_eq!(key_entry, make_test_key_entry_test_vector(key_id));
         Ok(())
     }
 
@@ -1538,21 +1934,12 @@ mod tests {
                 alias: Some(TEST_ALIAS.to_string()),
                 blob: None,
             },
+            KeyType::Client,
             KeyEntryLoadBits::BOTH,
             1,
             |_k, _av| Ok(()),
         )?;
-        assert_eq!(
-            key_entry,
-            KeyEntry {
-                id: key_id,
-                km_blob: Some(TEST_KM_BLOB.to_vec()),
-                cert: Some(TEST_CERT_BLOB.to_vec()),
-                cert_chain: Some(TEST_CERT_CHAIN_BLOB.to_vec()),
-                sec_level: SecurityLevel::TRUSTED_ENVIRONMENT,
-                parameters: make_test_params(),
-            }
-        );
+        assert_eq!(key_entry, make_test_key_entry_test_vector(key_id));
         Ok(())
     }
 
@@ -1564,21 +1951,12 @@ mod tests {
             .0;
         let (_key_guard, key_entry) = db.load_key_entry(
             KeyDescriptor { domain: Domain::KEY_ID, nspace: key_id, alias: None, blob: None },
+            KeyType::Client,
             KeyEntryLoadBits::BOTH,
             1,
             |_k, _av| Ok(()),
         )?;
-        assert_eq!(
-            key_entry,
-            KeyEntry {
-                id: key_id,
-                km_blob: Some(TEST_KM_BLOB.to_vec()),
-                cert: Some(TEST_CERT_BLOB.to_vec()),
-                cert_chain: Some(TEST_CERT_CHAIN_BLOB.to_vec()),
-                sec_level: SecurityLevel::TRUSTED_ENVIRONMENT,
-                parameters: make_test_params(),
-            }
-        );
+        assert_eq!(key_entry, make_test_key_entry_test_vector(key_id));
 
         Ok(())
     }
@@ -1606,23 +1984,13 @@ mod tests {
         debug_dump_grant_table(&mut db)?;
 
         let (_key_guard, key_entry) =
-            db.load_key_entry(granted_key, KeyEntryLoadBits::BOTH, 2, |k, av| {
+            db.load_key_entry(granted_key, KeyType::Client, KeyEntryLoadBits::BOTH, 2, |k, av| {
                 assert_eq!(Domain::GRANT, k.domain);
                 assert!(av.unwrap().includes(KeyPerm::use_()));
                 Ok(())
             })?;
 
-        assert_eq!(
-            key_entry,
-            KeyEntry {
-                id: key_id,
-                km_blob: Some(TEST_KM_BLOB.to_vec()),
-                cert: Some(TEST_CERT_BLOB.to_vec()),
-                cert_chain: Some(TEST_CERT_CHAIN_BLOB.to_vec()),
-                sec_level: SecurityLevel::TRUSTED_ENVIRONMENT,
-                parameters: make_test_params(),
-            }
-        );
+        assert_eq!(key_entry, make_test_key_entry_test_vector(key_id));
         Ok(())
     }
 
@@ -1644,21 +2012,12 @@ mod tests {
                     alias: Some(KEY_LOCK_TEST_ALIAS.to_string()),
                     blob: None,
                 },
+                KeyType::Client,
                 KeyEntryLoadBits::BOTH,
                 33,
                 |_k, _av| Ok(()),
             )?;
-            assert_eq!(
-                key_entry,
-                KeyEntry {
-                    id: key_id,
-                    km_blob: Some(TEST_KM_BLOB.to_vec()),
-                    cert: Some(TEST_CERT_BLOB.to_vec()),
-                    cert_chain: Some(TEST_CERT_CHAIN_BLOB.to_vec()),
-                    sec_level: SecurityLevel::TRUSTED_ENVIRONMENT,
-                    parameters: make_test_params(),
-                }
-            );
+            assert_eq!(key_entry, make_test_key_entry_test_vector(key_id));
             let state = Arc::new(AtomicU8::new(1));
             let state2 = state.clone();
 
@@ -1680,6 +2039,7 @@ mod tests {
                             alias: Some(KEY_LOCK_TEST_ALIAS.to_string()),
                             blob: None,
                         },
+                        KeyType::Client,
                         KeyEntryLoadBits::BOTH,
                         33,
                         |_k, _av| Ok(()),
@@ -1771,7 +2131,13 @@ mod tests {
                 .into_iter()
                 .map(|d| {
                     let (_, entry) = db
-                        .load_key_entry(d, KeyEntryLoadBits::NONE, *namespace as u32, |_, _| Ok(()))
+                        .load_key_entry(
+                            d,
+                            KeyType::Client,
+                            KeyEntryLoadBits::NONE,
+                            *namespace as u32,
+                            |_, _| Ok(()),
+                        )
                         .unwrap();
                     entry.id()
                 })
@@ -1812,7 +2178,7 @@ mod tests {
     #[allow(dead_code)]
     struct KeyEntryRow {
         id: i64,
-        creation_date: String,
+        key_type: KeyType,
         domain: Option<Domain>,
         namespace: Option<i64>,
         alias: Option<String>,
@@ -1824,7 +2190,7 @@ mod tests {
             .query_map(NO_PARAMS, |row| {
                 Ok(KeyEntryRow {
                     id: row.get(0)?,
-                    creation_date: row.get(1)?,
+                    key_type: row.get(1)?,
                     domain: match row.get(2)? {
                         Some(i) => Some(Domain(i)),
                         None => None,
@@ -2068,8 +2434,8 @@ mod tests {
         let key_id = db.create_key_entry(domain, namespace)?;
         db.insert_blob(
             &key_id,
-            SubComponentType::KM_BLOB,
-            TEST_KM_BLOB,
+            SubComponentType::KEY_BLOB,
+            TEST_KEY_BLOB,
             SecurityLevel::TRUSTED_ENVIRONMENT,
         )?;
         db.insert_blob(
@@ -2085,24 +2451,48 @@ mod tests {
             SecurityLevel::TRUSTED_ENVIRONMENT,
         )?;
         db.insert_keyparameter(&key_id, &make_test_params())?;
+        let mut metadata = KeyMetaData::new();
+        metadata.add(KeyMetaEntry::EncryptedBy(EncryptedBy::Password));
+        metadata.add(KeyMetaEntry::Salt(vec![1, 2, 3]));
+        metadata.add(KeyMetaEntry::Iv(vec![2, 3, 1]));
+        metadata.add(KeyMetaEntry::AeadTag(vec![3, 1, 2]));
+        db.insert_key_metadata(&key_id, &metadata)?;
         db.rebind_alias(&key_id, alias, domain, namespace)?;
         Ok(key_id)
     }
 
+    fn make_test_key_entry_test_vector(key_id: i64) -> KeyEntry {
+        let mut metadata = KeyMetaData::new();
+        metadata.add(KeyMetaEntry::EncryptedBy(EncryptedBy::Password));
+        metadata.add(KeyMetaEntry::Salt(vec![1, 2, 3]));
+        metadata.add(KeyMetaEntry::Iv(vec![2, 3, 1]));
+        metadata.add(KeyMetaEntry::AeadTag(vec![3, 1, 2]));
+
+        KeyEntry {
+            id: key_id,
+            km_blob: Some(TEST_KEY_BLOB.to_vec()),
+            cert: Some(TEST_CERT_BLOB.to_vec()),
+            cert_chain: Some(TEST_CERT_CHAIN_BLOB.to_vec()),
+            sec_level: SecurityLevel::TRUSTED_ENVIRONMENT,
+            parameters: make_test_params(),
+            metadata,
+        }
+    }
+
     fn debug_dump_keyentry_table(db: &mut KeystoreDB) -> Result<()> {
-        let mut stmt = db.conn.prepare(
-            "SELECT id, creation_date, domain, namespace, alias FROM persistent.keyentry;",
-        )?;
-        let rows = stmt.query_map::<(i64, i64, i32, i64, String), _, _>(NO_PARAMS, |row| {
+        let mut stmt = db
+            .conn
+            .prepare("SELECT id, key_type, domain, namespace, alias FROM persistent.keyentry;")?;
+        let rows = stmt.query_map::<(i64, KeyType, i32, i64, String), _, _>(NO_PARAMS, |row| {
             Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
         })?;
 
         println!("Key entry table rows:");
         for r in rows {
-            let (id, cdate, domain, namespace, alias) = r.unwrap();
+            let (id, key_type, domain, namespace, alias) = r.unwrap();
             println!(
-                "    id: {} Creation date: {} Domain: {} Namespace: {} Alias: {}",
-                id, cdate, domain, namespace, alias
+                "    id: {} KeyType: {:?} Domain: {} Namespace: {} Alias: {}",
+                id, key_type, domain, namespace, alias
             );
         }
         Ok(())

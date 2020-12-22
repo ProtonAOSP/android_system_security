@@ -28,6 +28,7 @@ pub mod service;
 pub mod utils;
 
 mod db_utils;
+mod super_key;
 
 #[cfg(test)]
 mod test {

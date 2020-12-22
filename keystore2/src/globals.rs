@@ -17,6 +17,8 @@
 //! to talk to.
 
 use crate::database::KeystoreDB;
+use crate::super_key::SuperKeyManager;
+use lazy_static::lazy_static;
 use std::cell::RefCell;
 
 thread_local! {
@@ -33,4 +35,9 @@ thread_local! {
                     .expect("Could not get the current working directory.")
                 )
                 .expect("Failed to open database."));
+}
+
+lazy_static! {
+    /// Runtime database of unwrapped super keys.
+    pub static ref SUPER_KEY: SuperKeyManager = Default::default();
 }
