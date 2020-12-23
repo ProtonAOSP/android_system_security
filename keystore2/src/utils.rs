@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// This suppresses the compiler's complaint about converting tv_sec to i64 in method
+// get_current_time_in_seconds.
+#![allow(clippy::useless_conversion)]
+
 //! This module implements utility functions used by the Keystore 2.0 service
 //! implementation.
 
@@ -26,6 +30,7 @@ use android_system_keystore2::aidl::android::system::keystore2::{
 };
 use anyhow::{anyhow, Context};
 use binder::{FromIBinder, SpIBinder, ThreadState};
+use std::convert::TryFrom;
 use std::sync::Mutex;
 
 /// This function uses its namesake in the permission module and in
@@ -135,4 +140,16 @@ pub fn key_parameters_to_authorizations(
     parameters: Vec<crate::key_parameter::KeyParameter>,
 ) -> Vec<Authorization> {
     parameters.into_iter().map(|p| p.into_authorization()).collect()
+}
+
+/// This returns the current time (in seconds) as an instance of a monotonic clock, by invoking the
+/// system call since Rust does not support getting monotonic time instance as an integer.
+pub fn get_current_time_in_seconds() -> i64 {
+    let mut current_time = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    // Following unsafe block includes one system call to get monotonic time.
+    // Therefore, it is not considered harmful.
+    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC_RAW, &mut current_time) };
+    // It is safe to unwrap here because try_from() returns std::convert::Infallible, which is
+    // defined to be an error that can never happen (i.e. the result is always ok).
+    i64::try_from(current_time.tv_sec).unwrap()
 }
