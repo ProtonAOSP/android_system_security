@@ -153,3 +153,12 @@ pub fn get_current_time_in_seconds() -> i64 {
     // defined to be an error that can never happen (i.e. the result is always ok).
     i64::try_from(current_time.tv_sec).unwrap()
 }
+
+/// AID offset for uid space partitioning.
+/// TODO: Replace with bindgen generated from libcutils. b/175619259
+pub const AID_USER_OFFSET: u32 = 100000;
+
+/// Extracts the android user from the given uid.
+pub fn uid_to_android_user(uid: u32) -> u32 {
+    uid / AID_USER_OFFSET
+}
