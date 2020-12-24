@@ -18,7 +18,6 @@
 //! This crate implement the core Keystore 2.0 service API as defined by the Keystore 2.0
 //! AIDL spec.
 
-use crate::database::{KeyEntryLoadBits, SubComponentType};
 use crate::error::{self, map_or_log_err, ErrorCode};
 use crate::globals::DB;
 use crate::permission;
@@ -27,6 +26,10 @@ use crate::security_level::KeystoreSecurityLevel;
 use crate::utils::{
     check_grant_permission, check_key_permission, check_keystore_permission,
     key_parameters_to_authorizations, Asp,
+};
+use crate::{
+    database::{KeyEntryLoadBits, KeyType, SubComponentType},
+    error::ResponseCode,
 };
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::SecurityLevel::SecurityLevel;
 use android_system_keystore2::aidl::android::system::keystore2::{
@@ -77,6 +80,7 @@ impl KeystoreService {
             .with(|db| {
                 db.borrow_mut().load_key_entry(
                     key.clone(),
+                    KeyType::Client,
                     KeyEntryLoadBits::PUBLIC,
                     ThreadState::get_calling_uid(),
                     |k, av| check_key_permission(KeyPerm::get_info(), k, &av),
@@ -103,8 +107,13 @@ impl KeystoreService {
                 keySecurityLevel: key_entry.sec_level(),
                 certificate: key_entry.take_cert(),
                 certificateChain: key_entry.take_cert_chain(),
+                modificationTimeMs: key_entry
+                    .metadata()
+                    .creation_date()
+                    .map(|d| d.to_millis_epoch())
+                    .ok_or(Error::Rc(ResponseCode::VALUE_CORRUPTED))
+                    .context("In get_key_entry: Trying to get creation date.")?,
                 authorizations: key_parameters_to_authorizations(key_entry.into_key_parameters()),
-                ..Default::default()
             },
         })
     }
@@ -120,6 +129,7 @@ impl KeystoreService {
             let (key_id_guard, key_entry) = db
                 .load_key_entry(
                     key.clone(),
+                    KeyType::Client,
                     KeyEntryLoadBits::NONE,
                     ThreadState::get_calling_uid(),
                     |k, av| {
