@@ -32,6 +32,8 @@
 //! impl KeyParameterValue {
 //!     pub fn get_tag(&self) -> Tag;
 //!     pub fn new_from_sql(tag: Tag, data: &SqlField) -> Result<Self>;
+//!     pub fn new_from_tag_primitive_pair<T: Into<Primitive>>(tag: Tag, v: T)
+//!        -> Result<Self, PrimitiveError>;
 //!     fn to_sql(&self) -> SqlResult<ToSqlOutput>
 //! }
 //!
@@ -40,7 +42,7 @@
 //! impl From<KmKeyParameter> for KeyParameterValue {}
 //!
 //! ## Implementation
-//! Each of the five functions is implemented as match statement over each key parameter variant.
+//! Each of the six functions is implemented as match statement over each key parameter variant.
 //! We bootstrap these function as well as the KeyParameterValue enum itself from a single list
 //! of key parameters, that needs to be kept in sync with the KeyMint AIDL specification.
 //!
@@ -87,6 +89,8 @@
 //!    The two variants differ in whether or not $vtype is expected.
 //!  * The termination condition which has an empty in list.
 //!  * The public interface, which does not have @marker and calls itself with an empty out list.
+
+use std::convert::TryInto;
 
 use crate::db_utils::SqlField;
 use crate::error::Error as KeystoreError;
@@ -169,6 +173,117 @@ implement_associate_primitive_for_aidl_enum! {SecurityLevel}
 implement_associate_primitive_identity! {Vec<u8>}
 implement_associate_primitive_identity! {i64}
 implement_associate_primitive_identity! {i32}
+
+/// This enum allows passing a primitive value to `KeyParameterValue::new_from_tag_primitive_pair`
+/// Usually, it is not necessary to use this type directly because the function uses
+/// `Into<Primitive>` as a trait bound.
+pub enum Primitive {
+    /// Wraps an i64.
+    I64(i64),
+    /// Wraps an i32.
+    I32(i32),
+    /// Wraps a Vec<u8>.
+    Vec(Vec<u8>),
+}
+
+impl From<i64> for Primitive {
+    fn from(v: i64) -> Self {
+        Self::I64(v)
+    }
+}
+impl From<i32> for Primitive {
+    fn from(v: i32) -> Self {
+        Self::I32(v)
+    }
+}
+impl From<Vec<u8>> for Primitive {
+    fn from(v: Vec<u8>) -> Self {
+        Self::Vec(v)
+    }
+}
+
+/// This error is returned by `KeyParameterValue::new_from_tag_primitive_pair`.
+#[derive(thiserror::Error, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum PrimitiveError {
+    /// Returned if this primitive is unsuitable for the given tag type.
+    #[error("Primitive does not match the expected tag type.")]
+    TypeMismatch,
+    /// Return if the tag type is unknown.
+    #[error("Unknown tag.")]
+    UnknownTag,
+}
+
+impl TryInto<i64> for Primitive {
+    type Error = PrimitiveError;
+
+    fn try_into(self) -> Result<i64, Self::Error> {
+        match self {
+            Self::I64(v) => Ok(v),
+            _ => Err(Self::Error::TypeMismatch),
+        }
+    }
+}
+impl TryInto<i32> for Primitive {
+    type Error = PrimitiveError;
+
+    fn try_into(self) -> Result<i32, Self::Error> {
+        match self {
+            Self::I32(v) => Ok(v),
+            _ => Err(Self::Error::TypeMismatch),
+        }
+    }
+}
+impl TryInto<Vec<u8>> for Primitive {
+    type Error = PrimitiveError;
+
+    fn try_into(self) -> Result<Vec<u8>, Self::Error> {
+        match self {
+            Self::Vec(v) => Ok(v),
+            _ => Err(Self::Error::TypeMismatch),
+        }
+    }
+}
+
+/// Expands the list of KeyParameterValue variants as follows:
+///
+/// Input:
+/// Invalid with tag INVALID and field Invalid,
+/// Algorithm(Algorithm) with tag ALGORITHM and field Algorithm,
+///
+/// Output:
+/// ```
+/// pub fn new_from_tag_primitive_pair<T: Into<Primitive>>(
+///     tag: Tag,
+///     v: T
+/// ) -> Result<KeyParameterValue, PrimitiveError> {
+///     let p: Primitive = v.into();
+///     Ok(match tag {
+///         Tag::INVALID => KeyParameterValue::Invalid,
+///         Tag::ALGORITHM => KeyParameterValue::Algorithm(
+///             <Algorithm>::from_primitive(p.try_into()?)
+///         ),
+///         _ => return Err(PrimitiveError::UnknownTag),
+///     })
+/// }
+/// ```
+macro_rules! implement_from_tag_primitive_pair {
+    ($enum_name:ident; $($vname:ident$(($vtype:ty))? $tag_name:ident),*) => {
+        /// Returns the an instance of $enum_name or an error if the given primitive does not match
+        /// the tag type or the tag is unknown.
+        pub fn new_from_tag_primitive_pair<T: Into<Primitive>>(
+            tag: Tag,
+            v: T
+        ) -> Result<$enum_name, PrimitiveError> {
+            let p: Primitive = v.into();
+            Ok(match tag {
+                $(Tag::$tag_name => $enum_name::$vname$((
+                    <$vtype>::from_primitive(p.try_into()?)
+                ))?,)*
+                _ => return Err(PrimitiveError::UnknownTag),
+            })
+        }
+    };
+}
 
 /// Expands the list of KeyParameterValue variants as follows:
 ///
@@ -534,6 +649,7 @@ macro_rules! implement_key_parameter_value {
         impl $enum_name {
             implement_new_from_sql!($enum_name; $($vname$(($vtype))? $tag_name),*);
             implement_get_tag!($enum_name; $($vname$(($vtype))? $tag_name),*);
+            implement_from_tag_primitive_pair!($enum_name; $($vname$(($vtype))? $tag_name),*);
 
             #[cfg(test)]
             fn make_field_matches_tag_type_test_vector() -> Vec<KmKeyParameter> {
