@@ -19,9 +19,9 @@
 //! This module implements utility functions used by the Keystore 2.0 service
 //! implementation.
 
+use crate::error::Error;
 use crate::permission;
 use crate::permission::{KeyPerm, KeyPermSet, KeystorePerm};
-use crate::{error::Error, key_parameter::KeyParameterValue};
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
     KeyCharacteristics::KeyCharacteristics, SecurityLevel::SecurityLevel,
 };
@@ -119,17 +119,9 @@ pub fn key_characteristics_to_internal(
     key_characteristics
         .hardwareEnforced
         .into_iter()
-        .map(|aidl_kp| {
-            crate::key_parameter::KeyParameter::new(
-                KeyParameterValue::convert_from_wire(aidl_kp),
-                hw_security_level,
-            )
-        })
+        .map(|aidl_kp| crate::key_parameter::KeyParameter::new(aidl_kp.into(), hw_security_level))
         .chain(key_characteristics.softwareEnforced.into_iter().map(|aidl_kp| {
-            crate::key_parameter::KeyParameter::new(
-                KeyParameterValue::convert_from_wire(aidl_kp),
-                SecurityLevel::SOFTWARE,
-            )
+            crate::key_parameter::KeyParameter::new(aidl_kp.into(), SecurityLevel::SOFTWARE)
         }))
         .collect()
 }

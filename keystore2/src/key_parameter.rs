@@ -12,9 +12,85 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! KeyParameter is used to express different characteristics of a key requested by the user
-//! and enforced by the OEMs. This module implements the internal representation of KeyParameter
-//! and the methods to work with KeyParameter.
+//! Key parameters are declared by KeyMint to describe properties of keys and operations.
+//! During key generation and import, key parameters are used to characterize a key, its usage
+//! restrictions, and additional parameters for attestation. During the lifetime of the key,
+//! the key characteristics are expressed as set of key parameters. During cryptographic
+//! operations, clients may specify additional operation specific parameters.
+//! This module provides a Keystore 2.0 internal representation for key parameters and
+//! implements traits to convert it from and into KeyMint KeyParameters and store it in
+//! the SQLite database.
+//!
+//! ## Synopsis
+//!
+//! enum KeyParameterValue {
+//!     Invalid,
+//!     Algorithm(Algorithm),
+//!     ...
+//! }
+//!
+//! impl KeyParameterValue {
+//!     pub fn get_tag(&self) -> Tag;
+//!     pub fn new_from_sql(tag: Tag, data: &SqlField) -> Result<Self>;
+//!     pub fn new_from_tag_primitive_pair<T: Into<Primitive>>(tag: Tag, v: T)
+//!        -> Result<Self, PrimitiveError>;
+//!     fn to_sql(&self) -> SqlResult<ToSqlOutput>
+//! }
+//!
+//! use ...::keymint::KeyParameter as KmKeyParameter;
+//! impl Into<KmKeyParameter> for KeyParameterValue {}
+//! impl From<KmKeyParameter> for KeyParameterValue {}
+//!
+//! ## Implementation
+//! Each of the six functions is implemented as match statement over each key parameter variant.
+//! We bootstrap these function as well as the KeyParameterValue enum itself from a single list
+//! of key parameters, that needs to be kept in sync with the KeyMint AIDL specification.
+//!
+//! The list resembles an enum declaration with a few extra fields.
+//! enum KeyParameterValue {
+//!    Invalid with tag INVALID and field Invalid,
+//!    Algorithm(Algorithm) with tag ALGORITHM and field Algorithm,
+//!    ...
+//! }
+//! The tag corresponds to the variant of the keymint::Tag, and the field corresponds to the
+//! variant of the keymint::KeyParameterValue union. There is no one to one mapping between
+//! tags and union fields, e.g., the values of both tags BOOT_PATCHLEVEL and VENDOR_PATCHLEVEL
+//! are stored in the Integer field.
+//!
+//! The macros interpreting them all follow a similar pattern and follow the following fragment
+//! naming scheme:
+//!
+//!    Algorithm(Algorithm) with tag ALGORITHM and field Algorithm,
+//!    $vname $(($vtype ))? with tag $tag_name and field $field_name,
+//!
+//! Further, KeyParameterValue appears in the macro as $enum_name.
+//! Note that $vtype is optional to accommodate variants like Invalid which don't wrap a value.
+//!
+//! In some cases $vtype is not part of the expansion, but we still have to modify the expansion
+//! depending on the presence of $vtype. In these cases we recurse through the list following the
+//! following pattern:
+//!
+//! (@<marker> <non repeating args>, [<out list>], [<in list>])
+//!
+//! These macros usually have four rules:
+//!  * Two main recursive rules, of the form:
+//!    (
+//!        @<marker>
+//!        <non repeating args>,
+//!        [<out list>],
+//!        [<one element pattern> <in tail>]
+//!    ) => {
+//!        macro!{@<marker> <non repeating args>, [<out list>
+//!            <one element expansion>
+//!        ], [<in tail>]}
+//!    };
+//!    They pop one element off the <in list> and add one expansion to the out list.
+//!    The element expansion is kept on a separate line (or lines) for better readability.
+//!    The two variants differ in whether or not $vtype is expected.
+//!  * The termination condition which has an empty in list.
+//!  * The public interface, which does not have @marker and calls itself with an empty out list.
+
+use std::convert::TryInto;
 
 use crate::db_utils::SqlField;
 use crate::error::Error as KeystoreError;
@@ -32,288 +108,710 @@ use anyhow::{Context, Result};
 use rusqlite::types::{Null, ToSql, ToSqlOutput};
 use rusqlite::Result as SqlResult;
 
-/// KeyParameter wraps the KeyParameterValue and the security level at which it is enforced.
-#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
-pub struct KeyParameter {
-    key_parameter_value: KeyParameterValue,
-    security_level: SecurityLevel,
+/// This trait is used to associate a primitive to any type that can be stored inside a
+/// KeyParameterValue, especially the AIDL enum types, e.g., keymint::{Algorithm, Digest, ...}.
+/// This allows for simplifying the macro rules, e.g., for reading from the SQL database.
+/// An expression like `KeyParameterValue::Algorithm(row.get(0))` would not work because
+/// a type of `Algorithm` is expected which does not implement `FromSql` and we cannot
+/// implement it because we own neither the type nor the trait.
+/// With AssociatePrimitive we can write an expression
+/// `KeyParameter::Algorithm(<Algorithm>::from_primitive(row.get(0)))` to inform `get`
+/// about the expected primitive type that it can convert into. By implementing this
+/// trait for all inner types we can write a single rule to cover all cases (except where
+/// there is no wrapped type):
+/// `KeyParameterValue::$vname(<$vtype>::from_primitive(row.get(0)))`
+trait AssociatePrimitive {
+    type Primitive;
+
+    fn from_primitive(v: Self::Primitive) -> Self;
+    fn to_primitive(&self) -> Self::Primitive;
 }
 
+/// Associates the given type with i32. The macro assumes that the given type is actually a
+/// tuple struct wrapping i32, such as AIDL enum types.
+macro_rules! implement_associate_primitive_for_aidl_enum {
+    ($t:ty) => {
+        impl AssociatePrimitive for $t {
+            type Primitive = i32;
+
+            fn from_primitive(v: Self::Primitive) -> Self {
+                Self(v)
+            }
+            fn to_primitive(&self) -> Self::Primitive {
+                self.0
+            }
+        }
+    };
+}
+
+/// Associates the given type with itself.
+macro_rules! implement_associate_primitive_identity {
+    ($t:ty) => {
+        impl AssociatePrimitive for $t {
+            type Primitive = $t;
+
+            fn from_primitive(v: Self::Primitive) -> Self {
+                v
+            }
+            fn to_primitive(&self) -> Self::Primitive {
+                self.clone()
+            }
+        }
+    };
+}
+
+implement_associate_primitive_for_aidl_enum! {Algorithm}
+implement_associate_primitive_for_aidl_enum! {BlockMode}
+implement_associate_primitive_for_aidl_enum! {Digest}
+implement_associate_primitive_for_aidl_enum! {EcCurve}
+implement_associate_primitive_for_aidl_enum! {HardwareAuthenticatorType}
+implement_associate_primitive_for_aidl_enum! {KeyOrigin}
+implement_associate_primitive_for_aidl_enum! {KeyPurpose}
+implement_associate_primitive_for_aidl_enum! {PaddingMode}
+implement_associate_primitive_for_aidl_enum! {SecurityLevel}
+
+implement_associate_primitive_identity! {Vec<u8>}
+implement_associate_primitive_identity! {i64}
+implement_associate_primitive_identity! {i32}
+
+/// This enum allows passing a primitive value to `KeyParameterValue::new_from_tag_primitive_pair`
+/// Usually, it is not necessary to use this type directly because the function uses
+/// `Into<Primitive>` as a trait bound.
+pub enum Primitive {
+    /// Wraps an i64.
+    I64(i64),
+    /// Wraps an i32.
+    I32(i32),
+    /// Wraps a Vec<u8>.
+    Vec(Vec<u8>),
+}
+
+impl From<i64> for Primitive {
+    fn from(v: i64) -> Self {
+        Self::I64(v)
+    }
+}
+impl From<i32> for Primitive {
+    fn from(v: i32) -> Self {
+        Self::I32(v)
+    }
+}
+impl From<Vec<u8>> for Primitive {
+    fn from(v: Vec<u8>) -> Self {
+        Self::Vec(v)
+    }
+}
+
+/// This error is returned by `KeyParameterValue::new_from_tag_primitive_pair`.
+#[derive(thiserror::Error, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum PrimitiveError {
+    /// Returned if this primitive is unsuitable for the given tag type.
+    #[error("Primitive does not match the expected tag type.")]
+    TypeMismatch,
+    /// Return if the tag type is unknown.
+    #[error("Unknown tag.")]
+    UnknownTag,
+}
+
+impl TryInto<i64> for Primitive {
+    type Error = PrimitiveError;
+
+    fn try_into(self) -> Result<i64, Self::Error> {
+        match self {
+            Self::I64(v) => Ok(v),
+            _ => Err(Self::Error::TypeMismatch),
+        }
+    }
+}
+impl TryInto<i32> for Primitive {
+    type Error = PrimitiveError;
+
+    fn try_into(self) -> Result<i32, Self::Error> {
+        match self {
+            Self::I32(v) => Ok(v),
+            _ => Err(Self::Error::TypeMismatch),
+        }
+    }
+}
+impl TryInto<Vec<u8>> for Primitive {
+    type Error = PrimitiveError;
+
+    fn try_into(self) -> Result<Vec<u8>, Self::Error> {
+        match self {
+            Self::Vec(v) => Ok(v),
+            _ => Err(Self::Error::TypeMismatch),
+        }
+    }
+}
+
+/// Expands the list of KeyParameterValue variants as follows:
+///
+/// Input:
+/// Invalid with tag INVALID and field Invalid,
+/// Algorithm(Algorithm) with tag ALGORITHM and field Algorithm,
+///
+/// Output:
+/// ```
+/// pub fn new_from_tag_primitive_pair<T: Into<Primitive>>(
+///     tag: Tag,
+///     v: T
+/// ) -> Result<KeyParameterValue, PrimitiveError> {
+///     let p: Primitive = v.into();
+///     Ok(match tag {
+///         Tag::INVALID => KeyParameterValue::Invalid,
+///         Tag::ALGORITHM => KeyParameterValue::Algorithm(
+///             <Algorithm>::from_primitive(p.try_into()?)
+///         ),
+///         _ => return Err(PrimitiveError::UnknownTag),
+///     })
+/// }
+/// ```
+macro_rules! implement_from_tag_primitive_pair {
+    ($enum_name:ident; $($vname:ident$(($vtype:ty))? $tag_name:ident),*) => {
+        /// Returns the an instance of $enum_name or an error if the given primitive does not match
+        /// the tag type or the tag is unknown.
+        pub fn new_from_tag_primitive_pair<T: Into<Primitive>>(
+            tag: Tag,
+            v: T
+        ) -> Result<$enum_name, PrimitiveError> {
+            let p: Primitive = v.into();
+            Ok(match tag {
+                $(Tag::$tag_name => $enum_name::$vname$((
+                    <$vtype>::from_primitive(p.try_into()?)
+                ))?,)*
+                _ => return Err(PrimitiveError::UnknownTag),
+            })
+        }
+    };
+}
+
+/// Expands the list of KeyParameterValue variants as follows:
+///
+/// Input:
+/// pub enum KeyParameterValue {
+///     Invalid with tag INVALID and field Invalid,
+///     Algorithm(Algorithm) with tag ALGORITHM and field Algorithm,
+/// }
+///
+/// Output:
+/// ```
+/// pub enum KeyParameterValue {
+///     Invalid,
+///     Algorithm(Algorithm),
+/// }
+/// ```
+macro_rules! implement_enum {
+    (
+        $(#[$enum_meta:meta])*
+        $enum_vis:vis enum $enum_name:ident {
+             $($(#[$emeta:meta])* $vname:ident$(($vtype:ty))?),* $(,)?
+        }
+    ) => {
+        $(#[$enum_meta])*
+        $enum_vis enum $enum_name {
+            $(
+                $(#[$emeta])*
+                $vname$(($vtype))?
+            ),*
+        }
+    };
+}
+
+/// Expands the list of KeyParameterValue variants as follows:
+///
+/// Input:
+/// Invalid with tag INVALID and field Invalid,
+/// Algorithm(Algorithm) with tag ALGORITHM and field Algorithm,
+///
+/// Output:
+/// ```
+/// pub fn get_tag(&self) -> Tag {
+///     match self {
+///         KeyParameterValue::Invalid => Tag::INVALID,
+///         KeyParameterValue::Algorithm(_) => Tag::ALGORITHM,
+///     }
+/// }
+/// ```
+macro_rules! implement_get_tag {
+    (
+        @replace_type_spec
+        $enum_name:ident,
+        [$($out:tt)*],
+        [$vname:ident($vtype:ty) $tag_name:ident, $($in:tt)*]
+    ) => {
+        implement_get_tag!{@replace_type_spec $enum_name, [$($out)*
+            $enum_name::$vname(_) => Tag::$tag_name,
+        ], [$($in)*]}
+    };
+    (
+        @replace_type_spec
+        $enum_name:ident,
+        [$($out:tt)*],
+        [$vname:ident $tag_name:ident, $($in:tt)*]
+    ) => {
+        implement_get_tag!{@replace_type_spec $enum_name, [$($out)*
+            $enum_name::$vname => Tag::$tag_name,
+        ], [$($in)*]}
+    };
+    (@replace_type_spec $enum_name:ident, [$($out:tt)*], []) => {
+        /// Returns the tag of the given instance.
+        pub fn get_tag(&self) -> Tag {
+            match self {
+                $($out)*
+            }
+        }
+    };
+
+    ($enum_name:ident; $($vname:ident$(($vtype:ty))? $tag_name:ident),*) => {
+        implement_get_tag!{@replace_type_spec $enum_name, [], [$($vname$(($vtype))? $tag_name,)*]}
+    };
+}
+
+/// Expands the list of KeyParameterValue variants as follows:
+///
+/// Input:
+/// Invalid with tag INVALID and field Invalid,
+/// Algorithm(Algorithm) with tag ALGORITHM and field Algorithm,
+///
+/// Output:
+/// ```
+/// fn to_sql(&self) -> SqlResult<ToSqlOutput> {
+///     match self {
+///         KeyParameterValue::Invalid => Ok(ToSqlOutput::from(Null)),
+///         KeyParameterValue::Algorithm(v) => Ok(ToSqlOutput::from(v.to_primitive())),
+///     }
+/// }
+/// ```
+macro_rules! implement_to_sql {
+    (
+        @replace_type_spec
+        $enum_name:ident,
+        [$($out:tt)*],
+        [$vname:ident($vtype:ty), $($in:tt)*]
+    ) => {
+        implement_to_sql!{@replace_type_spec $enum_name, [ $($out)*
+            $enum_name::$vname(v) => Ok(ToSqlOutput::from(v.to_primitive())),
+        ], [$($in)*]}
+    };
+    (
+        @replace_type_spec
+        $enum_name:ident,
+        [$($out:tt)*],
+        [$vname:ident, $($in:tt)*]
+    ) => {
+        implement_to_sql!{@replace_type_spec $enum_name, [ $($out)*
+            $enum_name::$vname => Ok(ToSqlOutput::from(Null)),
+        ], [$($in)*]}
+    };
+    (@replace_type_spec $enum_name:ident, [$($out:tt)*], []) => {
+        /// Converts $enum_name to be stored in a rusqlite database.
+        fn to_sql(&self) -> SqlResult<ToSqlOutput> {
+            match self {
+                $($out)*
+            }
+        }
+    };
+
+
+    ($enum_name:ident; $($vname:ident$(($vtype:ty))?),*) => {
+        impl ToSql for $enum_name {
+            implement_to_sql!{@replace_type_spec $enum_name, [], [$($vname$(($vtype))?,)*]}
+        }
+
+    }
+}
+
+/// Expands the list of KeyParameterValue variants as follows:
+///
+/// Input:
+/// Invalid with tag INVALID and field Invalid,
+/// Algorithm(Algorithm) with tag ALGORITHM and field Algorithm,
+///
+/// Output:
+/// ```
+/// pub fn new_from_sql(
+///     tag: Tag,
+///     data: &SqlField,
+/// ) -> Result<Self> {
+///     Ok(match self {
+///         Tag::Invalid => KeyParameterValue::Invalid,
+///         Tag::ALGORITHM => {
+///             KeyParameterValue::Algorithm(<Algorithm>::from_primitive(data
+///                 .get()
+///                 .map_err(|_| KeystoreError::Rc(ResponseCode::VALUE_CORRUPTED))
+///                 .context(concat!("Failed to read sql data for tag: ", "ALGORITHM", "."))?
+///             ))
+///         },
+///     })
+/// }
+/// ```
+macro_rules! implement_new_from_sql {
+    ($enum_name:ident; $($vname:ident$(($vtype:ty))? $tag_name:ident),*) => {
+        /// Takes a tag and an SqlField and attempts to construct a KeyParameter value.
+        /// This function may fail if the parameter value cannot be extracted from the
+        /// database cell.
+        pub fn new_from_sql(
+            tag: Tag,
+            data: &SqlField,
+        ) -> Result<Self> {
+            Ok(match tag {
+                $(
+                    Tag::$tag_name => {
+                        $enum_name::$vname$((<$vtype>::from_primitive(data
+                            .get()
+                            .map_err(|_| KeystoreError::Rc(ResponseCode::VALUE_CORRUPTED))
+                            .context(concat!(
+                                "Failed to read sql data for tag: ",
+                                stringify!($tag_name),
+                                "."
+                            ))?
+                        )))?
+                    },
+                )*
+                _ => $enum_name::Invalid,
+            })
+        }
+    };
+}
+
+/// This key parameter default is used during the conversion from KeyParameterValue
+/// to keymint::KeyParameterValue. Keystore's version does not have wrapped types
+/// for boolean tags and the tag Invalid. The AIDL version uses bool and integer
+/// variants respectively. This default function is invoked in these cases to
+/// homogenize the rules for boolean and invalid tags.
+/// The bool variant returns true because boolean parameters are implicitly true
+/// if present.
+trait KpDefault {
+    fn default() -> Self;
+}
+
+impl KpDefault for i32 {
+    fn default() -> Self {
+        0
+    }
+}
+
+impl KpDefault for bool {
+    fn default() -> Self {
+        true
+    }
+}
+
+/// Expands the list of KeyParameterValue variants as follows:
+///
+/// Input:
+/// Invalid with tag INVALID and field Invalid,
+/// Algorithm(Algorithm) with tag ALGORITHM and field Algorithm,
+///
+/// Output:
+/// ```
+/// impl From<KmKeyParameter> for KeyParameterValue {
+///     fn from(kp: KmKeyParameter) -> Self {
+///         match kp {
+///             KmKeyParameter { tag: Tag::INVALID, value: KmKeyParameterValue::Invalid(_) }
+///                 => $enum_name::$vname,
+///             KmKeyParameter { tag: Tag::Algorithm, value: KmKeyParameterValue::Algorithm(v) }
+///                 => $enum_name::Algorithm(v),
+///             _ => $enum_name::Invalid,
+///         }
+///     }
+/// }
+///
+/// impl Into<KmKeyParameter> for KeyParameterValue {
+///     fn into(self) -> KmKeyParameter {
+///         match self {
+///             KeyParameterValue::Invalid => KmKeyParameter {
+///                 tag: Tag::INVALID,
+///                 value: KmKeyParameterValue::Invalid(KpDefault::default())
+///             },
+///             KeyParameterValue::Algorithm(v) => KmKeyParameter {
+///                 tag: Tag::ALGORITHM,
+///                 value: KmKeyParameterValue::Algorithm(v)
+///             },
+///         }
+///     }
+/// }
+/// ```
+macro_rules! implement_try_from_to_km_parameter {
+    // The first three rules expand From<KmKeyParameter>.
+    (
+        @from
+        $enum_name:ident,
+        [$($out:tt)*],
+        [$vname:ident($vtype:ty) $tag_name:ident $field_name:ident, $($in:tt)*]
+    ) => {
+        implement_try_from_to_km_parameter!{@from $enum_name, [$($out)*
+            KmKeyParameter {
+                tag: Tag::$tag_name,
+                value: KmKeyParameterValue::$field_name(v)
+            } => $enum_name::$vname(v),
+        ], [$($in)*]
+    }};
+    (
+        @from
+        $enum_name:ident,
+        [$($out:tt)*],
+        [$vname:ident $tag_name:ident $field_name:ident, $($in:tt)*]
+    ) => {
+        implement_try_from_to_km_parameter!{@from $enum_name, [$($out)*
+            KmKeyParameter {
+                tag: Tag::$tag_name,
+                value: KmKeyParameterValue::$field_name(_)
+            } => $enum_name::$vname,
+        ], [$($in)*]
+    }};
+    (@from $enum_name:ident, [$($out:tt)*], []) => {
+        impl From<KmKeyParameter> for $enum_name {
+            fn from(kp: KmKeyParameter) -> Self {
+                match kp {
+                    $($out)*
+                    _ => $enum_name::Invalid,
+                }
+            }
+        }
+    };
+
+    // The next three rules expand Into<KmKeyParameter>.
+    (
+        @into
+        $enum_name:ident,
+        [$($out:tt)*],
+        [$vname:ident($vtype:ty) $tag_name:ident $field_name:ident, $($in:tt)*]
+    ) => {
+        implement_try_from_to_km_parameter!{@into $enum_name, [$($out)*
+            $enum_name::$vname(v) => KmKeyParameter {
+                tag: Tag::$tag_name,
+                value: KmKeyParameterValue::$field_name(v)
+            },
+        ], [$($in)*]
+    }};
+    (
+        @into
+        $enum_name:ident,
+        [$($out:tt)*],
+        [$vname:ident $tag_name:ident $field_name:ident, $($in:tt)*]
+    ) => {
+        implement_try_from_to_km_parameter!{@into $enum_name, [$($out)*
+            $enum_name::$vname => KmKeyParameter {
+                tag: Tag::$tag_name,
+                value: KmKeyParameterValue::$field_name(KpDefault::default())
+            },
+        ], [$($in)*]
+    }};
+    (@into $enum_name:ident, [$($out:tt)*], []) => {
+        impl Into<KmKeyParameter> for $enum_name {
+            fn into(self) -> KmKeyParameter {
+                match self {
+                    $($out)*
+                }
+            }
+        }
+    };
+
+
+    ($enum_name:ident; $($vname:ident$(($vtype:ty))? $tag_name:ident $field_name:ident),*) => {
+        implement_try_from_to_km_parameter!(
+            @from $enum_name,
+            [],
+            [$($vname$(($vtype))? $tag_name $field_name,)*]
+        );
+        implement_try_from_to_km_parameter!(
+            @into $enum_name,
+            [],
+            [$($vname$(($vtype))? $tag_name $field_name,)*]
+        );
+    };
+}
+
+/// This is the top level macro. While the other macros do most of the heavy lifting, this takes
+/// the key parameter list and passes it on to the other macros to generate all of the conversion
+/// functions. In addition, it generates an important test vector for verifying that tag type of the
+/// keymint tag matches the associated keymint KeyParameterValue field.
+macro_rules! implement_key_parameter_value {
+    (
+        $(#[$enum_meta:meta])*
+        $enum_vis:vis enum $enum_name:ident {
+            $(
+                 $(#[$emeta:meta])*
+                $vname:ident$(($vtype:ty))? with tag $tag_name:ident and field $field_name:ident
+            ),* $(,)?
+        }
+    ) => {
+        implement_enum!(
+            $(#[$enum_meta])*
+            $enum_vis enum $enum_name {
+            $(
+                $(#[$emeta])*
+                $vname$(($vtype))?
+            ),*
+        });
+
+        impl $enum_name {
+            implement_new_from_sql!($enum_name; $($vname$(($vtype))? $tag_name),*);
+            implement_get_tag!($enum_name; $($vname$(($vtype))? $tag_name),*);
+            implement_from_tag_primitive_pair!($enum_name; $($vname$(($vtype))? $tag_name),*);
+
+            #[cfg(test)]
+            fn make_field_matches_tag_type_test_vector() -> Vec<KmKeyParameter> {
+                vec![$(KmKeyParameter{
+                    tag: Tag::$tag_name,
+                    value: KmKeyParameterValue::$field_name(Default::default())}
+                ),*]
+            }
+        }
+
+        implement_try_from_to_km_parameter!(
+            $enum_name;
+            $($vname$(($vtype))? $tag_name $field_name),*
+        );
+
+        implement_to_sql!($enum_name; $($vname$(($vtype))?),*);
+    };
+}
+
+implement_key_parameter_value! {
 /// KeyParameterValue holds a value corresponding to one of the Tags defined in
 /// the AIDL spec at hardware/interfaces/keymint
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
 pub enum KeyParameterValue {
     /// Associated with Tag:INVALID
-    Invalid,
+    Invalid with tag INVALID and field Invalid,
     /// Set of purposes for which the key may be used
-    KeyPurpose(KeyPurpose),
+    KeyPurpose(KeyPurpose) with tag PURPOSE and field KeyPurpose,
     /// Cryptographic algorithm with which the key is used
-    Algorithm(Algorithm),
+    Algorithm(Algorithm) with tag ALGORITHM and field Algorithm,
     /// Size of the key , in bits
-    KeySize(i32),
+    KeySize(i32) with tag KEY_SIZE and field Integer,
     /// Block cipher mode(s) with which the key may be used
-    BlockMode(BlockMode),
+    BlockMode(BlockMode) with tag BLOCK_MODE and field BlockMode,
     /// Digest algorithms that may be used with the key to perform signing and verification
-    Digest(Digest),
+    Digest(Digest) with tag DIGEST and field Digest,
     /// Padding modes that may be used with the key.  Relevant to RSA, AES and 3DES keys.
-    PaddingMode(PaddingMode),
+    PaddingMode(PaddingMode) with tag PADDING and field PaddingMode,
     /// Can the caller provide a nonce for nonce-requiring operations
-    CallerNonce,
+    CallerNonce with tag CALLER_NONCE and field BoolValue,
     /// Minimum length of MAC for HMAC keys and AES keys that support GCM mode
-    MinMacLength(i32),
+    MinMacLength(i32) with tag MIN_MAC_LENGTH and field Integer,
     /// The elliptic curve
-    EcCurve(EcCurve),
+    EcCurve(EcCurve) with tag EC_CURVE and field EcCurve,
     /// Value of the public exponent for an RSA key pair
-    RSAPublicExponent(i64),
+    RSAPublicExponent(i64) with tag RSA_PUBLIC_EXPONENT and field LongInteger,
     /// An attestation certificate for the generated key should contain an application-scoped
     /// and time-bounded device-unique ID
-    IncludeUniqueID,
+    IncludeUniqueID with tag INCLUDE_UNIQUE_ID and field BoolValue,
     //TODO: find out about this
     // /// Necessary system environment conditions for the generated key to be used
     // KeyBlobUsageRequirements(KeyBlobUsageRequirements),
     /// Only the boot loader can use the key
-    BootLoaderOnly,
+    BootLoaderOnly with tag BOOTLOADER_ONLY and field BoolValue,
     /// When deleted, the key is guaranteed to be permanently deleted and unusable
-    RollbackResistance,
+    RollbackResistance with tag ROLLBACK_RESISTANCE and field BoolValue,
     /// The date and time at which the key becomes active
-    ActiveDateTime(i64),
+    ActiveDateTime(i64) with tag ACTIVE_DATETIME and field DateTime,
     /// The date and time at which the key expires for signing and encryption
-    OriginationExpireDateTime(i64),
+    OriginationExpireDateTime(i64) with tag ORIGINATION_EXPIRE_DATETIME and field DateTime,
     /// The date and time at which the key expires for verification and decryption
-    UsageExpireDateTime(i64),
+    UsageExpireDateTime(i64) with tag USAGE_EXPIRE_DATETIME and field DateTime,
     /// Minimum amount of time that elapses between allowed operations
-    MinSecondsBetweenOps(i32),
+    MinSecondsBetweenOps(i32) with tag MIN_SECONDS_BETWEEN_OPS and field Integer,
     /// Maximum number of times that a key may be used between system reboots
-    MaxUsesPerBoot(i32),
+    MaxUsesPerBoot(i32) with tag MAX_USES_PER_BOOT and field Integer,
     /// ID of the Android user that is permitted to use the key
-    UserID(i32),
+    UserID(i32) with tag USER_ID and field Integer,
     /// A key may only be used under a particular secure user authentication state
-    UserSecureID(i64),
+    UserSecureID(i64) with tag USER_SECURE_ID and field LongInteger,
     /// No authentication is required to use this key
-    NoAuthRequired,
+    NoAuthRequired with tag NO_AUTH_REQUIRED and field BoolValue,
     /// The types of user authenticators that may be used to authorize this key
-    HardwareAuthenticatorType(HardwareAuthenticatorType),
+    HardwareAuthenticatorType(HardwareAuthenticatorType) with tag USER_AUTH_TYPE and field HardwareAuthenticatorType,
     /// The time in seconds for which the key is authorized for use, after user authentication
-    AuthTimeout(i32),
+    AuthTimeout(i32) with tag AUTH_TIMEOUT and field Integer,
     /// The key may be used after authentication timeout if device is still on-body
-    AllowWhileOnBody,
+    AllowWhileOnBody with tag ALLOW_WHILE_ON_BODY and field BoolValue,
     /// The key must be unusable except when the user has provided proof of physical presence
-    TrustedUserPresenceRequired,
+    TrustedUserPresenceRequired with tag TRUSTED_USER_PRESENCE_REQUIRED and field BoolValue,
     /// Applicable to keys with KeyPurpose SIGN, and specifies that this key must not be usable
     /// unless the user provides confirmation of the data to be signed
-    TrustedConfirmationRequired,
+    TrustedConfirmationRequired with tag TRUSTED_CONFIRMATION_REQUIRED and field BoolValue,
     /// The key may only be used when the device is unlocked
-    UnlockedDeviceRequired,
+    UnlockedDeviceRequired with tag UNLOCKED_DEVICE_REQUIRED and field BoolValue,
     /// When provided to generateKey or importKey, this tag specifies data
     /// that is necessary during all uses of the key
-    ApplicationID(Vec<u8>),
+    ApplicationID(Vec<u8>) with tag APPLICATION_ID and field Blob,
     /// When provided to generateKey or importKey, this tag specifies data
     /// that is necessary during all uses of the key
-    ApplicationData(Vec<u8>),
+    ApplicationData(Vec<u8>) with tag APPLICATION_DATA and field Blob,
     /// Specifies the date and time the key was created
-    CreationDateTime(i64),
+    CreationDateTime(i64) with tag CREATION_DATETIME and field DateTime,
     /// Specifies where the key was created, if known
-    KeyOrigin(KeyOrigin),
+    KeyOrigin(KeyOrigin) with tag ORIGIN and field Origin,
     /// The key used by verified boot to validate the operating system booted
-    RootOfTrust(Vec<u8>),
+    RootOfTrust(Vec<u8>) with tag ROOT_OF_TRUST and field Blob,
     /// System OS version with which the key may be used
-    OSVersion(i32),
+    OSVersion(i32) with tag OS_VERSION and field Integer,
     /// Specifies the system security patch level with which the key may be used
-    OSPatchLevel(i32),
+    OSPatchLevel(i32) with tag OS_PATCHLEVEL and field Integer,
     /// Specifies a unique, time-based identifier
-    UniqueID(Vec<u8>),
+    UniqueID(Vec<u8>) with tag UNIQUE_ID and field Blob,
     /// Used to deliver a "challenge" value to the attestKey() method
-    AttestationChallenge(Vec<u8>),
+    AttestationChallenge(Vec<u8>) with tag ATTESTATION_CHALLENGE and field Blob,
     /// The set of applications which may use a key, used only with attestKey()
-    AttestationApplicationID(Vec<u8>),
+    AttestationApplicationID(Vec<u8>) with tag ATTESTATION_APPLICATION_ID and field Blob,
     /// Provides the device's brand name, to attestKey()
-    AttestationIdBrand(Vec<u8>),
+    AttestationIdBrand(Vec<u8>) with tag ATTESTATION_ID_BRAND and field Blob,
     /// Provides the device's device name, to attestKey()
-    AttestationIdDevice(Vec<u8>),
+    AttestationIdDevice(Vec<u8>) with tag ATTESTATION_ID_DEVICE and field Blob,
     /// Provides the device's product name, to attestKey()
-    AttestationIdProduct(Vec<u8>),
+    AttestationIdProduct(Vec<u8>) with tag ATTESTATION_ID_PRODUCT and field Blob,
     /// Provides the device's serial number, to attestKey()
-    AttestationIdSerial(Vec<u8>),
+    AttestationIdSerial(Vec<u8>) with tag ATTESTATION_ID_SERIAL and field Blob,
     /// Provides the IMEIs for all radios on the device, to attestKey()
-    AttestationIdIMEI(Vec<u8>),
+    AttestationIdIMEI(Vec<u8>) with tag ATTESTATION_ID_IMEI and field Blob,
     /// Provides the MEIDs for all radios on the device, to attestKey()
-    AttestationIdMEID(Vec<u8>),
+    AttestationIdMEID(Vec<u8>) with tag ATTESTATION_ID_MEID and field Blob,
     /// Provides the device's manufacturer name, to attestKey()
-    AttestationIdManufacturer(Vec<u8>),
+    AttestationIdManufacturer(Vec<u8>) with tag ATTESTATION_ID_MANUFACTURER and field Blob,
     /// Provides the device's model name, to attestKey()
-    AttestationIdModel(Vec<u8>),
+    AttestationIdModel(Vec<u8>) with tag ATTESTATION_ID_MODEL and field Blob,
     /// Specifies the vendor image security patch level with which the key may be used
-    VendorPatchLevel(i32),
+    VendorPatchLevel(i32) with tag VENDOR_PATCHLEVEL and field Integer,
     /// Specifies the boot image (kernel) security patch level with which the key may be used
-    BootPatchLevel(i32),
+    BootPatchLevel(i32) with tag BOOT_PATCHLEVEL and field Integer,
     /// Provides "associated data" for AES-GCM encryption or decryption
-    AssociatedData(Vec<u8>),
+    AssociatedData(Vec<u8>) with tag ASSOCIATED_DATA and field Blob,
     /// Provides or returns a nonce or Initialization Vector (IV) for AES-GCM,
     /// AES-CBC, AES-CTR, or 3DES-CBC encryption or decryption
-    Nonce(Vec<u8>),
+    Nonce(Vec<u8>) with tag NONCE and field Blob,
     /// Provides the requested length of a MAC or GCM authentication tag, in bits
-    MacLength(i32),
+    MacLength(i32) with tag MAC_LENGTH and field Integer,
     /// Specifies whether the device has been factory reset since the
     /// last unique ID rotation.  Used for key attestation
-    ResetSinceIdRotation,
+    ResetSinceIdRotation with tag RESET_SINCE_ID_ROTATION and field BoolValue,
     /// Used to deliver a cryptographic token proving that the user
     ///  confirmed a signing request
-    ConfirmationToken(Vec<u8>),
+    ConfirmationToken(Vec<u8>) with tag CONFIRMATION_TOKEN and field Blob,
+}
+}
+
+impl From<&KmKeyParameter> for KeyParameterValue {
+    fn from(kp: &KmKeyParameter) -> Self {
+        kp.clone().into()
+    }
+}
+
+/// KeyParameter wraps the KeyParameterValue and the security level at which it is enforced.
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
+pub struct KeyParameter {
+    value: KeyParameterValue,
+    security_level: SecurityLevel,
 }
 
 impl KeyParameter {
     /// Create an instance of KeyParameter, given the value and the security level.
-    pub fn new(key_parameter_value: KeyParameterValue, security_level: SecurityLevel) -> Self {
-        KeyParameter { key_parameter_value, security_level }
+    pub fn new(value: KeyParameterValue, security_level: SecurityLevel) -> Self {
+        KeyParameter { value, security_level }
     }
 
-    /// Returns the tag given the KeyParameter instance.
-    pub fn get_tag(&self) -> Tag {
-        match self.key_parameter_value {
-            KeyParameterValue::Invalid => Tag::INVALID,
-            KeyParameterValue::KeyPurpose(_) => Tag::PURPOSE,
-            KeyParameterValue::Algorithm(_) => Tag::ALGORITHM,
-            KeyParameterValue::KeySize(_) => Tag::KEY_SIZE,
-            KeyParameterValue::BlockMode(_) => Tag::BLOCK_MODE,
-            KeyParameterValue::Digest(_) => Tag::DIGEST,
-            KeyParameterValue::PaddingMode(_) => Tag::PADDING,
-            KeyParameterValue::CallerNonce => Tag::CALLER_NONCE,
-            KeyParameterValue::MinMacLength(_) => Tag::MIN_MAC_LENGTH,
-            KeyParameterValue::EcCurve(_) => Tag::EC_CURVE,
-            KeyParameterValue::RSAPublicExponent(_) => Tag::RSA_PUBLIC_EXPONENT,
-            KeyParameterValue::IncludeUniqueID => Tag::INCLUDE_UNIQUE_ID,
-            KeyParameterValue::BootLoaderOnly => Tag::BOOTLOADER_ONLY,
-            KeyParameterValue::RollbackResistance => Tag::ROLLBACK_RESISTANCE,
-            KeyParameterValue::ActiveDateTime(_) => Tag::ACTIVE_DATETIME,
-            KeyParameterValue::OriginationExpireDateTime(_) => Tag::ORIGINATION_EXPIRE_DATETIME,
-            KeyParameterValue::UsageExpireDateTime(_) => Tag::USAGE_EXPIRE_DATETIME,
-            KeyParameterValue::MinSecondsBetweenOps(_) => Tag::MIN_SECONDS_BETWEEN_OPS,
-            KeyParameterValue::MaxUsesPerBoot(_) => Tag::MAX_USES_PER_BOOT,
-            KeyParameterValue::UserID(_) => Tag::USER_ID,
-            KeyParameterValue::UserSecureID(_) => Tag::USER_SECURE_ID,
-            KeyParameterValue::NoAuthRequired => Tag::NO_AUTH_REQUIRED,
-            KeyParameterValue::HardwareAuthenticatorType(_) => Tag::USER_AUTH_TYPE,
-            KeyParameterValue::AuthTimeout(_) => Tag::AUTH_TIMEOUT,
-            KeyParameterValue::AllowWhileOnBody => Tag::ALLOW_WHILE_ON_BODY,
-            KeyParameterValue::TrustedUserPresenceRequired => Tag::TRUSTED_USER_PRESENCE_REQUIRED,
-            KeyParameterValue::TrustedConfirmationRequired => Tag::TRUSTED_CONFIRMATION_REQUIRED,
-            KeyParameterValue::UnlockedDeviceRequired => Tag::UNLOCKED_DEVICE_REQUIRED,
-            KeyParameterValue::ApplicationID(_) => Tag::APPLICATION_ID,
-            KeyParameterValue::ApplicationData(_) => Tag::APPLICATION_DATA,
-            KeyParameterValue::CreationDateTime(_) => Tag::CREATION_DATETIME,
-            KeyParameterValue::KeyOrigin(_) => Tag::ORIGIN,
-            KeyParameterValue::RootOfTrust(_) => Tag::ROOT_OF_TRUST,
-            KeyParameterValue::OSVersion(_) => Tag::OS_VERSION,
-            KeyParameterValue::OSPatchLevel(_) => Tag::OS_PATCHLEVEL,
-            KeyParameterValue::UniqueID(_) => Tag::UNIQUE_ID,
-            KeyParameterValue::AttestationChallenge(_) => Tag::ATTESTATION_CHALLENGE,
-            KeyParameterValue::AttestationApplicationID(_) => Tag::ATTESTATION_APPLICATION_ID,
-            KeyParameterValue::AttestationIdBrand(_) => Tag::ATTESTATION_ID_BRAND,
-            KeyParameterValue::AttestationIdDevice(_) => Tag::ATTESTATION_ID_DEVICE,
-            KeyParameterValue::AttestationIdProduct(_) => Tag::ATTESTATION_ID_PRODUCT,
-            KeyParameterValue::AttestationIdSerial(_) => Tag::ATTESTATION_ID_SERIAL,
-            KeyParameterValue::AttestationIdIMEI(_) => Tag::ATTESTATION_ID_IMEI,
-            KeyParameterValue::AttestationIdMEID(_) => Tag::ATTESTATION_ID_MEID,
-            KeyParameterValue::AttestationIdManufacturer(_) => Tag::ATTESTATION_ID_MANUFACTURER,
-            KeyParameterValue::AttestationIdModel(_) => Tag::ATTESTATION_ID_MODEL,
-            KeyParameterValue::VendorPatchLevel(_) => Tag::VENDOR_PATCHLEVEL,
-            KeyParameterValue::BootPatchLevel(_) => Tag::BOOT_PATCHLEVEL,
-            KeyParameterValue::AssociatedData(_) => Tag::ASSOCIATED_DATA,
-            KeyParameterValue::Nonce(_) => Tag::NONCE,
-            KeyParameterValue::MacLength(_) => Tag::MAC_LENGTH,
-            KeyParameterValue::ResetSinceIdRotation => Tag::RESET_SINCE_ID_ROTATION,
-            KeyParameterValue::ConfirmationToken(_) => Tag::CONFIRMATION_TOKEN,
-        }
-    }
-
-    /// Returns key parameter value.
-    pub fn key_parameter_value(&self) -> &KeyParameterValue {
-        &self.key_parameter_value
-    }
-
-    /// Returns the security level of a KeyParameter.
-    pub fn security_level(&self) -> &SecurityLevel {
-        &self.security_level
-    }
-
-    /// An authorization is a KeyParameter with an associated security level that is used
-    /// to convey the key characteristics to keystore clients. This function consumes
-    /// an internal KeyParameter representation to produce the Authorization wire type.
-    pub fn into_authorization(self) -> Authorization {
-        Authorization {
-            securityLevel: self.security_level,
-            keyParameter: self.key_parameter_value.convert_to_wire(),
-        }
-    }
-}
-
-impl ToSql for KeyParameterValue {
-    /// Converts KeyParameterValue to be stored in rusqlite database.
-    /// Note that following variants of KeyParameterValue should not be stored:
-    /// IncludeUniqueID, ApplicationID, ApplicationData, RootOfTrust, UniqueID,
-    /// Attestation*, AssociatedData, Nonce, MacLength, ResetSinceIdRotation, ConfirmationToken.
-    /// This filtering is enforced at a higher level (i.e. enforcement module) and here we support
-    /// conversion for all the variants, to keep error handling simple.
-    fn to_sql(&self) -> SqlResult<ToSqlOutput> {
-        match self {
-            KeyParameterValue::Invalid => Ok(ToSqlOutput::from(Null)),
-            KeyParameterValue::KeyPurpose(k) => Ok(ToSqlOutput::from(k.0 as u32)),
-            KeyParameterValue::Algorithm(a) => Ok(ToSqlOutput::from(a.0 as u32)),
-            KeyParameterValue::KeySize(k) => Ok(ToSqlOutput::from(*k)),
-            KeyParameterValue::BlockMode(b) => Ok(ToSqlOutput::from(b.0 as u32)),
-            KeyParameterValue::Digest(d) => Ok(ToSqlOutput::from(d.0 as u32)),
-            KeyParameterValue::PaddingMode(p) => Ok(ToSqlOutput::from(p.0 as u32)),
-            KeyParameterValue::CallerNonce => Ok(ToSqlOutput::from(Null)),
-            KeyParameterValue::MinMacLength(m) => Ok(ToSqlOutput::from(*m)),
-            KeyParameterValue::EcCurve(e) => Ok(ToSqlOutput::from(e.0 as u32)),
-            KeyParameterValue::RSAPublicExponent(r) => Ok(ToSqlOutput::from(*r as i64)),
-            KeyParameterValue::IncludeUniqueID => Ok(ToSqlOutput::from(Null)),
-            KeyParameterValue::BootLoaderOnly => Ok(ToSqlOutput::from(Null)),
-            KeyParameterValue::RollbackResistance => Ok(ToSqlOutput::from(Null)),
-            KeyParameterValue::ActiveDateTime(a) => Ok(ToSqlOutput::from(*a as i64)),
-            KeyParameterValue::OriginationExpireDateTime(o) => Ok(ToSqlOutput::from(*o as i64)),
-            KeyParameterValue::UsageExpireDateTime(u) => Ok(ToSqlOutput::from(*u as i64)),
-            KeyParameterValue::MinSecondsBetweenOps(m) => Ok(ToSqlOutput::from(*m)),
-            KeyParameterValue::MaxUsesPerBoot(m) => Ok(ToSqlOutput::from(*m)),
-            KeyParameterValue::UserID(u) => Ok(ToSqlOutput::from(*u)),
-            KeyParameterValue::UserSecureID(u) => Ok(ToSqlOutput::from(*u as i64)),
-            KeyParameterValue::NoAuthRequired => Ok(ToSqlOutput::from(Null)),
-            KeyParameterValue::HardwareAuthenticatorType(h) => Ok(ToSqlOutput::from(h.0 as u32)),
-            KeyParameterValue::AuthTimeout(m) => Ok(ToSqlOutput::from(*m)),
-            KeyParameterValue::AllowWhileOnBody => Ok(ToSqlOutput::from(Null)),
-            KeyParameterValue::TrustedUserPresenceRequired => Ok(ToSqlOutput::from(Null)),
-            KeyParameterValue::TrustedConfirmationRequired => Ok(ToSqlOutput::from(Null)),
-            KeyParameterValue::UnlockedDeviceRequired => Ok(ToSqlOutput::from(Null)),
-            KeyParameterValue::ApplicationID(a) => Ok(ToSqlOutput::from(a.to_vec())),
-            KeyParameterValue::ApplicationData(a) => Ok(ToSqlOutput::from(a.to_vec())),
-            KeyParameterValue::CreationDateTime(c) => Ok(ToSqlOutput::from(*c as i64)),
-            KeyParameterValue::KeyOrigin(k) => Ok(ToSqlOutput::from(k.0 as u32)),
-            KeyParameterValue::RootOfTrust(r) => Ok(ToSqlOutput::from(r.to_vec())),
-            KeyParameterValue::OSVersion(o) => Ok(ToSqlOutput::from(*o)),
-            KeyParameterValue::OSPatchLevel(o) => Ok(ToSqlOutput::from(*o)),
-            KeyParameterValue::UniqueID(u) => Ok(ToSqlOutput::from(u.to_vec())),
-            KeyParameterValue::AttestationChallenge(a) => Ok(ToSqlOutput::from(a.to_vec())),
-            KeyParameterValue::AttestationApplicationID(a) => Ok(ToSqlOutput::from(a.to_vec())),
-            KeyParameterValue::AttestationIdBrand(a) => Ok(ToSqlOutput::from(a.to_vec())),
-            KeyParameterValue::AttestationIdDevice(a) => Ok(ToSqlOutput::from(a.to_vec())),
-            KeyParameterValue::AttestationIdProduct(a) => Ok(ToSqlOutput::from(a.to_vec())),
-            KeyParameterValue::AttestationIdSerial(a) => Ok(ToSqlOutput::from(a.to_vec())),
-            KeyParameterValue::AttestationIdIMEI(a) => Ok(ToSqlOutput::from(a.to_vec())),
-            KeyParameterValue::AttestationIdMEID(a) => Ok(ToSqlOutput::from(a.to_vec())),
-            KeyParameterValue::AttestationIdManufacturer(a) => Ok(ToSqlOutput::from(a.to_vec())),
-            KeyParameterValue::AttestationIdModel(a) => Ok(ToSqlOutput::from(a.to_vec())),
-            KeyParameterValue::VendorPatchLevel(v) => Ok(ToSqlOutput::from(*v)),
-            KeyParameterValue::BootPatchLevel(b) => Ok(ToSqlOutput::from(*b)),
-            KeyParameterValue::AssociatedData(a) => Ok(ToSqlOutput::from(a.to_vec())),
-            KeyParameterValue::Nonce(n) => Ok(ToSqlOutput::from(n.to_vec())),
-            KeyParameterValue::MacLength(m) => Ok(ToSqlOutput::from(*m)),
-            KeyParameterValue::ResetSinceIdRotation => Ok(ToSqlOutput::from(Null)),
-            KeyParameterValue::ConfirmationToken(c) => Ok(ToSqlOutput::from(c.to_vec())),
-        }
-    }
-}
-
-impl KeyParameter {
     /// Construct a KeyParameter from the data from a rusqlite row.
     /// Note that following variants of KeyParameterValue should not be stored:
     /// IncludeUniqueID, ApplicationID, ApplicationData, RootOfTrust, UniqueID,
@@ -325,569 +823,107 @@ impl KeyParameter {
         data: &SqlField,
         security_level_val: SecurityLevel,
     ) -> Result<Self> {
-        let key_param_value = match tag_val {
-            Tag::INVALID => KeyParameterValue::Invalid,
-            Tag::PURPOSE => {
-                let key_purpose: i32 = data
-                    .get()
-                    .map_err(|_| KeystoreError::Rc(ResponseCode::VALUE_CORRUPTED))
-                    .context("Failed to read sql data for tag: PURPOSE.")?;
-                KeyParameterValue::KeyPurpose(KeyPurpose(key_purpose))
-            }
-            Tag::ALGORITHM => {
-                let algorithm: i32 = data
-                    .get()
-                    .map_err(|_| KeystoreError::Rc(ResponseCode::VALUE_CORRUPTED))
-                    .context("Failed to read sql data for tag: ALGORITHM.")?;
-                KeyParameterValue::Algorithm(Algorithm(algorithm))
-            }
-            Tag::KEY_SIZE => {
-                let key_size: i32 =
-                    data.get().context("Failed to read sql data for tag: KEY_SIZE.")?;
-                KeyParameterValue::KeySize(key_size)
-            }
-            Tag::BLOCK_MODE => {
-                let block_mode: i32 = data
-                    .get()
-                    .map_err(|_| KeystoreError::Rc(ResponseCode::VALUE_CORRUPTED))
-                    .context("Failed to read sql data for tag: BLOCK_MODE.")?;
-                KeyParameterValue::BlockMode(BlockMode(block_mode))
-            }
-            Tag::DIGEST => {
-                let digest: i32 = data
-                    .get()
-                    .map_err(|_| KeystoreError::Rc(ResponseCode::VALUE_CORRUPTED))
-                    .context("Failed to read sql data for tag: DIGEST.")?;
-                KeyParameterValue::Digest(Digest(digest))
-            }
-            Tag::PADDING => {
-                let padding: i32 = data
-                    .get()
-                    .map_err(|_| KeystoreError::Rc(ResponseCode::VALUE_CORRUPTED))
-                    .context("Failed to read sql data for tag: PADDING.")?;
-                KeyParameterValue::PaddingMode(PaddingMode(padding))
-            }
-            Tag::CALLER_NONCE => KeyParameterValue::CallerNonce,
-            Tag::MIN_MAC_LENGTH => {
-                let min_mac_length: i32 =
-                    data.get().context("Failed to read sql data for tag: MIN_MAC_LENGTH.")?;
-                KeyParameterValue::MinMacLength(min_mac_length)
-            }
-            Tag::EC_CURVE => {
-                let ec_curve: i32 = data
-                    .get()
-                    .map_err(|_| KeystoreError::Rc(ResponseCode::VALUE_CORRUPTED))
-                    .context("Failed to read sql data for tag: EC_CURVE.")?;
-                KeyParameterValue::EcCurve(EcCurve(ec_curve))
-            }
-            Tag::RSA_PUBLIC_EXPONENT => {
-                let rsa_pub_exponent: i64 =
-                    data.get().context("Failed to read sql data for tag: RSA_PUBLIC_EXPONENT.")?;
+        Ok(Self {
+            value: KeyParameterValue::new_from_sql(tag_val, data)?,
+            security_level: security_level_val,
+        })
+    }
 
-                KeyParameterValue::RSAPublicExponent(rsa_pub_exponent)
-            }
-            Tag::INCLUDE_UNIQUE_ID => KeyParameterValue::IncludeUniqueID,
-            Tag::BOOTLOADER_ONLY => KeyParameterValue::BootLoaderOnly,
-            Tag::ROLLBACK_RESISTANCE => KeyParameterValue::RollbackResistance,
-            Tag::ACTIVE_DATETIME => {
-                let active_datetime: i64 =
-                    data.get().context("Failed to read sql data for tag: ACTIVE_DATETIME.")?;
-                KeyParameterValue::ActiveDateTime(active_datetime)
-            }
-            Tag::ORIGINATION_EXPIRE_DATETIME => {
-                let origination_expire_datetime: i64 = data
-                    .get()
-                    .context("Failed to read sql data for tag: ORIGINATION_EXPIRE_DATETIME.")?;
-                KeyParameterValue::OriginationExpireDateTime(origination_expire_datetime)
-            }
-            Tag::USAGE_EXPIRE_DATETIME => {
-                let usage_expire_datetime: i64 = data
-                    .get()
-                    .context("Failed to read sql data for tag: USAGE_EXPIRE_DATETIME.")?;
-                KeyParameterValue::UsageExpireDateTime(usage_expire_datetime)
-            }
-            Tag::MIN_SECONDS_BETWEEN_OPS => {
-                let min_secs_between_ops: i32 = data
-                    .get()
-                    .context("Failed to read sql data for tag: MIN_SECONDS_BETWEEN_OPS.")?;
-                KeyParameterValue::MinSecondsBetweenOps(min_secs_between_ops)
-            }
-            Tag::MAX_USES_PER_BOOT => {
-                let max_uses_per_boot: i32 =
-                    data.get().context("Failed to read sql data for tag: MAX_USES_PER_BOOT.")?;
-                KeyParameterValue::MaxUsesPerBoot(max_uses_per_boot)
-            }
-            Tag::USER_ID => {
-                let user_id: i32 =
-                    data.get().context("Failed to read sql data for tag: USER_ID.")?;
-                KeyParameterValue::UserID(user_id)
-            }
-            Tag::USER_SECURE_ID => {
-                let user_secure_id: i64 =
-                    data.get().context("Failed to read sql data for tag: USER_SECURE_ID.")?;
-                KeyParameterValue::UserSecureID(user_secure_id)
-            }
-            Tag::NO_AUTH_REQUIRED => KeyParameterValue::NoAuthRequired,
-            Tag::USER_AUTH_TYPE => {
-                let user_auth_type: i32 = data
-                    .get()
-                    .map_err(|_| KeystoreError::Rc(ResponseCode::VALUE_CORRUPTED))
-                    .context("Failed to read sql data for tag: USER_AUTH_TYPE.")?;
-                KeyParameterValue::HardwareAuthenticatorType(HardwareAuthenticatorType(
-                    user_auth_type,
-                ))
-            }
-            Tag::AUTH_TIMEOUT => {
-                let auth_timeout: i32 =
-                    data.get().context("Failed to read sql data for tag: AUTH_TIMEOUT.")?;
-                KeyParameterValue::AuthTimeout(auth_timeout)
-            }
-            Tag::ALLOW_WHILE_ON_BODY => KeyParameterValue::AllowWhileOnBody,
-            Tag::TRUSTED_USER_PRESENCE_REQUIRED => KeyParameterValue::TrustedUserPresenceRequired,
-            Tag::TRUSTED_CONFIRMATION_REQUIRED => KeyParameterValue::TrustedConfirmationRequired,
-            Tag::UNLOCKED_DEVICE_REQUIRED => KeyParameterValue::UnlockedDeviceRequired,
-            Tag::APPLICATION_ID => {
-                let app_id: Vec<u8> =
-                    data.get().context("Failed to read sql data for tag: APPLICATION_ID.")?;
-                KeyParameterValue::ApplicationID(app_id)
-            }
-            Tag::APPLICATION_DATA => {
-                let app_data: Vec<u8> =
-                    data.get().context("Failed to read sql data for tag: APPLICATION_DATA.")?;
-                KeyParameterValue::ApplicationData(app_data)
-            }
-            Tag::CREATION_DATETIME => {
-                let creation_datetime: i64 =
-                    data.get().context("Failed to read sql data for tag: CREATION_DATETIME.")?;
-                KeyParameterValue::CreationDateTime(creation_datetime)
-            }
-            Tag::ORIGIN => {
-                let origin: i32 = data
-                    .get()
-                    .map_err(|_| KeystoreError::Rc(ResponseCode::VALUE_CORRUPTED))
-                    .context("Failed to read sql data for tag: ORIGIN.")?;
-                KeyParameterValue::KeyOrigin(KeyOrigin(origin))
-            }
-            Tag::ROOT_OF_TRUST => {
-                let root_of_trust: Vec<u8> =
-                    data.get().context("Failed to read sql data for tag: ROOT_OF_TRUST.")?;
-                KeyParameterValue::RootOfTrust(root_of_trust)
-            }
-            Tag::OS_VERSION => {
-                let os_version: i32 =
-                    data.get().context("Failed to read sql data for tag: OS_VERSION.")?;
-                KeyParameterValue::OSVersion(os_version)
-            }
-            Tag::OS_PATCHLEVEL => {
-                let os_patch_level: i32 =
-                    data.get().context("Failed to read sql data for tag: OS_PATCHLEVEL.")?;
-                KeyParameterValue::OSPatchLevel(os_patch_level)
-            }
-            Tag::UNIQUE_ID => {
-                let unique_id: Vec<u8> =
-                    data.get().context("Failed to read sql data for tag: UNIQUE_ID.")?;
-                KeyParameterValue::UniqueID(unique_id)
-            }
-            Tag::ATTESTATION_CHALLENGE => {
-                let attestation_challenge: Vec<u8> = data
-                    .get()
-                    .context("Failed to read sql data for tag: ATTESTATION_CHALLENGE.")?;
-                KeyParameterValue::AttestationChallenge(attestation_challenge)
-            }
-            Tag::ATTESTATION_APPLICATION_ID => {
-                let attestation_app_id: Vec<u8> = data
-                    .get()
-                    .context("Failed to read sql data for tag: ATTESTATION_APPLICATION_ID.")?;
-                KeyParameterValue::AttestationApplicationID(attestation_app_id)
-            }
-            Tag::ATTESTATION_ID_BRAND => {
-                let attestation_id_brand: Vec<u8> =
-                    data.get().context("Failed to read sql data for tag: ATTESTATION_ID_BRAND.")?;
-                KeyParameterValue::AttestationIdBrand(attestation_id_brand)
-            }
-            Tag::ATTESTATION_ID_DEVICE => {
-                let attestation_id_device: Vec<u8> = data
-                    .get()
-                    .context("Failed to read sql data for tag: ATTESTATION_ID_DEVICE.")?;
-                KeyParameterValue::AttestationIdDevice(attestation_id_device)
-            }
-            Tag::ATTESTATION_ID_PRODUCT => {
-                let attestation_id_product: Vec<u8> = data
-                    .get()
-                    .context("Failed to read sql data for tag: ATTESTATION_ID_PRODUCT.")?;
-                KeyParameterValue::AttestationIdProduct(attestation_id_product)
-            }
-            Tag::ATTESTATION_ID_SERIAL => {
-                let attestation_id_serial: Vec<u8> = data
-                    .get()
-                    .context("Failed to read sql data for tag: ATTESTATION_ID_SERIAL.")?;
-                KeyParameterValue::AttestationIdSerial(attestation_id_serial)
-            }
-            Tag::ATTESTATION_ID_IMEI => {
-                let attestation_id_imei: Vec<u8> =
-                    data.get().context("Failed to read sql data for tag: ATTESTATION_ID_IMEI.")?;
-                KeyParameterValue::AttestationIdIMEI(attestation_id_imei)
-            }
-            Tag::ATTESTATION_ID_MEID => {
-                let attestation_id_meid: Vec<u8> =
-                    data.get().context("Failed to read sql data for tag: ATTESTATION_ID_MEID.")?;
-                KeyParameterValue::AttestationIdMEID(attestation_id_meid)
-            }
-            Tag::ATTESTATION_ID_MANUFACTURER => {
-                let attestation_id_manufacturer: Vec<u8> = data
-                    .get()
-                    .context("Failed to read sql data for tag: ATTESTATION_ID_MANUFACTURER.")?;
-                KeyParameterValue::AttestationIdManufacturer(attestation_id_manufacturer)
-            }
-            Tag::ATTESTATION_ID_MODEL => {
-                let attestation_id_model: Vec<u8> =
-                    data.get().context("Failed to read sql data for tag: ATTESTATION_ID_MODEL.")?;
-                KeyParameterValue::AttestationIdModel(attestation_id_model)
-            }
-            Tag::VENDOR_PATCHLEVEL => {
-                let vendor_patch_level: i32 =
-                    data.get().context("Failed to read sql data for tag: VENDOR_PATCHLEVEL.")?;
-                KeyParameterValue::VendorPatchLevel(vendor_patch_level)
-            }
-            Tag::BOOT_PATCHLEVEL => {
-                let boot_patch_level: i32 =
-                    data.get().context("Failed to read sql data for tag: BOOT_PATCHLEVEL.")?;
-                KeyParameterValue::BootPatchLevel(boot_patch_level)
-            }
-            Tag::ASSOCIATED_DATA => {
-                let associated_data: Vec<u8> =
-                    data.get().context("Failed to read sql data for tag: ASSOCIATED_DATA.")?;
-                KeyParameterValue::AssociatedData(associated_data)
-            }
-            Tag::NONCE => {
-                let nonce: Vec<u8> =
-                    data.get().context("Failed to read sql data for tag: NONCE.")?;
-                KeyParameterValue::Nonce(nonce)
-            }
-            Tag::MAC_LENGTH => {
-                let mac_length: i32 =
-                    data.get().context("Failed to read sql data for tag: MAC_LENGTH.")?;
-                KeyParameterValue::MacLength(mac_length)
-            }
-            Tag::RESET_SINCE_ID_ROTATION => KeyParameterValue::ResetSinceIdRotation,
-            Tag::CONFIRMATION_TOKEN => {
-                let confirmation_token: Vec<u8> =
-                    data.get().context("Failed to read sql data for tag: CONFIRMATION_TOKEN.")?;
-                KeyParameterValue::ConfirmationToken(confirmation_token)
-            }
-            _ => {
-                return Err(KeystoreError::Rc(ResponseCode::VALUE_CORRUPTED))
-                    .context("Failed to decode Tag enum from value.")?
-            }
-        };
-        Ok(KeyParameter::new(key_param_value, security_level_val))
+    /// Get the KeyMint Tag of this this key parameter.
+    pub fn get_tag(&self) -> Tag {
+        self.value.get_tag()
+    }
+
+    /// Returns key parameter value.
+    pub fn key_parameter_value(&self) -> &KeyParameterValue {
+        &self.value
+    }
+
+    /// Returns the security level of this key parameter.
+    pub fn security_level(&self) -> &SecurityLevel {
+        &self.security_level
+    }
+
+    /// An authorization is a KeyParameter with an associated security level that is used
+    /// to convey the key characteristics to keystore clients. This function consumes
+    /// an internal KeyParameter representation to produce the Authorization wire type.
+    pub fn into_authorization(self) -> Authorization {
+        Authorization { securityLevel: self.security_level, keyParameter: self.value.into() }
     }
 }
 
-/// Macro rules for converting key parameter to/from wire type.
-/// This macro takes between three and four different pieces of information about each
-/// of the KeyParameterValue variants:
-/// 1. The KeyParameterValue variant name,
-/// 2. the tag name corresponding to the variant,
-/// 3. the field name in the KmKeyParameter struct, in which information about this variant is
-///    stored when converted, and
-/// 4. an optional enum type name when the nested value is of enum type.
-/// The macro takes a set of lines corresponding to each KeyParameterValue variant and generates
-/// the two conversion methods: convert_to_wire() and convert_from_wire().
-/// ## Example
-/// ```
-/// implement_key_parameter_conversion_to_from_wire! {
-///         Invalid, INVALID, na;
-///         KeyPurpose, PURPOSE, integer, KeyPurpose;
-///         CallerNonce, CALLER_NONCE, boolValue;
-///         UserSecureID, USER_SECURE_ID, longInteger;
-///         ApplicationID, APPLICATION_ID, blob;
-/// }
-/// ```
-/// expands to:
-/// ```
-/// pub fn convert_to_wire(self) -> KmKeyParameter {
-///         match self {
-///                 KeyParameterValue::Invalid => KmKeyParameter {
-///                         tag: Tag::INVALID,
-///                         ..Default::default()
-///                 },
-///                 KeyParameterValue::KeyPurpose(v) => KmKeyParameter {
-///                         tag: Tag::PURPOSE,
-///                         integer: v.0,
-///                         ..Default::default()
-///                 },
-///                 KeyParameterValue::CallerNonce => KmKeyParameter {
-///                         tag: Tag::CALLER_NONCE,
-///                         boolValue: true,
-///                         ..Default::default()
-///                 },
-///                 KeyParameterValue::UserSecureID(v) => KmKeyParameter {
-///                         tag: Tag::USER_SECURE_ID,
-///                         longInteger: v,
-///                         ..Default::default()
-///                 },
-///                 KeyParameterValue::ApplicationID(v) => KmKeyParameter {
-///                         tag: Tag::APPLICATION_ID,
-///                         blob: v,
-///                         ..Default::default()
-///                 },
-///         }
-/// }
-/// ```
-/// and
-/// ```
-/// pub fn convert_from_wire(aidl_kp: KmKeyParameter) -> KeyParameterValue {
-///         match aidl_kp {
-///                 KmKeyParameter {
-///                         tag: Tag::INVALID,
-///                         ..
-///                 } => KeyParameterValue::Invalid,
-///                 KmKeyParameter {
-///                         tag: Tag::PURPOSE,
-///                         integer: v,
-///                         ..
-///                 } => KeyParameterValue::KeyPurpose(KeyPurpose(v)),
-///                 KmKeyParameter {
-///                         tag: Tag::CALLER_NONCE,
-///                         boolValue: true,
-///                         ..
-///                 } => KeyParameterValue::CallerNonce,
-///                 KmKeyParameter {
-///                          tag: Tag::USER_SECURE_ID,
-///                          longInteger: v,
-///                          ..
-///                 } => KeyParameterValue::UserSecureID(v),
-///                 KmKeyParameter {
-///                          tag: Tag::APPLICATION_ID,
-///                          blob: v,
-///                          ..
-///                 } => KeyParameterValue::ApplicationID(v),
-///                 _ => KeyParameterValue::Invalid,
-///         }
-/// }
-///
-macro_rules! implement_key_parameter_conversion_to_from_wire {
-    // There are three groups of rules in this macro.
-    // 1. The first group contains the rule which acts as the public interface. It takes the input
-    //    given to this macro and prepares it to be given as input to the two groups of rules
-    //    mentioned below.
-    // 2. The second group starts with the prefix @to and generates convert_to_wire() method.
-    // 3. The third group starts with the prefix @from and generates convert_from_wire() method.
-    //
-    // Input to this macro is first handled by the first macro rule (belonging to the first
-    // group above), which pre-processes the input such that rules in the other two groups
-    // generate the code for the two methods, when called recursively.
-    // Each of convert_to_wire() and convert_from_wire() methods are generated using a set of
-    // four macro rules in the second two groups. These four rules intend to do the following
-    // tasks respectively:
-    // i) generates match arms related to Invalid KeyParameterValue variant.
-    // ii) generates match arms related to boolValue field in KmKeyParameter struct.
-    // iii) generates match arms related to all the other fields in KmKeyParameter struct.
-    // iv) generates the method definition including the match arms generated from the above
-    // three recursive macro rules.
+#[cfg(test)]
+mod generated_key_parameter_tests {
+    use super::*;
+    use android_hardware_security_keymint::aidl::android::hardware::security::keymint::TagType::TagType;
 
-    // This rule is applied on the input given to the macro invocations from outside the macro.
-    ($($variant:ident, $tag_name:ident, $field_name:ident $(,$enum_type:ident)?;)*) => {
-        // pre-processes input to target the rules that generate convert_to_wire() method.
-        implement_key_parameter_conversion_to_from_wire! {@to
-            [], $($variant, $tag_name, $field_name;)*
+    fn get_field_by_tag_type(tag: Tag) -> KmKeyParameterValue {
+        let tag_type = TagType((tag.0 as u32 & 0xF0000000) as i32);
+        match tag {
+            Tag::ALGORITHM => return KmKeyParameterValue::Algorithm(Default::default()),
+            Tag::BLOCK_MODE => return KmKeyParameterValue::BlockMode(Default::default()),
+            Tag::PADDING => return KmKeyParameterValue::PaddingMode(Default::default()),
+            Tag::DIGEST => return KmKeyParameterValue::Digest(Default::default()),
+            Tag::EC_CURVE => return KmKeyParameterValue::EcCurve(Default::default()),
+            Tag::ORIGIN => return KmKeyParameterValue::Origin(Default::default()),
+            Tag::PURPOSE => return KmKeyParameterValue::KeyPurpose(Default::default()),
+            Tag::USER_AUTH_TYPE => {
+                return KmKeyParameterValue::HardwareAuthenticatorType(Default::default())
+            }
+            Tag::HARDWARE_TYPE => return KmKeyParameterValue::SecurityLevel(Default::default()),
+            _ => {}
         }
-        // pre-processes input to target the rules that generate convert_from_wire() method.
-        implement_key_parameter_conversion_to_from_wire! {@from
-            [], $($variant, $tag_name, $field_name;)*
+        match tag_type {
+            TagType::INVALID => return KmKeyParameterValue::Invalid(Default::default()),
+            TagType::ENUM | TagType::ENUM_REP => {}
+            TagType::UINT | TagType::UINT_REP => {
+                return KmKeyParameterValue::Integer(Default::default())
+            }
+            TagType::ULONG | TagType::ULONG_REP => {
+                return KmKeyParameterValue::LongInteger(Default::default())
+            }
+            TagType::DATE => return KmKeyParameterValue::DateTime(Default::default()),
+            TagType::BOOL => return KmKeyParameterValue::BoolValue(Default::default()),
+            TagType::BIGNUM | TagType::BYTES => {
+                return KmKeyParameterValue::Blob(Default::default())
+            }
+            _ => {}
         }
-    };
+        panic!("Unknown tag/tag_type: {:?} {:?}", tag, tag_type);
+    }
 
-    // Following four rules (belonging to the aforementioned second group) generate
-    // convert_to_wire() conversion method.
-    // -----------------------------------------------------------------------
-    // This rule handles Invalid variant.
-    // On an input: `Invalid, INVALID, Invalid;` it generates a match arm like:
-    // KeyParameterValue::Invalid => KmKeyParameter {
-    //     tag: Tag::INVALID,
-    //     value: KmKeyParameterValue::Invalid(0),
-    // },
-    (@to [$($out:tt)*], Invalid, INVALID, Invalid; $($in:tt)*) => {
-        implement_key_parameter_conversion_to_from_wire! {@to
-            [$($out)*
-                KeyParameterValue::Invalid => KmKeyParameter {
-                    tag: Tag::INVALID,
-                    value: KmKeyParameterValue::Invalid(0),
-                },
-            ], $($in)*
-        }
-    };
-    // This rule handles all variants that correspond to bool values.
-    // On an input like: `CallerNonce, CALLER_NONCE, BoolValue;` it generates
-    // a match arm like:
-    // KeyParameterValue::CallerNonce => KmKeyParameter {
-    //     tag: Tag::CALLER_NONCE,
-    //     value: KmKeyParameterValue::BoolValue(true),
-    // },
-    (@to [$($out:tt)*], $variant:ident, $tag_val:ident, BoolValue; $($in:tt)*) => {
-        implement_key_parameter_conversion_to_from_wire! {@to
-            [$($out)*
-                KeyParameterValue::$variant => KmKeyParameter {
-                    tag: Tag::$tag_val,
-                    value: KmKeyParameterValue::BoolValue(true),
-                },
-            ], $($in)*
-        }
-    };
-    // This rule handles all variants that are neither invalid nor bool values nor enums
-    // (i.e. all variants which correspond to integer, longInteger, and blob fields in
-    // KmKeyParameter).
-    // On an input like: `ConfirmationToken, CONFIRMATION_TOKEN, Blob;` it generates a match arm
-    // like: KeyParameterValue::ConfirmationToken(v) => KmKeyParameter {
-    //     tag: Tag::CONFIRMATION_TOKEN,
-    //     value: KmKeyParameterValue::$field(v),
-    // },
-    (@to [$($out:tt)*], $variant:ident, $tag_val:ident, $field:ident; $($in:tt)*) => {
-        implement_key_parameter_conversion_to_from_wire! {@to
-            [$($out)*
-                KeyParameterValue::$variant(v) => KmKeyParameter {
-                    tag: Tag::$tag_val,
-                    value: KmKeyParameterValue::$field(v),
-                },
-            ], $($in)*
-        }
-    };
-    // After all the match arms are generated by the above three rules, this rule combines them
-    // into the convert_to_wire() method.
-    (@to [$($out:tt)*], ) => {
-        /// Conversion of key parameter to wire type
-        pub fn convert_to_wire(self) -> KmKeyParameter {
-            match self {
-                $($out)*
+    fn check_field_matches_tag_type(list_o_parameters: &[KmKeyParameter]) {
+        for kp in list_o_parameters.iter() {
+            match (&kp.value, get_field_by_tag_type(kp.tag)) {
+                (&KmKeyParameterValue::Algorithm(_), KmKeyParameterValue::Algorithm(_))
+                | (&KmKeyParameterValue::BlockMode(_), KmKeyParameterValue::BlockMode(_))
+                | (&KmKeyParameterValue::PaddingMode(_), KmKeyParameterValue::PaddingMode(_))
+                | (&KmKeyParameterValue::Digest(_), KmKeyParameterValue::Digest(_))
+                | (&KmKeyParameterValue::EcCurve(_), KmKeyParameterValue::EcCurve(_))
+                | (&KmKeyParameterValue::Origin(_), KmKeyParameterValue::Origin(_))
+                | (&KmKeyParameterValue::KeyPurpose(_), KmKeyParameterValue::KeyPurpose(_))
+                | (
+                    &KmKeyParameterValue::HardwareAuthenticatorType(_),
+                    KmKeyParameterValue::HardwareAuthenticatorType(_),
+                )
+                | (&KmKeyParameterValue::SecurityLevel(_), KmKeyParameterValue::SecurityLevel(_))
+                | (&KmKeyParameterValue::Invalid(_), KmKeyParameterValue::Invalid(_))
+                | (&KmKeyParameterValue::Integer(_), KmKeyParameterValue::Integer(_))
+                | (&KmKeyParameterValue::LongInteger(_), KmKeyParameterValue::LongInteger(_))
+                | (&KmKeyParameterValue::DateTime(_), KmKeyParameterValue::DateTime(_))
+                | (&KmKeyParameterValue::BoolValue(_), KmKeyParameterValue::BoolValue(_))
+                | (&KmKeyParameterValue::Blob(_), KmKeyParameterValue::Blob(_)) => {}
+                (actual, expected) => panic!(
+                    "Tag {:?} associated with variant {:?} expected {:?}",
+                    kp.tag, actual, expected
+                ),
             }
         }
-    };
+    }
 
-    // Following four rules (belonging to the aforementioned third group) generate
-    // convert_from_wire() conversion method.
-    // ------------------------------------------------------------------------
-    // This rule handles Invalid variant.
-    // On an input: `Invalid, INVALID, Invalid;` it generates a match arm like:
-    // KmKeyParameter { tag: Tag::INVALID, .. } => KeyParameterValue::Invalid,
-    (@from [$($out:tt)*], Invalid, INVALID, Invalid; $($in:tt)*) => {
-        implement_key_parameter_conversion_to_from_wire! {@from
-            [$($out)*
-                KmKeyParameter {
-                    tag: Tag::INVALID,
-                    ..
-                } => KeyParameterValue::Invalid,
-            ], $($in)*
-        }
-    };
-    // This rule handles all variants that correspond to bool values.
-    // On an input like: `CallerNonce, CALLER_NONCE, BoolValue;` it generates a match arm like:
-    // KmKeyParameter {
-    //      tag: Tag::CALLER_NONCE,
-    //      boolValue: true,
-    //      ..
-    // } => KeyParameterValue::CallerNonce,
-    (@from [$($out:tt)*], $variant:ident, $tag_val:ident, BoolValue; $($in:tt)*) => {
-        implement_key_parameter_conversion_to_from_wire! {@from
-            [$($out)*
-                KmKeyParameter {
-                    tag: Tag::$tag_val,
-                    value: KmKeyParameterValue::BoolValue(true),
-                } => KeyParameterValue::$variant,
-            ], $($in)*
-        }
-    };
-    // This rule handles all variants that are neither invalid nor bool values nor enums
-    // (i.e. all variants which correspond to integer, longInteger, and blob fields in
-    // KmKeyParameter).
-    // On an input like: `ConfirmationToken, CONFIRMATION_TOKEN, Blob;` it generates a match arm
-    // like:
-    // KmKeyParameter {
-    //         tag: Tag::CONFIRMATION_TOKEN,
-    //         value: KmKeyParameterValue::Blob(v),
-    // } => KeyParameterValue::ConfirmationToken(v),
-    (@from [$($out:tt)*], $variant:ident, $tag_val:ident, $field:ident; $($in:tt)*) => {
-        implement_key_parameter_conversion_to_from_wire! {@from
-            [$($out)*
-                KmKeyParameter {
-                    tag: Tag::$tag_val,
-                    value: KmKeyParameterValue::$field(v),
-                } => KeyParameterValue::$variant(v),
-            ], $($in)*
-        }
-    };
-    // After all the match arms are generated by the above three rules, this rule combines them
-    // into the convert_from_wire() method.
-    (@from [$($out:tt)*], ) => {
-        /// Conversion of key parameter from wire type
-        pub fn convert_from_wire(aidl_kp: KmKeyParameter) -> KeyParameterValue {
-            match aidl_kp {
-                $($out)*
-                _ => KeyParameterValue::Invalid,
-            }
-        }
-    };
-}
-
-impl KeyParameterValue {
-    // Invoke the macro that generates the code for key parameter conversion to/from wire type
-    // with all possible variants of KeyParameterValue. Each line corresponding to a variant
-    // contains: variant identifier, tag value, and the related field name (i.e.
-    // boolValue/integer/longInteger/blob) in the KmKeyParameter.
-    implement_key_parameter_conversion_to_from_wire! {
-        Invalid, INVALID, Invalid;
-        KeyPurpose, PURPOSE, KeyPurpose;
-        Algorithm, ALGORITHM, Algorithm;
-        KeySize, KEY_SIZE, Integer;
-        BlockMode, BLOCK_MODE, BlockMode;
-        Digest, DIGEST, Digest;
-        PaddingMode, PADDING, PaddingMode;
-        CallerNonce, CALLER_NONCE, BoolValue;
-        MinMacLength, MIN_MAC_LENGTH, Integer;
-        EcCurve, EC_CURVE, EcCurve;
-        RSAPublicExponent, RSA_PUBLIC_EXPONENT, LongInteger;
-        IncludeUniqueID, INCLUDE_UNIQUE_ID, BoolValue;
-        BootLoaderOnly, BOOTLOADER_ONLY, BoolValue;
-        RollbackResistance, ROLLBACK_RESISTANCE, BoolValue;
-        ActiveDateTime, ACTIVE_DATETIME, DateTime;
-        OriginationExpireDateTime, ORIGINATION_EXPIRE_DATETIME, DateTime;
-        UsageExpireDateTime, USAGE_EXPIRE_DATETIME, DateTime;
-        MinSecondsBetweenOps, MIN_SECONDS_BETWEEN_OPS, Integer;
-        MaxUsesPerBoot, MAX_USES_PER_BOOT, Integer;
-        UserID, USER_ID, Integer;
-        UserSecureID, USER_SECURE_ID, LongInteger;
-        NoAuthRequired, NO_AUTH_REQUIRED, BoolValue;
-        HardwareAuthenticatorType, USER_AUTH_TYPE, HardwareAuthenticatorType;
-        AuthTimeout, AUTH_TIMEOUT, Integer;
-        AllowWhileOnBody, ALLOW_WHILE_ON_BODY, BoolValue;
-        TrustedUserPresenceRequired, TRUSTED_USER_PRESENCE_REQUIRED, BoolValue;
-        TrustedConfirmationRequired, TRUSTED_CONFIRMATION_REQUIRED, BoolValue;
-        UnlockedDeviceRequired, UNLOCKED_DEVICE_REQUIRED, BoolValue;
-        ApplicationID, APPLICATION_ID, Blob;
-        ApplicationData, APPLICATION_DATA, Blob;
-        CreationDateTime, CREATION_DATETIME, DateTime;
-        KeyOrigin, ORIGIN, Origin;
-        RootOfTrust, ROOT_OF_TRUST, Blob;
-        OSVersion, OS_VERSION, Integer;
-        OSPatchLevel, OS_PATCHLEVEL, Integer;
-        UniqueID, UNIQUE_ID, Blob;
-        AttestationChallenge, ATTESTATION_CHALLENGE, Blob;
-        AttestationApplicationID, ATTESTATION_APPLICATION_ID, Blob;
-        AttestationIdBrand, ATTESTATION_ID_BRAND, Blob;
-        AttestationIdDevice, ATTESTATION_ID_DEVICE, Blob;
-        AttestationIdProduct, ATTESTATION_ID_PRODUCT, Blob;
-        AttestationIdSerial, ATTESTATION_ID_SERIAL, Blob;
-        AttestationIdIMEI, ATTESTATION_ID_IMEI, Blob;
-        AttestationIdMEID, ATTESTATION_ID_MEID, Blob;
-        AttestationIdManufacturer, ATTESTATION_ID_MANUFACTURER, Blob;
-        AttestationIdModel, ATTESTATION_ID_MODEL, Blob;
-        VendorPatchLevel, VENDOR_PATCHLEVEL, Integer;
-        BootPatchLevel, BOOT_PATCHLEVEL, Integer;
-        AssociatedData, ASSOCIATED_DATA, Blob;
-        Nonce, NONCE, Blob;
-        MacLength, MAC_LENGTH, Integer;
-        ResetSinceIdRotation, RESET_SINCE_ID_ROTATION, BoolValue;
-        ConfirmationToken, CONFIRMATION_TOKEN, Blob;
+    #[test]
+    fn key_parameter_value_field_matches_tag_type() {
+        check_field_matches_tag_type(&KeyParameterValue::make_field_matches_tag_type_test_vector());
     }
 }
 
@@ -1108,10 +1144,8 @@ mod storage_tests {
     fn test_non_existing_enum_variant() -> Result<()> {
         let db = init_db()?;
         insert_into_keyparameter(&db, 1, 100, &123, 1)?;
-        tests::check_result_contains_error_string(
-            query_from_keyparameter(&db),
-            "Failed to decode Tag enum from value.",
-        );
+        let key_param = query_from_keyparameter(&db)?;
+        assert_eq!(Tag::INVALID, key_param.get_tag());
         Ok(())
     }
 
@@ -1197,15 +1231,18 @@ mod wire_tests {
     #[test]
     fn test_convert_to_wire_invalid() {
         let kp = KeyParameter::new(KeyParameterValue::Invalid, SecurityLevel::STRONGBOX);
-        let actual = KeyParameterValue::convert_to_wire(kp.key_parameter_value);
-        assert_eq!(Tag::INVALID, actual.tag);
+        assert_eq!(
+            KmKeyParameter { tag: Tag::INVALID, value: KmKeyParameterValue::Invalid(0) },
+            kp.value.into()
+        );
     }
     #[test]
     fn test_convert_to_wire_bool() {
         let kp = KeyParameter::new(KeyParameterValue::CallerNonce, SecurityLevel::STRONGBOX);
-        let actual = KeyParameterValue::convert_to_wire(kp.key_parameter_value);
-        assert_eq!(Tag::CALLER_NONCE, actual.tag);
-        assert_eq!(KmKeyParameterValue::BoolValue(true), actual.value);
+        assert_eq!(
+            KmKeyParameter { tag: Tag::CALLER_NONCE, value: KmKeyParameterValue::BoolValue(true) },
+            kp.value.into()
+        );
     }
     #[test]
     fn test_convert_to_wire_integer() {
@@ -1213,17 +1250,25 @@ mod wire_tests {
             KeyParameterValue::KeyPurpose(KeyPurpose::ENCRYPT),
             SecurityLevel::STRONGBOX,
         );
-        let actual = KeyParameterValue::convert_to_wire(kp.key_parameter_value);
-        assert_eq!(Tag::PURPOSE, actual.tag);
-        assert_eq!(KmKeyParameterValue::KeyPurpose(KeyPurpose::ENCRYPT), actual.value);
+        assert_eq!(
+            KmKeyParameter {
+                tag: Tag::PURPOSE,
+                value: KmKeyParameterValue::KeyPurpose(KeyPurpose::ENCRYPT)
+            },
+            kp.value.into()
+        );
     }
     #[test]
     fn test_convert_to_wire_long_integer() {
         let kp =
             KeyParameter::new(KeyParameterValue::UserSecureID(i64::MAX), SecurityLevel::STRONGBOX);
-        let actual = KeyParameterValue::convert_to_wire(kp.key_parameter_value);
-        assert_eq!(Tag::USER_SECURE_ID, actual.tag);
-        assert_eq!(KmKeyParameterValue::LongInteger(i64::MAX), actual.value);
+        assert_eq!(
+            KmKeyParameter {
+                tag: Tag::USER_SECURE_ID,
+                value: KmKeyParameterValue::LongInteger(i64::MAX)
+            },
+            kp.value.into()
+        );
     }
     #[test]
     fn test_convert_to_wire_blob() {
@@ -1231,11 +1276,12 @@ mod wire_tests {
             KeyParameterValue::ConfirmationToken(String::from("ConfirmationToken").into_bytes()),
             SecurityLevel::STRONGBOX,
         );
-        let actual = KeyParameterValue::convert_to_wire(kp.key_parameter_value);
-        assert_eq!(Tag::CONFIRMATION_TOKEN, actual.tag);
         assert_eq!(
-            KmKeyParameterValue::Blob(String::from("ConfirmationToken").into_bytes()),
-            actual.value
+            KmKeyParameter {
+                tag: Tag::CONFIRMATION_TOKEN,
+                value: KmKeyParameterValue::Blob(String::from("ConfirmationToken").into_bytes())
+            },
+            kp.value.into()
         );
     }
 
@@ -1243,15 +1289,13 @@ mod wire_tests {
     #[test]
     fn test_convert_from_wire_invalid() {
         let aidl_kp = KmKeyParameter { tag: Tag::INVALID, ..Default::default() };
-        let actual = KeyParameterValue::convert_from_wire(aidl_kp);
-        assert_eq!(KeyParameterValue::Invalid, actual);
+        assert_eq!(KeyParameterValue::Invalid, aidl_kp.into());
     }
     #[test]
     fn test_convert_from_wire_bool() {
         let aidl_kp =
             KmKeyParameter { tag: Tag::CALLER_NONCE, value: KmKeyParameterValue::BoolValue(true) };
-        let actual = KeyParameterValue::convert_from_wire(aidl_kp);
-        assert_eq!(KeyParameterValue::CallerNonce, actual);
+        assert_eq!(KeyParameterValue::CallerNonce, aidl_kp.into());
     }
     #[test]
     fn test_convert_from_wire_integer() {
@@ -1259,8 +1303,7 @@ mod wire_tests {
             tag: Tag::PURPOSE,
             value: KmKeyParameterValue::KeyPurpose(KeyPurpose::ENCRYPT),
         };
-        let actual = KeyParameterValue::convert_from_wire(aidl_kp);
-        assert_eq!(KeyParameterValue::KeyPurpose(KeyPurpose::ENCRYPT), actual);
+        assert_eq!(KeyParameterValue::KeyPurpose(KeyPurpose::ENCRYPT), aidl_kp.into());
     }
     #[test]
     fn test_convert_from_wire_long_integer() {
@@ -1268,8 +1311,7 @@ mod wire_tests {
             tag: Tag::USER_SECURE_ID,
             value: KmKeyParameterValue::LongInteger(i64::MAX),
         };
-        let actual = KeyParameterValue::convert_from_wire(aidl_kp);
-        assert_eq!(KeyParameterValue::UserSecureID(i64::MAX), actual);
+        assert_eq!(KeyParameterValue::UserSecureID(i64::MAX), aidl_kp.into());
     }
     #[test]
     fn test_convert_from_wire_blob() {
@@ -1277,10 +1319,9 @@ mod wire_tests {
             tag: Tag::CONFIRMATION_TOKEN,
             value: KmKeyParameterValue::Blob(String::from("ConfirmationToken").into_bytes()),
         };
-        let actual = KeyParameterValue::convert_from_wire(aidl_kp);
         assert_eq!(
             KeyParameterValue::ConfirmationToken(String::from("ConfirmationToken").into_bytes()),
-            actual
+            aidl_kp.into()
         );
     }
 }
