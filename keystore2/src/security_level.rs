@@ -45,7 +45,7 @@ use crate::{
     error::{self, map_km_error, map_or_log_err, Error, ErrorCode},
     utils::key_characteristics_to_internal,
 };
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use binder::{IBinder, Interface, ThreadState};
 
 /// Implementation of the IKeystoreSecurityLevel Interface.
@@ -54,8 +54,6 @@ pub struct KeystoreSecurityLevel {
     keymint: Asp,
     operation_db: OperationDb,
 }
-
-static KEYMINT_SERVICE_NAME: &str = "android.hardware.security.keymint.IKeyMintDevice";
 
 // Blob of 32 zeroes used as empty masking key.
 static ZERO_BLOB_32: &[u8] = &[0; 32];
@@ -68,18 +66,10 @@ impl KeystoreSecurityLevel {
     pub fn new_native_binder(
         security_level: SecurityLevel,
     ) -> Result<impl IKeystoreSecurityLevel + Send> {
-        let service_name = format!("{}/default", KEYMINT_SERVICE_NAME);
-        let keymint: Box<dyn IKeyMintDevice> =
-            binder::get_interface(&service_name).map_err(|e| {
-                anyhow!(format!(
-                    "Could not get KeyMint instance: {} failed with error code {:?}",
-                    service_name, e
-                ))
-            })?;
-
         let result = BnKeystoreSecurityLevel::new_binder(Self {
             security_level,
-            keymint: Asp::new(keymint.as_binder()),
+            keymint: crate::globals::get_keymint_device(security_level)
+                .context("In KeystoreSecurityLevel::new_native_binder.")?,
             operation_db: OperationDb::new(),
         });
         result.as_binder().set_requesting_sid(true);
