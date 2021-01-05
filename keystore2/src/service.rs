@@ -201,7 +201,7 @@ impl KeystoreService {
 
     fn delete_key(&self, key: &KeyDescriptor) -> Result<()> {
         // TODO implement.
-        Err(anyhow!(error::Error::sys()))
+        Ok(())
     }
 
     fn grant(
