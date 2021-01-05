@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::env::temp_dir;
 use std::fs::{create_dir, remove_dir_all};
 use std::io::ErrorKind;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::{env::temp_dir, ops::Deref};
 
 #[derive(Debug)]
 pub struct TempDir {
@@ -44,6 +44,10 @@ impl TempDir {
         &self.path
     }
 
+    pub fn build(&self) -> PathBuilder {
+        PathBuilder(self.path.clone())
+    }
+
     /// When a test is failing you can set this to false in order to inspect
     /// the directory structure after the test failed.
     #[allow(dead_code)]
@@ -59,5 +63,22 @@ impl Drop for TempDir {
         if self.do_drop {
             remove_dir_all(&self.path).expect("Cannot delete temporary dir.");
         }
+    }
+}
+
+pub struct PathBuilder(PathBuf);
+
+impl PathBuilder {
+    pub fn push(mut self, segment: &str) -> Self {
+        self.0.push(segment);
+        self
+    }
+}
+
+impl Deref for PathBuilder {
+    type Target = Path;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
