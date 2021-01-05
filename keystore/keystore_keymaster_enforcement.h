@@ -86,16 +86,19 @@ class KeystoreKeymasterEnforcement : public KeymasterEnforcement {
     }
 
     bool is_device_locked(int32_t userId) const override {
+        std::lock_guard<std::mutex> lock(is_device_locked_for_user_map_lock_);
         // If we haven't had a set call for this user yet, assume the device is locked.
         if (mIsDeviceLockedForUser.count(userId) == 0) return true;
         return mIsDeviceLockedForUser.find(userId)->second;
     }
 
     void set_device_locked(bool isLocked, int32_t userId) {
+        std::lock_guard<std::mutex> lock(is_device_locked_for_user_map_lock_);
         mIsDeviceLockedForUser[userId] = isLocked;
     }
 
   private:
+    mutable std::mutex is_device_locked_for_user_map_lock_;
     std::map<int32_t, bool> mIsDeviceLockedForUser;
 };
 
