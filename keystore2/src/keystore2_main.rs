@@ -15,11 +15,13 @@
 //! This crate implements the Keystore 2.0 service entry point.
 
 use binder::Interface;
+use keystore2::apc::ApcManager;
 use keystore2::service::KeystoreService;
 use log::{error, info};
 use std::panic;
 
 static KS2_SERVICE_NAME: &str = "android.system.keystore2";
+static APC_SERVICE_NAME: &str = "android.security.apc";
 
 /// Keystore 2.0 takes one argument which is a path indicating its designated working directory.
 fn main() {
@@ -53,6 +55,13 @@ fn main() {
     });
     binder::add_service(KS2_SERVICE_NAME, ks_service.as_binder()).unwrap_or_else(|e| {
         panic!("Failed to register service {} because of {:?}.", KS2_SERVICE_NAME, e);
+    });
+
+    let apc_service = ApcManager::new_native_binder().unwrap_or_else(|e| {
+        panic!("Failed to create service {} because of {:?}.", APC_SERVICE_NAME, e);
+    });
+    binder::add_service(APC_SERVICE_NAME, apc_service.as_binder()).unwrap_or_else(|e| {
+        panic!("Failed to register service {} because of {:?}.", APC_SERVICE_NAME, e);
     });
 
     info!("Successfully registered Keystore 2.0 service.");

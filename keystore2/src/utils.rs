@@ -25,11 +25,20 @@ use crate::permission::{KeyPerm, KeyPermSet, KeystorePerm};
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
     KeyCharacteristics::KeyCharacteristics, SecurityLevel::SecurityLevel,
 };
+use android_security_apc::aidl::android::security::apc::{
+    IProtectedConfirmation::{FLAG_UI_OPTION_INVERTED, FLAG_UI_OPTION_MAGNIFIED},
+    ResponseCode::ResponseCode as ApcResponseCode,
+};
 use android_system_keystore2::aidl::android::system::keystore2::{
     Authorization::Authorization, KeyDescriptor::KeyDescriptor,
 };
 use anyhow::{anyhow, Context};
 use binder::{FromIBinder, SpIBinder, ThreadState};
+use keystore2_apc_compat::{
+    ApcCompatUiOptions, APC_COMPAT_ERROR_ABORTED, APC_COMPAT_ERROR_CANCELLED,
+    APC_COMPAT_ERROR_IGNORED, APC_COMPAT_ERROR_OK, APC_COMPAT_ERROR_OPERATION_PENDING,
+    APC_COMPAT_ERROR_SYSTEM_ERROR,
+};
 use std::convert::TryFrom;
 use std::sync::Mutex;
 
@@ -144,6 +153,31 @@ pub fn get_current_time_in_seconds() -> i64 {
     // It is safe to unwrap here because try_from() returns std::convert::Infallible, which is
     // defined to be an error that can never happen (i.e. the result is always ok).
     i64::try_from(current_time.tv_sec).unwrap()
+}
+
+/// Converts a response code as returned by the Android Protected Confirmation HIDL compatibility
+/// module (keystore2_apc_compat) into a ResponseCode as defined by the APC AIDL
+/// (android.security.apc) spec.
+pub fn compat_2_response_code(rc: u32) -> ApcResponseCode {
+    match rc {
+        APC_COMPAT_ERROR_OK => ApcResponseCode::OK,
+        APC_COMPAT_ERROR_CANCELLED => ApcResponseCode::CANCELLED,
+        APC_COMPAT_ERROR_ABORTED => ApcResponseCode::ABORTED,
+        APC_COMPAT_ERROR_OPERATION_PENDING => ApcResponseCode::OPERATION_PENDING,
+        APC_COMPAT_ERROR_IGNORED => ApcResponseCode::IGNORED,
+        APC_COMPAT_ERROR_SYSTEM_ERROR => ApcResponseCode::SYSTEM_ERROR,
+        _ => ApcResponseCode::SYSTEM_ERROR,
+    }
+}
+
+/// Converts the UI Options flags as defined by the APC AIDL (android.security.apc) spec into
+/// UI Options flags as defined by the Android Protected Confirmation HIDL compatibility
+/// module (keystore2_apc_compat).
+pub fn ui_opts_2_compat(opt: i32) -> ApcCompatUiOptions {
+    ApcCompatUiOptions {
+        inverted: (opt & FLAG_UI_OPTION_INVERTED) != 0,
+        magnified: (opt & FLAG_UI_OPTION_MAGNIFIED) != 0,
+    }
 }
 
 /// AID offset for uid space partitioning.
