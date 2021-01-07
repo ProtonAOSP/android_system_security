@@ -38,7 +38,7 @@ pub use android_system_keystore2::aidl::android::system::keystore2::ResponseCode
 use keystore2_selinux as selinux;
 
 use android_system_keystore2::binder::{
-    ExceptionCode, Result as BinderResult, Status as BinderStatus,
+    ExceptionCode, Result as BinderResult, Status as BinderStatus, StatusCode,
 };
 
 /// This is the main Keystore error type. It wraps the Keystore `ResponseCode` generated
@@ -54,6 +54,9 @@ pub enum Error {
     /// Wraps a Binder exception code other than a service specific exception.
     #[error("Binder exception code {0:?}, {1:?}")]
     Binder(ExceptionCode, i32),
+    /// Wraps a Binder status code.
+    #[error("Binder transaction error {0:?}")]
+    BinderTransaction(StatusCode),
 }
 
 impl Error {
@@ -96,6 +99,28 @@ pub fn map_km_error<T>(r: BinderResult<T>) -> Result<T, Error> {
             e_code => Error::Binder(e_code, 0),
         }
     })
+}
+
+/// This function is similar to map_km_error only that we don't expect
+/// any KeyMint error codes, we simply preserve the exception code and optional
+/// service specific exception.
+pub fn map_binder_status<T>(r: BinderResult<T>) -> Result<T, Error> {
+    r.map_err(|s| match s.exception_code() {
+        ExceptionCode::SERVICE_SPECIFIC => {
+            let se = s.service_specific_error();
+            Error::Binder(ExceptionCode::SERVICE_SPECIFIC, se)
+        }
+        ExceptionCode::TRANSACTION_FAILED => {
+            let e = s.transaction_error();
+            Error::BinderTransaction(e)
+        }
+        e_code => Error::Binder(e_code, 0),
+    })
+}
+
+/// This function maps a status code onto a Keystore Error.
+pub fn map_binder_status_code<T>(r: Result<T, StatusCode>) -> Result<T, Error> {
+    r.map_err(Error::BinderTransaction)
 }
 
 /// This function should be used by Keystore service calls to translate error conditions
@@ -142,7 +167,9 @@ where
                 // If an Error::Binder reaches this stage we report a system error.
                 // The exception code and possible service specific error will be
                 // printed in the error log above.
-                Some(Error::Binder(_, _)) => ResponseCode::SYSTEM_ERROR.0,
+                Some(Error::Binder(_, _)) | Some(Error::BinderTransaction(_)) => {
+                    ResponseCode::SYSTEM_ERROR.0
+                }
                 None => match root_cause.downcast_ref::<selinux::Error>() {
                     Some(selinux::Error::PermissionDenied) => ResponseCode::PERMISSION_DENIED.0,
                     _ => ResponseCode::SYSTEM_ERROR.0,
