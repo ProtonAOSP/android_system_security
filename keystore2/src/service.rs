@@ -44,35 +44,55 @@ use keystore2_selinux as selinux;
 
 /// Implementation of the IKeystoreService.
 pub struct KeystoreService {
-    sec_level: Asp,
+    sec_level_tee: Asp,
+    sec_level_strongbox: Option<Asp>,
 }
 
 impl KeystoreService {
     /// Create a new instance of the Keystore 2.0 service.
     pub fn new_native_binder() -> Result<impl IKeystoreService> {
+        let tee = KeystoreSecurityLevel::new_native_binder(SecurityLevel::TRUSTED_ENVIRONMENT)
+            .map(|tee| Asp::new(tee.as_binder()))
+            .context(concat!(
+                "In KeystoreService::new_native_binder: ",
+                "Trying to construct mendatory security level TEE."
+            ))?;
+        // Strongbox is optional, so we ignore errors and turn the result into an Option.
+        let strongbox =
+            KeystoreSecurityLevel::new_native_binder(SecurityLevel::TRUSTED_ENVIRONMENT)
+                .map(|tee| Asp::new(tee.as_binder()))
+                .ok();
+
         let result = BnKeystoreService::new_binder(Self {
-            sec_level: Asp::new({
-                let sec_level =
-                    KeystoreSecurityLevel::new_native_binder(SecurityLevel::TRUSTED_ENVIRONMENT)
-                        .context("While trying to create IKeystoreSecurityLevel")?;
-                sec_level.as_binder()
-            }),
+            sec_level_tee: tee,
+            sec_level_strongbox: strongbox,
         });
         result.as_binder().set_requesting_sid(true);
         Ok(result)
+    }
+
+    fn get_security_level_internal(
+        &self,
+        security_level: SecurityLevel,
+    ) -> Result<Option<Box<dyn IKeystoreSecurityLevel>>> {
+        Ok(match (security_level, &self.sec_level_strongbox) {
+            (SecurityLevel::TRUSTED_ENVIRONMENT, _) => Some(self.sec_level_tee.get_interface().context(
+                "In get_security_level_internal: Failed to get IKeystoreSecurityLevel (TEE).",
+            )?),
+            (SecurityLevel::STRONGBOX, Some(strongbox)) => Some(strongbox.get_interface().context(
+                "In get_security_level_internal: Failed to get IKeystoreSecurityLevel (Strongbox).",
+            )?),
+            _ => None,
+        })
     }
 
     fn get_security_level(
         &self,
         security_level: SecurityLevel,
     ) -> Result<Box<dyn IKeystoreSecurityLevel>> {
-        match security_level {
-            SecurityLevel::TRUSTED_ENVIRONMENT => self
-                .sec_level
-                .get_interface()
-                .context("In get_security_level: Failed to get IKeystoreSecurityLevel."),
-            _ => Err(anyhow!(error::Error::Km(ErrorCode::HARDWARE_TYPE_UNAVAILABLE))),
-        }
+        self.get_security_level_internal(security_level)
+            .context("In get_security_level.")?
+            .ok_or_else(|| anyhow!(error::Error::Km(ErrorCode::HARDWARE_TYPE_UNAVAILABLE)))
     }
 
     fn get_key_entry(&self, key: &KeyDescriptor) -> Result<KeyEntryResponse> {
@@ -88,13 +108,18 @@ impl KeystoreService {
             })
             .context("In get_key_entry, while trying to load key info.")?;
 
-        let i_sec_level = match key_entry.sec_level() {
-            SecurityLevel::TRUSTED_ENVIRONMENT => self
-                .sec_level
-                .get_interface()
-                .context("In get_key_entry: Failed to get IKeystoreSecurityLevel.")?,
-            _ => return Err(anyhow!(error::Error::Km(ErrorCode::HARDWARE_TYPE_UNAVAILABLE))),
-        };
+        let i_sec_level = self
+            .get_security_level_internal(key_entry.sec_level())
+            .context("In get_key_entry.")?
+            .ok_or_else(|| {
+                anyhow!(error::Error::sys()).context(format!(
+                    concat!(
+                        "Found key with security level {:?} ",
+                        "but no KeyMint instance of that security level."
+                    ),
+                    key_entry.sec_level()
+                ))
+            })?;
 
         Ok(KeyEntryResponse {
             iSecurityLevel: Some(i_sec_level),
