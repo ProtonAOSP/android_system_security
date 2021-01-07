@@ -14,9 +14,7 @@
 
 aidl_interface {
     name: "android.security.attestationmanager",
-    srcs: [
-        "android/security/attestationmanager/*.aidl",
-    ],
+    srcs: [ "android/security/attestationmanager/*.aidl", ],
     imports: [ "android.hardware.security.keymint" ],
     unstable: true,
     backend: {
@@ -47,3 +45,16 @@ aidl_interface {
     },
 }
 
+aidl_interface {
+    name: "android.security.apc",
+    srcs: [ "android/security/apc/*.aidl" ],
+    unstable: true,
+    backend: {
+        java: {
+            enabled: true,
+        },
+        rust: {
+            enabled: true,
+        },
+    },
+}
