@@ -117,6 +117,13 @@ impl Asp {
     }
 }
 
+impl Clone for Asp {
+    fn clone(&self) -> Self {
+        let lock = self.0.lock().unwrap();
+        Self(Mutex::new((*lock).clone()))
+    }
+}
+
 /// Converts a set of key characteristics as returned from KeyMint into the internal
 /// representation of the keystore service.
 /// The parameter `hw_security_level` indicates which security level shall be used for
