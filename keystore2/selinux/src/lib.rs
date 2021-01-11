@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// #![allow(missing_docs)]
-
 //! This crate provides some safe wrappers around the libselinux API. It is currently limited
 //! to the API surface that Keystore 2.0 requires to perform permission checks against
 //! the SEPolicy. Notably, it provides wrappers for:
