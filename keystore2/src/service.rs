@@ -165,18 +165,13 @@ impl KeystoreService {
                 .context("Failed to load key_entry.")?;
 
             if let Some(cert) = public_cert {
-                db.insert_blob(&key_id_guard, SubComponentType::CERT, cert, key_entry.sec_level())
+                db.insert_blob(&key_id_guard, SubComponentType::CERT, cert)
                     .context("Failed to update cert subcomponent.")?;
             }
 
             if let Some(cert_chain) = certificate_chain {
-                db.insert_blob(
-                    &key_id_guard,
-                    SubComponentType::CERT_CHAIN,
-                    cert_chain,
-                    key_entry.sec_level(),
-                )
-                .context("Failed to update cert chain subcomponent.")?;
+                db.insert_blob(&key_id_guard, SubComponentType::CERT_CHAIN, cert_chain)
+                    .context("Failed to update cert chain subcomponent.")?;
             }
             Ok(())
         })
@@ -225,7 +220,13 @@ impl KeystoreService {
     }
 
     fn delete_key(&self, key: &KeyDescriptor) -> Result<()> {
-        // TODO implement.
+        let caller_uid = ThreadState::get_calling_uid();
+        DB.with(|db| {
+            db.borrow_mut().unbind_key(key.clone(), KeyType::Client, caller_uid, |k, av| {
+                check_key_permission(KeyPerm::delete(), k, &av).context("During delete_key.")
+            })
+        })
+        .context("In delete_key: Trying to unbind the key.")?;
         Ok(())
     }
 
