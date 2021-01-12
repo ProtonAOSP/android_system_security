@@ -22,11 +22,11 @@ use crate::super_key::SuperKeyManager;
 use crate::utils::Asp;
 use crate::{
     database::KeystoreDB,
-    error::{map_binder_status_code, Error, ErrorCode},
+    error::{map_binder_status, map_binder_status_code, Error, ErrorCode},
 };
-use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
-    IKeyMintDevice::IKeyMintDevice, SecurityLevel::SecurityLevel,
-};
+use android_hardware_security_keymint::aidl::android::hardware::security::keymint::SecurityLevel::SecurityLevel;
+use android_hardware_security_keymint::binder::StatusCode;
+use android_security_compat::aidl::android::security::compat::IKeystoreCompatService::IKeystoreCompatService;
 use anyhow::{Context, Result};
 use lazy_static::lazy_static;
 use std::collections::HashMap;
@@ -86,6 +86,8 @@ lazy_static! {
 static KEYMINT_SERVICE_NAME: &str = "android.hardware.security.keymint.IKeyMintDevice";
 
 /// Make a new connection to a KeyMint device of the given security level.
+/// If no native KeyMint device can be found this function also brings
+/// up the compatibility service and attempts to connect to the legacy wrapper.
 fn connect_keymint(security_level: SecurityLevel) -> Result<Asp> {
     let service_name = match security_level {
         SecurityLevel::TRUSTED_ENVIRONMENT => format!("{}/default", KEYMINT_SERVICE_NAME),
@@ -96,9 +98,29 @@ fn connect_keymint(security_level: SecurityLevel) -> Result<Asp> {
         }
     };
 
-    let keymint: Box<dyn IKeyMintDevice> =
-        map_binder_status_code(binder::get_interface(&service_name))
-            .context("In connect_keymint: Trying to connect to genuine KeyMint service.")?;
+    let keymint = map_binder_status_code(binder::get_interface(&service_name))
+        .context("In connect_keymint: Trying to connect to genuine KeyMint service.")
+        .or_else(|e| {
+            match e.root_cause().downcast_ref::<Error>() {
+                Some(Error::BinderTransaction(StatusCode::NAME_NOT_FOUND)) => {
+                    // This is a no-op if it was called before.
+                    keystore2_km_compat::add_keymint_device_service();
+
+                    let keystore_compat_service: Box<dyn IKeystoreCompatService> =
+                        map_binder_status_code(binder::get_interface("android.security.compat"))
+                            .context("In connect_keymint: Trying to connect to compat service.")?;
+                    map_binder_status(keystore_compat_service.getKeyMintDevice(security_level))
+                        .map_err(|e| match e {
+                            Error::BinderTransaction(StatusCode::NAME_NOT_FOUND) => {
+                                Error::Km(ErrorCode::HARDWARE_TYPE_UNAVAILABLE)
+                            }
+                            e => e,
+                        })
+                        .context("In connext_keymint: Trying to get Legacy wrapper.")
+                }
+                _ => Err(e),
+            }
+        })?;
 
     Ok(Asp::new(keymint.as_binder()))
 }

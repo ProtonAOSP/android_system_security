@@ -50,6 +50,9 @@ fn main() {
         panic!("Must specify a working directory.");
     }
 
+    info!("Starting thread pool now.");
+    binder::ProcessState::start_thread_pool();
+
     let ks_service = KeystoreService::new_native_binder().unwrap_or_else(|e| {
         panic!("Failed to create service {} because of {:?}.", KS2_SERVICE_NAME, e);
     });
@@ -65,9 +68,6 @@ fn main() {
     });
 
     info!("Successfully registered Keystore 2.0 service.");
-
-    info!("Starting thread pool now.");
-    binder::ProcessState::start_thread_pool();
 
     info!("Joining thread pool now.");
     binder::ProcessState::join_thread_pool();

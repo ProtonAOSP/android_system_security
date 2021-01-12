@@ -13,6 +13,7 @@
 // limitations under the License.
 
 //! This crate implements the Android Keystore 2.0 service.
+#![recursion_limit = "256"]
 
 pub mod apc;
 pub mod auth_token_handler;

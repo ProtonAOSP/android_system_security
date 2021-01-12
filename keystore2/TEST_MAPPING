@@ -1,6 +1,12 @@
 {
   "presubmit": [
     {
+      "name": "keystore2_certificate_test"
+    },
+    {
+      "name": "keystore2_km_compat_test"
+    },
+    {
       "name": "keystore2_test"
     }
   ]
