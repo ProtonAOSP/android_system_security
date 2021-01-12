@@ -58,3 +58,21 @@ aidl_interface {
         },
     },
 }
+
+aidl_interface {
+    name: "android.security.compat",
+    srcs: [ "android/security/compat/*.aidl" ],
+    imports: [ "android.hardware.security.keymint" ],
+    unstable: true,
+    backend: {
+        java: {
+            sdk_version: "module_current",
+        },
+        rust: {
+            enabled: true,
+        },
+        ndk: {
+            enabled: true,
+        }
+    },
+}
