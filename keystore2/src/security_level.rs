@@ -114,47 +114,21 @@ impl KeystoreSecurityLevel {
                 KeyDescriptor { domain: Domain::BLOB, blob: Some(blob.data), ..Default::default() }
             }
             _ => DB
-                .with(|db| {
-                    let mut db = db.borrow_mut();
-                    let key_id = db
-                        .create_key_entry(key.domain, key.nspace)
-                        .context("Trying to create a key entry.")?;
-                    db.insert_blob(
-                        &key_id,
-                        SubComponentType::KEY_BLOB,
-                        &blob.data,
-                        self.security_level,
-                    )
-                    .context("Trying to insert km blob.")?;
-                    if let Some(c) = &cert {
-                        db.insert_blob(&key_id, SubComponentType::CERT, c, self.security_level)
-                            .context("Trying to insert cert blob.")?;
-                    }
-                    if let Some(c) = &cert_chain {
-                        db.insert_blob(
-                            &key_id,
-                            SubComponentType::CERT_CHAIN,
-                            c,
-                            self.security_level,
-                        )
-                        .context("Trying to insert cert chain blob.")?;
-                    }
-                    db.insert_keyparameter(&key_id, &key_parameters)
-                        .context("Trying to insert key parameters.")?;
+                .with::<_, Result<KeyDescriptor>>(|db| {
                     let mut metadata = KeyMetaData::new();
                     metadata.add(KeyMetaEntry::CreationDate(creation_date));
-                    db.insert_key_metadata(&key_id, &metadata)
-                        .context("Trying to insert key metadata.")?;
-                    match &key.alias {
-                        Some(alias) => db
-                            .rebind_alias(&key_id, alias, key.domain, key.nspace)
-                            .context("Failed to rebind alias.")?,
-                        None => {
-                            return Err(error::Error::sys()).context(
-                                "Alias must be specified. (This should have been checked earlier.)",
-                            )
-                        }
-                    }
+
+                    let mut db = db.borrow_mut();
+                    let key_id = db
+                        .store_new_key(
+                            key,
+                            &key_parameters,
+                            &blob.data,
+                            cert.as_deref(),
+                            cert_chain.as_deref(),
+                            &metadata,
+                        )
+                        .context("In store_new_key.")?;
                     Ok(KeyDescriptor {
                         domain: Domain::KEY_ID,
                         nspace: key_id.id(),
@@ -527,7 +501,6 @@ impl KeystoreSecurityLevel {
                             &key_id_guard,
                             SubComponentType::KEY_BLOB,
                             &upgraded_blob,
-                            self.security_level,
                         )
                     })
                     .context(concat!(

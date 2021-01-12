@@ -16,6 +16,8 @@
 //! database connections and connections to services that Keystore needs
 //! to talk to.
 
+use crate::async_task::AsyncTask;
+use crate::gc::Gc;
 use crate::super_key::SuperKeyManager;
 use crate::utils::Asp;
 use crate::{
@@ -27,9 +29,40 @@ use android_hardware_security_keymint::aidl::android::hardware::security::keymin
 };
 use anyhow::{Context, Result};
 use lazy_static::lazy_static;
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Mutex;
+use std::{cell::RefCell, sync::Once};
+
+static DB_INIT: Once = Once::new();
+
+/// Open a connection to the Keystore 2.0 database. This is called during the initialization of
+/// the thread local DB field. It should never be called directly. The first time this is called
+/// we also call KeystoreDB::cleanup_leftovers to restore the key lifecycle invariant. See the
+/// documentation of cleanup_leftovers for more details.
+fn create_thread_local_db() -> KeystoreDB {
+    let mut db = KeystoreDB::new(
+        // Keystore changes to the database directory on startup
+        // (see keystore2_main.rs).
+        &std::env::current_dir().expect("Could not get the current working directory."),
+    )
+    .expect("Failed to open database.");
+    DB_INIT.call_once(|| {
+        log::info!("Touching Keystore 2.0 database for this first time since boot.");
+        log::info!("Calling cleanup leftovers.");
+        let n = db.cleanup_leftovers().expect("Failed to cleanup database on startup.");
+        if n != 0 {
+            log::info!(
+                concat!(
+                    "Cleaned up {} failed entries. ",
+                    "This indicates keystore crashed during key generation."
+                ),
+                n
+            );
+        }
+        Gc::notify_gc();
+    });
+    db
+}
 
 thread_local! {
     /// Database connections are not thread safe, but connecting to the
@@ -37,14 +70,7 @@ thread_local! {
     /// used by only one thread. So we store one database connection per
     /// thread in this thread local key.
     pub static DB: RefCell<KeystoreDB> =
-            RefCell::new(
-                KeystoreDB::new(
-                    // Keystore changes to the database directory on startup
-                    // (see keystor2_main.rs).
-                    &std::env::current_dir()
-                    .expect("Could not get the current working directory.")
-                )
-                .expect("Failed to open database."));
+            RefCell::new(create_thread_local_db());
 }
 
 lazy_static! {
@@ -52,6 +78,9 @@ lazy_static! {
     pub static ref SUPER_KEY: SuperKeyManager = Default::default();
     /// Map of KeyMint devices.
     static ref KEY_MINT_DEVICES: Mutex<HashMap<SecurityLevel, Asp>> = Default::default();
+    /// A single on-demand worker thread that handles deferred tasks with two different
+    /// priorities.
+    pub static ref ASYNC_TASK: AsyncTask = Default::default();
 }
 
 static KEYMINT_SERVICE_NAME: &str = "android.hardware.security.keymint.IKeyMintDevice";
