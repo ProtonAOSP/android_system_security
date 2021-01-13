@@ -56,4 +56,33 @@ pub enum Error {
     /// Nix error.
     #[error(transparent)]
     NixError(#[from] nix::Error),
+
+    /// This is returned if the C implementation of HKDFExtract returned false
+    /// or otherwise failed.
+    #[error("Failed to extract.")]
+    HKDFExtractFailed,
+
+    /// This is returned if the C implementation of HKDFExpand returned false.
+    #[error("Failed to expand.")]
+    HKDFExpandFailed,
+
+    /// This is returned if the C implementation of ECDHComputeKey returned -1.
+    #[error("Failed to compute ecdh key.")]
+    ECDHComputeKeyFailed,
+
+    /// This is returned if the C implementation of ECKEYGenerateKey returned null.
+    #[error("Failed to generate key.")]
+    ECKEYGenerateKeyFailed,
+
+    /// This is returned if the C implementation of ECKEYDeriveFromSecret returned null.
+    #[error("Failed to derive key.")]
+    ECKEYDeriveFailed,
+
+    /// This is returned if the C implementation of ECPOINTPoint2Oct returned 0.
+    #[error("Failed to convert point to oct.")]
+    ECPoint2OctFailed,
+
+    /// This is returned if the C implementation of ECPOINTOct2Point returned null.
+    #[error("Failed to convert oct to point.")]
+    ECOct2PointFailed,
 }
