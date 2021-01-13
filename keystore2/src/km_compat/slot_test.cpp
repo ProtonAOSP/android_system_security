@@ -46,14 +46,12 @@ static std::vector<uint8_t> generateAESKey(std::shared_ptr<KeyMintDevice> device
         KMV1::makeKeyParameter(KMV1::TAG_PURPOSE, KeyPurpose::ENCRYPT),
         KMV1::makeKeyParameter(KMV1::TAG_PURPOSE, KeyPurpose::DECRYPT),
     });
-    ByteArray blob;
-    KeyCharacteristics characteristics;
-    std::vector<Certificate> cert;
-    auto status = device->generateKey(keyParams, &blob, &characteristics, &cert);
+    KeyCreationResult creationResult;
+    auto status = device->generateKey(keyParams, &creationResult);
     if (!status.isOk()) {
         return {};
     }
-    return blob.data;
+    return creationResult.keyBlob;
 }
 
 static std::variant<BeginResult, ScopedAStatus> begin(std::shared_ptr<KeyMintDevice> device,
@@ -151,16 +149,14 @@ TEST(SlotTest, TestSlots) {
         KMV1::makeKeyParameter(KMV1::TAG_PURPOSE, KeyPurpose::SIGN),
         KMV1::makeKeyParameter(KMV1::TAG_NO_AUTH_REQUIRED, true),
     });
-    ByteArray blob;
-    KeyCharacteristics characteristics;
-    std::vector<Certificate> cert;
-    status = device->generateKey(kps, &blob, &characteristics, &cert);
+    KeyCreationResult creationResult;
+    status = device->generateKey(kps, &creationResult);
     ASSERT_TRUE(!status.isOk());
     ASSERT_EQ(status.getServiceSpecificError(),
               static_cast<int32_t>(ErrorCode::TOO_MANY_OPERATIONS));
     // But generating a certificate with signCert does not use a slot.
     kps.pop_back();
-    status = device->generateKey(kps, &blob, &characteristics, &cert);
+    status = device->generateKey(kps, &creationResult);
     ASSERT_TRUE(status.isOk());
 
     // Destructing operations should free up their slots.

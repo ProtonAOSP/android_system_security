@@ -28,10 +28,9 @@ mod tests {
 
     use super::*;
     use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
-        Algorithm::Algorithm, BeginResult::BeginResult, BlockMode::BlockMode, ByteArray::ByteArray,
-        Certificate::Certificate, Digest::Digest, ErrorCode::ErrorCode,
-        HardwareAuthToken::HardwareAuthToken, IKeyMintDevice::IKeyMintDevice,
-        KeyCharacteristics::KeyCharacteristics, KeyFormat::KeyFormat, KeyParameter::KeyParameter,
+        Algorithm::Algorithm, BeginResult::BeginResult, BlockMode::BlockMode, Digest::Digest,
+        ErrorCode::ErrorCode, HardwareAuthToken::HardwareAuthToken, IKeyMintDevice::IKeyMintDevice,
+        KeyCreationResult::KeyCreationResult, KeyFormat::KeyFormat, KeyParameter::KeyParameter,
         KeyParameterArray::KeyParameterArray, KeyParameterValue::KeyParameterValue,
         KeyPurpose::KeyPurpose, PaddingMode::PaddingMode, SecurityLevel::SecurityLevel, Tag::Tag,
     };
@@ -72,17 +71,10 @@ mod tests {
     }
 
     // TODO: If I only need the key itself, don't return the other things.
-    fn generate_key(
-        legacy: &dyn IKeyMintDevice,
-        kps: Vec<KeyParameter>,
-    ) -> (ByteArray, KeyCharacteristics, Vec<Certificate>) {
-        let mut blob = ByteArray { data: vec![] };
-        let mut characteristics = KeyCharacteristics::default();
-        let mut cert_chain = vec![];
-        let result = legacy.generateKey(&kps, &mut blob, &mut characteristics, &mut cert_chain);
-        assert!(result.is_ok(), "{:?}", result);
-        assert_ne!(blob.data.len(), 0);
-        (blob, characteristics, cert_chain)
+    fn generate_key(legacy: &dyn IKeyMintDevice, kps: Vec<KeyParameter>) -> KeyCreationResult {
+        let creation_result = legacy.generateKey(&kps).expect("Failed to generate key");
+        assert_ne!(creation_result.keyBlob.len(), 0);
+        creation_result
     }
 
     fn generate_rsa_key(legacy: &dyn IKeyMintDevice, encrypt: bool, attest: bool) -> Vec<u8> {
@@ -123,14 +115,14 @@ mod tests {
                 value: KeyParameterValue::Blob(vec![42; 8]),
             });
         }
-        let (blob, _, cert_chain) = generate_key(legacy, kps);
+        let creation_result = generate_key(legacy, kps);
         if attest {
             // TODO: Will this always be greater than 1?
-            assert!(cert_chain.len() > 1);
+            assert!(creation_result.certificateChain.len() > 1);
         } else {
-            assert_eq!(cert_chain.len(), 1);
+            assert_eq!(creation_result.certificateChain.len(), 1);
         }
-        blob.data
+        creation_result.keyBlob
     }
 
     #[test]
@@ -160,23 +152,15 @@ mod tests {
         }];
         let kf = KeyFormat::RAW;
         let kd = [0; 16];
-        let mut blob = ByteArray { data: vec![] };
-        let mut characteristics = KeyCharacteristics::default();
-        let mut cert_chain = vec![];
-        let result =
-            legacy.importKey(&kps, kf, &kd, &mut blob, &mut characteristics, &mut cert_chain);
-        assert!(result.is_ok(), "{:?}", result);
-        assert_ne!(blob.data.len(), 0);
-        assert_eq!(cert_chain.len(), 0);
+        let creation_result = legacy.importKey(&kps, kf, &kd).expect("Failed to import key");
+        assert_ne!(creation_result.keyBlob.len(), 0);
+        assert_eq!(creation_result.certificateChain.len(), 0);
     }
 
     #[test]
     fn test_import_wrapped_key() {
         let legacy = get_device();
-        let mut blob = ByteArray { data: vec![] };
-        let mut characteristics = KeyCharacteristics::default();
-        let result =
-            legacy.importWrappedKey(&[], &[], &[], &[], 0, 0, &mut blob, &mut characteristics);
+        let result = legacy.importWrappedKey(&[], &[], &[], &[], 0, 0);
         // TODO: This test seems to fail on cuttlefish.  How should I test it?
         assert!(result.is_err());
     }
@@ -238,9 +222,9 @@ mod tests {
                 value: KeyParameterValue::KeyPurpose(KeyPurpose::DECRYPT),
             },
         ];
-        let (blob, _, cert_chain) = generate_key(legacy, kps);
-        assert_eq!(cert_chain.len(), 0);
-        blob.data
+        let creation_result = generate_key(legacy, kps);
+        assert_eq!(creation_result.certificateChain.len(), 0);
+        creation_result.keyBlob
     }
 
     fn begin(
