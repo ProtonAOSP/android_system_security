@@ -36,6 +36,30 @@ extern "C" {
 
   void generateKeyFromPassword(uint8_t* key, size_t key_len, const char* pw,
                                size_t pw_len, const uint8_t* salt);
+
+  #include "openssl/digest.h"
+  #include "openssl/ec_key.h"
+
+  bool HKDFExtract(uint8_t *out_key, size_t *out_len,
+                   const uint8_t *secret, size_t secret_len,
+                   const uint8_t *salt, size_t salt_len);
+
+  bool HKDFExpand(uint8_t *out_key, size_t out_len,
+                  const uint8_t *prk, size_t prk_len,
+                  const uint8_t *info, size_t info_len);
+
+  // We define this as field_elem_size.
+  static const size_t EC_MAX_BYTES = 32;
+
+  int ECDHComputeKey(void *out, const EC_POINT *pub_key, const EC_KEY *priv_key);
+
+  EC_KEY* ECKEYGenerateKey();
+
+  EC_KEY* ECKEYDeriveFromSecret(const uint8_t *secret, size_t secret_len);
+
+  size_t ECPOINTPoint2Oct(const EC_POINT *point, uint8_t *buf, size_t len);
+
+  EC_POINT* ECPOINTOct2Point(const uint8_t *buf, size_t len);
 }
 
 #endif  //  __CRYPTO_H__
