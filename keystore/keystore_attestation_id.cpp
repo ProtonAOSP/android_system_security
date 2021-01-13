@@ -35,6 +35,8 @@
 #include <keystore/KeyAttestationPackageInfo.h>
 #include <keystore/Signature.h>
 
+#include <hardware/keymaster_defs.h>
+
 #include <private/android_filesystem_config.h> /* for AID_SYSTEM */
 
 #include <openssl/asn1t.h>
@@ -210,6 +212,10 @@ build_attestation_application_id(const KeyAttestationApplicationId& key_attestat
             return BAD_VALUE;
         }
         std::string package_name(String8(*pinfo->package_name()).string());
+        // Prevent Google Play Services from using key attestation for SafetyNet
+        if (package_name == "com.google.android.gms") {
+            return KM_ERROR_UNIMPLEMENTED;
+        }
         std::unique_ptr<KM_ATTESTATION_PACKAGE_INFO> attestation_package_info;
         auto rc = build_attestation_package_info(*pinfo, &attestation_package_info);
         if (rc != NO_ERROR) {
