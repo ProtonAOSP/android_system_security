@@ -20,7 +20,11 @@
 
 #include <log/log.h>
 #include <openssl/aes.h>
+#include <openssl/ec.h>
+#include <openssl/ec_key.h>
+#include <openssl/ecdh.h>
 #include <openssl/evp.h>
+#include <openssl/hkdf.h>
 #include <openssl/rand.h>
 
 #include <vector>
@@ -196,4 +200,64 @@ void generateKeyFromPassword(uint8_t* key, size_t key_len, const char* pw, size_
     }
 
     PKCS5_PBKDF2_HMAC(pw, pw_len, salt, saltSize, 8192, digest, key_len, key);
+}
+
+// New code.
+
+bool HKDFExtract(uint8_t* out_key, size_t* out_len, const uint8_t* secret, size_t secret_len,
+                 const uint8_t* salt, size_t salt_len) {
+    const EVP_MD* digest = EVP_sha256();
+    auto result = HKDF_extract(out_key, out_len, digest, secret, secret_len, salt, salt_len);
+    return result == 1;
+}
+
+bool HKDFExpand(uint8_t* out_key, size_t out_len, const uint8_t* prk, size_t prk_len,
+                const uint8_t* info, size_t info_len) {
+    const EVP_MD* digest = EVP_sha256();
+    auto result = HKDF_expand(out_key, out_len, digest, prk, prk_len, info, info_len);
+    return result == 1;
+}
+
+int ECDHComputeKey(void* out, const EC_POINT* pub_key, const EC_KEY* priv_key) {
+    return ECDH_compute_key(out, EC_MAX_BYTES, pub_key, priv_key, nullptr);
+}
+
+EC_KEY* ECKEYGenerateKey() {
+    EC_KEY* key = EC_KEY_new();
+    EC_GROUP* group = EC_GROUP_new_by_curve_name(NID_X9_62_prime256v1);
+    EC_KEY_set_group(key, group);
+    auto result = EC_KEY_generate_key(key);
+    if (result == 0) {
+        EC_GROUP_free(group);
+        EC_KEY_free(key);
+        return nullptr;
+    }
+    return key;
+}
+
+EC_KEY* ECKEYDeriveFromSecret(const uint8_t* secret, size_t secret_len) {
+    EC_GROUP* group = EC_GROUP_new_by_curve_name(NID_X9_62_prime256v1);
+    auto result = EC_KEY_derive_from_secret(group, secret, secret_len);
+    EC_GROUP_free(group);
+    return result;
+}
+
+size_t ECPOINTPoint2Oct(const EC_POINT* point, uint8_t* buf, size_t len) {
+    EC_GROUP* group = EC_GROUP_new_by_curve_name(NID_X9_62_prime256v1);
+    point_conversion_form_t form = POINT_CONVERSION_UNCOMPRESSED;
+    auto result = EC_POINT_point2oct(group, point, form, buf, len, nullptr);
+    EC_GROUP_free(group);
+    return result;
+}
+
+EC_POINT* ECPOINTOct2Point(const uint8_t* buf, size_t len) {
+    EC_GROUP* group = EC_GROUP_new_by_curve_name(NID_X9_62_prime256v1);
+    EC_POINT* point = EC_POINT_new(group);
+    auto result = EC_POINT_oct2point(group, point, buf, len, nullptr);
+    EC_GROUP_free(group);
+    if (result == 0) {
+        EC_POINT_free(point);
+        return nullptr;
+    }
+    return point;
 }
