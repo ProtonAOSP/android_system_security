@@ -23,7 +23,7 @@ use crate::error::Error;
 use crate::permission;
 use crate::permission::{KeyPerm, KeyPermSet, KeystorePerm};
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
-    KeyCharacteristics::KeyCharacteristics, SecurityLevel::SecurityLevel,
+    KeyCharacteristics::KeyCharacteristics,
 };
 use android_security_apc::aidl::android::security::apc::{
     IProtectedConfirmation::{FLAG_UI_OPTION_INVERTED, FLAG_UI_OPTION_MAGNIFIED},
@@ -126,19 +126,17 @@ impl Clone for Asp {
 
 /// Converts a set of key characteristics as returned from KeyMint into the internal
 /// representation of the keystore service.
-/// The parameter `hw_security_level` indicates which security level shall be used for
-/// parameters found in the hardware enforced parameter list.
 pub fn key_characteristics_to_internal(
-    key_characteristics: KeyCharacteristics,
-    hw_security_level: SecurityLevel,
+    key_characteristics: Vec<KeyCharacteristics>,
 ) -> Vec<crate::key_parameter::KeyParameter> {
     key_characteristics
-        .hardwareEnforced
         .into_iter()
-        .map(|aidl_kp| crate::key_parameter::KeyParameter::new(aidl_kp.into(), hw_security_level))
-        .chain(key_characteristics.softwareEnforced.into_iter().map(|aidl_kp| {
-            crate::key_parameter::KeyParameter::new(aidl_kp.into(), SecurityLevel::SOFTWARE)
-        }))
+        .flat_map(|aidl_key_char| {
+            let sec_level = aidl_key_char.securityLevel;
+            aidl_key_char.authorizations.into_iter().map(move |aidl_kp| {
+                crate::key_parameter::KeyParameter::new(aidl_kp.into(), sec_level)
+            })
+        })
         .collect()
 }
 
