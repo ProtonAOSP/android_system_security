@@ -632,9 +632,114 @@ macro_rules! implement_key_parameter_value {
         $(#[$enum_meta:meta])*
         $enum_vis:vis enum $enum_name:ident {
             $(
-                 $(#[$emeta:meta])*
-                $vname:ident$(($vtype:ty))? with tag $tag_name:ident and field $field_name:ident
+                $(#[$($emeta:tt)+])*
+                $vname:ident$(($vtype:ty))?
             ),* $(,)?
+        }
+    ) => {
+        implement_key_parameter_value!{
+            @extract_attr
+            $(#[$enum_meta])*
+            $enum_vis enum $enum_name {
+                []
+                [$(
+                    [] [$(#[$($emeta)+])*]
+                    $vname$(($vtype))?,
+                )*]
+            }
+        }
+    };
+
+    (
+        @extract_attr
+        $(#[$enum_meta:meta])*
+        $enum_vis:vis enum $enum_name:ident {
+            [$($out:tt)*]
+            [
+                [$(#[$mout:meta])*]
+                [
+                    #[key_param(tag = $tag_name:ident, field = $field_name:ident)]
+                    $(#[$($mtail:tt)+])*
+                ]
+                $vname:ident$(($vtype:ty))?,
+                $($tail:tt)*
+            ]
+        }
+    ) => {
+        implement_key_parameter_value!{
+            @extract_attr
+            $(#[$enum_meta])*
+            $enum_vis enum $enum_name {
+                [
+                    $($out)*
+                    $(#[$mout])*
+                    $(#[$($mtail)+])*
+                    $tag_name $field_name $vname$(($vtype))?,
+                ]
+                [$($tail)*]
+            }
+        }
+    };
+
+    (
+        @extract_attr
+        $(#[$enum_meta:meta])*
+        $enum_vis:vis enum $enum_name:ident {
+            [$($out:tt)*]
+            [
+                [$(#[$mout:meta])*]
+                [
+                    #[$front:meta]
+                    $(#[$($mtail:tt)+])*
+                ]
+                $vname:ident$(($vtype:ty))?,
+                $($tail:tt)*
+            ]
+        }
+    ) => {
+        implement_key_parameter_value!{
+            @extract_attr
+            $(#[$enum_meta])*
+            $enum_vis enum $enum_name {
+                [$($out)*]
+                [
+                    [
+                        $(#[$mout])*
+                        #[$front]
+                    ]
+                    [$(#[$($mtail)+])*]
+                    $vname$(($vtype))?,
+                    $($tail)*
+                ]
+            }
+        }
+    };
+
+    (
+        @extract_attr
+        $(#[$enum_meta:meta])*
+        $enum_vis:vis enum $enum_name:ident {
+            [$($out:tt)*]
+            []
+        }
+    ) => {
+        implement_key_parameter_value!{
+            @spill
+            $(#[$enum_meta])*
+            $enum_vis enum $enum_name {
+                $($out)*
+            }
+        }
+    };
+
+    (
+        @spill
+        $(#[$enum_meta:meta])*
+        $enum_vis:vis enum $enum_name:ident {
+            $(
+                $(#[$emeta:meta])*
+                $tag_name:ident $field_name:ident $vname:ident$(($vtype:ty))?,
+            )*
         }
     ) => {
         implement_enum!(
@@ -675,121 +780,174 @@ implement_key_parameter_value! {
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
 pub enum KeyParameterValue {
     /// Associated with Tag:INVALID
-    Invalid with tag INVALID and field Invalid,
+    #[key_param(tag = INVALID, field = Invalid)]
+    Invalid,
     /// Set of purposes for which the key may be used
-    KeyPurpose(KeyPurpose) with tag PURPOSE and field KeyPurpose,
+    #[key_param(tag = PURPOSE, field = KeyPurpose)]
+    KeyPurpose(KeyPurpose),
     /// Cryptographic algorithm with which the key is used
-    Algorithm(Algorithm) with tag ALGORITHM and field Algorithm,
+    #[key_param(tag = ALGORITHM, field = Algorithm)]
+    Algorithm(Algorithm),
     /// Size of the key , in bits
-    KeySize(i32) with tag KEY_SIZE and field Integer,
+    #[key_param(tag = KEY_SIZE, field = Integer)]
+    KeySize(i32),
     /// Block cipher mode(s) with which the key may be used
-    BlockMode(BlockMode) with tag BLOCK_MODE and field BlockMode,
+    #[key_param(tag = BLOCK_MODE, field = BlockMode)]
+    BlockMode(BlockMode),
     /// Digest algorithms that may be used with the key to perform signing and verification
-    Digest(Digest) with tag DIGEST and field Digest,
+    #[key_param(tag = DIGEST, field = Digest)]
+    Digest(Digest),
     /// Padding modes that may be used with the key.  Relevant to RSA, AES and 3DES keys.
-    PaddingMode(PaddingMode) with tag PADDING and field PaddingMode,
+    #[key_param(tag = PADDING, field = PaddingMode)]
+    PaddingMode(PaddingMode),
     /// Can the caller provide a nonce for nonce-requiring operations
-    CallerNonce with tag CALLER_NONCE and field BoolValue,
+    #[key_param(tag = CALLER_NONCE, field = BoolValue)]
+    CallerNonce,
     /// Minimum length of MAC for HMAC keys and AES keys that support GCM mode
-    MinMacLength(i32) with tag MIN_MAC_LENGTH and field Integer,
+    #[key_param(tag = MIN_MAC_LENGTH, field = Integer)]
+    MinMacLength(i32),
     /// The elliptic curve
-    EcCurve(EcCurve) with tag EC_CURVE and field EcCurve,
+    #[key_param(tag = EC_CURVE, field = EcCurve)]
+    EcCurve(EcCurve),
     /// Value of the public exponent for an RSA key pair
-    RSAPublicExponent(i64) with tag RSA_PUBLIC_EXPONENT and field LongInteger,
+    #[key_param(tag = RSA_PUBLIC_EXPONENT, field = LongInteger)]
+    RSAPublicExponent(i64),
     /// An attestation certificate for the generated key should contain an application-scoped
     /// and time-bounded device-unique ID
-    IncludeUniqueID with tag INCLUDE_UNIQUE_ID and field BoolValue,
+    #[key_param(tag = INCLUDE_UNIQUE_ID, field = BoolValue)]
+    IncludeUniqueID,
     //TODO: find out about this
     // /// Necessary system environment conditions for the generated key to be used
     // KeyBlobUsageRequirements(KeyBlobUsageRequirements),
     /// Only the boot loader can use the key
-    BootLoaderOnly with tag BOOTLOADER_ONLY and field BoolValue,
+    #[key_param(tag = BOOTLOADER_ONLY, field = BoolValue)]
+    BootLoaderOnly,
     /// When deleted, the key is guaranteed to be permanently deleted and unusable
-    RollbackResistance with tag ROLLBACK_RESISTANCE and field BoolValue,
+    #[key_param(tag = ROLLBACK_RESISTANCE, field = BoolValue)]
+    RollbackResistance,
     /// The date and time at which the key becomes active
-    ActiveDateTime(i64) with tag ACTIVE_DATETIME and field DateTime,
+    #[key_param(tag = ACTIVE_DATETIME, field = DateTime)]
+    ActiveDateTime(i64),
     /// The date and time at which the key expires for signing and encryption
-    OriginationExpireDateTime(i64) with tag ORIGINATION_EXPIRE_DATETIME and field DateTime,
+    #[key_param(tag = ORIGINATION_EXPIRE_DATETIME, field = DateTime)]
+    OriginationExpireDateTime(i64),
     /// The date and time at which the key expires for verification and decryption
-    UsageExpireDateTime(i64) with tag USAGE_EXPIRE_DATETIME and field DateTime,
+    #[key_param(tag = USAGE_EXPIRE_DATETIME, field = DateTime)]
+    UsageExpireDateTime(i64),
     /// Minimum amount of time that elapses between allowed operations
-    MinSecondsBetweenOps(i32) with tag MIN_SECONDS_BETWEEN_OPS and field Integer,
+    #[key_param(tag = MIN_SECONDS_BETWEEN_OPS, field = Integer)]
+    MinSecondsBetweenOps(i32),
     /// Maximum number of times that a key may be used between system reboots
-    MaxUsesPerBoot(i32) with tag MAX_USES_PER_BOOT and field Integer,
+    #[key_param(tag = MAX_USES_PER_BOOT, field = Integer)]
+    MaxUsesPerBoot(i32),
     /// ID of the Android user that is permitted to use the key
-    UserID(i32) with tag USER_ID and field Integer,
+    #[key_param(tag = USER_ID, field = Integer)]
+    UserID(i32),
     /// A key may only be used under a particular secure user authentication state
-    UserSecureID(i64) with tag USER_SECURE_ID and field LongInteger,
+    #[key_param(tag = USER_SECURE_ID, field = LongInteger)]
+    UserSecureID(i64),
     /// No authentication is required to use this key
-    NoAuthRequired with tag NO_AUTH_REQUIRED and field BoolValue,
+    #[key_param(tag = NO_AUTH_REQUIRED, field = BoolValue)]
+    NoAuthRequired,
     /// The types of user authenticators that may be used to authorize this key
-    HardwareAuthenticatorType(HardwareAuthenticatorType) with tag USER_AUTH_TYPE and field HardwareAuthenticatorType,
+    #[key_param(tag = USER_AUTH_TYPE, field = HardwareAuthenticatorType)]
+    HardwareAuthenticatorType(HardwareAuthenticatorType),
     /// The time in seconds for which the key is authorized for use, after user authentication
-    AuthTimeout(i32) with tag AUTH_TIMEOUT and field Integer,
+    #[key_param(tag = AUTH_TIMEOUT, field = Integer)]
+    AuthTimeout(i32),
     /// The key may be used after authentication timeout if device is still on-body
-    AllowWhileOnBody with tag ALLOW_WHILE_ON_BODY and field BoolValue,
+    #[key_param(tag = ALLOW_WHILE_ON_BODY, field = BoolValue)]
+    AllowWhileOnBody,
     /// The key must be unusable except when the user has provided proof of physical presence
-    TrustedUserPresenceRequired with tag TRUSTED_USER_PRESENCE_REQUIRED and field BoolValue,
+    #[key_param(tag = TRUSTED_USER_PRESENCE_REQUIRED, field = BoolValue)]
+    TrustedUserPresenceRequired,
     /// Applicable to keys with KeyPurpose SIGN, and specifies that this key must not be usable
     /// unless the user provides confirmation of the data to be signed
-    TrustedConfirmationRequired with tag TRUSTED_CONFIRMATION_REQUIRED and field BoolValue,
+    #[key_param(tag = TRUSTED_CONFIRMATION_REQUIRED, field = BoolValue)]
+    TrustedConfirmationRequired,
     /// The key may only be used when the device is unlocked
-    UnlockedDeviceRequired with tag UNLOCKED_DEVICE_REQUIRED and field BoolValue,
+    #[key_param(tag = UNLOCKED_DEVICE_REQUIRED, field = BoolValue)]
+    UnlockedDeviceRequired,
     /// When provided to generateKey or importKey, this tag specifies data
     /// that is necessary during all uses of the key
-    ApplicationID(Vec<u8>) with tag APPLICATION_ID and field Blob,
+    #[key_param(tag = APPLICATION_ID, field = Blob)]
+    ApplicationID(Vec<u8>),
     /// When provided to generateKey or importKey, this tag specifies data
     /// that is necessary during all uses of the key
-    ApplicationData(Vec<u8>) with tag APPLICATION_DATA and field Blob,
+    #[key_param(tag = APPLICATION_DATA, field = Blob)]
+    ApplicationData(Vec<u8>),
     /// Specifies the date and time the key was created
-    CreationDateTime(i64) with tag CREATION_DATETIME and field DateTime,
+    #[key_param(tag = CREATION_DATETIME, field = DateTime)]
+    CreationDateTime(i64),
     /// Specifies where the key was created, if known
-    KeyOrigin(KeyOrigin) with tag ORIGIN and field Origin,
+    #[key_param(tag = ORIGIN, field = Origin)]
+    KeyOrigin(KeyOrigin),
     /// The key used by verified boot to validate the operating system booted
-    RootOfTrust(Vec<u8>) with tag ROOT_OF_TRUST and field Blob,
+    #[key_param(tag = ROOT_OF_TRUST, field = Blob)]
+    RootOfTrust(Vec<u8>),
     /// System OS version with which the key may be used
-    OSVersion(i32) with tag OS_VERSION and field Integer,
+    #[key_param(tag = OS_VERSION, field = Integer)]
+    OSVersion(i32),
     /// Specifies the system security patch level with which the key may be used
-    OSPatchLevel(i32) with tag OS_PATCHLEVEL and field Integer,
+    #[key_param(tag = OS_PATCHLEVEL, field = Integer)]
+    OSPatchLevel(i32),
     /// Specifies a unique, time-based identifier
-    UniqueID(Vec<u8>) with tag UNIQUE_ID and field Blob,
+    #[key_param(tag = UNIQUE_ID, field = Blob)]
+    UniqueID(Vec<u8>),
     /// Used to deliver a "challenge" value to the attestKey() method
-    AttestationChallenge(Vec<u8>) with tag ATTESTATION_CHALLENGE and field Blob,
+    #[key_param(tag = ATTESTATION_CHALLENGE, field = Blob)]
+    AttestationChallenge(Vec<u8>),
     /// The set of applications which may use a key, used only with attestKey()
-    AttestationApplicationID(Vec<u8>) with tag ATTESTATION_APPLICATION_ID and field Blob,
+    #[key_param(tag = ATTESTATION_APPLICATION_ID, field = Blob)]
+    AttestationApplicationID(Vec<u8>),
     /// Provides the device's brand name, to attestKey()
-    AttestationIdBrand(Vec<u8>) with tag ATTESTATION_ID_BRAND and field Blob,
+    #[key_param(tag = ATTESTATION_ID_BRAND, field = Blob)]
+    AttestationIdBrand(Vec<u8>),
     /// Provides the device's device name, to attestKey()
-    AttestationIdDevice(Vec<u8>) with tag ATTESTATION_ID_DEVICE and field Blob,
+    #[key_param(tag = ATTESTATION_ID_DEVICE, field = Blob)]
+    AttestationIdDevice(Vec<u8>),
     /// Provides the device's product name, to attestKey()
-    AttestationIdProduct(Vec<u8>) with tag ATTESTATION_ID_PRODUCT and field Blob,
+    #[key_param(tag = ATTESTATION_ID_PRODUCT, field = Blob)]
+    AttestationIdProduct(Vec<u8>),
     /// Provides the device's serial number, to attestKey()
-    AttestationIdSerial(Vec<u8>) with tag ATTESTATION_ID_SERIAL and field Blob,
+    #[key_param(tag = ATTESTATION_ID_SERIAL, field = Blob)]
+    AttestationIdSerial(Vec<u8>),
     /// Provides the IMEIs for all radios on the device, to attestKey()
-    AttestationIdIMEI(Vec<u8>) with tag ATTESTATION_ID_IMEI and field Blob,
+    #[key_param(tag = ATTESTATION_ID_IMEI, field = Blob)]
+    AttestationIdIMEI(Vec<u8>),
     /// Provides the MEIDs for all radios on the device, to attestKey()
-    AttestationIdMEID(Vec<u8>) with tag ATTESTATION_ID_MEID and field Blob,
+    #[key_param(tag = ATTESTATION_ID_MEID, field = Blob)]
+    AttestationIdMEID(Vec<u8>),
     /// Provides the device's manufacturer name, to attestKey()
-    AttestationIdManufacturer(Vec<u8>) with tag ATTESTATION_ID_MANUFACTURER and field Blob,
+    #[key_param(tag = ATTESTATION_ID_MANUFACTURER, field = Blob)]
+    AttestationIdManufacturer(Vec<u8>),
     /// Provides the device's model name, to attestKey()
-    AttestationIdModel(Vec<u8>) with tag ATTESTATION_ID_MODEL and field Blob,
+    #[key_param(tag = ATTESTATION_ID_MODEL, field = Blob)]
+    AttestationIdModel(Vec<u8>),
     /// Specifies the vendor image security patch level with which the key may be used
-    VendorPatchLevel(i32) with tag VENDOR_PATCHLEVEL and field Integer,
+    #[key_param(tag = VENDOR_PATCHLEVEL, field = Integer)]
+    VendorPatchLevel(i32),
     /// Specifies the boot image (kernel) security patch level with which the key may be used
-    BootPatchLevel(i32) with tag BOOT_PATCHLEVEL and field Integer,
+    #[key_param(tag = BOOT_PATCHLEVEL, field = Integer)]
+    BootPatchLevel(i32),
     /// Provides "associated data" for AES-GCM encryption or decryption
-    AssociatedData(Vec<u8>) with tag ASSOCIATED_DATA and field Blob,
+    #[key_param(tag = ASSOCIATED_DATA, field = Blob)]
+    AssociatedData(Vec<u8>),
     /// Provides or returns a nonce or Initialization Vector (IV) for AES-GCM,
     /// AES-CBC, AES-CTR, or 3DES-CBC encryption or decryption
-    Nonce(Vec<u8>) with tag NONCE and field Blob,
+    #[key_param(tag = NONCE, field = Blob)]
+    Nonce(Vec<u8>),
     /// Provides the requested length of a MAC or GCM authentication tag, in bits
-    MacLength(i32) with tag MAC_LENGTH and field Integer,
+    #[key_param(tag = MAC_LENGTH, field = Integer)]
+    MacLength(i32),
     /// Specifies whether the device has been factory reset since the
     /// last unique ID rotation.  Used for key attestation
-    ResetSinceIdRotation with tag RESET_SINCE_ID_ROTATION and field BoolValue,
+    #[key_param(tag = RESET_SINCE_ID_ROTATION, field = BoolValue)]
+    ResetSinceIdRotation,
     /// Used to deliver a cryptographic token proving that the user
     ///  confirmed a signing request
-    ConfirmationToken(Vec<u8>) with tag CONFIRMATION_TOKEN and field Blob,
+    #[key_param(tag = CONFIRMATION_TOKEN, field = Blob)]
+    ConfirmationToken(Vec<u8>),
 }
 }
 
