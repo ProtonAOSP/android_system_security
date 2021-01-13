@@ -73,12 +73,13 @@ convertKeyParametersFromLegacy(const std::vector<V4_0_KeyParameter>& legacyKps) 
     return kps;
 }
 
-static KeyCharacteristics
-convertKeyCharacteristicsFromLegacy(const V4_0_KeyCharacteristics& legacyKc) {
+static std::vector<KeyCharacteristics>
+convertKeyCharacteristicsFromLegacy(KeyMintSecurityLevel securityLevel,
+                                    const V4_0_KeyCharacteristics& legacyKc) {
     KeyCharacteristics kc;
-    kc.softwareEnforced = convertKeyParametersFromLegacy(legacyKc.softwareEnforced);
-    kc.hardwareEnforced = convertKeyParametersFromLegacy(legacyKc.hardwareEnforced);
-    return kc;
+    kc.securityLevel = securityLevel;
+    kc.authorizations = convertKeyParametersFromLegacy(legacyKc.hardwareEnforced);
+    return {kc};
 }
 
 static V4_0_KeyFormat convertKeyFormatToLegacy(const KeyFormat& kf) {
@@ -140,8 +141,10 @@ ScopedAStatus KeyMintDevice::getHardwareInfo(KeyMintHardwareInfo* _aidl_return) 
     // TODO: What do I do about the version number?  Is it the version of the device I get?
     auto result = mDevice->getHardwareInfo([&](auto securityLevel, const auto& keymasterName,
                                                const auto& keymasterAuthorName) {
-        _aidl_return->securityLevel =
+        securityLevel_ =
             static_cast<::aidl::android::hardware::security::keymint::SecurityLevel>(securityLevel);
+
+        _aidl_return->securityLevel = securityLevel_;
         _aidl_return->keyMintName = keymasterName;
         _aidl_return->keyMintAuthorName = keymasterAuthorName;
     });
@@ -166,34 +169,32 @@ ScopedAStatus KeyMintDevice::addRngEntropy(const std::vector<uint8_t>& in_data) 
 }
 
 ScopedAStatus KeyMintDevice::generateKey(const std::vector<KeyParameter>& in_keyParams,
-                                         ByteArray* out_generatedKeyBlob,
-                                         KeyCharacteristics* out_generatedKeyCharacteristics,
-                                         std::vector<Certificate>* out_outCertChain) {
+                                         KeyCreationResult* out_creationResult) {
     auto legacyKeyParams = convertKeyParametersToLegacy(in_keyParams);
     V4_0_ErrorCode errorCode;
     auto result = mDevice->generateKey(
         legacyKeyParams, [&](V4_0_ErrorCode error, const hidl_vec<uint8_t>& keyBlob,
                              const V4_0_KeyCharacteristics& keyCharacteristics) {
             errorCode = error;
-            out_generatedKeyBlob->data = keyBlob;
-            *out_generatedKeyCharacteristics =
-                convertKeyCharacteristicsFromLegacy(keyCharacteristics);
+            out_creationResult->keyBlob = keyBlob;
+            out_creationResult->keyCharacteristics =
+                convertKeyCharacteristicsFromLegacy(securityLevel_, keyCharacteristics);
         });
     if (!result.isOk()) {
         return ScopedAStatus::fromServiceSpecificError(
             static_cast<int32_t>(ResponseCode::SYSTEM_ERROR));
     }
     if (errorCode == V4_0_ErrorCode::OK) {
-        auto cert = getCertificate(in_keyParams, out_generatedKeyBlob->data);
+        auto cert = getCertificate(in_keyParams, out_creationResult->keyBlob);
         if (std::holds_alternative<V4_0_ErrorCode>(cert)) {
             auto code = std::get<V4_0_ErrorCode>(cert);
             // We return OK in successful cases that do not generate a certificate.
             if (code != V4_0_ErrorCode::OK) {
                 errorCode = code;
-                deleteKey(out_generatedKeyBlob->data);
+                deleteKey(out_creationResult->keyBlob);
             }
         } else {
-            *out_outCertChain = std::get<std::vector<Certificate>>(cert);
+            out_creationResult->certificateChain = std::get<std::vector<Certificate>>(cert);
         }
     }
     return convertErrorCode(errorCode);
@@ -202,36 +203,34 @@ ScopedAStatus KeyMintDevice::generateKey(const std::vector<KeyParameter>& in_key
 ScopedAStatus KeyMintDevice::importKey(const std::vector<KeyParameter>& in_inKeyParams,
                                        KeyFormat in_inKeyFormat,
                                        const std::vector<uint8_t>& in_inKeyData,
-                                       ByteArray* out_outImportedKeyBlob,
-                                       KeyCharacteristics* out_outImportedKeyCharacteristics,
-                                       std::vector<Certificate>* out_outCertChain) {
+                                       KeyCreationResult* out_creationResult) {
     auto legacyKeyParams = convertKeyParametersToLegacy(in_inKeyParams);
     auto legacyKeyFormat = convertKeyFormatToLegacy(in_inKeyFormat);
     V4_0_ErrorCode errorCode;
-    auto result =
-        mDevice->importKey(legacyKeyParams, legacyKeyFormat, in_inKeyData,
-                           [&](V4_0_ErrorCode error, const hidl_vec<uint8_t>& keyBlob,
-                               const V4_0_KeyCharacteristics& keyCharacteristics) {
-                               errorCode = error;
-                               out_outImportedKeyBlob->data = keyBlob;
-                               *out_outImportedKeyCharacteristics =
-                                   convertKeyCharacteristicsFromLegacy(keyCharacteristics);
-                           });
+    auto result = mDevice->importKey(legacyKeyParams, legacyKeyFormat, in_inKeyData,
+                                     [&](V4_0_ErrorCode error, const hidl_vec<uint8_t>& keyBlob,
+                                         const V4_0_KeyCharacteristics& keyCharacteristics) {
+                                         errorCode = error;
+                                         out_creationResult->keyBlob = keyBlob;
+                                         out_creationResult->keyCharacteristics =
+                                             convertKeyCharacteristicsFromLegacy(
+                                                 securityLevel_, keyCharacteristics);
+                                     });
     if (!result.isOk()) {
         return ScopedAStatus::fromServiceSpecificError(
             static_cast<int32_t>(ResponseCode::SYSTEM_ERROR));
     }
     if (errorCode == V4_0_ErrorCode::OK) {
-        auto cert = getCertificate(in_inKeyParams, out_outImportedKeyBlob->data);
+        auto cert = getCertificate(in_inKeyParams, out_creationResult->keyBlob);
         if (std::holds_alternative<V4_0_ErrorCode>(cert)) {
             auto code = std::get<V4_0_ErrorCode>(cert);
             // We return OK in successful cases that do not generate a certificate.
             if (code != V4_0_ErrorCode::OK) {
                 errorCode = code;
-                deleteKey(out_outImportedKeyBlob->data);
+                deleteKey(out_creationResult->keyBlob);
             }
         } else {
-            *out_outCertChain = std::get<std::vector<Certificate>>(cert);
+            out_creationResult->certificateChain = std::get<std::vector<Certificate>>(cert);
         }
     }
     return convertErrorCode(errorCode);
@@ -241,20 +240,19 @@ ScopedAStatus KeyMintDevice::importWrappedKey(
     const std::vector<uint8_t>& in_inWrappedKeyData,
     const std::vector<uint8_t>& in_inWrappingKeyBlob, const std::vector<uint8_t>& in_inMaskingKey,
     const std::vector<KeyParameter>& in_inUnwrappingParams, int64_t in_inPasswordSid,
-    int64_t in_inBiometricSid, ByteArray* out_outImportedKeyBlob,
-    KeyCharacteristics* out_outImportedKeyCharacteristics) {
+    int64_t in_inBiometricSid, KeyCreationResult* out_creationResult) {
     auto legacyUnwrappingParams = convertKeyParametersToLegacy(in_inUnwrappingParams);
     V4_0_ErrorCode errorCode;
-    auto result =
-        mDevice->importWrappedKey(in_inWrappedKeyData, in_inWrappingKeyBlob, in_inMaskingKey,
-                                  legacyUnwrappingParams, in_inPasswordSid, in_inBiometricSid,
-                                  [&](V4_0_ErrorCode error, const hidl_vec<uint8_t>& keyBlob,
-                                      const V4_0_KeyCharacteristics& keyCharacteristics) {
-                                      errorCode = error;
-                                      out_outImportedKeyBlob->data = keyBlob;
-                                      *out_outImportedKeyCharacteristics =
-                                          convertKeyCharacteristicsFromLegacy(keyCharacteristics);
-                                  });
+    auto result = mDevice->importWrappedKey(
+        in_inWrappedKeyData, in_inWrappingKeyBlob, in_inMaskingKey, legacyUnwrappingParams,
+        in_inPasswordSid, in_inBiometricSid,
+        [&](V4_0_ErrorCode error, const hidl_vec<uint8_t>& keyBlob,
+            const V4_0_KeyCharacteristics& keyCharacteristics) {
+            errorCode = error;
+            out_creationResult->keyBlob = keyBlob;
+            out_creationResult->keyCharacteristics =
+                convertKeyCharacteristicsFromLegacy(securityLevel_, keyCharacteristics);
+        });
     if (!result.isOk()) {
         return ScopedAStatus::fromServiceSpecificError(
             static_cast<int32_t>(ResponseCode::SYSTEM_ERROR));
