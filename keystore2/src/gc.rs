@@ -18,7 +18,7 @@
 //! optionally dispose of sensitive key material appropriately, and then delete
 //! the key entry from the database.
 
-use crate::globals::{get_keymint_device, DB};
+use crate::globals::{get_keymint_dev_by_uuid, DB};
 use crate::{error::map_km_error, globals::ASYNC_TASK};
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::IKeyMintDevice::IKeyMintDevice;
 use anyhow::Result;
@@ -42,7 +42,9 @@ impl Gc {
             if let Some((key_id, mut key_entry)) = db.get_unreferenced_key()? {
                 if let Some(blob) = key_entry.take_km_blob() {
                     let km_dev: Box<dyn IKeyMintDevice> =
-                        get_keymint_device(key_entry.sec_level())?.get_interface()?;
+                        get_keymint_dev_by_uuid(key_entry.km_uuid())
+                            .map(|(dev, _)| dev)?
+                            .get_interface()?;
                     if let Err(e) = map_km_error(km_dev.deleteKey(&blob)) {
                         // Log but ignore error.
                         log::error!("Error trying to delete key. {:?}", e);

@@ -48,7 +48,7 @@ use crate::key_parameter::{KeyParameter, Tag};
 use crate::permission::KeyPermSet;
 use crate::utils::get_current_time_in_seconds;
 use anyhow::{anyhow, Context, Result};
-use std::{convert::TryFrom, convert::TryInto, time::SystemTimeError};
+use std::{convert::TryFrom, convert::TryInto, ops::Deref, time::SystemTimeError};
 
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
     HardwareAuthToken::HardwareAuthToken,
@@ -186,6 +186,50 @@ impl FromSql for KeyType {
         }
     }
 }
+
+/// Uuid representation that can be stored in the database.
+/// Right now it can only be initialized from SecurityLevel.
+/// Once KeyMint provides a UUID type a corresponding From impl shall be added.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Uuid([u8; 16]);
+
+impl Deref for Uuid {
+    type Target = [u8; 16];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl From<SecurityLevel> for Uuid {
+    fn from(sec_level: SecurityLevel) -> Self {
+        Self((sec_level.0 as u128).to_be_bytes())
+    }
+}
+
+impl ToSql for Uuid {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput> {
+        self.0.to_sql()
+    }
+}
+
+impl FromSql for Uuid {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        let blob = Vec::<u8>::column_result(value)?;
+        if blob.len() != 16 {
+            return Err(FromSqlError::OutOfRange(blob.len() as i64));
+        }
+        let mut arr = [0u8; 16];
+        arr.copy_from_slice(&blob);
+        Ok(Self(arr))
+    }
+}
+
+/// Key entries that are not associated with any KeyMint instance, such as pure certificate
+/// entries are associated with this UUID.
+pub static KEYSTORE_UUID: Uuid = Uuid([
+    0x41, 0xe3, 0xb9, 0xce, 0x27, 0x58, 0x4e, 0x91, 0xbc, 0xfd, 0xa5, 0x5d, 0x91, 0x85, 0xab, 0x11,
+]);
 
 /// Indicates how the sensitive part of this key blob is encrypted.
 #[derive(Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -435,6 +479,30 @@ impl Drop for KeyIdGuard {
     }
 }
 
+/// This type represents a certificate and certificate chain entry for a key.
+#[derive(Debug)]
+pub struct CertificateInfo {
+    cert: Option<Vec<u8>>,
+    cert_chain: Option<Vec<u8>>,
+}
+
+impl CertificateInfo {
+    /// Constructs a new CertificateInfo object from `cert` and `cert_chain`
+    pub fn new(cert: Option<Vec<u8>>, cert_chain: Option<Vec<u8>>) -> Self {
+        Self { cert, cert_chain }
+    }
+
+    /// Take the cert
+    pub fn take_cert(&mut self) -> Option<Vec<u8>> {
+        self.cert.take()
+    }
+
+    /// Take the cert chain
+    pub fn take_cert_chain(&mut self) -> Option<Vec<u8>> {
+        self.cert_chain.take()
+    }
+}
+
 /// This type represents a Keystore 2.0 key entry.
 /// An entry has a unique `id` by which it can be found in the database.
 /// It has a security level field, key parameters, and three optional fields
@@ -445,7 +513,7 @@ pub struct KeyEntry {
     km_blob: Option<Vec<u8>>,
     cert: Option<Vec<u8>>,
     cert_chain: Option<Vec<u8>>,
-    sec_level: SecurityLevel,
+    km_uuid: Uuid,
     parameters: Vec<KeyParameter>,
     metadata: KeyMetaData,
     pure_cert: bool,
@@ -480,9 +548,9 @@ impl KeyEntry {
     pub fn take_cert_chain(&mut self) -> Option<Vec<u8>> {
         self.cert_chain.take()
     }
-    /// Returns the security level of the key entry.
-    pub fn sec_level(&self) -> SecurityLevel {
-        self.sec_level
+    /// Returns the uuid of the owning KeyMint instance.
+    pub fn km_uuid(&self) -> &Uuid {
+        &self.km_uuid
     }
     /// Exposes the key parameters of this key entry.
     pub fn key_parameters(&self) -> &Vec<KeyParameter> {
@@ -641,7 +709,8 @@ impl KeystoreDB {
                      domain INTEGER,
                      namespace INTEGER,
                      alias BLOB,
-                     state INTEGER);",
+                     state INTEGER,
+                     km_uuid BLOB);",
             NO_PARAMS,
         )
         .context("Failed to initialize \"keyentry\" table.")?;
@@ -830,6 +899,7 @@ impl KeystoreDB {
         domain: Domain,
         namespace: i64,
         alias: &str,
+        km_uuid: Uuid,
         create_new_key: F,
     ) -> Result<(KeyIdGuard, KeyEntry)>
     where
@@ -876,9 +946,17 @@ impl KeystoreDB {
                 let id = Self::insert_with_retry(|id| {
                     tx.execute(
                         "INSERT into persistent.keyentry
-                        (id, key_type, domain, namespace, alias, state)
-                        VALUES(?, ?, ?, ?, ?, ?);",
-                        params![id, KeyType::Super, domain.0, namespace, alias, KeyLifeCycle::Live],
+                        (id, key_type, domain, namespace, alias, state, km_uuid)
+                        VALUES(?, ?, ?, ?, ?, ?, ?);",
+                        params![
+                            id,
+                            KeyType::Super,
+                            domain.0,
+                            namespace,
+                            alias,
+                            KeyLifeCycle::Live,
+                            km_uuid,
+                        ],
                     )
                 })
                 .context("In get_or_create_key_with.")?;
@@ -925,9 +1003,14 @@ impl KeystoreDB {
     /// key artifacts, i.e., blobs and parameters have been associated with the new
     /// key id. Finalizing with `rebind_alias` makes the creation of a new key entry
     /// atomic even if key generation is not.
-    pub fn create_key_entry(&mut self, domain: Domain, namespace: i64) -> Result<KeyIdGuard> {
+    pub fn create_key_entry(
+        &mut self,
+        domain: Domain,
+        namespace: i64,
+        km_uuid: &Uuid,
+    ) -> Result<KeyIdGuard> {
         self.with_transaction(TransactionBehavior::Immediate, |tx| {
-            Self::create_key_entry_internal(tx, domain, namespace)
+            Self::create_key_entry_internal(tx, domain, namespace, km_uuid)
         })
         .context("In create_key_entry.")
     }
@@ -936,6 +1019,7 @@ impl KeystoreDB {
         tx: &Transaction,
         domain: Domain,
         namespace: i64,
+        km_uuid: &Uuid,
     ) -> Result<KeyIdGuard> {
         match domain {
             Domain::APP | Domain::SELINUX => {}
@@ -948,14 +1032,15 @@ impl KeystoreDB {
             Self::insert_with_retry(|id| {
                 tx.execute(
                     "INSERT into persistent.keyentry
-                     (id, key_type, domain, namespace, alias, state)
-                     VALUES(?, ?, ?, ?, NULL, ?);",
+                     (id, key_type, domain, namespace, alias, state, km_uuid)
+                     VALUES(?, ?, ?, ?, NULL, ?, ?);",
                     params![
                         id,
                         KeyType::Client,
                         domain.0 as u32,
                         namespace,
-                        KeyLifeCycle::Existing
+                        KeyLifeCycle::Existing,
+                        km_uuid,
                     ],
                 )
             })
@@ -1105,7 +1190,7 @@ impl KeystoreDB {
                     newid.0,
                     domain.0 as u32,
                     namespace,
-                    KeyLifeCycle::Existing
+                    KeyLifeCycle::Existing,
                 ],
             )
             .context("In rebind_alias: Failed to set alias.")?;
@@ -1128,9 +1213,9 @@ impl KeystoreDB {
         key: KeyDescriptor,
         params: impl IntoIterator<Item = &'a KeyParameter>,
         blob: &[u8],
-        cert: Option<&[u8]>,
-        cert_chain: Option<&[u8]>,
+        cert_info: &CertificateInfo,
         metadata: &KeyMetaData,
+        km_uuid: &Uuid,
     ) -> Result<(bool, KeyIdGuard)> {
         let (alias, domain, namespace) = match key {
             KeyDescriptor { alias: Some(alias), domain: Domain::APP, nspace, blob: None }
@@ -1143,15 +1228,15 @@ impl KeystoreDB {
             }
         };
         self.with_transaction(TransactionBehavior::Immediate, |tx| {
-            let key_id = Self::create_key_entry_internal(tx, domain, namespace)
+            let key_id = Self::create_key_entry_internal(tx, domain, namespace, km_uuid)
                 .context("Trying to create new key entry.")?;
             Self::set_blob_internal(tx, key_id.id(), SubComponentType::KEY_BLOB, Some(blob))
                 .context("Trying to insert the key blob.")?;
-            if let Some(cert) = cert {
+            if let Some(cert) = &cert_info.cert {
                 Self::set_blob_internal(tx, key_id.id(), SubComponentType::CERT, Some(&cert))
                     .context("Trying to insert the certificate.")?;
             }
-            if let Some(cert_chain) = cert_chain {
+            if let Some(cert_chain) = &cert_info.cert_chain {
                 Self::set_blob_internal(
                     tx,
                     key_id.id(),
@@ -1173,7 +1258,12 @@ impl KeystoreDB {
     /// Store a new certificate
     /// The function creates a new key entry, populates the blob field and metadata, and rebinds
     /// the given alias to the new cert.
-    pub fn store_new_certificate(&mut self, key: KeyDescriptor, cert: &[u8]) -> Result<KeyIdGuard> {
+    pub fn store_new_certificate(
+        &mut self,
+        key: KeyDescriptor,
+        cert: &[u8],
+        km_uuid: &Uuid,
+    ) -> Result<KeyIdGuard> {
         let (alias, domain, namespace) = match key {
             KeyDescriptor { alias: Some(alias), domain: Domain::APP, nspace, blob: None }
             | KeyDescriptor { alias: Some(alias), domain: Domain::SELINUX, nspace, blob: None } => {
@@ -1186,7 +1276,7 @@ impl KeystoreDB {
             }
         };
         self.with_transaction(TransactionBehavior::Immediate, |tx| {
-            let key_id = Self::create_key_entry_internal(tx, domain, namespace)
+            let key_id = Self::create_key_entry_internal(tx, domain, namespace, km_uuid)
                 .context("Trying to create new key entry.")?;
 
             Self::set_blob_internal(tx, key_id.id(), SubComponentType::CERT_CHAIN, Some(cert))
@@ -1592,6 +1682,15 @@ impl KeystoreDB {
         .context("In unbind_key.")
     }
 
+    fn get_key_km_uuid(tx: &Transaction, key_id: i64) -> Result<Uuid> {
+        tx.query_row(
+            "SELECT km_uuid FROM persistent.keyentry WHERE id = ?",
+            params![key_id],
+            |row| row.get(0),
+        )
+        .context("In get_key_km_uuid.")
+    }
+
     fn load_key_components(
         tx: &Transaction,
         load_bits: KeyEntryLoadBits,
@@ -1603,25 +1702,18 @@ impl KeystoreDB {
             Self::load_blob_components(key_id, load_bits, &tx)
                 .context("In load_key_components.")?;
 
-        let parameters =
-            Self::load_key_parameters(key_id, &tx).context("In load_key_components.")?;
+        let parameters = Self::load_key_parameters(key_id, &tx)
+            .context("In load_key_components: Trying to load key parameters.")?;
 
-        // Extract the security level by checking the security level of the origin tag.
-        // Super keys don't have key parameters so we use security_level software by default.
-        let sec_level = parameters
-            .iter()
-            .find_map(|k| match k.get_tag() {
-                Tag::ORIGIN => Some(*k.security_level()),
-                _ => None,
-            })
-            .unwrap_or(SecurityLevel::SOFTWARE);
+        let km_uuid = Self::get_key_km_uuid(&tx, key_id)
+            .context("In load_key_components: Trying to get KM uuid.")?;
 
         Ok(KeyEntry {
             id: key_id,
             km_blob,
             cert: cert_blob,
             cert_chain: cert_chain_blob,
-            sec_level,
+            km_uuid,
             parameters,
             metadata,
             pure_cert: !has_km_blob,
@@ -2072,7 +2164,7 @@ mod tests {
         let temp_dir = TempDir::new("persistent_db_test")?;
         let mut db = KeystoreDB::new(temp_dir.path())?;
 
-        db.create_key_entry(Domain::APP, 100)?;
+        db.create_key_entry(Domain::APP, 100, &KEYSTORE_UUID)?;
         let entries = get_keyentry(&db)?;
         assert_eq!(entries.len(), 1);
 
@@ -2085,31 +2177,31 @@ mod tests {
 
     #[test]
     fn test_create_key_entry() -> Result<()> {
-        fn extractor(ke: &KeyEntryRow) -> (Domain, i64, Option<&str>) {
-            (ke.domain.unwrap(), ke.namespace.unwrap(), ke.alias.as_deref())
+        fn extractor(ke: &KeyEntryRow) -> (Domain, i64, Option<&str>, Uuid) {
+            (ke.domain.unwrap(), ke.namespace.unwrap(), ke.alias.as_deref(), ke.km_uuid.unwrap())
         }
 
         let mut db = new_test_db()?;
 
-        db.create_key_entry(Domain::APP, 100)?;
-        db.create_key_entry(Domain::SELINUX, 101)?;
+        db.create_key_entry(Domain::APP, 100, &KEYSTORE_UUID)?;
+        db.create_key_entry(Domain::SELINUX, 101, &KEYSTORE_UUID)?;
 
         let entries = get_keyentry(&db)?;
         assert_eq!(entries.len(), 2);
-        assert_eq!(extractor(&entries[0]), (Domain::APP, 100, None));
-        assert_eq!(extractor(&entries[1]), (Domain::SELINUX, 101, None));
+        assert_eq!(extractor(&entries[0]), (Domain::APP, 100, None, KEYSTORE_UUID));
+        assert_eq!(extractor(&entries[1]), (Domain::SELINUX, 101, None, KEYSTORE_UUID));
 
         // Test that we must pass in a valid Domain.
         check_result_is_error_containing_string(
-            db.create_key_entry(Domain::GRANT, 102),
+            db.create_key_entry(Domain::GRANT, 102, &KEYSTORE_UUID),
             "Domain Domain(1) must be either App or SELinux.",
         );
         check_result_is_error_containing_string(
-            db.create_key_entry(Domain::BLOB, 103),
+            db.create_key_entry(Domain::BLOB, 103, &KEYSTORE_UUID),
             "Domain Domain(3) must be either App or SELinux.",
         );
         check_result_is_error_containing_string(
-            db.create_key_entry(Domain::KEY_ID, 104),
+            db.create_key_entry(Domain::KEY_ID, 104, &KEYSTORE_UUID),
             "Domain Domain(4) must be either App or SELinux.",
         );
 
@@ -2118,31 +2210,48 @@ mod tests {
 
     #[test]
     fn test_rebind_alias() -> Result<()> {
-        fn extractor(ke: &KeyEntryRow) -> (Option<Domain>, Option<i64>, Option<&str>) {
-            (ke.domain, ke.namespace, ke.alias.as_deref())
+        fn extractor(
+            ke: &KeyEntryRow,
+        ) -> (Option<Domain>, Option<i64>, Option<&str>, Option<Uuid>) {
+            (ke.domain, ke.namespace, ke.alias.as_deref(), ke.km_uuid)
         }
 
         let mut db = new_test_db()?;
-        db.create_key_entry(Domain::APP, 42)?;
-        db.create_key_entry(Domain::APP, 42)?;
+        db.create_key_entry(Domain::APP, 42, &KEYSTORE_UUID)?;
+        db.create_key_entry(Domain::APP, 42, &KEYSTORE_UUID)?;
         let entries = get_keyentry(&db)?;
         assert_eq!(entries.len(), 2);
-        assert_eq!(extractor(&entries[0]), (Some(Domain::APP), Some(42), None));
-        assert_eq!(extractor(&entries[1]), (Some(Domain::APP), Some(42), None));
+        assert_eq!(
+            extractor(&entries[0]),
+            (Some(Domain::APP), Some(42), None, Some(KEYSTORE_UUID))
+        );
+        assert_eq!(
+            extractor(&entries[1]),
+            (Some(Domain::APP), Some(42), None, Some(KEYSTORE_UUID))
+        );
 
         // Test that the first call to rebind_alias sets the alias.
         rebind_alias(&mut db, &KEY_ID_LOCK.get(entries[0].id), "foo", Domain::APP, 42)?;
         let entries = get_keyentry(&db)?;
         assert_eq!(entries.len(), 2);
-        assert_eq!(extractor(&entries[0]), (Some(Domain::APP), Some(42), Some("foo")));
-        assert_eq!(extractor(&entries[1]), (Some(Domain::APP), Some(42), None));
+        assert_eq!(
+            extractor(&entries[0]),
+            (Some(Domain::APP), Some(42), Some("foo"), Some(KEYSTORE_UUID))
+        );
+        assert_eq!(
+            extractor(&entries[1]),
+            (Some(Domain::APP), Some(42), None, Some(KEYSTORE_UUID))
+        );
 
         // Test that the second call to rebind_alias also empties the old one.
         rebind_alias(&mut db, &KEY_ID_LOCK.get(entries[1].id), "foo", Domain::APP, 42)?;
         let entries = get_keyentry(&db)?;
         assert_eq!(entries.len(), 2);
-        assert_eq!(extractor(&entries[0]), (None, None, None));
-        assert_eq!(extractor(&entries[1]), (Some(Domain::APP), Some(42), Some("foo")));
+        assert_eq!(extractor(&entries[0]), (None, None, None, Some(KEYSTORE_UUID)));
+        assert_eq!(
+            extractor(&entries[1]),
+            (Some(Domain::APP), Some(42), Some("foo"), Some(KEYSTORE_UUID))
+        );
 
         // Test that we must pass in a valid Domain.
         check_result_is_error_containing_string(
@@ -2166,8 +2275,11 @@ mod tests {
         // Test that we correctly abort the transaction in this case.
         let entries = get_keyentry(&db)?;
         assert_eq!(entries.len(), 2);
-        assert_eq!(extractor(&entries[0]), (None, None, None));
-        assert_eq!(extractor(&entries[1]), (Some(Domain::APP), Some(42), Some("foo")));
+        assert_eq!(extractor(&entries[0]), (None, None, None, Some(KEYSTORE_UUID)));
+        assert_eq!(
+            extractor(&entries[1]),
+            (Some(Domain::APP), Some(42), Some("foo"), Some(KEYSTORE_UUID))
+        );
 
         Ok(())
     }
@@ -2180,9 +2292,9 @@ mod tests {
 
         let mut db = new_test_db()?;
         db.conn.execute(
-            "INSERT INTO persistent.keyentry (id, key_type, domain, namespace, alias, state)
-                VALUES (1, 0, 0, 15, 'key', 1), (2, 0, 2, 7, 'yek', 1);",
-            NO_PARAMS,
+            "INSERT INTO persistent.keyentry (id, key_type, domain, namespace, alias, state, km_uuid)
+                VALUES (1, 0, 0, 15, 'key', 1, ?), (2, 0, 2, 7, 'yek', 1, ?);",
+            params![KEYSTORE_UUID, KEYSTORE_UUID],
         )?;
         let app_key = KeyDescriptor {
             domain: super::Domain::APP,
@@ -2426,6 +2538,7 @@ mod tests {
                 blob: None,
             },
             TEST_CERT_BLOB,
+            &KEYSTORE_UUID,
         )
         .expect("Trying to insert cert.");
 
@@ -2965,6 +3078,7 @@ mod tests {
         namespace: Option<i64>,
         alias: Option<String>,
         state: KeyLifeCycle,
+        km_uuid: Option<Uuid>,
     }
 
     fn get_keyentry(db: &KeystoreDB) -> Result<Vec<KeyEntryRow>> {
@@ -2981,6 +3095,7 @@ mod tests {
                     namespace: row.get(3)?,
                     alias: row.get(4)?,
                     state: row.get(5)?,
+                    km_uuid: row.get(6)?,
                 })
             })?
             .map(|r| r.context("Could not read keyentry row."))
@@ -3223,7 +3338,7 @@ mod tests {
         alias: &str,
         max_usage_count: Option<i32>,
     ) -> Result<KeyIdGuard> {
-        let key_id = db.create_key_entry(domain, namespace)?;
+        let key_id = db.create_key_entry(domain, namespace, &KEYSTORE_UUID)?;
         db.set_blob(&key_id, SubComponentType::KEY_BLOB, Some(TEST_KEY_BLOB))?;
         db.set_blob(&key_id, SubComponentType::CERT, Some(TEST_CERT_BLOB))?;
         db.set_blob(&key_id, SubComponentType::CERT_CHAIN, Some(TEST_CERT_CHAIN_BLOB))?;
@@ -3255,7 +3370,7 @@ mod tests {
             km_blob: Some(TEST_KEY_BLOB.to_vec()),
             cert: Some(TEST_CERT_BLOB.to_vec()),
             cert_chain: Some(TEST_CERT_CHAIN_BLOB.to_vec()),
-            sec_level: SecurityLevel::TRUSTED_ENVIRONMENT,
+            km_uuid: KEYSTORE_UUID,
             parameters: params,
             metadata,
             pure_cert: false,
@@ -3264,21 +3379,29 @@ mod tests {
 
     fn debug_dump_keyentry_table(db: &mut KeystoreDB) -> Result<()> {
         let mut stmt = db.conn.prepare(
-            "SELECT id, key_type, domain, namespace, alias, state FROM persistent.keyentry;",
+            "SELECT id, key_type, domain, namespace, alias, state, km_uuid FROM persistent.keyentry;",
         )?;
-        let rows = stmt.query_map::<(i64, KeyType, i32, i64, String, KeyLifeCycle), _, _>(
+        let rows = stmt.query_map::<(i64, KeyType, i32, i64, String, KeyLifeCycle, Uuid), _, _>(
             NO_PARAMS,
             |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?))
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                ))
             },
         )?;
 
         println!("Key entry table rows:");
         for r in rows {
-            let (id, key_type, domain, namespace, alias, state) = r.unwrap();
+            let (id, key_type, domain, namespace, alias, state, km_uuid) = r.unwrap();
             println!(
-                "    id: {} KeyType: {:?} Domain: {} Namespace: {} Alias: {} State: {:?}",
-                id, key_type, domain, namespace, alias, state
+                "    id: {} KeyType: {:?} Domain: {} Namespace: {} Alias: {} State: {:?} KmUuid: {:?}",
+                id, key_type, domain, namespace, alias, state, km_uuid
             );
         }
         Ok(())
