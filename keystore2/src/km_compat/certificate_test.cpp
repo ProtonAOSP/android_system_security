@@ -49,14 +49,12 @@ getCertificate(const std::vector<KeyParameter>& keyParams) {
     if (!device) {
         return ScopedAStatus::fromStatus(STATUS_NAME_NOT_FOUND);
     }
-    ByteArray blob;
-    KeyCharacteristics characteristics;
-    std::vector<Certificate> certChain;
-    auto status = device->generateKey(keyParams, &blob, &characteristics, &certChain);
+    KeyCreationResult creationResult;
+    auto status = device->generateKey(keyParams, &creationResult);
     if (!status.isOk()) {
         return status;
     }
-    return certChain;
+    return creationResult.certificateChain;
 }
 
 static void ensureCertChainSize(const std::variant<std::vector<Certificate>, ScopedAStatus>& result,

@@ -17,10 +17,10 @@
 //! This crate implements the IKeystoreSecurityLevel interface.
 
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
-    Algorithm::Algorithm, ByteArray::ByteArray, Certificate::Certificate as KmCertificate,
-    HardwareAuthenticatorType::HardwareAuthenticatorType, IKeyMintDevice::IKeyMintDevice,
-    KeyCharacteristics::KeyCharacteristics, KeyFormat::KeyFormat, KeyParameter::KeyParameter,
-    KeyParameterValue::KeyParameterValue, SecurityLevel::SecurityLevel, Tag::Tag,
+    Algorithm::Algorithm, HardwareAuthenticatorType::HardwareAuthenticatorType,
+    IKeyMintDevice::IKeyMintDevice, KeyCreationResult::KeyCreationResult, KeyFormat::KeyFormat,
+    KeyParameter::KeyParameter, KeyParameterValue::KeyParameterValue, SecurityLevel::SecurityLevel,
+    Tag::Tag,
 };
 use android_system_keystore2::aidl::android::system::keystore2::{
     AuthenticatorSpec::AuthenticatorSpec, CreateOperationResponse::CreateOperationResponse,
@@ -79,39 +79,39 @@ impl KeystoreSecurityLevel {
     fn store_new_key(
         &self,
         key: KeyDescriptor,
-        key_characteristics: KeyCharacteristics,
-        km_cert_chain: Option<Vec<KmCertificate>>,
-        blob: ByteArray,
+        creation_result: KeyCreationResult,
     ) -> Result<KeyMetadata> {
-        let (cert, cert_chain): (Option<Vec<u8>>, Option<Vec<u8>>) = match km_cert_chain {
-            Some(mut chain) => (
-                match chain.len() {
-                    0 => None,
-                    _ => Some(chain.remove(0).encodedCertificate),
-                },
-                match chain.len() {
-                    0 => None,
-                    _ => Some(
-                        chain
-                            .iter()
-                            .map(|c| c.encodedCertificate.iter())
-                            .flatten()
-                            .copied()
-                            .collect(),
-                    ),
-                },
-            ),
-            None => (None, None),
-        };
+        let KeyCreationResult {
+            keyBlob: key_blob,
+            keyCharacteristics: key_characteristics,
+            certificateChain: mut certificate_chain,
+        } = creation_result;
 
-        let key_parameters =
-            key_characteristics_to_internal(key_characteristics, self.security_level);
+        let (cert, cert_chain): (Option<Vec<u8>>, Option<Vec<u8>>) = (
+            match certificate_chain.len() {
+                0 => None,
+                _ => Some(certificate_chain.remove(0).encodedCertificate),
+            },
+            match certificate_chain.len() {
+                0 => None,
+                _ => Some(
+                    certificate_chain
+                        .iter()
+                        .map(|c| c.encodedCertificate.iter())
+                        .flatten()
+                        .copied()
+                        .collect(),
+                ),
+            },
+        );
+
+        let key_parameters = key_characteristics_to_internal(key_characteristics);
 
         let creation_date = DateTime::now().context("Trying to make creation time.")?;
 
         let key = match key.domain {
             Domain::BLOB => {
-                KeyDescriptor { domain: Domain::BLOB, blob: Some(blob.data), ..Default::default() }
+                KeyDescriptor { domain: Domain::BLOB, blob: Some(key_blob), ..Default::default() }
             }
             _ => DB
                 .with::<_, Result<KeyDescriptor>>(|db| {
@@ -123,7 +123,7 @@ impl KeystoreSecurityLevel {
                         .store_new_key(
                             key,
                             &key_parameters,
-                            &blob.data,
+                            &key_blob,
                             cert.as_deref(),
                             cert_chain.as_deref(),
                             &metadata,
@@ -294,18 +294,9 @@ impl KeystoreSecurityLevel {
 
         let km_dev: Box<dyn IKeyMintDevice> = self.keymint.get_interface()?;
         map_km_error(km_dev.addRngEntropy(entropy))?;
-        let mut blob: ByteArray = Default::default();
-        let mut key_characteristics: KeyCharacteristics = Default::default();
-        let mut certificate_chain: Vec<KmCertificate> = Default::default();
-        map_km_error(km_dev.generateKey(
-            &params,
-            &mut blob,
-            &mut key_characteristics,
-            &mut certificate_chain,
-        ))?;
+        let creation_result = map_km_error(km_dev.generateKey(&params))?;
 
-        self.store_new_key(key, key_characteristics, Some(certificate_chain), blob)
-            .context("In generate_key.")
+        self.store_new_key(key, creation_result).context("In generate_key.")
     }
 
     fn import_key(
@@ -334,10 +325,6 @@ impl KeystoreSecurityLevel {
         // import_key requires the rebind permission.
         check_key_permission(KeyPerm::rebind(), &key, &None).context("In import_key.")?;
 
-        let mut blob: ByteArray = Default::default();
-        let mut key_characteristics: KeyCharacteristics = Default::default();
-        let mut certificate_chain: Vec<KmCertificate> = Default::default();
-
         let format = params
             .iter()
             .find(|p| p.tag == Tag::ALGORITHM)
@@ -355,17 +342,9 @@ impl KeystoreSecurityLevel {
             .context("In import_key.")?;
 
         let km_dev: Box<dyn IKeyMintDevice> = self.keymint.get_interface()?;
-        map_km_error(km_dev.importKey(
-            &params,
-            format,
-            key_data,
-            &mut blob,
-            &mut key_characteristics,
-            &mut certificate_chain,
-        ))?;
+        let creation_result = map_km_error(km_dev.importKey(&params, format, key_data))?;
 
-        self.store_new_key(key, key_characteristics, Some(certificate_chain), blob)
-            .context("In import_key.")
+        self.store_new_key(key, creation_result).context("In import_key.")
     }
 
     fn import_wrapped_key(
@@ -455,29 +434,25 @@ impl KeystoreSecurityLevel {
         let masking_key = masking_key.unwrap_or(ZERO_BLOB_32);
 
         let km_dev: Box<dyn IKeyMintDevice> = self.keymint.get_interface()?;
-        let ((blob, key_characteristics), _) = self.upgrade_keyblob_if_required_with(
+        let (creation_result, _) = self.upgrade_keyblob_if_required_with(
             &*km_dev,
             Some(wrapping_key_id_guard),
             wrapping_key_blob,
             &[],
             |wrapping_blob| {
-                let mut blob: ByteArray = Default::default();
-                let mut key_characteristics: KeyCharacteristics = Default::default();
-                map_km_error(km_dev.importWrappedKey(
+                let creation_result = map_km_error(km_dev.importWrappedKey(
                     wrapped_data,
                     wrapping_key_blob,
                     masking_key,
                     &params,
                     pw_sid,
                     fp_sid,
-                    &mut blob,
-                    &mut key_characteristics,
                 ))?;
-                Ok((blob, key_characteristics))
+                Ok(creation_result)
             },
         )?;
 
-        self.store_new_key(key, key_characteristics, None, blob).context("In import_wrapped_key.")
+        self.store_new_key(key, creation_result).context("In import_wrapped_key.")
     }
 
     fn upgrade_keyblob_if_required_with<T, F>(
