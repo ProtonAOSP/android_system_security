@@ -12,9 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//TODO: remove this in the future CLs in the stack.
-#![allow(dead_code)]
-
 //! This is the Keystore 2.0 database module.
 //! The database module provides a connection to the backing SQLite store.
 //! We have two databases one for persistent key blob storage and one for
@@ -59,14 +56,15 @@ use anyhow::{anyhow, Context, Result};
 use std::{convert::TryFrom, convert::TryInto, time::SystemTimeError};
 
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
-    HardwareAuthToken::HardwareAuthToken, HardwareAuthenticatorType::HardwareAuthenticatorType,
-    SecurityLevel::SecurityLevel,
+    ErrorCode::ErrorCode as Ec, HardwareAuthToken::HardwareAuthToken,
+    HardwareAuthenticatorType::HardwareAuthenticatorType, SecurityLevel::SecurityLevel,
+    Timestamp::Timestamp,
 };
 use android_system_keystore2::aidl::android::system::keystore2::{
     Domain::Domain, KeyDescriptor::KeyDescriptor,
 };
-
 use lazy_static::lazy_static;
+use log::error;
 #[cfg(not(test))]
 use rand::prelude::random;
 use rusqlite::{
@@ -75,7 +73,7 @@ use rusqlite::{
     types::FromSqlResult,
     types::ToSqlOutput,
     types::{FromSqlError, Value, ValueRef},
-    Connection, OptionalExtension, ToSql, Transaction, TransactionBehavior, NO_PARAMS,
+    Connection, Error, OptionalExtension, ToSql, Transaction, TransactionBehavior, NO_PARAMS,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -585,12 +583,6 @@ impl AuthTokenEntry {
         })
     }
 
-    fn is_newer_than(&self, other: &AuthTokenEntry) -> bool {
-        // NOTE: Although in legacy keystore both timestamp and time_received are involved in this
-        // check, we decided to only consider time_received in keystore2 code.
-        self.time_received.seconds() > other.time_received.seconds()
-    }
-
     /// Returns the auth token wrapped by the AuthTokenEntry
     pub fn get_auth_token(self) -> HardwareAuthToken {
         self.auth_token
@@ -705,7 +697,9 @@ impl KeystoreDB {
             NO_PARAMS,
         )
         .context("Failed to initialize \"metadata\" table.")?;
-
+        // TODO: Add the initial entry on last_off_body to the metadata table during the boot of the
+        // device (i.e. during the first startup of the keystore during a boot cycle).
+        Self::insert_last_off_body(conn, MonotonicRawTime::now()).context("In init-tables.")?;
         Ok(())
     }
 
@@ -1686,6 +1680,121 @@ impl KeystoreDB {
             .context("In insert_auth_token: failed to insert auth token into the database")?;
         Ok(())
     }
+
+    /// find the auth token entry issued for a time-out token
+    pub fn find_timed_auth_token_entry(
+        &mut self,
+        user_secure_ids: &[i64],
+        auth_type: HardwareAuthenticatorType,
+        key_time_out: i64,
+        allow_while_on_body: bool,
+    ) -> Result<AuthTokenEntry> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .context("In find_timed_auth_token_entry: failed to initialize transaction.")?;
+        let auth_token_entries =
+            Self::load_auth_token_entries(&tx).context("In find_timed_auth_token_entry.")?;
+        // NOTE: Although in legacy keystore both timestamp and time_received are used when finding
+        // the newest match, we decided to only consider time_received in keystore2 code.
+        // TODO: verify that the iter().find() preserves the order.
+        let newest_match: Option<AuthTokenEntry> = auth_token_entries.into_iter().find(|entry| {
+            AuthTokenEntry::satisfies_auth(&entry.auth_token, user_secure_ids, auth_type)
+        });
+
+        // Tag::ALLOW_WHILE_ON_BODY specifies that the key may be used after authentication
+        // timeout if device is still on-body. So we return error only if both checks fail.
+        if let Some(newest_match_entry) = newest_match {
+            let current_time = MonotonicRawTime::now();
+            let time_since_received_plus_time_out =
+                match newest_match_entry.time_received.seconds().checked_add(key_time_out) {
+                    Some(t) => t,
+                    None => {
+                        // we do not expect this behavior, so we need to log this error if it ever
+                        // happens.
+                        error!("In find_timed_auth_token_entry: overflow occurred.");
+                        return Err(KsError::Km(Ec::KEY_USER_NOT_AUTHENTICATED)).context(
+                            "In find_timed_auth_token_entry: matching auth token is expired.",
+                        );
+                    }
+                };
+            if (time_since_received_plus_time_out < current_time.seconds())
+                && (!allow_while_on_body
+                    || (newest_match_entry.time_received.seconds()
+                        < Self::get_last_off_body(&tx)?.seconds()))
+            {
+                return Err(KsError::Km(Ec::KEY_USER_NOT_AUTHENTICATED))
+                    .context("In find_timed_auth_token_entry: matching auth token is expired.");
+            }
+            tx.commit().context("In find_timed_auth_token_entry, failed to commit transaction.")?;
+            Ok(newest_match_entry)
+        } else {
+            Err(KsError::Km(Ec::KEY_USER_NOT_AUTHENTICATED))
+                .context("In find_timed_auth_token_entry: no matching auth token found.")
+        }
+    }
+
+    /// load the existing auth token entries in perboot.authtoken table into a vector.
+    /// return None if the table is empty.
+    fn load_auth_token_entries(tx: &Transaction) -> Result<Vec<AuthTokenEntry>> {
+        let mut stmt = tx
+            .prepare("SELECT * from perboot.authtoken ORDER BY time_received DESC;")
+            .context("In load_auth_token_entries: select prepare statement failed.")?;
+
+        let auth_token_entries: Vec<AuthTokenEntry> = stmt
+            .query_map(NO_PARAMS, |row| {
+                Ok(AuthTokenEntry::new(
+                    HardwareAuthToken {
+                        challenge: row.get(1)?,
+                        userId: row.get(2)?,
+                        authenticatorId: row.get(3)?,
+                        authenticatorType: HardwareAuthenticatorType(row.get(4)?),
+                        timestamp: Timestamp { milliSeconds: row.get(5)? },
+                        mac: row.get(6)?,
+                    },
+                    row.get(7)?,
+                ))
+            })
+            .context("In load_auth_token_entries: query_map failed.")?
+            .collect::<Result<Vec<AuthTokenEntry>, Error>>()
+            .context(
+                "In load_auth_token_entries: failed to create a vector of auth token entries
+                from mapped rows.",
+            )?;
+        Ok(auth_token_entries)
+    }
+
+    /// insert last_off_body into the metadata table at the initialization of auth token table
+    pub fn insert_last_off_body(conn: &Connection, last_off_body: MonotonicRawTime) -> Result<()> {
+        conn.execute(
+            "INSERT OR REPLACE INTO perboot.metadata (key, value) VALUES (?, ?);",
+            params!["last_off_body", last_off_body],
+        )
+        .context("In insert_last_off_body: failed to insert.")?;
+        Ok(())
+    }
+
+    /// update last_off_body when on_device_off_body is called
+    pub fn update_last_off_body(&self, last_off_body: MonotonicRawTime) -> Result<()> {
+        self.conn
+            .execute(
+                "UPDATE perboot.metadata SET value = ? WHERE key = ?;",
+                params![last_off_body, "last_off_body"],
+            )
+            .context("In update_last_off_body: failed to update.")?;
+        Ok(())
+    }
+
+    /// get last_off_body time when finding auth tokens
+    fn get_last_off_body(tx: &Transaction) -> Result<MonotonicRawTime> {
+        let mut stmt = tx
+            .prepare("SELECT value from perboot.metadata WHERE key = ?;")
+            .context("In get_last_off_body: select prepare statement failed.")?;
+        let last_off_body: Result<MonotonicRawTime> = stmt
+            .query_row(params!["last_off_body"], |row| Ok(row.get(0)?))
+            .context("In get_last_off_body: query_row failed.");
+        last_off_body
+    }
 }
 
 #[cfg(test)]
@@ -1704,13 +1813,13 @@ mod tests {
         HardwareAuthenticatorType::HardwareAuthenticatorType as kmhw_authenticator_type,
         Timestamp::Timestamp,
     };
-    use rusqlite::Error;
     use rusqlite::NO_PARAMS;
+    use rusqlite::{Error, TransactionBehavior};
     use std::cell::RefCell;
     use std::sync::atomic::{AtomicU8, Ordering};
     use std::sync::Arc;
     use std::thread;
-    use std::time::SystemTime;
+    use std::time::{Duration, SystemTime};
 
     fn new_test_db() -> Result<KeystoreDB> {
         let conn = KeystoreDB::make_connection("file::memory:", "file::memory:")?;
@@ -2895,5 +3004,22 @@ mod tests {
             *counter.borrow_mut() += 1;
             result
         })
+    }
+
+    #[test]
+    fn test_last_off_body() -> Result<()> {
+        let mut db = new_test_db()?;
+        KeystoreDB::insert_last_off_body(&db.conn, MonotonicRawTime::now())?;
+        let tx = db.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let last_off_body_1 = KeystoreDB::get_last_off_body(&tx)?;
+        tx.commit()?;
+        let one_second = Duration::from_secs(1);
+        thread::sleep(one_second);
+        db.update_last_off_body(MonotonicRawTime::now())?;
+        let tx2 = db.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let last_off_body_2 = KeystoreDB::get_last_off_body(&tx2)?;
+        tx2.commit()?;
+        assert!(last_off_body_1.seconds() < last_off_body_2.seconds());
+        Ok(())
     }
 }
