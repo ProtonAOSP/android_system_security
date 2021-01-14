@@ -12,10 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// This suppresses the compiler's complaint about converting tv_sec to i64 in method
-// get_current_time_in_seconds.
-#![allow(clippy::useless_conversion)]
-
 //! This module implements utility functions used by the Keystore 2.0 service
 //! implementation.
 
@@ -157,6 +153,9 @@ pub fn get_current_time_in_seconds() -> i64 {
     unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC_RAW, &mut current_time) };
     // It is safe to unwrap here because try_from() returns std::convert::Infallible, which is
     // defined to be an error that can never happen (i.e. the result is always ok).
+    // This suppresses the compiler's complaint about converting tv_sec to i64 in method
+    // get_current_time_in_seconds.
+    #[allow(clippy::useless_conversion)]
     i64::try_from(current_time.tv_sec).unwrap()
 }
 

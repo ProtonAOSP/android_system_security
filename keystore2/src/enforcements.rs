@@ -12,9 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//TODO: remove this after implementing the methods.
-#![allow(dead_code)]
-
 //! This is the Keystore 2.0 Enforcements module.
 // TODO: more description to follow.
 use crate::auth_token_handler::AuthTokenHandler;
@@ -150,8 +147,7 @@ impl Enforcements {
         purpose: KeyPurpose,
         key_params: &[KeyParameter],
         op_params: &[KeyParameter],
-        // security_level will be used in the next CL
-        _security_level: SecurityLevel,
+        security_level: SecurityLevel,
     ) -> Result<AuthTokenHandler> {
         match purpose {
             // Allow SIGN, DECRYPT for both symmetric and asymmetric keys.
@@ -188,11 +184,13 @@ impl Enforcements {
         // reduce the number of for loops on key parameters from 3 to 1, compared to legacy keystore
         let mut key_purpose_authorized: bool = false;
         let mut is_time_out_key: bool = false;
-        let mut auth_type: Option<HardwareAuthenticatorType> = None;
+        let mut user_auth_type: Option<HardwareAuthenticatorType> = None;
         let mut no_auth_required: bool = false;
         let mut caller_nonce_allowed = false;
         let mut user_id: i32 = -1;
         let mut user_secure_ids = Vec::<i64>::new();
+        let mut key_time_out: Option<i64> = None;
+        let mut allow_while_on_body = false;
 
         // iterate through key parameters, recording information we need for authorization
         // enforcements later, or enforcing authorizations in place, where applicable
@@ -201,11 +199,12 @@ impl Enforcements {
                 KeyParameterValue::NoAuthRequired => {
                     no_auth_required = true;
                 }
-                KeyParameterValue::AuthTimeout(_) => {
+                KeyParameterValue::AuthTimeout(t) => {
                     is_time_out_key = true;
+                    key_time_out = Some(*t as i64);
                 }
                 KeyParameterValue::HardwareAuthenticatorType(a) => {
-                    auth_type = Some(*a);
+                    user_auth_type = Some(*a);
                 }
                 KeyParameterValue::KeyPurpose(p) => {
                     // Note: if there can be multiple KeyPurpose key parameters (TODO: confirm this),
@@ -255,6 +254,9 @@ impl Enforcements {
                             .context("In authorize_create: device is locked.");
                     }
                 }
+                KeyParameterValue::AllowWhileOnBody => {
+                    allow_while_on_body = true;
+                }
                 // NOTE: as per offline discussion, sanitizing key parameters and rejecting
                 // create operation if any non-allowed tags are present, is not done in
                 // authorize_create (unlike in legacy keystore where AuthorizeBegin is rejected if
@@ -279,8 +281,8 @@ impl Enforcements {
         }
 
         // if either of auth_type or secure_id is present and the other is not present, return error
-        if (auth_type.is_some() && user_secure_ids.is_empty())
-            || (auth_type.is_none() && !user_secure_ids.is_empty())
+        if (user_auth_type.is_some() && user_secure_ids.is_empty())
+            || (user_auth_type.is_none() && !user_secure_ids.is_empty())
         {
             return Err(KeystoreError::Km(Ec::KEY_USER_NOT_AUTHENTICATED)).context(
                 "In authorize_create: Auth required, but either auth type or secure ids
@@ -299,13 +301,37 @@ impl Enforcements {
         }
 
         if !user_secure_ids.is_empty() {
-            // per op auth token
+            // key requiring authentication per operation
             if !is_time_out_key {
                 return Ok(AuthTokenHandler::OpAuthRequired);
             } else {
-                //time out token
-                // TODO: retrieve it from the database
-                // - in an upcoming CL
+                // key requiring time-out based authentication
+                let auth_token = DB
+                    .with::<_, Result<HardwareAuthToken>>(|db| {
+                        let mut db = db.borrow_mut();
+                        match (user_auth_type, key_time_out) {
+                            (Some(auth_type), Some(key_time_out)) => {
+                                let matching_entry = db
+                                    .find_timed_auth_token_entry(
+                                        &user_secure_ids,
+                                        auth_type,
+                                        key_time_out,
+                                        allow_while_on_body,
+                                    )
+                                    .context("Failed to find timed auth token.")?;
+                                Ok(matching_entry.get_auth_token())
+                            }
+                            (_, _) => Err(KeystoreError::Km(Ec::KEY_USER_NOT_AUTHENTICATED))
+                                .context("Authenticator type and/or key time out is not given."),
+                        }
+                    })
+                    .context("In authorize_create.")?;
+
+                if security_level == SecurityLevel::STRONGBOX {
+                    return Ok(AuthTokenHandler::VerificationRequired(auth_token));
+                } else {
+                    return Ok(AuthTokenHandler::Token(auth_token, None));
+                }
             }
         }
 
