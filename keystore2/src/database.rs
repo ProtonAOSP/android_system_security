@@ -41,17 +41,12 @@
 //! from the database module these functions take permission check
 //! callbacks.
 
-#![allow(dead_code)]
-
+use crate::db_utils::{self, SqlField};
 use crate::error::{Error as KsError, ResponseCode};
 use crate::impl_metadata; // This is in db_utils.rs
 use crate::key_parameter::{KeyParameter, Tag};
 use crate::permission::KeyPermSet;
 use crate::utils::get_current_time_in_seconds;
-use crate::{
-    db_utils::{self, SqlField},
-    gc::Gc,
-};
 use anyhow::{anyhow, Context, Result};
 use std::{convert::TryFrom, convert::TryInto, time::SystemTimeError};
 
@@ -1033,34 +1028,23 @@ impl KeystoreDB {
         .context("In insert_key_metadata.")
     }
 
-    fn rebind_alias(
-        &mut self,
-        newid: &KeyIdGuard,
-        alias: &str,
-        domain: Domain,
-        namespace: i64,
-    ) -> Result<()> {
-        self.with_transaction(TransactionBehavior::Immediate, |tx| {
-            Self::rebind_alias_internal(tx, newid, alias, domain, namespace)
-        })
-        .context("In rebind_alias.")
-    }
-
     /// Updates the alias column of the given key id `newid` with the given alias,
     /// and atomically, removes the alias, domain, and namespace from another row
     /// with the same alias-domain-namespace tuple if such row exits.
-    fn rebind_alias_internal(
+    /// Returns Ok(true) if an old key was marked unreferenced as a hint to the garbage
+    /// collector.
+    fn rebind_alias(
         tx: &Transaction,
         newid: &KeyIdGuard,
         alias: &str,
         domain: Domain,
         namespace: i64,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         match domain {
             Domain::APP | Domain::SELINUX => {}
             _ => {
                 return Err(KsError::sys()).context(format!(
-                    "In rebind_alias_internal: Domain {:?} must be either App or SELinux.",
+                    "In rebind_alias: Domain {:?} must be either App or SELinux.",
                     domain
                 ));
             }
@@ -1072,10 +1056,7 @@ impl KeystoreDB {
                  WHERE alias = ? AND domain = ? AND namespace = ?;",
                 params![KeyLifeCycle::Unreferenced, alias, domain.0 as u32, namespace],
             )
-            .context("In rebind_alias_internal: Failed to rebind existing entry.")?;
-        if updated != 0 {
-            Gc::notify_gc();
-        }
+            .context("In rebind_alias: Failed to rebind existing entry.")?;
         let result = tx
             .execute(
                 "UPDATE persistent.keyentry
@@ -1090,19 +1071,21 @@ impl KeystoreDB {
                     KeyLifeCycle::Existing
                 ],
             )
-            .context("In rebind_alias_internal: Failed to set alias.")?;
+            .context("In rebind_alias: Failed to set alias.")?;
         if result != 1 {
             return Err(KsError::sys()).context(format!(
-                "In rebind_alias_internal: Expected to update a single entry but instead updated {}.",
+                "In rebind_alias: Expected to update a single entry but instead updated {}.",
                 result
             ));
         }
-        Ok(())
+        Ok(updated != 0)
     }
 
     /// Store a new key in a single transaction.
     /// The function creates a new key entry, populates the blob, key parameter, and metadata
     /// fields, and rebinds the given alias to the new key.
+    /// The boolean returned is a hint for the garbage collector. If true, a key was replaced,
+    /// is now unreferenced and needs to be collected.
     pub fn store_new_key<'a>(
         &mut self,
         key: KeyDescriptor,
@@ -1111,7 +1094,7 @@ impl KeystoreDB {
         cert: Option<&[u8]>,
         cert_chain: Option<&[u8]>,
         metadata: &KeyMetaData,
-    ) -> Result<KeyIdGuard> {
+    ) -> Result<(bool, KeyIdGuard)> {
         let (alias, domain, namespace) = match key {
             KeyDescriptor { alias: Some(alias), domain: Domain::APP, nspace, blob: None }
             | KeyDescriptor { alias: Some(alias), domain: Domain::SELINUX, nspace, blob: None } => {
@@ -1143,9 +1126,9 @@ impl KeystoreDB {
             Self::insert_keyparameter_internal(tx, &key_id, params)
                 .context("Trying to insert key parameters.")?;
             metadata.store_in_db(key_id.id(), tx).context("Tryin to insert key metadata.")?;
-            Self::rebind_alias_internal(tx, &key_id, &alias, domain, namespace)
+            let need_gc = Self::rebind_alias(tx, &key_id, &alias, domain, namespace)
                 .context("Trying to rebind alias.")?;
-            Ok(key_id)
+            Ok((need_gc, key_id))
         })
         .context("In store_new_key.")
     }
@@ -1437,29 +1420,27 @@ impl KeystoreDB {
         Ok((key_id_guard, key_entry))
     }
 
-    fn mark_unreferenced(tx: &Transaction, key_id: i64) -> Result<()> {
+    fn mark_unreferenced(tx: &Transaction, key_id: i64) -> Result<bool> {
         let updated = tx
             .execute(
                 "UPDATE persistent.keyentry SET state = ? WHERE id = ?;",
                 params![KeyLifeCycle::Unreferenced, key_id],
             )
             .context("In mark_unreferenced: Failed to update state of key entry.")?;
-        if updated != 0 {
-            Gc::notify_gc();
-        }
         tx.execute("DELETE from persistent.grant WHERE keyentryid = ?;", params![key_id])
             .context("In mark_unreferenced: Failed to drop grants.")?;
-        Ok(())
+        Ok(updated != 0)
     }
 
     /// Marks the given key as unreferenced and removes all of the grants to this key.
+    /// Returns Ok(true) if a key was marked unreferenced as a hint for the garbage collector.
     pub fn unbind_key(
         &mut self,
         key: KeyDescriptor,
         key_type: KeyType,
         caller_uid: u32,
         check_permission: impl FnOnce(&KeyDescriptor, Option<KeyPermSet>) -> Result<()>,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         self.with_transaction(TransactionBehavior::Immediate, |tx| {
             let (key_id, access_key_descriptor, access_vector) =
                 Self::load_access_tuple(tx, key, key_type, caller_uid)
@@ -1797,6 +1778,19 @@ mod tests {
         Ok(KeystoreDB { conn })
     }
 
+    fn rebind_alias(
+        db: &mut KeystoreDB,
+        newid: &KeyIdGuard,
+        alias: &str,
+        domain: Domain,
+        namespace: i64,
+    ) -> Result<bool> {
+        db.with_transaction(TransactionBehavior::Immediate, |tx| {
+            KeystoreDB::rebind_alias(tx, newid, alias, domain, namespace)
+        })
+        .context("In rebind_alias.")
+    }
+
     #[test]
     fn datetime() -> Result<()> {
         let conn = Connection::open_in_memory()?;
@@ -2000,14 +1994,14 @@ mod tests {
         assert_eq!(extractor(&entries[1]), (Some(Domain::APP), Some(42), None));
 
         // Test that the first call to rebind_alias sets the alias.
-        db.rebind_alias(&KEY_ID_LOCK.get(entries[0].id), "foo", Domain::APP, 42)?;
+        rebind_alias(&mut db, &KEY_ID_LOCK.get(entries[0].id), "foo", Domain::APP, 42)?;
         let entries = get_keyentry(&db)?;
         assert_eq!(entries.len(), 2);
         assert_eq!(extractor(&entries[0]), (Some(Domain::APP), Some(42), Some("foo")));
         assert_eq!(extractor(&entries[1]), (Some(Domain::APP), Some(42), None));
 
         // Test that the second call to rebind_alias also empties the old one.
-        db.rebind_alias(&KEY_ID_LOCK.get(entries[1].id), "foo", Domain::APP, 42)?;
+        rebind_alias(&mut db, &KEY_ID_LOCK.get(entries[1].id), "foo", Domain::APP, 42)?;
         let entries = get_keyentry(&db)?;
         assert_eq!(entries.len(), 2);
         assert_eq!(extractor(&entries[0]), (None, None, None));
@@ -2015,21 +2009,21 @@ mod tests {
 
         // Test that we must pass in a valid Domain.
         check_result_is_error_containing_string(
-            db.rebind_alias(&KEY_ID_LOCK.get(0), "foo", Domain::GRANT, 42),
+            rebind_alias(&mut db, &KEY_ID_LOCK.get(0), "foo", Domain::GRANT, 42),
             "Domain Domain(1) must be either App or SELinux.",
         );
         check_result_is_error_containing_string(
-            db.rebind_alias(&KEY_ID_LOCK.get(0), "foo", Domain::BLOB, 42),
+            rebind_alias(&mut db, &KEY_ID_LOCK.get(0), "foo", Domain::BLOB, 42),
             "Domain Domain(3) must be either App or SELinux.",
         );
         check_result_is_error_containing_string(
-            db.rebind_alias(&KEY_ID_LOCK.get(0), "foo", Domain::KEY_ID, 42),
+            rebind_alias(&mut db, &KEY_ID_LOCK.get(0), "foo", Domain::KEY_ID, 42),
             "Domain Domain(4) must be either App or SELinux.",
         );
 
         // Test that we correctly handle setting an alias for something that does not exist.
         check_result_is_error_containing_string(
-            db.rebind_alias(&KEY_ID_LOCK.get(0), "foo", Domain::SELINUX, 42),
+            rebind_alias(&mut db, &KEY_ID_LOCK.get(0), "foo", Domain::SELINUX, 42),
             "Expected to update a single entry but instead updated 0",
         );
         // Test that we correctly abort the transaction in this case.
@@ -2894,7 +2888,7 @@ mod tests {
         metadata.add(KeyMetaEntry::Iv(vec![2, 3, 1]));
         metadata.add(KeyMetaEntry::AeadTag(vec![3, 1, 2]));
         db.insert_key_metadata(&key_id, &metadata)?;
-        db.rebind_alias(&key_id, alias, domain, namespace)?;
+        rebind_alias(db, &key_id, alias, domain, namespace)?;
         Ok(key_id)
     }
 
