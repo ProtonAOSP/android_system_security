@@ -50,7 +50,7 @@ use crate::{
     utils::key_characteristics_to_internal,
     utils::uid_to_android_user,
 };
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use binder::{IBinder, Interface, ThreadState};
 
 /// Implementation of the IKeystoreSecurityLevel Interface.
@@ -293,6 +293,20 @@ impl KeystoreSecurityLevel {
         })
     }
 
+    fn add_attestation_parameters(uid: u32, params: &[KeyParameter]) -> Result<Vec<KeyParameter>> {
+        let mut result = params.to_vec();
+        if params.iter().any(|kp| kp.tag == Tag::ATTESTATION_CHALLENGE) {
+            let aaid = keystore2_aaid::get_aaid(uid).map_err(|e| {
+                anyhow!(format!("In add_attestation_parameters: get_aaid returned status {}.", e))
+            })?;
+            result.push(KeyParameter {
+                tag: Tag::ATTESTATION_APPLICATION_ID,
+                value: KeyParameterValue::Blob(aaid),
+            });
+        }
+        Ok(result)
+    }
+
     fn generate_key(
         &self,
         key: &KeyDescriptor,
@@ -319,6 +333,9 @@ impl KeystoreSecurityLevel {
 
         // generate_key requires the rebind permission.
         check_key_permission(KeyPerm::rebind(), &key, &None).context("In generate_key.")?;
+
+        let params = Self::add_attestation_parameters(caller_uid, params)
+            .context("In generate_key: Trying to get aaid.")?;
 
         let km_dev: Box<dyn IKeyMintDevice> = self.keymint.get_interface()?;
         map_km_error(km_dev.addRngEntropy(entropy))?;
@@ -354,6 +371,9 @@ impl KeystoreSecurityLevel {
 
         // import_key requires the rebind permission.
         check_key_permission(KeyPerm::rebind(), &key, &None).context("In import_key.")?;
+
+        let params = Self::add_attestation_parameters(caller_uid, params)
+            .context("In import_key: Trying to get aaid.")?;
 
         let format = params
             .iter()
