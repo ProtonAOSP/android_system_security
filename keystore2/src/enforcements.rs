@@ -15,6 +15,7 @@
 //! This is the Keystore 2.0 Enforcements module.
 // TODO: more description to follow.
 use crate::auth_token_handler::AuthTokenHandler;
+use crate::background_task_handler::Message;
 use crate::database::AuthTokenEntry;
 use crate::error::Error as KeystoreError;
 use crate::globals::DB;
@@ -23,10 +24,12 @@ use android_hardware_security_keymint::aidl::android::hardware::security::keymin
     Algorithm::Algorithm, ErrorCode::ErrorCode as Ec, HardwareAuthToken::HardwareAuthToken,
     HardwareAuthenticatorType::HardwareAuthenticatorType, KeyPurpose::KeyPurpose,
     SecurityLevel::SecurityLevel, Tag::Tag, Timestamp::Timestamp,
+    VerificationToken::VerificationToken,
 };
 use android_system_keystore2::aidl::android::system::keystore2::OperationChallenge::OperationChallenge;
 use anyhow::{Context, Result};
 use std::collections::{HashMap, HashSet};
+use std::sync::mpsc::{channel, Sender};
 use std::sync::Mutex;
 use std::time::SystemTime;
 
@@ -38,25 +41,40 @@ pub struct Enforcements {
     // This maps the operation challenge to an optional auth token, to maintain op-auth tokens
     // in-memory, until they are picked up and given to the operation by authorise_update_finish().
     op_auth_map: Mutex<HashMap<i64, Option<HardwareAuthToken>>>,
+    // sender end of the channel via which the enforcement module communicates with the
+    // background task handler (bth). This is of type Mutex in an Option because it is initialized
+    // after the global enforcement object is created.
+    sender_to_bth: Mutex<Option<Sender<Message>>>,
 }
 
 impl Enforcements {
-    /// Creates an enforcement object with the two data structures it holds.
+    /// Creates an enforcement object with the two data structures it holds and the sender as None.
     pub fn new() -> Self {
         Enforcements {
             device_unlocked_set: Mutex::new(HashSet::new()),
             op_auth_map: Mutex::new(HashMap::new()),
+            sender_to_bth: Mutex::new(None),
         }
+    }
+
+    /// Initialize the sender_to_bth field, using the given sender end of a channel.
+    pub fn set_sender_to_bth(&self, sender: Sender<Message>) {
+        // It is ok to unwrap here because there is no chance of poisoning this mutex.
+        let mut sender_guard = self.sender_to_bth.lock().unwrap();
+        *sender_guard = Some(sender);
     }
 
     /// Checks if update or finish calls are authorized. If the operation is based on per-op key,
     /// try to receive the auth token from the op_auth_map. We assume that by the time update/finish
     /// is called, the auth token has been delivered to keystore. Therefore, we do not wait for it
     /// and if the auth token is not found in the map, an error is returned.
+    /// This method is called only during the first call to update or if finish is called right
+    /// after create operation, because the operation caches the authorization decisions and tokens
+    /// from previous calls to enforcement module.
     pub fn authorize_update_or_finish(
         &self,
         key_params: &[KeyParameter],
-        op_challenge: Option<OperationChallenge>,
+        op_challenge: Option<&OperationChallenge>,
     ) -> Result<AuthTokenHandler> {
         let mut user_auth_type: Option<HardwareAuthenticatorType> = None;
         let mut user_secure_ids = Vec::<i64>::new();
@@ -403,11 +421,65 @@ impl Enforcements {
             .context("In add_auth_token.")?;
         Ok(())
     }
+
+    /// This allows adding an entry to the op_auth_map, indexed by the operation challenge.
+    /// This is to be called by create_operation, once it has received the operation challenge
+    /// from keymint for an operation whose authorization decision is OpAuthRequired, as signalled
+    /// by the AuthTokenHandler.
+    pub fn insert_to_op_auth_map(&self, op_challenge: i64) {
+        let mut op_auth_map_guard = self.op_auth_map.lock().unwrap();
+        op_auth_map_guard.insert(op_challenge, None);
+    }
+
+    /// Requests a verification token from the background task handler which will retrieve it from
+    /// Timestamp Service or TEE KeyMint.
+    /// Once the create_operation receives an operation challenge from KeyMint, if it has
+    /// previously received a VerificationRequired variant of AuthTokenHandler during
+    /// authorize_create_operation, it calls this method to obtain a VerificationToken.
+    pub fn request_verification_token(
+        &self,
+        auth_token: HardwareAuthToken,
+        op_challenge: OperationChallenge,
+    ) -> Result<AuthTokenHandler> {
+        // create a channel for this particular operation
+        let (op_sender, op_receiver) = channel::<(HardwareAuthToken, VerificationToken)>();
+        // it is ok to unwrap here because there is no way this mutex gets poisoned.
+        let sender_guard = self.sender_to_bth.lock().unwrap();
+        if let Some(sender) = &*sender_guard {
+            let sender_cloned = sender.clone();
+            drop(sender_guard);
+            sender_cloned
+                .send(Message::Inputs((auth_token, op_challenge, op_sender)))
+                .map_err(|_| KeystoreError::sys())
+                .context(
+                    "In request_verification_token. Sending a request for a verification token
+             failed.",
+                )?;
+        }
+        Ok(AuthTokenHandler::Channel(op_receiver))
+    }
 }
 
 impl Default for Enforcements {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl Drop for Enforcements {
+    fn drop(&mut self) {
+        let sender_guard = self.sender_to_bth.lock().unwrap();
+        if let Some(sender) = &*sender_guard {
+            let sender_cloned = sender.clone();
+            drop(sender_guard);
+            // TODO: Verify how best to handle the error in this case.
+            sender_cloned.send(Message::Shutdown).unwrap_or_else(|e| {
+                panic!(
+                    "Failed to send shutdown message to background task handler because of {:?}.",
+                    e
+                );
+            });
+        }
     }
 }
 
