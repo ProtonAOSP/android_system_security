@@ -15,7 +15,6 @@
 //! This module defines the AuthTokenHandler enum and its methods. AuthTokenHandler enum represents
 //! the different states an auth token and an associated verification token can be expressed during
 //! the operation life cycle.
-use crate::error::Error as KeystoreError;
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
     HardwareAuthToken::HardwareAuthToken, VerificationToken::VerificationToken,
 };
@@ -23,7 +22,8 @@ use anyhow::{Context, Result};
 use std::sync::mpsc::Receiver;
 
 /// AuthTokenHandler enum has five different variants which are described by the comments above
-// each variant.
+// each variant, as follows.
+#[derive(Debug)]
 pub enum AuthTokenHandler {
     /// Used when an operation does not require an auth token for authorization.
     NoAuthRequired,
@@ -45,39 +45,37 @@ pub enum AuthTokenHandler {
 }
 
 impl AuthTokenHandler {
-    /// Retrieve auth token and verification token from the Token variant of an AuthTokenHandler
-    /// instance
-    pub fn get_auth_and_verification_tokens(
-        &self,
-    ) -> Option<(&HardwareAuthToken, &VerificationToken)> {
-        if let AuthTokenHandler::Token(auth_token, Some(verification_token)) = self {
-            Some((auth_token, verification_token))
-        } else {
-            None
-        }
-    }
-
-    /// Retrieve auth token from the Token variant of an AuthTokenHandler instance
-    pub fn get_auth_token(&self) -> Option<&HardwareAuthToken> {
-        if let AuthTokenHandler::Token(auth_token, _) = self {
-            Some(auth_token)
-        } else {
-            None
-        }
-    }
-
     /// If Channel variant, block on it until the verification token is sent by the
-    /// keystore2 worker thread which obtains verification tokens from TEE Keymint
-    pub fn receive_verification_token(&mut self) -> Result<()> {
+    /// keystore2 worker thread which obtains verification tokens from TEE Keymint and converts the
+    /// object from Channel variant to Token variant.
+    /// Retrieve auth token and verification token from the Token variant of an AuthTokenHandler
+    /// instance.
+    pub fn retrieve_auth_and_verification_tokens(
+        &mut self,
+    ) -> Result<(Option<&HardwareAuthToken>, Option<&VerificationToken>)> {
+        // Converts to Token variant if Channel variant found, after retrieving the
+        // VerificationToken
         if let AuthTokenHandler::Channel(recv) = self {
             let (auth_token, verification_token) =
                 recv.recv().context("In receive_verification_token: sender disconnected.")?;
             *self = AuthTokenHandler::Token(auth_token, Some(verification_token));
-            Ok(())
+        }
+        // get the tokens from the Token variant
+        if let AuthTokenHandler::Token(auth_token, optional_verification_token) = self {
+            Ok((Some(auth_token), optional_verification_token.as_ref()))
         } else {
-            Err(KeystoreError::sys()).context(
-                "In receive_verification_token: Wrong variant found in the authorization object.",
-            )
+            Ok((None, None))
+        }
+    }
+
+    /// Retrieve auth token from VerificationRequired and Token variants of an
+    /// AuthTokenHandler instance. This method is useful when we only expect an auth token and
+    /// do not expect a verification token.
+    pub fn get_auth_token(&self) -> Option<&HardwareAuthToken> {
+        match self {
+            AuthTokenHandler::VerificationRequired(auth_token) => Some(auth_token),
+            AuthTokenHandler::Token(auth_token, _) => Some(auth_token),
+            _ => None,
         }
     }
 }
