@@ -30,6 +30,7 @@ using ::aidl::android::hardware::security::keymint::ByteArray;
 using ::aidl::android::hardware::security::keymint::Certificate;
 using ::aidl::android::hardware::security::keymint::HardwareAuthToken;
 using ::aidl::android::hardware::security::keymint::KeyCharacteristics;
+using ::aidl::android::hardware::security::keymint::KeyCreationResult;
 using ::aidl::android::hardware::security::keymint::KeyFormat;
 using ::aidl::android::hardware::security::keymint::KeyMintHardwareInfo;
 using ::aidl::android::hardware::security::keymint::KeyParameter;
@@ -84,21 +85,16 @@ class KeyMintDevice : public aidl::android::hardware::security::keymint::BnKeyMi
                                       VerificationToken* _aidl_return) override;
     ScopedAStatus addRngEntropy(const std::vector<uint8_t>& in_data) override;
     ScopedAStatus generateKey(const std::vector<KeyParameter>& in_keyParams,
-                              ByteArray* out_generatedKeyBlob,
-                              KeyCharacteristics* out_generatedKeyCharacteristics,
-                              std::vector<Certificate>* out_outCertChain) override;
+                              KeyCreationResult* out_creationResult) override;
     ScopedAStatus importKey(const std::vector<KeyParameter>& in_inKeyParams,
                             KeyFormat in_inKeyFormat, const std::vector<uint8_t>& in_inKeyData,
-                            ByteArray* out_outImportedKeyBlob,
-                            KeyCharacteristics* out_outImportedKeyCharacteristics,
-                            std::vector<Certificate>* out_outCertChain) override;
+                            KeyCreationResult* out_creationResult) override;
     ScopedAStatus importWrappedKey(const std::vector<uint8_t>& in_inWrappedKeyData,
                                    const std::vector<uint8_t>& in_inWrappingKeyBlob,
                                    const std::vector<uint8_t>& in_inMaskingKey,
                                    const std::vector<KeyParameter>& in_inUnwrappingParams,
                                    int64_t in_inPasswordSid, int64_t in_inBiometricSid,
-                                   ByteArray* out_outImportedKeyBlob,
-                                   KeyCharacteristics* out_outImportedKeyCharacteristics) override;
+                                   KeyCreationResult* out_creationResult) override;
     ScopedAStatus upgradeKey(const std::vector<uint8_t>& in_inKeyBlobToUpgrade,
                              const std::vector<KeyParameter>& in_inUpgradeParams,
                              std::vector<uint8_t>* _aidl_return) override;
@@ -121,6 +117,7 @@ class KeyMintDevice : public aidl::android::hardware::security::keymint::BnKeyMi
   private:
     std::optional<V4_0_ErrorCode> signCertificate(const std::vector<KeyParameter>& keyParams,
                                                   const std::vector<uint8_t>& keyBlob, X509* cert);
+    KeyMintSecurityLevel securityLevel_;
 };
 
 class KeyMintOperation : public aidl::android::hardware::security::keymint::BnKeyMintOperation {
