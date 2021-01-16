@@ -28,8 +28,8 @@ aidl_interface {
 }
 
 aidl_interface {
-    name: "android.security.authorizations",
-    srcs: [ "android/security/authorizations/*.aidl" ],
+    name: "android.security.authorization",
+    srcs: [ "android/security/authorization/*.aidl" ],
     imports: [ "android.hardware.security.keymint" ],
     unstable: true,
     backend: {
