@@ -17,6 +17,8 @@
 //! to talk to.
 
 use crate::async_task::AsyncTask;
+use crate::background_task_handler::BackgroundTaskHandler;
+use crate::enforcements::Enforcements;
 use crate::gc::Gc;
 use crate::super_key::SuperKeyManager;
 use crate::utils::Asp;
@@ -81,6 +83,14 @@ lazy_static! {
     /// A single on-demand worker thread that handles deferred tasks with two different
     /// priorities.
     pub static ref ASYNC_TASK: AsyncTask = Default::default();
+    /// Singeleton for enforcements.
+    /// It is safe for this enforcements object to be called by multiple threads because the two
+    /// data structures which maintain its state are protected by mutexes.
+    pub static ref ENFORCEMENTS: Enforcements = Enforcements::new();
+    /// Background task handler is initialized and exists globally.
+    /// The other modules (e.g. enforcements) communicate with it via a channel initialized during
+    /// keystore startup.
+    pub static ref BACKGROUND_TASK_HANDLER: BackgroundTaskHandler = BackgroundTaskHandler::new();
 }
 
 static KEYMINT_SERVICE_NAME: &str = "android.hardware.security.keymint.IKeyMintDevice";
