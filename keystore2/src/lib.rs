@@ -17,7 +17,6 @@
 
 pub mod apc;
 pub mod auth_token_handler;
-pub mod authorization;
 pub mod background_task_handler;
 pub mod database;
 pub mod enforcements;
