@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package android.security.authorizations;
+package android.security.authorization;
 
 import android.hardware.security.keymint.HardwareAuthToken;
 
