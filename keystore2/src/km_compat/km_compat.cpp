@@ -41,6 +41,7 @@ using ::android::hardware::hidl_vec;
 using ::android::hardware::keymaster::V4_0::TagType;
 using ::android::hidl::manager::V1_2::IServiceManager;
 using V4_0_HardwareAuthToken = ::android::hardware::keymaster::V4_0::HardwareAuthToken;
+using V4_0_HmacSharingParameters = ::android::hardware::keymaster::V4_0::HmacSharingParameters;
 using V4_0_KeyCharacteristics = ::android::hardware::keymaster::V4_0::KeyCharacteristics;
 using V4_0_KeyFormat = ::android::hardware::keymaster::V4_0::KeyFormat;
 using V4_0_KeyParameter = ::android::hardware::keymaster::V4_0::KeyParameter;
@@ -107,6 +108,22 @@ static V4_0_VerificationToken convertVerificationTokenToLegacy(const Verificatio
         static_cast<::android::hardware::keymaster::V4_0::SecurityLevel>(vt.securityLevel);
     legacyVt.mac = vt.mac;
     return legacyVt;
+}
+
+static V4_0_HmacSharingParameters
+convertSharedSecretParameterToLegacy(const SharedSecretParameters& ssp) {
+    V4_0_HmacSharingParameters legacyHsp;
+    legacyHsp.seed = ssp.seed;
+    std::copy(ssp.nonce.begin(), ssp.nonce.end(), legacyHsp.nonce.data());
+    return legacyHsp;
+}
+
+static std::vector<V4_0_HmacSharingParameters>
+convertSharedSecretParametersToLegacy(const std::vector<SharedSecretParameters>& legacySsps) {
+    std::vector<V4_0_HmacSharingParameters> ssps(legacySsps.size());
+    std::transform(legacySsps.begin(), legacySsps.end(), ssps.begin(),
+                   convertSharedSecretParameterToLegacy);
+    return ssps;
 }
 
 void OperationSlots::setNumFreeSlots(uint8_t numFreeSlots) {
@@ -425,6 +442,63 @@ KeyMintOperation::~KeyMintOperation() {
             LOG(WARNING) << "Error calling abort in ~KeyMintOperation: " << error.getMessage();
         }
     }
+}
+
+// SecureClock implementation
+
+ScopedAStatus SecureClock::generateTimeStamp(int64_t in_challenge, TimeStampToken* _aidl_return) {
+    V4_0_ErrorCode errorCode;
+    auto result = mDevice->verifyAuthorization(
+        in_challenge, {}, V4_0_HardwareAuthToken(),
+        [&](V4_0_ErrorCode error, const V4_0_VerificationToken& token) {
+            errorCode = error;
+            _aidl_return->challenge = token.challenge;
+            _aidl_return->timestamp.milliSeconds = token.timestamp;
+            _aidl_return->securityLevel =
+                static_cast<::aidl::android::hardware::security::keymint::SecurityLevel>(
+                    token.securityLevel);
+            _aidl_return->mac = token.mac;
+        });
+    if (!result.isOk()) {
+        return ScopedAStatus::fromServiceSpecificError(
+            static_cast<int32_t>(ResponseCode::SYSTEM_ERROR));
+    }
+    return convertErrorCode(errorCode);
+}
+
+// SharedSecret implementation
+
+ScopedAStatus SharedSecret::getSharedSecretParameters(SharedSecretParameters* _aidl_return) {
+    V4_0_ErrorCode errorCode;
+    auto result = mDevice->getHmacSharingParameters(
+        [&](V4_0_ErrorCode error, const V4_0_HmacSharingParameters& params) {
+            errorCode = error;
+            _aidl_return->seed = params.seed;
+            std::copy(params.nonce.data(), params.nonce.data() + params.nonce.elementCount(),
+                      std::back_inserter(_aidl_return->nonce));
+        });
+    if (!result.isOk()) {
+        return ScopedAStatus::fromServiceSpecificError(
+            static_cast<int32_t>(ResponseCode::SYSTEM_ERROR));
+    }
+    return convertErrorCode(errorCode);
+}
+
+ScopedAStatus
+SharedSecret::computeSharedSecret(const std::vector<SharedSecretParameters>& in_params,
+                                  std::vector<uint8_t>* _aidl_return) {
+    V4_0_ErrorCode errorCode;
+    auto legacyParams = convertSharedSecretParametersToLegacy(in_params);
+    auto result = mDevice->computeSharedHmac(
+        legacyParams, [&](V4_0_ErrorCode error, const hidl_vec<uint8_t>& sharingCheck) {
+            errorCode = error;
+            *_aidl_return = sharingCheck;
+        });
+    if (!result.isOk()) {
+        return ScopedAStatus::fromServiceSpecificError(
+            static_cast<int32_t>(ResponseCode::SYSTEM_ERROR));
+    }
+    return convertErrorCode(errorCode);
 }
 
 // Certificate implementation
@@ -830,7 +904,11 @@ KeymasterDevices initializeKeymasters() {
     return result;
 }
 
-// KeyMintDevice implementation
+void KeyMintDevice::setNumFreeSlots(uint8_t numFreeSlots) {
+    mOperationSlots.setNumFreeSlots(numFreeSlots);
+}
+
+// Constructors and helpers.
 
 KeyMintDevice::KeyMintDevice(sp<Keymaster> device, KeyMintSecurityLevel securityLevel)
     : mDevice(device) {
@@ -841,8 +919,10 @@ KeyMintDevice::KeyMintDevice(sp<Keymaster> device, KeyMintSecurityLevel security
     }
 }
 
-void KeyMintDevice::setNumFreeSlots(uint8_t numFreeSlots) {
-    mOperationSlots.setNumFreeSlots(numFreeSlots);
+sp<Keymaster> getDevice(KeyMintSecurityLevel securityLevel) {
+    auto secLevel = static_cast<SecurityLevel>(securityLevel);
+    auto devices = initializeKeymasters();
+    return devices[secLevel];
 }
 
 std::shared_ptr<KeyMintDevice>
@@ -862,6 +942,22 @@ KeyMintDevice::createKeyMintDevice(KeyMintSecurityLevel securityLevel) {
     return device_ptr;
 }
 
+std::shared_ptr<SharedSecret> SharedSecret::createSharedSecret(KeyMintSecurityLevel securityLevel) {
+    auto device = getDevice(securityLevel);
+    if (!device) {
+        return {};
+    }
+    return ndk::SharedRefBase::make<SharedSecret>(std::move(device));
+}
+
+std::shared_ptr<SecureClock> SecureClock::createSecureClock(KeyMintSecurityLevel securityLevel) {
+    auto device = getDevice(securityLevel);
+    if (!device) {
+        return {};
+    }
+    return ndk::SharedRefBase::make<SecureClock>(std::move(device));
+}
+
 ScopedAStatus
 KeystoreCompatService::getKeyMintDevice(KeyMintSecurityLevel in_securityLevel,
                                         std::shared_ptr<IKeyMintDevice>* _aidl_return) {
@@ -873,5 +969,31 @@ KeystoreCompatService::getKeyMintDevice(KeyMintSecurityLevel in_securityLevel,
         mDeviceCache[in_securityLevel] = std::move(device);
     }
     *_aidl_return = mDeviceCache[in_securityLevel];
+    return ScopedAStatus::ok();
+}
+
+ScopedAStatus KeystoreCompatService::getSharedSecret(KeyMintSecurityLevel in_securityLevel,
+                                                     std::shared_ptr<ISharedSecret>* _aidl_return) {
+    if (!mSharedSecret) {
+        auto secret = SharedSecret::createSharedSecret(in_securityLevel);
+        if (!secret) {
+            return ScopedAStatus::fromStatus(STATUS_NAME_NOT_FOUND);
+        }
+        mSharedSecret = std::move(secret);
+    }
+    *_aidl_return = mSharedSecret;
+    return ScopedAStatus::ok();
+}
+
+ScopedAStatus KeystoreCompatService::getSecureClock(std::shared_ptr<ISecureClock>* _aidl_return) {
+    if (!mSharedSecret) {
+        // The legacy verification service was always provided by the TEE variant.
+        auto clock = SecureClock::createSecureClock(KeyMintSecurityLevel::TRUSTED_ENVIRONMENT);
+        if (!clock) {
+            return ScopedAStatus::fromStatus(STATUS_NAME_NOT_FOUND);
+        }
+        mSecureClock = std::move(clock);
+    }
+    *_aidl_return = mSecureClock;
     return ScopedAStatus::ok();
 }
