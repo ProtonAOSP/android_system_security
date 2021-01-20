@@ -281,10 +281,10 @@ impl KeystoreSecurityLevel {
                     Some(OperationChallenge { challenge: begin_result.challenge });
                 ENFORCEMENTS.insert_to_op_auth_map(begin_result.challenge);
             }
-            AuthTokenHandler::VerificationRequired(auth_token) => {
-                //request a verification token, given the auth token and the challenge
+            AuthTokenHandler::TimestampRequired(auth_token) => {
+                //request a timestamp token, given the auth token and the challenge
                 auth_token_handler = ENFORCEMENTS
-                    .request_verification_token(
+                    .request_timestamp_token(
                         auth_token,
                         OperationChallenge { challenge: begin_result.challenge },
                     )

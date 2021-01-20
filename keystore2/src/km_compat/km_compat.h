@@ -38,7 +38,6 @@ using ::aidl::android::hardware::security::keymint::KeyMintHardwareInfo;
 using ::aidl::android::hardware::security::keymint::KeyParameter;
 using ::aidl::android::hardware::security::keymint::KeyParameterArray;
 using ::aidl::android::hardware::security::keymint::KeyPurpose;
-using ::aidl::android::hardware::security::keymint::VerificationToken;
 using KeyMintSecurityLevel = ::aidl::android::hardware::security::keymint::SecurityLevel;
 using V4_0_ErrorCode = ::android::hardware::keymaster::V4_0::ErrorCode;
 using ::aidl::android::hardware::security::keymint::IKeyMintDevice;
@@ -87,8 +86,6 @@ class KeyMintDevice : public aidl::android::hardware::security::keymint::BnKeyMi
     static std::shared_ptr<KeyMintDevice> createKeyMintDevice(KeyMintSecurityLevel securityLevel);
 
     ScopedAStatus getHardwareInfo(KeyMintHardwareInfo* _aidl_return) override;
-    ScopedAStatus verifyAuthorization(int64_t in_challenge, const HardwareAuthToken& in_token,
-                                      VerificationToken* _aidl_return) override;
     ScopedAStatus addRngEntropy(const std::vector<uint8_t>& in_data) override;
     ScopedAStatus generateKey(const std::vector<KeyParameter>& in_keyParams,
                               KeyCreationResult* out_creationResult) override;
@@ -141,14 +138,14 @@ class KeyMintOperation : public aidl::android::hardware::security::keymint::BnKe
     ScopedAStatus update(const std::optional<KeyParameterArray>& in_inParams,
                          const std::optional<std::vector<uint8_t>>& in_input,
                          const std::optional<HardwareAuthToken>& in_inAuthToken,
-                         const std::optional<VerificationToken>& in_inVerificationToken,
+                         const std::optional<TimeStampToken>& in_inTimestampToken,
                          std::optional<KeyParameterArray>* out_outParams,
                          std::optional<ByteArray>* out_output, int32_t* _aidl_return);
     ScopedAStatus finish(const std::optional<KeyParameterArray>& in_inParams,
                          const std::optional<std::vector<uint8_t>>& in_input,
                          const std::optional<std::vector<uint8_t>>& in_inSignature,
                          const std::optional<HardwareAuthToken>& in_authToken,
-                         const std::optional<VerificationToken>& in_inVerificationToken,
+                         const std::optional<TimeStampToken>& in_inTimestampToken,
                          std::optional<KeyParameterArray>* out_outParams,
                          std::vector<uint8_t>* _aidl_return);
     ScopedAStatus abort();

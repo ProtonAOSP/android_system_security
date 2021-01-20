@@ -20,6 +20,8 @@ use crate::permission::KeystorePerm;
 use crate::utils::check_keystore_permission;
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
     HardwareAuthToken::HardwareAuthToken, HardwareAuthenticatorType::HardwareAuthenticatorType,
+};
+use android_hardware_security_secureclock::aidl::android::hardware::security::secureclock::{
     Timestamp::Timestamp,
 };
 use android_security_authorization::binder::{Interface, Result as BinderResult};
