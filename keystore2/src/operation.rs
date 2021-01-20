@@ -134,7 +134,10 @@ use android_hardware_security_keymint::aidl::android::hardware::security::keymin
     ByteArray::ByteArray, HardwareAuthToken::HardwareAuthToken,
     IKeyMintOperation::IKeyMintOperation, KeyParameter::KeyParameter as KmParam,
     KeyParameterArray::KeyParameterArray, KeyParameterValue::KeyParameterValue as KmParamValue,
-    Tag::Tag, VerificationToken::VerificationToken,
+    Tag::Tag,
+};
+use android_hardware_security_secureclock::aidl::android::hardware::security::secureclock::{
+    TimeStampToken::TimeStampToken,
 };
 use android_system_keystore2::aidl::android::system::keystore2::{
     IKeystoreOperation::BnKeystoreOperation, IKeystoreOperation::IKeystoreOperation,
@@ -356,7 +359,7 @@ impl Operation {
                 None,
                 // TODO Get auth token from enforcement module if required.
                 None,
-                // TODO Get verification token from enforcement module if required.
+                // TODO Get timestamp token from enforcement module if required.
                 None,
                 &mut out_params,
                 &mut output,
@@ -369,14 +372,14 @@ impl Operation {
 
     /// Based on the authorization information stored in the operation during create_operation(),
     /// and any previous calls to update(), this function returns appropriate auth token and
-    /// verification token to be passed to keymint.
+    /// timestamp token to be passed to keymint.
     /// Note that the call to the global enforcement object happens only during the first call to
     /// update or if finish() is called right after create_opertation.
     fn handle_authorization<'a>(
         auth_token_handler: &'a mut AuthTokenHandler,
         key_params: Option<&Vec<KeyParameter>>,
         op_challenge: Option<&OperationChallenge>,
-    ) -> Result<(Option<&'a HardwareAuthToken>, Option<&'a VerificationToken>)> {
+    ) -> Result<(Option<&'a HardwareAuthToken>, Option<&'a TimeStampToken>)> {
         // keystore performs authorization only if key parameters have been loaded during
         // create_operation()
         if let Some(key_parameters) = key_params {
@@ -395,7 +398,7 @@ impl Operation {
                 // this variant is found in every subsequent call to update/finish,
                 // unless the authorization is not required for the key
                 AuthTokenHandler::Token(_, _) => {
-                    auth_token_handler.retrieve_auth_and_verification_tokens()
+                    auth_token_handler.retrieve_auth_and_timestamp_tokens()
                 }
                 _ => Ok((None, None))
             }
@@ -418,7 +421,7 @@ impl Operation {
             self.km_op.get_interface().context("In update: Failed to get KeyMintOperation.")?;
 
         let mut auth_handler = self.auth_token_handler.lock().unwrap();
-        let (auth_token_for_km, verification_token_for_km) = Self::handle_authorization(
+        let (auth_token_for_km, timestamp_token_for_km) = Self::handle_authorization(
             &mut auth_handler,
             self.key_params.as_ref(),
             self.op_challenge.as_ref(),
@@ -431,7 +434,7 @@ impl Operation {
                 None,
                 Some(input),
                 auth_token_for_km,
-                verification_token_for_km,
+                timestamp_token_for_km,
                 &mut out_params,
                 &mut output,
             )),
@@ -465,7 +468,7 @@ impl Operation {
             self.km_op.get_interface().context("In finish: Failed to get KeyMintOperation.")?;
 
         let mut auth_handler = self.auth_token_handler.lock().unwrap();
-        let (auth_token_for_km, verification_token_for_km) = Self::handle_authorization(
+        let (auth_token_for_km, timestamp_token_for_km) = Self::handle_authorization(
             &mut auth_handler,
             self.key_params.as_ref(),
             self.op_challenge.as_ref(),
@@ -480,7 +483,7 @@ impl Operation {
                     input,
                     signature,
                     auth_token_for_km,
-                    verification_token_for_km,
+                    timestamp_token_for_km,
                     &mut out_params,
                 )),
             )
