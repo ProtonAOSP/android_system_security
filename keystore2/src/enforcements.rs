@@ -211,6 +211,7 @@ impl Enforcements {
         let mut user_secure_ids = Vec::<i64>::new();
         let mut key_time_out: Option<i64> = None;
         let mut allow_while_on_body = false;
+        let mut unlocked_device_required = false;
 
         // iterate through key parameters, recording information we need for authorization
         // enforcements later, or enforcing authorizations in place, where applicable
@@ -267,12 +268,7 @@ impl Enforcements {
                     user_id = *u;
                 }
                 KeyParameterValue::UnlockedDeviceRequired => {
-                    // check the device locked status. If locked, operations on the key are not
-                    // allowed.
-                    if self.is_device_locked(user_id) {
-                        return Err(KeystoreError::Km(Ec::DEVICE_LOCKED))
-                            .context("In authorize_create: device is locked.");
-                    }
+                    unlocked_device_required = true;
                 }
                 KeyParameterValue::AllowWhileOnBody => {
                     allow_while_on_body = true;
@@ -318,6 +314,16 @@ impl Enforcements {
                 "In authorize_create, NONCE is present,
                     although CALLER_NONCE is not present",
             );
+        }
+
+        if unlocked_device_required {
+            // check the device locked status. If locked, operations on the key are not
+            // allowed.
+            log::info!("Checking for lockd device of user {}.", user_id);
+            if self.is_device_locked(user_id) {
+                return Err(KeystoreError::Km(Ec::DEVICE_LOCKED))
+                    .context("In authorize_create: device is locked.");
+            }
         }
 
         if !user_secure_ids.is_empty() {
