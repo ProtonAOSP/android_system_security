@@ -775,7 +775,7 @@ mod test {
     mod legacy_blob_test_vectors;
     use crate::error;
     use crate::legacy_blob::test::legacy_blob_test_vectors::*;
-    use crate::test::utils::TempDir;
+    use keystore2_test_utils::TempDir;
 
     #[test]
     fn decode_encode_alias_test() {
