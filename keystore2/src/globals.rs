@@ -20,6 +20,7 @@ use crate::async_task::AsyncTask;
 use crate::background_task_handler::BackgroundTaskHandler;
 use crate::enforcements::Enforcements;
 use crate::gc::Gc;
+use crate::legacy_blob::LegacyBlobLoader;
 use crate::super_key::SuperKeyManager;
 use crate::utils::Asp;
 use crate::{
@@ -91,6 +92,10 @@ lazy_static! {
     /// The other modules (e.g. enforcements) communicate with it via a channel initialized during
     /// keystore startup.
     pub static ref BACKGROUND_TASK_HANDLER: BackgroundTaskHandler = BackgroundTaskHandler::new();
+    /// LegacyBlobLoader is initialized and exists globally.
+    /// The same directory used by the database is used by the LegacyBlobLoader as well.
+    pub static ref LEGACY_BLOB_LOADER: LegacyBlobLoader = LegacyBlobLoader::new(
+        &std::env::current_dir().expect("Could not get the current working directory."));
 }
 
 static KEYMINT_SERVICE_NAME: &str = "android.hardware.security.keymint.IKeyMintDevice";
