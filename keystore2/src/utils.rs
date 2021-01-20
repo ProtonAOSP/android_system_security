@@ -77,6 +77,7 @@ pub fn check_key_permission(
 ) -> anyhow::Result<()> {
     ThreadState::with_calling_sid(|calling_sid| {
         permission::check_key_permission(
+            ThreadState::get_calling_uid(),
             &calling_sid
                 .ok_or_else(Error::sys)
                 .context("In check_key_permission: Cannot check permission without calling_sid.")?,
