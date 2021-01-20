@@ -19,6 +19,7 @@ rust_library {
 
     rustlibs: [
         "android.hardware.security.keymint-rust",
+        "android.hardware.security.secureclock-rust",
         "android.security.apc-rust",
         "android.security.authorization-rust",
         "android.security.compat-rust",
@@ -48,6 +49,7 @@ rust_test {
     test_config: "AndroidTest.xml",
     rustlibs: [
         "android.hardware.security.keymint-rust",
+        "android.hardware.security.secureclock-rust",
         "android.security.apc-rust",
         "android.security.authorization-rust",
         "android.security.compat-rust",

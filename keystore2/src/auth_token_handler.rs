@@ -13,11 +13,15 @@
 // limitations under the License.
 
 //! This module defines the AuthTokenHandler enum and its methods. AuthTokenHandler enum represents
-//! the different states an auth token and an associated verification token can be expressed during
+//! the different states an auth token and an associated timestamp token can be expressed during
 //! the operation life cycle.
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
-    HardwareAuthToken::HardwareAuthToken, VerificationToken::VerificationToken,
+    HardwareAuthToken::HardwareAuthToken,
 };
+use android_hardware_security_secureclock::aidl::android::hardware::security::secureclock::{
+    TimeStampToken::TimeStampToken,
+};
+
 use anyhow::{Context, Result};
 use std::sync::mpsc::Receiver;
 
@@ -32,48 +36,48 @@ pub enum AuthTokenHandler {
     OpAuthRequired,
     /// Used to represent the intermediate state between the time the operation is found to be
     /// using a time_out key with STRONGBOX keymint, and the time a verficiation token is requested
-    /// from the worker thread which obtains verification tokens from the TEE KeyMint.
-    VerificationRequired(HardwareAuthToken),
-    /// Used to represent the intermediate state between the time a verification token is requested
-    /// from the worker thread which obtains verification tokens from the TEE KeyMint and the time
-    /// the verification token is received from the worker thread.
-    Channel(Receiver<(HardwareAuthToken, VerificationToken)>),
+    /// from the worker thread which obtains timestamp tokens from the TEE KeyMint.
+    TimestampRequired(HardwareAuthToken),
+    /// Used to represent the intermediate state between the time a timestamp token is requested
+    /// from the worker thread which obtains timestamp tokens from the TEE KeyMint and the time
+    /// the timestamp token is received from the worker thread.
+    Channel(Receiver<(HardwareAuthToken, TimeStampToken)>),
     /// Used to represent the final state for all operations requiring an auth token for
-    /// authorization, after the matching auth token (and the associated verification token if
+    /// authorization, after the matching auth token (and the associated timestamp token if
     /// required) is found.
-    Token(HardwareAuthToken, Option<VerificationToken>),
+    Token(HardwareAuthToken, Option<TimeStampToken>),
 }
 
 impl AuthTokenHandler {
-    /// If Channel variant, block on it until the verification token is sent by the
-    /// keystore2 worker thread which obtains verification tokens from TEE Keymint and converts the
+    /// If Channel variant, block on it until the timestamp token is sent by the
+    /// keystore2 worker thread which obtains timestamp tokens from TEE Keymint and converts the
     /// object from Channel variant to Token variant.
-    /// Retrieve auth token and verification token from the Token variant of an AuthTokenHandler
+    /// Retrieve auth token and timestamp token from the Token variant of an AuthTokenHandler
     /// instance.
-    pub fn retrieve_auth_and_verification_tokens(
+    pub fn retrieve_auth_and_timestamp_tokens(
         &mut self,
-    ) -> Result<(Option<&HardwareAuthToken>, Option<&VerificationToken>)> {
+    ) -> Result<(Option<&HardwareAuthToken>, Option<&TimeStampToken>)> {
         // Converts to Token variant if Channel variant found, after retrieving the
-        // VerificationToken
+        // TimeStampToken
         if let AuthTokenHandler::Channel(recv) = self {
-            let (auth_token, verification_token) =
-                recv.recv().context("In receive_verification_token: sender disconnected.")?;
-            *self = AuthTokenHandler::Token(auth_token, Some(verification_token));
+            let (auth_token, timestamp_token) =
+                recv.recv().context("In receive_timestamp_token: sender disconnected.")?;
+            *self = AuthTokenHandler::Token(auth_token, Some(timestamp_token));
         }
         // get the tokens from the Token variant
-        if let AuthTokenHandler::Token(auth_token, optional_verification_token) = self {
-            Ok((Some(auth_token), optional_verification_token.as_ref()))
+        if let AuthTokenHandler::Token(auth_token, optional_time_stamp_token) = self {
+            Ok((Some(auth_token), optional_time_stamp_token.as_ref()))
         } else {
             Ok((None, None))
         }
     }
 
-    /// Retrieve auth token from VerificationRequired and Token variants of an
+    /// Retrieve auth token from TimestampRequired and Token variants of an
     /// AuthTokenHandler instance. This method is useful when we only expect an auth token and
-    /// do not expect a verification token.
+    /// do not expect a timestamp token.
     pub fn get_auth_token(&self) -> Option<&HardwareAuthToken> {
         match self {
-            AuthTokenHandler::VerificationRequired(auth_token) => Some(auth_token),
+            AuthTokenHandler::TimestampRequired(auth_token) => Some(auth_token),
             AuthTokenHandler::Token(auth_token, _) => Some(auth_token),
             _ => None,
         }

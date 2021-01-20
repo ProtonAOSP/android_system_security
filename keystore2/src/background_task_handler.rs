@@ -16,8 +16,10 @@
 //! the timestamp service (or TEE KeyMint in legacy devices), via a separate thread.
 
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
-    HardwareAuthToken::HardwareAuthToken, IKeyMintDevice::IKeyMintDevice,
-    SecurityLevel::SecurityLevel, VerificationToken::VerificationToken,
+    HardwareAuthToken::HardwareAuthToken,
+};
+use android_hardware_security_secureclock::aidl::android::hardware::security::secureclock::{
+    ISecureClock::ISecureClock, TimeStampToken::TimeStampToken,
 };
 use android_system_keystore2::aidl::android::system::keystore2::OperationChallenge::OperationChallenge;
 use anyhow::Result;
@@ -25,16 +27,20 @@ use log::error;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Mutex;
 use std::thread::{spawn, JoinHandle};
+
+use crate::globals::get_timestamp_service;
+
 /// This is the struct encapsulating the thread which handles background tasks such as
-/// obtaining verification tokens.
+/// obtaining timestamp tokens.
 pub struct BackgroundTaskHandler {
     task_handler: Mutex<Option<JoinHandle<()>>>,
 }
+
 /// This enum defines the two variants of a message that can be passed down to the
 /// BackgroundTaskHandler via the channel.
 pub enum Message {
     ///This variant represents a message sent down the channel when requesting a timestamp token.
-    Inputs((HardwareAuthToken, OperationChallenge, Sender<(HardwareAuthToken, VerificationToken)>)),
+    Inputs((HardwareAuthToken, OperationChallenge, Sender<(HardwareAuthToken, TimeStampToken)>)),
     ///This variant represents a message sent down the channel when signalling the thread to stop.
     Shutdown,
 }
@@ -65,34 +71,32 @@ impl BackgroundTaskHandler {
         // If either a timestamp service or a keymint instance is expected to be found and neither
         // is found, an error is returned.
         // If neither is expected to be found, make timestamp_service field None, and in the thread,
-        // send a default verification token down the channel to the operation.
+        // send a default timestamp token down the channel to the operation.
         // Until timestamp service is available and proper probing of legacy keymaster devices are
         // done, the keymint service is initialized here as it is done in security_level module.
         Ok(spawn(move || {
-            while let Message::Inputs((auth_token, op_challenge, op_sender)) = receiver
-                .recv()
-                .expect(
-                "In background task handler thread. Failed to receive message over the channel.",
-            ) {
-                // TODO: call the timestamp service/old TEE keymaster to get
-                // timestamp/verification tokens and pass it down the sender that is
-                // coupled with a particular operation's receiver.
-                // If none of the services are available, pass the authtoken and a default
-                // verification token down the channel.
-                let km_dev: Box<dyn IKeyMintDevice> =
-                    crate::globals::get_keymint_device(SecurityLevel::TRUSTED_ENVIRONMENT)
-                        .expect("A TEE Keymint must be present.")
-                        .get_interface()
-                        .expect("Fatal: The keymint device does not implement IKeyMintDevice.");
-                let result = km_dev.verifyAuthorization(op_challenge.challenge, &auth_token);
+            while let Message::Inputs((auth_token, op_challenge, op_sender)) =
+                receiver.recv().expect(
+                    "In background task handler thread. Failed to
+                receive message over the channel.",
+                )
+            {
+                let dev: Box<dyn ISecureClock> = get_timestamp_service()
+                    .expect(concat!(
+                        "Secure Clock service must be present ",
+                        "if TimeStampTokens are required."
+                    ))
+                    .get_interface()
+                    .expect("Fatal: Timestamp service does not implement ISecureClock.");
+                let result = dev.generateTimeStamp(op_challenge.challenge);
                 match result {
-                    Ok(verification_token) => {
+                    Ok(timestamp_token) => {
                         // this can fail if the operation is dropped and hence the channel
                         // is hung up.
-                        op_sender.send((auth_token, verification_token)).unwrap_or_else(|e| {
+                        op_sender.send((auth_token, timestamp_token)).unwrap_or_else(|e| {
                             error!(
                                 "In background task handler thread. Failed to send
-                                         verification token to operation {} due to error {:?}.",
+                                         timestamp token to operation {} due to error {:?}.",
                                 op_challenge.challenge, e
                             )
                         });
@@ -101,17 +105,17 @@ impl BackgroundTaskHandler {
                         // log error
                         error!(
                             "In background task handler thread. Failed to receive
-                                     verification token for operation {} due to error {:?}.",
+                                     timestamp token for operation {} due to error {:?}.",
                             op_challenge.challenge, e
                         );
-                        // send default verification token
+                        // send default timestamp token
                         // this can fail if the operation is dropped and the channel is
                         // hung up.
-                        op_sender.send((auth_token, VerificationToken::default())).unwrap_or_else(
+                        op_sender.send((auth_token, TimeStampToken::default())).unwrap_or_else(
                             |e| {
                                 error!(
                                     "In background task handler thread. Failed to send default
-                                         verification token to operation {} due to error {:?}.",
+                                         timestamp token to operation {} due to error {:?}.",
                                     op_challenge.challenge, e
                                 )
                             },
