@@ -18,11 +18,30 @@ package android.security.compat;
 
 import android.hardware.security.keymint.IKeyMintDevice;
 import android.hardware.security.keymint.SecurityLevel;
+import android.hardware.security.secureclock.ISecureClock;
+import android.hardware.security.sharedsecret.ISharedSecret;
 
 /**
+ * The compatibility service allows Keystore 2.0 to connect to legacy wrapper implementations that
+ * it hosts itself without registering them as a service. Keystore 2.0 would not be allowed to
+ * register a HAL service, so instead it registers this service which it can then connect to.
  */
 interface IKeystoreCompatService {
     /**
+     * Return an implementation of IKeyMintDevice, that it implemented by Keystore 2.0 itself
+     * by means of Keymaster 4.1 or lower.
      */
     IKeyMintDevice getKeyMintDevice (SecurityLevel securityLevel);
+
+    /**
+     * Returns an implementation of ISecureClock, that is implemented by Keystore 2.0 itself
+     * by means of Keymaster 4.x.
+     */
+    ISecureClock getSecureClock ();
+
+    /**
+     * Returns an implementation of ISharedSecret, that is implemented by Keystore 2.0 itself
+     * by means of Keymaster 4.x.
+     */
+    ISharedSecret getSharedSecret (SecurityLevel securityLevel);
 }
