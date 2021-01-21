@@ -14,18 +14,23 @@
 
 //! This module implements IKeyAuthorization AIDL interface.
 
+use crate::error::Error as KeystoreError;
 use crate::error::map_or_log_err;
-use crate::globals::ENFORCEMENTS;
+use crate::globals::{DB, ENFORCEMENTS, LEGACY_BLOB_LOADER, SUPER_KEY};
 use crate::permission::KeystorePerm;
 use crate::utils::check_keystore_permission;
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
     HardwareAuthToken::HardwareAuthToken, HardwareAuthenticatorType::HardwareAuthenticatorType,
+};
+use android_hardware_security_secureclock::aidl::android::hardware::security::secureclock::{
     Timestamp::Timestamp,
 };
 use android_security_authorization::binder::{Interface, Result as BinderResult};
 use android_security_authorization:: aidl::android::security::authorization::IKeystoreAuthorization::{
         BnKeystoreAuthorization, IKeystoreAuthorization,
 };
+use android_security_authorization:: aidl::android::security::authorization::LockScreenEvent::LockScreenEvent;
+use android_system_keystore2::aidl::android::system::keystore2::ResponseCode::ResponseCode;
 use anyhow::{Context, Result};
 use binder::IBinder;
 
@@ -57,6 +62,59 @@ impl AuthorizationManager {
         ENFORCEMENTS.add_auth_token(auth_token_copy)?;
         Ok(())
     }
+
+    fn on_lock_screen_event(
+        &self,
+        lock_screen_event: LockScreenEvent,
+        user_id: i32,
+        password: Option<&[u8]>,
+    ) -> Result<()> {
+        match (lock_screen_event, password) {
+            (LockScreenEvent::UNLOCK, Some(user_password)) => {
+                //This corresponds to the unlock() method in legacy keystore API.
+                //check permission
+                check_keystore_permission(KeystorePerm::unlock())
+                    .context("In on_lock_screen_event: Unlock with password.")?;
+                ENFORCEMENTS.set_device_locked(user_id, false);
+                // Unlock super key.
+                DB.with::<_, Result<()>>(|db| {
+                    let mut db = db.borrow_mut();
+                    //TODO - b/176123105 - Once the user management API is implemented, unlock is
+                    //allowed only if the user is added. Then the two tasks handled by the
+                    //unlock_user_key will be split into two methods. For now, unlock_user_key
+                    //method is used as it is, which created a super key for the user if one does
+                    //not exists, in addition to unlocking the existing super key of the user/
+                    SUPER_KEY.unlock_user_key(
+                        user_id as u32,
+                        user_password,
+                        &mut db,
+                        &LEGACY_BLOB_LOADER,
+                    )?;
+                    Ok(())
+                })
+                .context("In on_lock_screen_event.")?;
+
+                Ok(())
+            }
+            (LockScreenEvent::UNLOCK, None) => {
+                check_keystore_permission(KeystorePerm::unlock())
+                    .context("In on_lock_screen_event: Unlock.")?;
+                ENFORCEMENTS.set_device_locked(user_id, false);
+                Ok(())
+            }
+            (LockScreenEvent::LOCK, None) => {
+                check_keystore_permission(KeystorePerm::lock())
+                    .context("In on_lock_screen_event: Lock")?;
+                ENFORCEMENTS.set_device_locked(user_id, true);
+                Ok(())
+            }
+            _ => {
+                // Any other combination is not supported.
+                Err(KeystoreError::Rc(ResponseCode::INVALID_ARGUMENT))
+                    .context("In on_lock_screen_event: Unknown event.")
+            }
+        }
+    }
 }
 
 impl Interface for AuthorizationManager {}
@@ -64,5 +122,14 @@ impl Interface for AuthorizationManager {}
 impl IKeystoreAuthorization for AuthorizationManager {
     fn addAuthToken(&self, auth_token: &HardwareAuthToken) -> BinderResult<()> {
         map_or_log_err(self.add_auth_token(auth_token), Ok)
+    }
+
+    fn onLockScreenEvent(
+        &self,
+        lock_screen_event: LockScreenEvent,
+        user_id: i32,
+        password: Option<&[u8]>,
+    ) -> BinderResult<()> {
+        map_or_log_err(self.on_lock_screen_event(lock_screen_event, user_id, password), Ok)
     }
 }

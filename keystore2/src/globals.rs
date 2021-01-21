@@ -20,6 +20,7 @@ use crate::async_task::AsyncTask;
 use crate::background_task_handler::BackgroundTaskHandler;
 use crate::enforcements::Enforcements;
 use crate::gc::Gc;
+use crate::legacy_blob::LegacyBlobLoader;
 use crate::super_key::SuperKeyManager;
 use crate::utils::Asp;
 use crate::{
@@ -80,17 +81,21 @@ lazy_static! {
     pub static ref SUPER_KEY: SuperKeyManager = Default::default();
     /// Map of KeyMint devices.
     static ref KEY_MINT_DEVICES: Mutex<HashMap<SecurityLevel, Asp>> = Default::default();
+    /// Timestamp service.
+    static ref TIME_STAMP_DEVICE: Mutex<Option<Asp>> = Default::default();
     /// A single on-demand worker thread that handles deferred tasks with two different
     /// priorities.
     pub static ref ASYNC_TASK: AsyncTask = Default::default();
     /// Singeleton for enforcements.
-    /// It is safe for this enforcements object to be called by multiple threads because the two
-    /// data structures which maintain its state are protected by mutexes.
     pub static ref ENFORCEMENTS: Enforcements = Enforcements::new();
     /// Background task handler is initialized and exists globally.
     /// The other modules (e.g. enforcements) communicate with it via a channel initialized during
     /// keystore startup.
     pub static ref BACKGROUND_TASK_HANDLER: BackgroundTaskHandler = BackgroundTaskHandler::new();
+    /// LegacyBlobLoader is initialized and exists globally.
+    /// The same directory used by the database is used by the LegacyBlobLoader as well.
+    pub static ref LEGACY_BLOB_LOADER: LegacyBlobLoader = LegacyBlobLoader::new(
+        &std::env::current_dir().expect("Could not get the current working directory."));
 }
 
 static KEYMINT_SERVICE_NAME: &str = "android.hardware.security.keymint.IKeyMintDevice";
@@ -142,11 +147,58 @@ pub fn get_keymint_device(security_level: SecurityLevel) -> Result<Asp> {
     if let Some(dev) = devices_map.get(&security_level) {
         Ok(dev.clone())
     } else {
-        let dev = connect_keymint(security_level).map_err(|e| {
-            anyhow::anyhow!(Error::Km(ErrorCode::HARDWARE_TYPE_UNAVAILABLE))
-                .context(format!("In get_keymint_device: {:?}", e))
-        })?;
+        let dev = connect_keymint(security_level).context("In get_keymint_device.")?;
         devices_map.insert(security_level, dev.clone());
+        Ok(dev)
+    }
+}
+
+static TIME_STAMP_SERVICE_NAME: &str = "android.hardware.security.secureclock.ISecureClock";
+
+/// Make a new connection to a secure clock service.
+/// If no native SecureClock device can be found brings up the compatibility service and attempts
+/// to connect to the legacy wrapper.
+fn connect_secureclock() -> Result<Asp> {
+    let secureclock = map_binder_status_code(binder::get_interface(TIME_STAMP_SERVICE_NAME))
+        .context("In connect_secureclock: Trying to connect to genuine secure clock service.")
+        .or_else(|e| {
+            match e.root_cause().downcast_ref::<Error>() {
+                Some(Error::BinderTransaction(StatusCode::NAME_NOT_FOUND)) => {
+                    // This is a no-op if it was called before.
+                    keystore2_km_compat::add_keymint_device_service();
+
+                    let keystore_compat_service: Box<dyn IKeystoreCompatService> =
+                        map_binder_status_code(binder::get_interface("android.security.compat"))
+                            .context(
+                                "In connect_secureclock: Trying to connect to compat service.",
+                            )?;
+
+                    // Legacy secure clock services were only implemented by TEE.
+                    map_binder_status(keystore_compat_service.getSecureClock())
+                        .map_err(|e| match e {
+                            Error::BinderTransaction(StatusCode::NAME_NOT_FOUND) => {
+                                Error::Km(ErrorCode::HARDWARE_TYPE_UNAVAILABLE)
+                            }
+                            e => e,
+                        })
+                        .context("In connect_secureclock: Trying to get Legacy wrapper.")
+                }
+                _ => Err(e),
+            }
+        })?;
+
+    Ok(Asp::new(secureclock.as_binder()))
+}
+
+/// Get the timestamp service that verifies auth token timeliness towards security levels with
+/// different clocks.
+pub fn get_timestamp_service() -> Result<Asp> {
+    let mut ts_device = TIME_STAMP_DEVICE.lock().unwrap();
+    if let Some(dev) = &*ts_device {
+        Ok(dev.clone())
+    } else {
+        let dev = connect_secureclock().context("In get_timestamp_service.")?;
+        *ts_device = Some(dev.clone());
         Ok(dev)
     }
 }

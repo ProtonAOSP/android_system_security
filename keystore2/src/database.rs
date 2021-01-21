@@ -58,6 +58,8 @@ use std::{convert::TryFrom, convert::TryInto, time::SystemTimeError};
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
     ErrorCode::ErrorCode as Ec, HardwareAuthToken::HardwareAuthToken,
     HardwareAuthenticatorType::HardwareAuthenticatorType, SecurityLevel::SecurityLevel,
+};
+use android_hardware_security_secureclock::aidl::android::hardware::security::secureclock::{
     Timestamp::Timestamp,
 };
 use android_system_keystore2::aidl::android::system::keystore2::{
@@ -1811,6 +1813,8 @@ mod tests {
     use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
         HardwareAuthToken::HardwareAuthToken,
         HardwareAuthenticatorType::HardwareAuthenticatorType as kmhw_authenticator_type,
+    };
+    use android_hardware_security_secureclock::aidl::android::hardware::security::secureclock::{
         Timestamp::Timestamp,
     };
     use rusqlite::NO_PARAMS;

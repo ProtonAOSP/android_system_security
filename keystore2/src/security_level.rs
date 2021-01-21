@@ -33,6 +33,7 @@ use android_system_keystore2::aidl::android::system::keystore2::{
 use crate::auth_token_handler::AuthTokenHandler;
 use crate::globals::ENFORCEMENTS;
 use crate::key_parameter::KeyParameter as KsKeyParam;
+use crate::key_parameter::KeyParameterValue as KsKeyParamValue;
 use crate::utils::{check_key_permission, Asp};
 use crate::{database::KeyIdGuard, globals::DB};
 use crate::{
@@ -47,6 +48,7 @@ use crate::{
 use crate::{
     error::{self, map_km_error, map_or_log_err, Error, ErrorCode},
     utils::key_characteristics_to_internal,
+    utils::uid_to_android_user,
 };
 use anyhow::{Context, Result};
 use binder::{IBinder, Interface, ThreadState};
@@ -83,6 +85,7 @@ impl KeystoreSecurityLevel {
         &self,
         key: KeyDescriptor,
         creation_result: KeyCreationResult,
+        user_id: u32,
     ) -> Result<KeyMetadata> {
         let KeyCreationResult {
             keyBlob: key_blob,
@@ -108,7 +111,12 @@ impl KeystoreSecurityLevel {
             },
         );
 
-        let key_parameters = key_characteristics_to_internal(key_characteristics);
+        let mut key_parameters = key_characteristics_to_internal(key_characteristics);
+
+        key_parameters.push(KsKeyParam::new(
+            KsKeyParamValue::UserID(user_id as i32),
+            SecurityLevel::SOFTWARE,
+        ));
 
         let creation_date = DateTime::now().context("Trying to make creation time.")?;
 
@@ -281,10 +289,10 @@ impl KeystoreSecurityLevel {
                     Some(OperationChallenge { challenge: begin_result.challenge });
                 ENFORCEMENTS.insert_to_op_auth_map(begin_result.challenge);
             }
-            AuthTokenHandler::VerificationRequired(auth_token) => {
-                //request a verification token, given the auth token and the challenge
+            AuthTokenHandler::TimestampRequired(auth_token) => {
+                //request a timestamp token, given the auth token and the challenge
                 auth_token_handler = ENFORCEMENTS
-                    .request_verification_token(
+                    .request_timestamp_token(
                         auth_token,
                         OperationChallenge { challenge: begin_result.challenge },
                     )
@@ -335,11 +343,12 @@ impl KeystoreSecurityLevel {
             return Err(error::Error::Km(ErrorCode::INVALID_ARGUMENT))
                 .context("In generate_key: Alias must be specified");
         }
+        let caller_uid = ThreadState::get_calling_uid();
 
         let key = match key.domain {
             Domain::APP => KeyDescriptor {
                 domain: key.domain,
-                nspace: ThreadState::get_calling_uid() as i64,
+                nspace: caller_uid as i64,
                 alias: key.alias.clone(),
                 blob: None,
             },
@@ -353,7 +362,8 @@ impl KeystoreSecurityLevel {
         map_km_error(km_dev.addRngEntropy(entropy))?;
         let creation_result = map_km_error(km_dev.generateKey(&params))?;
 
-        self.store_new_key(key, creation_result).context("In generate_key.")
+        let user_id = uid_to_android_user(caller_uid);
+        self.store_new_key(key, creation_result, user_id).context("In generate_key.")
     }
 
     fn import_key(
@@ -368,11 +378,12 @@ impl KeystoreSecurityLevel {
             return Err(error::Error::Km(ErrorCode::INVALID_ARGUMENT))
                 .context("In import_key: Alias must be specified");
         }
+        let caller_uid = ThreadState::get_calling_uid();
 
         let key = match key.domain {
             Domain::APP => KeyDescriptor {
                 domain: key.domain,
-                nspace: ThreadState::get_calling_uid() as i64,
+                nspace: caller_uid as i64,
                 alias: key.alias.clone(),
                 blob: None,
             },
@@ -401,7 +412,8 @@ impl KeystoreSecurityLevel {
         let km_dev: Box<dyn IKeyMintDevice> = self.keymint.get_interface()?;
         let creation_result = map_km_error(km_dev.importKey(&params, format, key_data))?;
 
-        self.store_new_key(key, creation_result).context("In import_key.")
+        let user_id = uid_to_android_user(caller_uid);
+        self.store_new_key(key, creation_result, user_id).context("In import_key.")
     }
 
     fn import_wrapped_key(
@@ -432,10 +444,11 @@ impl KeystoreSecurityLevel {
             }
         };
 
+        let caller_uid = ThreadState::get_calling_uid();
         let key = match key.domain {
             Domain::APP => KeyDescriptor {
                 domain: key.domain,
-                nspace: ThreadState::get_calling_uid() as i64,
+                nspace: caller_uid as i64,
                 alias: key.alias.clone(),
                 blob: None,
             },
@@ -451,7 +464,7 @@ impl KeystoreSecurityLevel {
                     wrapping_key.clone(),
                     KeyType::Client,
                     KeyEntryLoadBits::KM,
-                    ThreadState::get_calling_uid(),
+                    caller_uid,
                     |k, av| check_key_permission(KeyPerm::use_(), k, &av),
                 )
             })
@@ -509,7 +522,8 @@ impl KeystoreSecurityLevel {
             },
         )?;
 
-        self.store_new_key(key, creation_result).context("In import_wrapped_key.")
+        let user_id = uid_to_android_user(caller_uid);
+        self.store_new_key(key, creation_result, user_id).context("In import_wrapped_key.")
     }
 
     fn upgrade_keyblob_if_required_with<T, F>(

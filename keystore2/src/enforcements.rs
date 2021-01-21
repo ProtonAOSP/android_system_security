@@ -23,8 +23,10 @@ use crate::key_parameter::{KeyParameter, KeyParameterValue};
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
     Algorithm::Algorithm, ErrorCode::ErrorCode as Ec, HardwareAuthToken::HardwareAuthToken,
     HardwareAuthenticatorType::HardwareAuthenticatorType, KeyPurpose::KeyPurpose,
-    SecurityLevel::SecurityLevel, Tag::Tag, Timestamp::Timestamp,
-    VerificationToken::VerificationToken,
+    SecurityLevel::SecurityLevel, Tag::Tag,
+};
+use android_hardware_security_secureclock::aidl::android::hardware::security::secureclock::{
+    TimeStampToken::TimeStampToken, Timestamp::Timestamp,
 };
 use android_system_keystore2::aidl::android::system::keystore2::OperationChallenge::OperationChallenge;
 use anyhow::{Context, Result};
@@ -152,8 +154,8 @@ impl Enforcements {
     /// With regard to auth tokens, the following steps are taken:
     /// If the key is time-bound, find a matching auth token from the database.
     /// If the above step is successful, and if the security level is STRONGBOX, return a
-    /// VerificationRequired variant of the AuthTokenHandler with the found auth token to signal
-    /// the operation that it may need to obtain a verification token from TEE KeyMint.
+    /// TimestampRequired variant of the AuthTokenHandler with the found auth token to signal
+    /// the operation that it may need to obtain a timestamp token from TEE KeyMint.
     /// If the security level is not STRONGBOX, return a Token variant of the AuthTokenHandler with
     /// the found auth token to signal the operation that no more authorization required.
     /// If the key is per-op, return an OpAuthRequired variant of the AuthTokenHandler to signal
@@ -209,6 +211,7 @@ impl Enforcements {
         let mut user_secure_ids = Vec::<i64>::new();
         let mut key_time_out: Option<i64> = None;
         let mut allow_while_on_body = false;
+        let mut unlocked_device_required = false;
 
         // iterate through key parameters, recording information we need for authorization
         // enforcements later, or enforcing authorizations in place, where applicable
@@ -265,12 +268,7 @@ impl Enforcements {
                     user_id = *u;
                 }
                 KeyParameterValue::UnlockedDeviceRequired => {
-                    // check the device locked status. If locked, operations on the key are not
-                    // allowed.
-                    if self.is_device_locked(user_id) {
-                        return Err(KeystoreError::Km(Ec::DEVICE_LOCKED))
-                            .context("In authorize_create: device is locked.");
-                    }
+                    unlocked_device_required = true;
                 }
                 KeyParameterValue::AllowWhileOnBody => {
                     allow_while_on_body = true;
@@ -318,6 +316,16 @@ impl Enforcements {
             );
         }
 
+        if unlocked_device_required {
+            // check the device locked status. If locked, operations on the key are not
+            // allowed.
+            log::info!("Checking for lockd device of user {}.", user_id);
+            if self.is_device_locked(user_id) {
+                return Err(KeystoreError::Km(Ec::DEVICE_LOCKED))
+                    .context("In authorize_create: device is locked.");
+            }
+        }
+
         if !user_secure_ids.is_empty() {
             // key requiring authentication per operation
             if !is_time_out_key {
@@ -346,7 +354,7 @@ impl Enforcements {
                     .context("In authorize_create.")?;
 
                 if security_level == SecurityLevel::STRONGBOX {
-                    return Ok(AuthTokenHandler::VerificationRequired(auth_token));
+                    return Ok(AuthTokenHandler::TimestampRequired(auth_token));
                 } else {
                     return Ok(AuthTokenHandler::Token(auth_token, None));
                 }
@@ -431,18 +439,18 @@ impl Enforcements {
         op_auth_map_guard.insert(op_challenge, None);
     }
 
-    /// Requests a verification token from the background task handler which will retrieve it from
+    /// Requests a timestamp token from the background task handler which will retrieve it from
     /// Timestamp Service or TEE KeyMint.
     /// Once the create_operation receives an operation challenge from KeyMint, if it has
-    /// previously received a VerificationRequired variant of AuthTokenHandler during
-    /// authorize_create_operation, it calls this method to obtain a VerificationToken.
-    pub fn request_verification_token(
+    /// previously received a TimestampRequired variant of AuthTokenHandler during
+    /// authorize_create_operation, it calls this method to obtain a TimeStampToken.
+    pub fn request_timestamp_token(
         &self,
         auth_token: HardwareAuthToken,
         op_challenge: OperationChallenge,
     ) -> Result<AuthTokenHandler> {
         // create a channel for this particular operation
-        let (op_sender, op_receiver) = channel::<(HardwareAuthToken, VerificationToken)>();
+        let (op_sender, op_receiver) = channel::<(HardwareAuthToken, TimeStampToken)>();
         // it is ok to unwrap here because there is no way this mutex gets poisoned.
         let sender_guard = self.sender_to_bth.lock().unwrap();
         if let Some(sender) = &*sender_guard {
@@ -452,7 +460,7 @@ impl Enforcements {
                 .send(Message::Inputs((auth_token, op_challenge, op_sender)))
                 .map_err(|_| KeystoreError::sys())
                 .context(
-                    "In request_verification_token. Sending a request for a verification token
+                    "In request_timestamp_token. Sending a request for a timestamp token
              failed.",
                 )?;
         }
