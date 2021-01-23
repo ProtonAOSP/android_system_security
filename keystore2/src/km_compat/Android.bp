@@ -18,7 +18,7 @@ rust_library {
     srcs: ["lib.rs"],
 
     rustlibs: [
-        "android.hardware.security.keymint-rust",
+        "android.hardware.security.keymint-V1-rust",
         "android.security.compat-rust",
     ],
     shared_libs: [
@@ -33,7 +33,7 @@ rust_test {
     test_suites: ["general-tests"],
     auto_gen_config: true,
     rustlibs: [
-        "android.hardware.security.keymint-rust",
+        "android.hardware.security.keymint-V1-rust",
         "android.security.compat-rust",
     ],
     shared_libs: [
