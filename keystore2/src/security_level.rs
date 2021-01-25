@@ -16,21 +16,21 @@
 
 //! This crate implements the IKeystoreSecurityLevel interface.
 
+use crate::gc::Gc;
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
-    Algorithm::Algorithm, HardwareAuthToken::HardwareAuthToken,
-    HardwareAuthenticatorType::HardwareAuthenticatorType, IKeyMintDevice::IKeyMintDevice,
-    KeyCreationResult::KeyCreationResult, KeyFormat::KeyFormat, KeyParameter::KeyParameter,
-    KeyParameterValue::KeyParameterValue, SecurityLevel::SecurityLevel, Tag::Tag,
+    Algorithm::Algorithm, HardwareAuthenticatorType::HardwareAuthenticatorType,
+    IKeyMintDevice::IKeyMintDevice, KeyCreationResult::KeyCreationResult, KeyFormat::KeyFormat,
+    KeyParameter::KeyParameter, KeyParameterValue::KeyParameterValue, SecurityLevel::SecurityLevel,
+    Tag::Tag,
 };
 use android_system_keystore2::aidl::android::system::keystore2::{
     AuthenticatorSpec::AuthenticatorSpec, CreateOperationResponse::CreateOperationResponse,
     Domain::Domain, IKeystoreOperation::IKeystoreOperation,
     IKeystoreSecurityLevel::BnKeystoreSecurityLevel,
     IKeystoreSecurityLevel::IKeystoreSecurityLevel, KeyDescriptor::KeyDescriptor,
-    KeyMetadata::KeyMetadata, KeyParameters::KeyParameters, OperationChallenge::OperationChallenge,
+    KeyMetadata::KeyMetadata, KeyParameters::KeyParameters,
 };
 
-use crate::auth_token_handler::AuthTokenHandler;
 use crate::globals::ENFORCEMENTS;
 use crate::key_parameter::KeyParameter as KsKeyParam;
 use crate::key_parameter::KeyParameterValue as KsKeyParamValue;
@@ -130,7 +130,7 @@ impl KeystoreSecurityLevel {
                     metadata.add(KeyMetaEntry::CreationDate(creation_date));
 
                     let mut db = db.borrow_mut();
-                    let key_id = db
+                    let (need_gc, key_id) = db
                         .store_new_key(
                             key,
                             &key_parameters,
@@ -140,6 +140,9 @@ impl KeystoreSecurityLevel {
                             &metadata,
                         )
                         .context("In store_new_key.")?;
+                    if need_gc {
+                        Gc::notify_gc();
+                    }
                     Ok(KeyDescriptor {
                         domain: Domain::KEY_ID,
                         nspace: key_id.id(),
@@ -223,34 +226,19 @@ impl KeystoreSecurityLevel {
             },
         )?;
 
-        let mut auth_token_for_km: &HardwareAuthToken = &Default::default();
-        let mut auth_token_handler = AuthTokenHandler::NoAuthRequired;
+        let (immediate_hat, mut auth_info) = ENFORCEMENTS
+            .authorize_create(
+                purpose,
+                key_parameters.as_deref(),
+                operation_parameters,
+                // TODO b/178222844 Replace this with the configuration returned by
+                //      KeyMintDevice::getHardwareInfo.
+                //      For now we assume that strongbox implementations need secure timestamps.
+                self.security_level == SecurityLevel::STRONGBOX,
+            )
+            .context("In create_operation.")?;
 
-        // keystore performs authorizations only if the key parameters are loaded above
-        if let Some(ref key_params) = key_parameters {
-            // Note: although currently only one operation parameter is checked in authorizing the
-            // operation, the whole operation_parameter vector is converted into the internal
-            // representation of key parameter because we might need to sanitize operation
-            // parameters (b/175792701)
-            let mut op_params: Vec<KsKeyParam> = Vec::new();
-            for op_param in operation_parameters.iter() {
-                op_params.push(KsKeyParam::new(op_param.into(), self.security_level));
-            }
-            // authorize the operation, and receive an AuthTokenHandler, if authorized, else
-            // propagate the error
-            auth_token_handler = ENFORCEMENTS
-                .authorize_create(
-                    purpose,
-                    key_params.as_slice(),
-                    op_params.as_slice(),
-                    self.security_level,
-                )
-                .context("In create_operation.")?;
-            // if an auth token was found, pass it to keymint
-            if let Some(auth_token) = auth_token_handler.get_auth_token() {
-                auth_token_for_km = auth_token;
-            }
-        }
+        let immediate_hat = immediate_hat.unwrap_or_default();
 
         let km_dev: Box<dyn IKeyMintDevice> = self
             .keymint
@@ -268,7 +256,7 @@ impl KeystoreSecurityLevel {
                         purpose,
                         blob,
                         &operation_parameters,
-                        auth_token_for_km,
+                        &immediate_hat,
                     )) {
                         Err(Error::Km(ErrorCode::TOO_MANY_OPERATIONS)) => {
                             self.operation_db.prune(caller_uid)?;
@@ -280,35 +268,11 @@ impl KeystoreSecurityLevel {
             )
             .context("In create_operation: Failed to begin operation.")?;
 
-        let mut operation_challenge: Option<OperationChallenge> = None;
-
-        // take actions based on the authorization decision (if any) received via auth token handler
-        match auth_token_handler {
-            AuthTokenHandler::OpAuthRequired => {
-                operation_challenge =
-                    Some(OperationChallenge { challenge: begin_result.challenge });
-                ENFORCEMENTS.insert_to_op_auth_map(begin_result.challenge);
-            }
-            AuthTokenHandler::TimestampRequired(auth_token) => {
-                //request a timestamp token, given the auth token and the challenge
-                auth_token_handler = ENFORCEMENTS
-                    .request_timestamp_token(
-                        auth_token,
-                        OperationChallenge { challenge: begin_result.challenge },
-                    )
-                    .context("In create_operation.")?;
-            }
-            _ => {}
-        }
+        let operation_challenge = auth_info.finalize_create_authorization(begin_result.challenge);
 
         let operation = match begin_result.operation {
             Some(km_op) => {
-                let mut op_challenge_copy: Option<OperationChallenge> = None;
-                if let Some(ref op_challenge) = operation_challenge {
-                    op_challenge_copy = Some(OperationChallenge{challenge: op_challenge.challenge});
-                }
-                self.operation_db.create_operation(km_op, caller_uid,
-                 auth_token_handler, key_parameters, op_challenge_copy)
+                self.operation_db.create_operation(km_op, caller_uid, auth_info)
             },
             None => return Err(Error::sys()).context("In create_operation: Begin operation returned successfully, but did not return a valid operation."),
         };
@@ -319,8 +283,6 @@ impl KeystoreSecurityLevel {
                 .into_interface()
                 .context("In create_operation: Failed to create IKeystoreOperation.")?;
 
-        // TODO we need to the enforcement module to determine if we need to return the challenge.
-        // We return None for now because we don't support auth bound keys yet.
         Ok(CreateOperationResponse {
             iOperation: Some(op_binder),
             operationChallenge: operation_challenge,
