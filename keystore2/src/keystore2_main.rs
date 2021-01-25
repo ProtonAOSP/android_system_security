@@ -17,12 +17,9 @@
 use binder::Interface;
 use keystore2::apc::ApcManager;
 use keystore2::authorization::AuthorizationManager;
-use keystore2::background_task_handler::Message;
-use keystore2::globals::{BACKGROUND_TASK_HANDLER, ENFORCEMENTS};
 use keystore2::service::KeystoreService;
 use log::{error, info};
 use std::panic;
-use std::sync::mpsc::channel;
 
 static KS2_SERVICE_NAME: &str = "android.system.keystore2";
 static APC_SERVICE_NAME: &str = "android.security.apc";
@@ -54,14 +51,6 @@ fn main() {
     } else {
         panic!("Must specify a working directory.");
     }
-
-    // initialize the channel via which the enforcement module and background task handler module
-    // communicate, and hand over the sender and receiver ends to the respective objects.
-    let (sender, receiver) = channel::<Message>();
-    ENFORCEMENTS.set_sender_to_bth(sender);
-    BACKGROUND_TASK_HANDLER.start_bth(receiver).unwrap_or_else(|e| {
-        panic!("Failed to start background task handler because of {:?}.", e);
-    });
 
     info!("Starting thread pool now.");
     binder::ProcessState::start_thread_pool();

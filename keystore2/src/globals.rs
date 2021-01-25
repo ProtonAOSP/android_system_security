@@ -16,13 +16,12 @@
 //! database connections and connections to services that Keystore needs
 //! to talk to.
 
-use crate::async_task::AsyncTask;
-use crate::background_task_handler::BackgroundTaskHandler;
 use crate::enforcements::Enforcements;
 use crate::gc::Gc;
 use crate::legacy_blob::LegacyBlobLoader;
 use crate::super_key::SuperKeyManager;
 use crate::utils::Asp;
+use crate::{async_task::AsyncTask, database::MonotonicRawTime};
 use crate::{
     database::KeystoreDB,
     error::{map_binder_status, map_binder_status_code, Error, ErrorCode},
@@ -51,6 +50,8 @@ fn create_thread_local_db() -> KeystoreDB {
     .expect("Failed to open database.");
     DB_INIT.call_once(|| {
         log::info!("Touching Keystore 2.0 database for this first time since boot.");
+        db.insert_last_off_body(MonotonicRawTime::now())
+            .expect("Could not initialize database with last off body.");
         log::info!("Calling cleanup leftovers.");
         let n = db.cleanup_leftovers().expect("Failed to cleanup database on startup.");
         if n != 0 {
@@ -86,12 +87,8 @@ lazy_static! {
     /// A single on-demand worker thread that handles deferred tasks with two different
     /// priorities.
     pub static ref ASYNC_TASK: AsyncTask = Default::default();
-    /// Singeleton for enforcements.
+    /// Singleton for enforcements.
     pub static ref ENFORCEMENTS: Enforcements = Enforcements::new();
-    /// Background task handler is initialized and exists globally.
-    /// The other modules (e.g. enforcements) communicate with it via a channel initialized during
-    /// keystore startup.
-    pub static ref BACKGROUND_TASK_HANDLER: BackgroundTaskHandler = BackgroundTaskHandler::new();
     /// LegacyBlobLoader is initialized and exists globally.
     /// The same directory used by the database is used by the LegacyBlobLoader as well.
     pub static ref LEGACY_BLOB_LOADER: LegacyBlobLoader = LegacyBlobLoader::new(
