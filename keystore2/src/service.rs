@@ -18,7 +18,6 @@
 //! This crate implement the core Keystore 2.0 service API as defined by the Keystore 2.0
 //! AIDL spec.
 
-use crate::error::{self, map_or_log_err, ErrorCode};
 use crate::globals::DB;
 use crate::permission;
 use crate::permission::{KeyPerm, KeystorePerm};
@@ -30,6 +29,10 @@ use crate::utils::{
 use crate::{
     database::{KeyEntryLoadBits, KeyType, SubComponentType},
     error::ResponseCode,
+};
+use crate::{
+    error::{self, map_or_log_err, ErrorCode},
+    gc::Gc,
 };
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::SecurityLevel::SecurityLevel;
 use android_system_keystore2::aidl::android::system::keystore2::{
@@ -221,12 +224,16 @@ impl KeystoreService {
 
     fn delete_key(&self, key: &KeyDescriptor) -> Result<()> {
         let caller_uid = ThreadState::get_calling_uid();
-        DB.with(|db| {
-            db.borrow_mut().unbind_key(key.clone(), KeyType::Client, caller_uid, |k, av| {
-                check_key_permission(KeyPerm::delete(), k, &av).context("During delete_key.")
+        let need_gc = DB
+            .with(|db| {
+                db.borrow_mut().unbind_key(key.clone(), KeyType::Client, caller_uid, |k, av| {
+                    check_key_permission(KeyPerm::delete(), k, &av).context("During delete_key.")
+                })
             })
-        })
-        .context("In delete_key: Trying to unbind the key.")?;
+            .context("In delete_key: Trying to unbind the key.")?;
+        if need_gc {
+            Gc::notify_gc();
+        }
         Ok(())
     }
 
