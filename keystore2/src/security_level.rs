@@ -16,6 +16,7 @@
 
 //! This crate implements the IKeystoreSecurityLevel interface.
 
+use crate::gc::Gc;
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
     Algorithm::Algorithm, HardwareAuthenticatorType::HardwareAuthenticatorType,
     IKeyMintDevice::IKeyMintDevice, KeyCreationResult::KeyCreationResult, KeyFormat::KeyFormat,
@@ -129,7 +130,7 @@ impl KeystoreSecurityLevel {
                     metadata.add(KeyMetaEntry::CreationDate(creation_date));
 
                     let mut db = db.borrow_mut();
-                    let key_id = db
+                    let (need_gc, key_id) = db
                         .store_new_key(
                             key,
                             &key_parameters,
@@ -139,6 +140,9 @@ impl KeystoreSecurityLevel {
                             &metadata,
                         )
                         .context("In store_new_key.")?;
+                    if need_gc {
+                        Gc::notify_gc();
+                    }
                     Ok(KeyDescriptor {
                         domain: Domain::KEY_ID,
                         nspace: key_id.id(),
