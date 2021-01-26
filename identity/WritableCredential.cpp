@@ -39,12 +39,18 @@ using ::android::hardware::identity::SecureAccessControlProfile;
 using ::android::hardware::identity::support::chunkVector;
 
 WritableCredential::WritableCredential(const string& dataPath, const string& credentialName,
-                                       const string& docType, size_t dataChunkSize,
-                                       sp<IWritableIdentityCredential> halBinder)
-    : dataPath_(dataPath), credentialName_(credentialName), docType_(docType),
-      dataChunkSize_(dataChunkSize), halBinder_(halBinder) {}
+                                       const string& docType, bool isUpdate,
+                                       HardwareInformation hwInfo,
+                                       sp<IWritableIdentityCredential> halBinder, int halApiVersion)
+    : dataPath_(dataPath), credentialName_(credentialName), docType_(docType), isUpdate_(isUpdate),
+      hwInfo_(std::move(hwInfo)), halBinder_(halBinder), halApiVersion_(halApiVersion) {}
 
 WritableCredential::~WritableCredential() {}
+
+void WritableCredential::setCredentialUpdatedCallback(
+    std::function<void()>&& onCredentialUpdatedCallback) {
+    onCredentialUpdatedCallback_ = onCredentialUpdatedCallback;
+}
 
 Status WritableCredential::ensureAttestationCertificateExists(const vector<uint8_t>& challenge) {
     if (!attestationCertificate_.empty()) {
@@ -79,7 +85,10 @@ Status WritableCredential::ensureAttestationCertificateExists(const vector<uint8
 
 Status WritableCredential::getCredentialKeyCertificateChain(const vector<uint8_t>& challenge,
                                                             vector<uint8_t>* _aidl_return) {
-
+    if (isUpdate_) {
+        return Status::fromServiceSpecificError(ICredentialStore::ERROR_GENERIC,
+                                                "Cannot be called for an update");
+    }
     Status ensureStatus = ensureAttestationCertificateExists(challenge);
     if (!ensureStatus.isOk()) {
         return ensureStatus;
@@ -87,6 +96,15 @@ Status WritableCredential::getCredentialKeyCertificateChain(const vector<uint8_t
 
     *_aidl_return = attestationCertificate_;
     return Status::ok();
+}
+
+void WritableCredential::setAttestationCertificate(const vector<uint8_t>& attestationCertificate) {
+    attestationCertificate_ = attestationCertificate;
+}
+
+void WritableCredential::setAvailableAuthenticationKeys(int keyCount, int maxUsesPerKey) {
+    keyCount_ = keyCount;
+    maxUsesPerKey_ = maxUsesPerKey;
 }
 
 ssize_t WritableCredential::calcExpectedProofOfProvisioningSize(
@@ -149,9 +167,12 @@ Status
 WritableCredential::personalize(const vector<AccessControlProfileParcel>& accessControlProfiles,
                                 const vector<EntryNamespaceParcel>& entryNamespaces,
                                 int64_t secureUserId, vector<uint8_t>* _aidl_return) {
-    Status ensureStatus = ensureAttestationCertificateExists({0x00});  // Challenge cannot be empty.
-    if (!ensureStatus.isOk()) {
-        return ensureStatus;
+    if (!isUpdate_) {
+        Status ensureStatus =
+            ensureAttestationCertificateExists({0x00});  // Challenge cannot be empty.
+        if (!ensureStatus.isOk()) {
+            return ensureStatus;
+        }
     }
 
     uid_t callingUid = android::IPCThreadState::self()->getCallingUid();
@@ -203,7 +224,7 @@ WritableCredential::personalize(const vector<AccessControlProfileParcel>& access
 
     for (const EntryNamespaceParcel& ensParcel : entryNamespaces) {
         for (const EntryParcel& eParcel : ensParcel.entries) {
-            vector<vector<uint8_t>> chunks = chunkVector(eParcel.value, dataChunkSize_);
+            vector<vector<uint8_t>> chunks = chunkVector(eParcel.value, hwInfo_.dataChunkSize);
 
             vector<int32_t> ids;
             std::copy(eParcel.accessControlProfileIds.begin(),
@@ -240,10 +261,14 @@ WritableCredential::personalize(const vector<AccessControlProfileParcel>& access
     }
     data.setCredentialData(credentialData);
 
+    data.setAvailableAuthenticationKeys(keyCount_, maxUsesPerKey_);
+
     if (!data.saveToDisk()) {
         return Status::fromServiceSpecificError(ICredentialStore::ERROR_GENERIC,
                                                 "Error saving credential data to disk");
     }
+
+    onCredentialUpdatedCallback_();
 
     *_aidl_return = proofOfProvisioningSignature;
     return Status::ok();

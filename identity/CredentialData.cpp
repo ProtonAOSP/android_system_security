@@ -16,6 +16,8 @@
 
 #define LOG_TAG "CredentialData"
 
+#include <chrono>
+
 #include <fcntl.h>
 #include <stdlib.h>
 #include <sys/stat.h>
@@ -119,12 +121,15 @@ bool CredentialData::saveToDisk() const {
     cppbor::Array authKeyDatasArray;
     for (const AuthKeyData& data : authKeyDatas_) {
         cppbor::Array array;
+        // Fields 0-6 was in the original version in Android 11
         array.add(data.certificate);
         array.add(data.keyBlob);
         array.add(data.staticAuthenticationData);
         array.add(data.pendingCertificate);
         array.add(data.pendingKeyBlob);
         array.add(data.useCount);
+        // Field 7 was added in Android 12
+        array.add(data.expirationDateMillisSinceEpoch);
         authKeyDatasArray.add(std::move(array));
     }
     map.add("authKeyData", std::move(authKeyDatasArray));
@@ -183,9 +188,17 @@ optional<AuthKeyData> parseAuthKeyData(const cppbor::Item& item) {
         LOG(ERROR) << "One or more items in AuthKeyData array in CBOR is of wrong type";
         return {};
     }
+    // expirationDateMillisSinceEpoch was added as the 7th element for Android 12. If not
+    // present, default to longest possible expiration date.
+    int64_t expirationDateMillisSinceEpoch = INT64_MAX;
+    if (array->size() >= 7) {
+        const cppbor::Int* itemExpirationDateMillisSinceEpoch = ((*array)[6])->asInt();
+        expirationDateMillisSinceEpoch = itemExpirationDateMillisSinceEpoch->value();
+    }
     AuthKeyData authKeyData;
     authKeyData.certificate = itemCertificate->value();
     authKeyData.keyBlob = itemKeyBlob->value();
+    authKeyData.expirationDateMillisSinceEpoch = expirationDateMillisSinceEpoch;
     authKeyData.staticAuthenticationData = itemStaticAuthenticationData->value();
     authKeyData.pendingCertificate = itemPendingCertificate->value();
     authKeyData.pendingKeyBlob = itemPendingKeyBlob->value();
@@ -232,7 +245,6 @@ optional<vector<vector<uint8_t>>> parseEncryptedChunks(const cppbor::Item& item)
 }
 
 bool CredentialData::loadFromDisk() {
-
     // Reset all data.
     credentialData_.clear();
     attestationCertificate_.clear();
@@ -487,16 +499,28 @@ const vector<AuthKeyData>& CredentialData::getAuthKeyDatas() const {
     return authKeyDatas_;
 }
 
-const AuthKeyData* CredentialData::selectAuthKey(bool allowUsingExhaustedKeys) {
+pair<int /* keyCount */, int /*maxUsersPerKey */> CredentialData::getAvailableAuthenticationKeys() {
+    return std::make_pair(keyCount_, maxUsesPerKey_);
+}
+
+AuthKeyData* CredentialData::findAuthKey_(bool allowUsingExhaustedKeys,
+                                          bool allowUsingExpiredKeys) {
     AuthKeyData* candidate = nullptr;
 
+    int64_t nowMilliSeconds =
+        std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()) * 1000;
+
     int n = 0;
-    int candidateNum = -1;
     for (AuthKeyData& data : authKeyDatas_) {
+        if (nowMilliSeconds > data.expirationDateMillisSinceEpoch) {
+            if (!allowUsingExpiredKeys) {
+                continue;
+            }
+        }
         if (data.certificate.size() != 0) {
+            // Not expired, include in normal check
             if (candidate == nullptr || data.useCount < candidate->useCount) {
                 candidate = &data;
-                candidateNum = n;
             }
         }
         n++;
@@ -510,6 +534,28 @@ const AuthKeyData* CredentialData::selectAuthKey(bool allowUsingExhaustedKeys) {
         return nullptr;
     }
 
+    return candidate;
+}
+
+const AuthKeyData* CredentialData::selectAuthKey(bool allowUsingExhaustedKeys,
+                                                 bool allowUsingExpiredKeys) {
+    AuthKeyData* candidate;
+
+    // First try to find a un-expired key..
+    candidate = findAuthKey_(allowUsingExhaustedKeys, false);
+    if (candidate == nullptr) {
+        // That didn't work, there are no un-expired keys and we don't allow using expired keys.
+        if (!allowUsingExpiredKeys) {
+            return nullptr;
+        }
+
+        // See if there's an expired key then...
+        candidate = findAuthKey_(allowUsingExhaustedKeys, true);
+        if (candidate == nullptr) {
+            return nullptr;
+        }
+    }
+
     candidate->useCount += 1;
     return candidate;
 }
@@ -519,8 +565,14 @@ CredentialData::getAuthKeysNeedingCertification(const sp<IIdentityCredential>& h
 
     vector<vector<uint8_t>> keysNeedingCert;
 
+    int64_t nowMilliSeconds =
+        std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()) * 1000;
+
     for (AuthKeyData& data : authKeyDatas_) {
-        bool newKeyNeeded = (data.certificate.size() == 0) || (data.useCount >= maxUsesPerKey_);
+        bool keyExceedUseCount = (data.useCount >= maxUsesPerKey_);
+        bool keyBeyondExpirationDate = (nowMilliSeconds > data.expirationDateMillisSinceEpoch);
+        bool newKeyNeeded =
+            (data.certificate.size() == 0) || keyExceedUseCount || keyBeyondExpirationDate;
         bool certificationPending = (data.pendingCertificate.size() > 0);
         if (newKeyNeeded && !certificationPending) {
             vector<uint8_t> signingKeyBlob;
@@ -543,11 +595,13 @@ CredentialData::getAuthKeysNeedingCertification(const sp<IIdentityCredential>& h
 }
 
 bool CredentialData::storeStaticAuthenticationData(const vector<uint8_t>& authenticationKey,
+                                                   int64_t expirationDateMillisSinceEpoch,
                                                    const vector<uint8_t>& staticAuthData) {
     for (AuthKeyData& data : authKeyDatas_) {
         if (data.pendingCertificate == authenticationKey) {
             data.certificate = data.pendingCertificate;
             data.keyBlob = data.pendingKeyBlob;
+            data.expirationDateMillisSinceEpoch = expirationDateMillisSinceEpoch;
             data.staticAuthenticationData = staticAuthData;
             data.pendingCertificate.clear();
             data.pendingKeyBlob.clear();

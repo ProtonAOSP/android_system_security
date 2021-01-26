@@ -5,6 +5,7 @@ cc_defaults {
         // "-Werror",
         "-Wextra",
         "-Wunused",
+        "-Wno-deprecated-declarations",
     ],
     sanitize: {
         misc_undefined : ["integer"],
@@ -38,8 +39,8 @@ cc_binary {
         "libkeystore-attestation-application-id",
     ],
     static_libs: [
-        "android.hardware.identity-cpp",
-        "android.hardware.keymaster-cpp",
+        "android.hardware.identity-unstable-cpp",
+        "android.hardware.keymaster-unstable-cpp",
         "libcppbor",
     ]
 }

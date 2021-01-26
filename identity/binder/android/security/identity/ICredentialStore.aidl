@@ -39,6 +39,7 @@ interface ICredentialStore {
     const int ERROR_AUTHENTICATION_KEY_NOT_FOUND = 9;
     const int ERROR_INVALID_ITEMS_REQUEST_MESSAGE = 10;
     const int ERROR_SESSION_TRANSCRIPT_MISMATCH = 11;
+    const int ERROR_NOT_SUPPORTED = 12;
 
     SecurityHardwareInfoParcel getSecurityHardwareInfo();
 
