@@ -52,6 +52,7 @@ class CertUtilsError {
         MemoryAllocation,
         InvalidArgument,
         UnexpectedNullPointer,
+        SignatureFailed,
     };
 
   private:

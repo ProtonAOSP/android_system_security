@@ -544,6 +544,9 @@ CertUtilsError signCertWith(X509* certificate,
 
     bssl::UniquePtr<uint8_t> free_cert_buf(cert_buf);
     auto signature = sign(cert_buf, buf_len);
+    if (signature.empty()) {
+        return CertUtilsError::SignatureFailed;
+    }
 
     if (!ASN1_STRING_set(certificate->signature, signature.data(), signature.size())) {
         return CertUtilsError::BoringSsl;
