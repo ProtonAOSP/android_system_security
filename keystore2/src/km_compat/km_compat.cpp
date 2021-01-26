@@ -19,6 +19,7 @@
 #include "km_compat_type_conversion.h"
 #include <aidl/android/hardware/security/keymint/Algorithm.h>
 #include <aidl/android/hardware/security/keymint/Digest.h>
+#include <aidl/android/hardware/security/keymint/ErrorCode.h>
 #include <aidl/android/hardware/security/keymint/PaddingMode.h>
 #include <aidl/android/system/keystore2/ResponseCode.h>
 #include <android-base/logging.h>
@@ -57,6 +58,14 @@ ScopedAStatus convertErrorCode(V4_0_ErrorCode result) {
         return ScopedAStatus::ok();
     }
     return ScopedAStatus::fromServiceSpecificError(static_cast<int32_t>(result));
+}
+
+static V4_0_ErrorCode toErrorCode(const ScopedAStatus& status) {
+    if (status.getExceptionCode() == EX_SERVICE_SPECIFIC) {
+        return static_cast<V4_0_ErrorCode>(status.getServiceSpecificError());
+    } else {
+        return V4_0_ErrorCode::UNKNOWN_ERROR;
+    }
 }
 
 static std::vector<V4_0::KeyParameter>
@@ -660,22 +669,23 @@ KeyMintDevice::signCertificate(const std::vector<KeyParameter>& keyParams,
             BeginResult beginResult;
             auto error = begin(KeyPurpose::SIGN, keyBlob, kps, HardwareAuthToken(), &beginResult);
             if (!error.isOk()) {
-                errorCode = static_cast<V4_0_ErrorCode>(error.getServiceSpecificError());
+                errorCode = toErrorCode(error);
                 return std::vector<uint8_t>();
             }
             std::optional<KeyParameterArray> outParams;
             std::optional<ByteArray> outByte;
             int32_t status;
-            beginResult.operation->update(std::nullopt, dataVec, std::nullopt, std::nullopt,
-                                          &outParams, &outByte, &status);
-            if (!status) {
+            error = beginResult.operation->update(std::nullopt, dataVec, std::nullopt, std::nullopt,
+                                                  &outParams, &outByte, &status);
+            if (!error.isOk()) {
+                errorCode = toErrorCode(error);
                 return std::vector<uint8_t>();
             }
             std::vector<uint8_t> result;
             error = beginResult.operation->finish(std::nullopt, std::nullopt, std::nullopt,
                                                   std::nullopt, std::nullopt, &outParams, &result);
             if (!error.isOk()) {
-                errorCode = static_cast<V4_0_ErrorCode>(error.getServiceSpecificError());
+                errorCode = toErrorCode(error);
                 return std::vector<uint8_t>();
             }
             return result;
@@ -725,6 +735,7 @@ KeyMintDevice::getCertificate(const std::vector<KeyParameter>& keyParams,
                 }
             });
         if (!result.isOk()) {
+            LOG(ERROR) << __func__ << ": Call to attestKey failed.";
             return V4_0_ErrorCode::UNKNOWN_ERROR;
         }
         if (errorCode != V4_0_ErrorCode::OK) {
@@ -743,6 +754,7 @@ KeyMintDevice::getCertificate(const std::vector<KeyParameter>& keyParams,
     // setIssuer
     auto error = keystore::setIssuer(&*cert, &*cert, false);
     if (error) {
+        LOG(ERROR) << __func__ << ": Set issuer failed.";
         return V4_0_ErrorCode::UNKNOWN_ERROR;
     }
 
@@ -755,26 +767,27 @@ KeyMintDevice::getCertificate(const std::vector<KeyParameter>& keyParams,
             return false;
         }) != keyParams.end();
     auto noAuthRequired = containsParam(keyParams, KMV1::TAG_NO_AUTH_REQUIRED);
-    if (canSelfSign && noAuthRequired) {
-        auto errorCode = signCertificate(keyParams, keyBlob, &*cert);
-        if (errorCode.has_value()) {
-            return errorCode.value();
-        }
-    } else {
+    // If we cannot sign because of purpose or authorization requirement,
+    if (!(canSelfSign && noAuthRequired)
+        // or if self signing fails for any other reason,
+        || signCertificate(keyParams, keyBlob, &*cert).has_value()) {
+        // we sign with ephemeral key.
         keystore::EVP_PKEY_CTX_Ptr pkey_ctx(EVP_PKEY_CTX_new_id(EVP_PKEY_EC, NULL));
         EVP_PKEY_keygen_init(pkey_ctx.get());
         EVP_PKEY_CTX_set_ec_paramgen_curve_nid(pkey_ctx.get(), NID_X9_62_prime256v1);
         EVP_PKEY* pkey_ptr = nullptr;
         EVP_PKEY_keygen(pkey_ctx.get(), &pkey_ptr);
         error = keystore::signCert(&*cert, pkey_ptr);
-    }
-    if (error) {
-        return V4_0_ErrorCode::UNKNOWN_ERROR;
+        if (error) {
+            LOG(ERROR) << __func__ << ": signCert failed.";
+            return V4_0_ErrorCode::UNKNOWN_ERROR;
+        }
     }
 
     // encodeCert
     auto encodedCertOrError = keystore::encodeCert(&*cert);
     if (std::holds_alternative<keystore::CertUtilsError>(encodedCertOrError)) {
+        LOG(ERROR) << __func__ << ": encodeCert failed.";
         return V4_0_ErrorCode::UNKNOWN_ERROR;
     }
 
