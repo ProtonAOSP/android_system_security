@@ -341,7 +341,7 @@ impl Operation {
             .auth_info
             .lock()
             .unwrap()
-            .get_auth_tokens()
+            .before_update()
             .context("In update_aad: Trying to get auth tokens.")?;
 
         self.update_outcome(
@@ -377,7 +377,7 @@ impl Operation {
             .auth_info
             .lock()
             .unwrap()
-            .get_auth_tokens()
+            .before_update()
             .context("In update: Trying to get auth tokens.")?;
 
         self.update_outcome(
@@ -423,7 +423,7 @@ impl Operation {
             .auth_info
             .lock()
             .unwrap()
-            .get_auth_tokens()
+            .before_finish()
             .context("In finish: Trying to get auth tokens.")?;
 
         let output = self
@@ -439,6 +439,8 @@ impl Operation {
                 )),
             )
             .context("In finish: KeyMint::finish failed.")?;
+
+        self.auth_info.lock().unwrap().after_finish().context("In finish.")?;
 
         // At this point the operation concluded successfully.
         *outcome = Outcome::Success;
