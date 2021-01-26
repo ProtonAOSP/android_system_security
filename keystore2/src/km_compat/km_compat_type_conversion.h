@@ -395,6 +395,9 @@ static V4_0::KeyParameter convertKeyParameterToLegacy(const KMV1::KeyParameter& 
             return V4_0::makeKeyParameter(V4_0::TAG_MAX_USES_PER_BOOT, v->get());
         }
         break;
+    case KMV1::Tag::USAGE_COUNT_LIMIT:
+        // Does not exist in KM < KeyMint 1.0.
+        break;
     case KMV1::Tag::USER_ID:
         if (auto v = KMV1::authorizationValue(KMV1::TAG_USER_ID, kp)) {
             return V4_0::makeKeyParameter(V4_0::TAG_USER_ID, v->get());
