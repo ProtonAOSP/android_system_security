@@ -29,6 +29,7 @@ namespace security {
 namespace identity {
 
 using ::android::binder::Status;
+using ::android::hardware::identity::HardwareInformation;
 using ::android::hardware::identity::IWritableIdentityCredential;
 using ::std::string;
 using ::std::vector;
@@ -36,8 +37,14 @@ using ::std::vector;
 class WritableCredential : public BnWritableCredential {
   public:
     WritableCredential(const string& dataPath, const string& credentialName, const string& docType,
-                       size_t dataChunkSize, sp<IWritableIdentityCredential> halBinder);
+                       bool isUpdate, HardwareInformation hwInfo,
+                       sp<IWritableIdentityCredential> halBinder, int halApiVersion);
     ~WritableCredential();
+
+    // Used when updating a credential
+    void setAttestationCertificate(const vector<uint8_t>& attestationCertificate);
+    void setAvailableAuthenticationKeys(int keyCount, int maxUsesPerKey);
+    void setCredentialUpdatedCallback(std::function<void()>&& onCredentialUpdatedCallback);
 
     // IWritableCredential overrides
     Status getCredentialKeyCertificateChain(const vector<uint8_t>& challenge,
@@ -51,9 +58,16 @@ class WritableCredential : public BnWritableCredential {
     string dataPath_;
     string credentialName_;
     string docType_;
-    size_t dataChunkSize_;
+    bool isUpdate_;
+    HardwareInformation hwInfo_;
     sp<IWritableIdentityCredential> halBinder_;
+    int halApiVersion_;
+
     vector<uint8_t> attestationCertificate_;
+    int keyCount_ = 0;
+    int maxUsesPerKey_ = 1;
+
+    std::function<void()> onCredentialUpdatedCallback_ = []() {};
 
     ssize_t calcExpectedProofOfProvisioningSize(
         const vector<AccessControlProfileParcel>& accessControlProfiles,
