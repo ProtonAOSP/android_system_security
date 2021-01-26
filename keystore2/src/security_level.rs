@@ -321,8 +321,10 @@ impl KeystoreSecurityLevel {
         check_key_permission(KeyPerm::rebind(), &key, &None).context("In generate_key.")?;
 
         let km_dev: Box<dyn IKeyMintDevice> = self.keymint.get_interface()?;
-        map_km_error(km_dev.addRngEntropy(entropy))?;
-        let creation_result = map_km_error(km_dev.generateKey(&params))?;
+        map_km_error(km_dev.addRngEntropy(entropy))
+            .context("In generate_key: Trying to add entropy.")?;
+        let creation_result = map_km_error(km_dev.generateKey(&params))
+            .context("In generate_key: While generating Key")?;
 
         let user_id = uid_to_android_user(caller_uid);
         self.store_new_key(key, creation_result, user_id).context("In generate_key.")
@@ -371,8 +373,10 @@ impl KeystoreSecurityLevel {
             })
             .context("In import_key.")?;
 
-        let km_dev: Box<dyn IKeyMintDevice> = self.keymint.get_interface()?;
-        let creation_result = map_km_error(km_dev.importKey(&params, format, key_data))?;
+        let km_dev: Box<dyn IKeyMintDevice> =
+            self.keymint.get_interface().context("In import_key: Trying to get the KM device")?;
+        let creation_result = map_km_error(km_dev.importKey(&params, format, key_data))
+            .context("In import_key: Trying to call importKey")?;
 
         let user_id = uid_to_android_user(caller_uid);
         self.store_new_key(key, creation_result, user_id).context("In import_key.")
@@ -466,26 +470,29 @@ impl KeystoreSecurityLevel {
         let masking_key = masking_key.unwrap_or(ZERO_BLOB_32);
 
         let km_dev: Box<dyn IKeyMintDevice> = self.keymint.get_interface()?;
-        let (creation_result, _) = self.upgrade_keyblob_if_required_with(
-            &*km_dev,
-            Some(wrapping_key_id_guard),
-            wrapping_key_blob,
-            &[],
-            |wrapping_blob| {
-                let creation_result = map_km_error(km_dev.importWrappedKey(
-                    wrapped_data,
-                    wrapping_key_blob,
-                    masking_key,
-                    &params,
-                    pw_sid,
-                    fp_sid,
-                ))?;
-                Ok(creation_result)
-            },
-        )?;
+        let (creation_result, _) = self
+            .upgrade_keyblob_if_required_with(
+                &*km_dev,
+                Some(wrapping_key_id_guard),
+                wrapping_key_blob,
+                &[],
+                |wrapping_blob| {
+                    let creation_result = map_km_error(km_dev.importWrappedKey(
+                        wrapped_data,
+                        wrapping_key_blob,
+                        masking_key,
+                        &params,
+                        pw_sid,
+                        fp_sid,
+                    ))?;
+                    Ok(creation_result)
+                },
+            )
+            .context("In import_wrapped_key.")?;
 
         let user_id = uid_to_android_user(caller_uid);
-        self.store_new_key(key, creation_result, user_id).context("In import_wrapped_key.")
+        self.store_new_key(key, creation_result, user_id)
+            .context("In import_wrapped_key: Trying to store the new key.")
     }
 
     fn upgrade_keyblob_if_required_with<T, F>(
