@@ -125,23 +125,16 @@
 //! or it transitions to its end-of-life, which means we may get a free slot.
 //! Either way, we have to revaluate the pruning scores.
 
-use crate::auth_token_handler::AuthTokenHandler;
+use crate::enforcements::AuthInfo;
 use crate::error::{map_km_error, map_or_log_err, Error, ErrorCode, ResponseCode};
-use crate::globals::ENFORCEMENTS;
-use crate::key_parameter::KeyParameter;
 use crate::utils::Asp;
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
-    ByteArray::ByteArray, HardwareAuthToken::HardwareAuthToken,
-    IKeyMintOperation::IKeyMintOperation, KeyParameter::KeyParameter as KmParam,
-    KeyParameterArray::KeyParameterArray, KeyParameterValue::KeyParameterValue as KmParamValue,
-    Tag::Tag,
-};
-use android_hardware_security_secureclock::aidl::android::hardware::security::secureclock::{
-    TimeStampToken::TimeStampToken,
+    ByteArray::ByteArray, IKeyMintOperation::IKeyMintOperation,
+    KeyParameter::KeyParameter as KmParam, KeyParameterArray::KeyParameterArray,
+    KeyParameterValue::KeyParameterValue as KmParamValue, Tag::Tag,
 };
 use android_system_keystore2::aidl::android::system::keystore2::{
     IKeystoreOperation::BnKeystoreOperation, IKeystoreOperation::IKeystoreOperation,
-    OperationChallenge::OperationChallenge,
 };
 use anyhow::{anyhow, Context, Result};
 use binder::{IBinder, Interface};
@@ -175,11 +168,7 @@ pub struct Operation {
     last_usage: Mutex<Instant>,
     outcome: Mutex<Outcome>,
     owner: u32, // Uid of the operation's owner.
-    auth_token_handler: Mutex<AuthTokenHandler>,
-    // optional because in create_operation, there is a case in which we might not load
-    // key parameters
-    key_params: Option<Vec<KeyParameter>>,
-    op_challenge: Option<OperationChallenge>,
+    auth_info: Mutex<AuthInfo>,
 }
 
 struct PruningInfo {
@@ -197,9 +186,7 @@ impl Operation {
         index: usize,
         km_op: Box<dyn IKeyMintOperation>,
         owner: u32,
-        auth_token_handler: AuthTokenHandler,
-        key_params: Option<Vec<KeyParameter>>,
-        op_challenge: Option<OperationChallenge>,
+        auth_info: AuthInfo,
     ) -> Self {
         Self {
             index,
@@ -207,9 +194,7 @@ impl Operation {
             last_usage: Mutex::new(Instant::now()),
             outcome: Mutex::new(Outcome::Unknown),
             owner,
-            auth_token_handler: Mutex::new(auth_token_handler),
-            key_params,
-            op_challenge,
+            auth_info: Mutex::new(auth_info),
         }
     }
 
@@ -352,15 +337,20 @@ impl Operation {
         let km_op: Box<dyn IKeyMintOperation> =
             self.km_op.get_interface().context("In update: Failed to get KeyMintOperation.")?;
 
+        let (hat, tst) = self
+            .auth_info
+            .lock()
+            .unwrap()
+            .get_auth_tokens()
+            .context("In update_aad: Trying to get auth tokens.")?;
+
         self.update_outcome(
             &mut *outcome,
             map_km_error(km_op.update(
                 Some(&params),
                 None,
-                // TODO Get auth token from enforcement module if required.
-                None,
-                // TODO Get timestamp token from enforcement module if required.
-                None,
+                hat.as_ref(),
+                tst.as_ref(),
                 &mut out_params,
                 &mut output,
             )),
@@ -368,43 +358,6 @@ impl Operation {
         .context("In update_aad: KeyMint::update failed.")?;
 
         Ok(())
-    }
-
-    /// Based on the authorization information stored in the operation during create_operation(),
-    /// and any previous calls to update(), this function returns appropriate auth token and
-    /// timestamp token to be passed to keymint.
-    /// Note that the call to the global enforcement object happens only during the first call to
-    /// update or if finish() is called right after create_opertation.
-    fn handle_authorization<'a>(
-        auth_token_handler: &'a mut AuthTokenHandler,
-        key_params: Option<&Vec<KeyParameter>>,
-        op_challenge: Option<&OperationChallenge>,
-    ) -> Result<(Option<&'a HardwareAuthToken>, Option<&'a TimeStampToken>)> {
-        // keystore performs authorization only if key parameters have been loaded during
-        // create_operation()
-        if let Some(key_parameters) = key_params {
-            match *auth_token_handler {
-                // this variant is found only in a first call to update or if finish is called
-                // right after create_operation.
-                AuthTokenHandler::OpAuthRequired => {
-                    *auth_token_handler = ENFORCEMENTS
-                        .authorize_update_or_finish(key_parameters.as_slice(), op_challenge)
-                        .context("In handle_authorization.")?;
-                    Ok((auth_token_handler.get_auth_token(), None))
-                }
-                // this variant is found only in a first call to update or if finish is called
-                // right after create_operation.
-                AuthTokenHandler::Channel(_)|
-                // this variant is found in every subsequent call to update/finish,
-                // unless the authorization is not required for the key
-                AuthTokenHandler::Token(_, _) => {
-                    auth_token_handler.retrieve_auth_and_timestamp_tokens()
-                }
-                _ => Ok((None, None))
-            }
-        } else {
-            Ok((None, None))
-        }
     }
 
     /// Implementation of `IKeystoreOperation::update`.
@@ -420,21 +373,20 @@ impl Operation {
         let km_op: Box<dyn IKeyMintOperation> =
             self.km_op.get_interface().context("In update: Failed to get KeyMintOperation.")?;
 
-        let mut auth_handler = self.auth_token_handler.lock().unwrap();
-        let (auth_token_for_km, timestamp_token_for_km) = Self::handle_authorization(
-            &mut auth_handler,
-            self.key_params.as_ref(),
-            self.op_challenge.as_ref(),
-        )
-        .context("In update.")?;
+        let (hat, tst) = self
+            .auth_info
+            .lock()
+            .unwrap()
+            .get_auth_tokens()
+            .context("In update: Trying to get auth tokens.")?;
 
         self.update_outcome(
             &mut *outcome,
             map_km_error(km_op.update(
                 None,
                 Some(input),
-                auth_token_for_km,
-                timestamp_token_for_km,
+                hat.as_ref(),
+                tst.as_ref(),
                 &mut out_params,
                 &mut output,
             )),
@@ -467,13 +419,12 @@ impl Operation {
         let km_op: Box<dyn IKeyMintOperation> =
             self.km_op.get_interface().context("In finish: Failed to get KeyMintOperation.")?;
 
-        let mut auth_handler = self.auth_token_handler.lock().unwrap();
-        let (auth_token_for_km, timestamp_token_for_km) = Self::handle_authorization(
-            &mut auth_handler,
-            self.key_params.as_ref(),
-            self.op_challenge.as_ref(),
-        )
-        .context("In finish.")?;
+        let (hat, tst) = self
+            .auth_info
+            .lock()
+            .unwrap()
+            .get_auth_tokens()
+            .context("In finish: Trying to get auth tokens.")?;
 
         let output = self
             .update_outcome(
@@ -482,8 +433,8 @@ impl Operation {
                     None,
                     input,
                     signature,
-                    auth_token_for_km,
-                    timestamp_token_for_km,
+                    hat.as_ref(),
+                    tst.as_ref(),
                     &mut out_params,
                 )),
             )
@@ -546,9 +497,7 @@ impl OperationDb {
         &self,
         km_op: Box<dyn IKeyMintOperation>,
         owner: u32,
-        auth_token_handler: AuthTokenHandler,
-        key_params: Option<Vec<KeyParameter>>,
-        op_challenge: Option<OperationChallenge>,
+        auth_info: AuthInfo,
     ) -> Arc<Operation> {
         // We use unwrap because we don't allow code that can panic while locked.
         let mut operations = self.operations.lock().expect("In create_operation.");
@@ -561,26 +510,12 @@ impl OperationDb {
             s.upgrade().is_none()
         }) {
             Some(free_slot) => {
-                let new_op = Arc::new(Operation::new(
-                    index - 1,
-                    km_op,
-                    owner,
-                    auth_token_handler,
-                    key_params,
-                    op_challenge,
-                ));
+                let new_op = Arc::new(Operation::new(index - 1, km_op, owner, auth_info));
                 *free_slot = Arc::downgrade(&new_op);
                 new_op
             }
             None => {
-                let new_op = Arc::new(Operation::new(
-                    operations.len(),
-                    km_op,
-                    owner,
-                    auth_token_handler,
-                    key_params,
-                    op_challenge,
-                ));
+                let new_op = Arc::new(Operation::new(operations.len(), km_op, owner, auth_info));
                 operations.push(Arc::downgrade(&new_op));
                 new_op
             }

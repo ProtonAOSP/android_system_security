@@ -41,22 +41,17 @@
 //! from the database module these functions take permission check
 //! callbacks.
 
-#![allow(dead_code)]
-
+use crate::db_utils::{self, SqlField};
 use crate::error::{Error as KsError, ResponseCode};
 use crate::impl_metadata; // This is in db_utils.rs
 use crate::key_parameter::{KeyParameter, Tag};
 use crate::permission::KeyPermSet;
 use crate::utils::get_current_time_in_seconds;
-use crate::{
-    db_utils::{self, SqlField},
-    gc::Gc,
-};
 use anyhow::{anyhow, Context, Result};
 use std::{convert::TryFrom, convert::TryInto, time::SystemTimeError};
 
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
-    ErrorCode::ErrorCode as Ec, HardwareAuthToken::HardwareAuthToken,
+    HardwareAuthToken::HardwareAuthToken,
     HardwareAuthenticatorType::HardwareAuthenticatorType, SecurityLevel::SecurityLevel,
 };
 use android_hardware_security_secureclock::aidl::android::hardware::security::secureclock::{
@@ -75,7 +70,7 @@ use rusqlite::{
     types::FromSqlResult,
     types::ToSqlOutput,
     types::{FromSqlError, Value, ValueRef},
-    Connection, Error, OptionalExtension, ToSql, Transaction, TransactionBehavior, NO_PARAMS,
+    Connection, OptionalExtension, ToSql, Transaction, TransactionBehavior, NO_PARAMS,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -547,6 +542,11 @@ impl MonotonicRawTime {
     pub fn seconds(&self) -> i64 {
         self.0
     }
+
+    /// Like i64::checked_sub.
+    pub fn checked_sub(&self, other: &Self) -> Option<Self> {
+        self.0.checked_sub(other.0).map(Self)
+    }
 }
 
 impl ToSql for MonotonicRawTime {
@@ -574,20 +574,26 @@ impl AuthTokenEntry {
     }
 
     /// Checks if this auth token satisfies the given authentication information.
-    pub fn satisfies_auth(
-        auth_token: &HardwareAuthToken,
-        user_secure_ids: &[i64],
-        auth_type: HardwareAuthenticatorType,
-    ) -> bool {
+    pub fn satisfies(&self, user_secure_ids: &[i64], auth_type: HardwareAuthenticatorType) -> bool {
         user_secure_ids.iter().any(|&sid| {
-            (sid == auth_token.userId || sid == auth_token.authenticatorId)
-                && (((auth_type.0 as i32) & (auth_token.authenticatorType.0 as i32)) != 0)
+            (sid == self.auth_token.userId || sid == self.auth_token.authenticatorId)
+                && (((auth_type.0 as i32) & (self.auth_token.authenticatorType.0 as i32)) != 0)
         })
     }
 
     /// Returns the auth token wrapped by the AuthTokenEntry
-    pub fn get_auth_token(self) -> HardwareAuthToken {
+    pub fn auth_token(&self) -> &HardwareAuthToken {
+        &self.auth_token
+    }
+
+    /// Returns the auth token wrapped by the AuthTokenEntry
+    pub fn take_auth_token(self) -> HardwareAuthToken {
         self.auth_token
+    }
+
+    /// Returns the time that this auth token was received.
+    pub fn time_received(&self) -> MonotonicRawTime {
+        self.time_received
     }
 }
 
@@ -699,9 +705,6 @@ impl KeystoreDB {
             NO_PARAMS,
         )
         .context("Failed to initialize \"metadata\" table.")?;
-        // TODO: Add the initial entry on last_off_body to the metadata table during the boot of the
-        // device (i.e. during the first startup of the keystore during a boot cycle).
-        Self::insert_last_off_body(conn, MonotonicRawTime::now()).context("In init-tables.")?;
         Ok(())
     }
 
@@ -1025,34 +1028,23 @@ impl KeystoreDB {
         .context("In insert_key_metadata.")
     }
 
-    fn rebind_alias(
-        &mut self,
-        newid: &KeyIdGuard,
-        alias: &str,
-        domain: Domain,
-        namespace: i64,
-    ) -> Result<()> {
-        self.with_transaction(TransactionBehavior::Immediate, |tx| {
-            Self::rebind_alias_internal(tx, newid, alias, domain, namespace)
-        })
-        .context("In rebind_alias.")
-    }
-
     /// Updates the alias column of the given key id `newid` with the given alias,
     /// and atomically, removes the alias, domain, and namespace from another row
     /// with the same alias-domain-namespace tuple if such row exits.
-    fn rebind_alias_internal(
+    /// Returns Ok(true) if an old key was marked unreferenced as a hint to the garbage
+    /// collector.
+    fn rebind_alias(
         tx: &Transaction,
         newid: &KeyIdGuard,
         alias: &str,
         domain: Domain,
         namespace: i64,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         match domain {
             Domain::APP | Domain::SELINUX => {}
             _ => {
                 return Err(KsError::sys()).context(format!(
-                    "In rebind_alias_internal: Domain {:?} must be either App or SELinux.",
+                    "In rebind_alias: Domain {:?} must be either App or SELinux.",
                     domain
                 ));
             }
@@ -1064,10 +1056,7 @@ impl KeystoreDB {
                  WHERE alias = ? AND domain = ? AND namespace = ?;",
                 params![KeyLifeCycle::Unreferenced, alias, domain.0 as u32, namespace],
             )
-            .context("In rebind_alias_internal: Failed to rebind existing entry.")?;
-        if updated != 0 {
-            Gc::notify_gc();
-        }
+            .context("In rebind_alias: Failed to rebind existing entry.")?;
         let result = tx
             .execute(
                 "UPDATE persistent.keyentry
@@ -1082,19 +1071,21 @@ impl KeystoreDB {
                     KeyLifeCycle::Existing
                 ],
             )
-            .context("In rebind_alias_internal: Failed to set alias.")?;
+            .context("In rebind_alias: Failed to set alias.")?;
         if result != 1 {
             return Err(KsError::sys()).context(format!(
-                "In rebind_alias_internal: Expected to update a single entry but instead updated {}.",
+                "In rebind_alias: Expected to update a single entry but instead updated {}.",
                 result
             ));
         }
-        Ok(())
+        Ok(updated != 0)
     }
 
     /// Store a new key in a single transaction.
     /// The function creates a new key entry, populates the blob, key parameter, and metadata
     /// fields, and rebinds the given alias to the new key.
+    /// The boolean returned is a hint for the garbage collector. If true, a key was replaced,
+    /// is now unreferenced and needs to be collected.
     pub fn store_new_key<'a>(
         &mut self,
         key: KeyDescriptor,
@@ -1103,7 +1094,7 @@ impl KeystoreDB {
         cert: Option<&[u8]>,
         cert_chain: Option<&[u8]>,
         metadata: &KeyMetaData,
-    ) -> Result<KeyIdGuard> {
+    ) -> Result<(bool, KeyIdGuard)> {
         let (alias, domain, namespace) = match key {
             KeyDescriptor { alias: Some(alias), domain: Domain::APP, nspace, blob: None }
             | KeyDescriptor { alias: Some(alias), domain: Domain::SELINUX, nspace, blob: None } => {
@@ -1135,9 +1126,9 @@ impl KeystoreDB {
             Self::insert_keyparameter_internal(tx, &key_id, params)
                 .context("Trying to insert key parameters.")?;
             metadata.store_in_db(key_id.id(), tx).context("Tryin to insert key metadata.")?;
-            Self::rebind_alias_internal(tx, &key_id, &alias, domain, namespace)
+            let need_gc = Self::rebind_alias(tx, &key_id, &alias, domain, namespace)
                 .context("Trying to rebind alias.")?;
-            Ok(key_id)
+            Ok((need_gc, key_id))
         })
         .context("In store_new_key.")
     }
@@ -1429,29 +1420,27 @@ impl KeystoreDB {
         Ok((key_id_guard, key_entry))
     }
 
-    fn mark_unreferenced(tx: &Transaction, key_id: i64) -> Result<()> {
+    fn mark_unreferenced(tx: &Transaction, key_id: i64) -> Result<bool> {
         let updated = tx
             .execute(
                 "UPDATE persistent.keyentry SET state = ? WHERE id = ?;",
                 params![KeyLifeCycle::Unreferenced, key_id],
             )
             .context("In mark_unreferenced: Failed to update state of key entry.")?;
-        if updated != 0 {
-            Gc::notify_gc();
-        }
         tx.execute("DELETE from persistent.grant WHERE keyentryid = ?;", params![key_id])
             .context("In mark_unreferenced: Failed to drop grants.")?;
-        Ok(())
+        Ok(updated != 0)
     }
 
     /// Marks the given key as unreferenced and removes all of the grants to this key.
+    /// Returns Ok(true) if a key was marked unreferenced as a hint for the garbage collector.
     pub fn unbind_key(
         &mut self,
         key: KeyDescriptor,
         key_type: KeyType,
         caller_uid: u32,
         check_permission: impl FnOnce(&KeyDescriptor, Option<KeyPermSet>) -> Result<()>,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         self.with_transaction(TransactionBehavior::Immediate, |tx| {
             let (key_id, access_key_descriptor, access_vector) =
                 Self::load_access_tuple(tx, key, key_type, caller_uid)
@@ -1683,69 +1672,23 @@ impl KeystoreDB {
         Ok(())
     }
 
-    /// find the auth token entry issued for a time-out token
-    pub fn find_timed_auth_token_entry(
+    /// Find the newest auth token matching the given predicate.
+    pub fn find_auth_token_entry<F>(
         &mut self,
-        user_secure_ids: &[i64],
-        auth_type: HardwareAuthenticatorType,
-        key_time_out: i64,
-        allow_while_on_body: bool,
-    ) -> Result<AuthTokenEntry> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .context("In find_timed_auth_token_entry: failed to initialize transaction.")?;
-        let auth_token_entries =
-            Self::load_auth_token_entries(&tx).context("In find_timed_auth_token_entry.")?;
-        // NOTE: Although in legacy keystore both timestamp and time_received are used when finding
-        // the newest match, we decided to only consider time_received in keystore2 code.
-        // TODO: verify that the iter().find() preserves the order.
-        let newest_match: Option<AuthTokenEntry> = auth_token_entries.into_iter().find(|entry| {
-            AuthTokenEntry::satisfies_auth(&entry.auth_token, user_secure_ids, auth_type)
-        });
+        p: F,
+    ) -> Result<Option<(AuthTokenEntry, MonotonicRawTime)>>
+    where
+        F: Fn(&AuthTokenEntry) -> bool,
+    {
+        self.with_transaction(TransactionBehavior::Deferred, |tx| {
+            let mut stmt = tx
+                .prepare("SELECT * from perboot.authtoken ORDER BY time_received DESC;")
+                .context("Prepare statement failed.")?;
 
-        // Tag::ALLOW_WHILE_ON_BODY specifies that the key may be used after authentication
-        // timeout if device is still on-body. So we return error only if both checks fail.
-        if let Some(newest_match_entry) = newest_match {
-            let current_time = MonotonicRawTime::now();
-            let time_since_received_plus_time_out =
-                match newest_match_entry.time_received.seconds().checked_add(key_time_out) {
-                    Some(t) => t,
-                    None => {
-                        // we do not expect this behavior, so we need to log this error if it ever
-                        // happens.
-                        error!("In find_timed_auth_token_entry: overflow occurred.");
-                        return Err(KsError::Km(Ec::KEY_USER_NOT_AUTHENTICATED)).context(
-                            "In find_timed_auth_token_entry: matching auth token is expired.",
-                        );
-                    }
-                };
-            if (time_since_received_plus_time_out < current_time.seconds())
-                && (!allow_while_on_body
-                    || (newest_match_entry.time_received.seconds()
-                        < Self::get_last_off_body(&tx)?.seconds()))
-            {
-                return Err(KsError::Km(Ec::KEY_USER_NOT_AUTHENTICATED))
-                    .context("In find_timed_auth_token_entry: matching auth token is expired.");
-            }
-            tx.commit().context("In find_timed_auth_token_entry, failed to commit transaction.")?;
-            Ok(newest_match_entry)
-        } else {
-            Err(KsError::Km(Ec::KEY_USER_NOT_AUTHENTICATED))
-                .context("In find_timed_auth_token_entry: no matching auth token found.")
-        }
-    }
+            let mut rows = stmt.query(NO_PARAMS).context("Failed to query.")?;
 
-    /// load the existing auth token entries in perboot.authtoken table into a vector.
-    /// return None if the table is empty.
-    fn load_auth_token_entries(tx: &Transaction) -> Result<Vec<AuthTokenEntry>> {
-        let mut stmt = tx
-            .prepare("SELECT * from perboot.authtoken ORDER BY time_received DESC;")
-            .context("In load_auth_token_entries: select prepare statement failed.")?;
-
-        let auth_token_entries: Vec<AuthTokenEntry> = stmt
-            .query_map(NO_PARAMS, |row| {
-                Ok(AuthTokenEntry::new(
+            while let Some(row) = rows.next().context("Failed to get next row.")? {
+                let entry = AuthTokenEntry::new(
                     HardwareAuthToken {
                         challenge: row.get(1)?,
                         userId: row.get(2)?,
@@ -1755,28 +1698,32 @@ impl KeystoreDB {
                         mac: row.get(6)?,
                     },
                     row.get(7)?,
-                ))
-            })
-            .context("In load_auth_token_entries: query_map failed.")?
-            .collect::<Result<Vec<AuthTokenEntry>, Error>>()
-            .context(
-                "In load_auth_token_entries: failed to create a vector of auth token entries
-                from mapped rows.",
-            )?;
-        Ok(auth_token_entries)
+                );
+                if p(&entry) {
+                    return Ok(Some((
+                        entry,
+                        Self::get_last_off_body(tx)
+                            .context("In find_auth_token_entry: Trying to get last off body")?,
+                    )));
+                }
+            }
+            Ok(None)
+        })
+        .context("In find_auth_token_entry.")
     }
 
-    /// insert last_off_body into the metadata table at the initialization of auth token table
-    pub fn insert_last_off_body(conn: &Connection, last_off_body: MonotonicRawTime) -> Result<()> {
-        conn.execute(
-            "INSERT OR REPLACE INTO perboot.metadata (key, value) VALUES (?, ?);",
-            params!["last_off_body", last_off_body],
-        )
-        .context("In insert_last_off_body: failed to insert.")?;
+    /// Insert last_off_body into the metadata table at the initialization of auth token table
+    pub fn insert_last_off_body(&self, last_off_body: MonotonicRawTime) -> Result<()> {
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO perboot.metadata (key, value) VALUES (?, ?);",
+                params!["last_off_body", last_off_body],
+            )
+            .context("In insert_last_off_body: failed to insert.")?;
         Ok(())
     }
 
-    /// update last_off_body when on_device_off_body is called
+    /// Update last_off_body when on_device_off_body is called
     pub fn update_last_off_body(&self, last_off_body: MonotonicRawTime) -> Result<()> {
         self.conn
             .execute(
@@ -1787,15 +1734,14 @@ impl KeystoreDB {
         Ok(())
     }
 
-    /// get last_off_body time when finding auth tokens
+    /// Get last_off_body time when finding auth tokens
     fn get_last_off_body(tx: &Transaction) -> Result<MonotonicRawTime> {
-        let mut stmt = tx
-            .prepare("SELECT value from perboot.metadata WHERE key = ?;")
-            .context("In get_last_off_body: select prepare statement failed.")?;
-        let last_off_body: Result<MonotonicRawTime> = stmt
-            .query_row(params!["last_off_body"], |row| Ok(row.get(0)?))
-            .context("In get_last_off_body: query_row failed.");
-        last_off_body
+        tx.query_row(
+            "SELECT value from perboot.metadata WHERE key = ?;",
+            params!["last_off_body"],
+            |row| Ok(row.get(0)?),
+        )
+        .context("In get_last_off_body: query_row failed.")
     }
 }
 
@@ -1830,6 +1776,19 @@ mod tests {
 
         KeystoreDB::init_tables(&conn).context("Failed to initialize tables.")?;
         Ok(KeystoreDB { conn })
+    }
+
+    fn rebind_alias(
+        db: &mut KeystoreDB,
+        newid: &KeyIdGuard,
+        alias: &str,
+        domain: Domain,
+        namespace: i64,
+    ) -> Result<bool> {
+        db.with_transaction(TransactionBehavior::Immediate, |tx| {
+            KeystoreDB::rebind_alias(tx, newid, alias, domain, namespace)
+        })
+        .context("In rebind_alias.")
     }
 
     #[test]
@@ -2035,14 +1994,14 @@ mod tests {
         assert_eq!(extractor(&entries[1]), (Some(Domain::APP), Some(42), None));
 
         // Test that the first call to rebind_alias sets the alias.
-        db.rebind_alias(&KEY_ID_LOCK.get(entries[0].id), "foo", Domain::APP, 42)?;
+        rebind_alias(&mut db, &KEY_ID_LOCK.get(entries[0].id), "foo", Domain::APP, 42)?;
         let entries = get_keyentry(&db)?;
         assert_eq!(entries.len(), 2);
         assert_eq!(extractor(&entries[0]), (Some(Domain::APP), Some(42), Some("foo")));
         assert_eq!(extractor(&entries[1]), (Some(Domain::APP), Some(42), None));
 
         // Test that the second call to rebind_alias also empties the old one.
-        db.rebind_alias(&KEY_ID_LOCK.get(entries[1].id), "foo", Domain::APP, 42)?;
+        rebind_alias(&mut db, &KEY_ID_LOCK.get(entries[1].id), "foo", Domain::APP, 42)?;
         let entries = get_keyentry(&db)?;
         assert_eq!(entries.len(), 2);
         assert_eq!(extractor(&entries[0]), (None, None, None));
@@ -2050,21 +2009,21 @@ mod tests {
 
         // Test that we must pass in a valid Domain.
         check_result_is_error_containing_string(
-            db.rebind_alias(&KEY_ID_LOCK.get(0), "foo", Domain::GRANT, 42),
+            rebind_alias(&mut db, &KEY_ID_LOCK.get(0), "foo", Domain::GRANT, 42),
             "Domain Domain(1) must be either App or SELinux.",
         );
         check_result_is_error_containing_string(
-            db.rebind_alias(&KEY_ID_LOCK.get(0), "foo", Domain::BLOB, 42),
+            rebind_alias(&mut db, &KEY_ID_LOCK.get(0), "foo", Domain::BLOB, 42),
             "Domain Domain(3) must be either App or SELinux.",
         );
         check_result_is_error_containing_string(
-            db.rebind_alias(&KEY_ID_LOCK.get(0), "foo", Domain::KEY_ID, 42),
+            rebind_alias(&mut db, &KEY_ID_LOCK.get(0), "foo", Domain::KEY_ID, 42),
             "Domain Domain(4) must be either App or SELinux.",
         );
 
         // Test that we correctly handle setting an alias for something that does not exist.
         check_result_is_error_containing_string(
-            db.rebind_alias(&KEY_ID_LOCK.get(0), "foo", Domain::SELINUX, 42),
+            rebind_alias(&mut db, &KEY_ID_LOCK.get(0), "foo", Domain::SELINUX, 42),
             "Expected to update a single entry but instead updated 0",
         );
         // Test that we correctly abort the transaction in this case.
@@ -2929,7 +2888,7 @@ mod tests {
         metadata.add(KeyMetaEntry::Iv(vec![2, 3, 1]));
         metadata.add(KeyMetaEntry::AeadTag(vec![3, 1, 2]));
         db.insert_key_metadata(&key_id, &metadata)?;
-        db.rebind_alias(&key_id, alias, domain, namespace)?;
+        rebind_alias(db, &key_id, alias, domain, namespace)?;
         Ok(key_id)
     }
 
@@ -3013,7 +2972,7 @@ mod tests {
     #[test]
     fn test_last_off_body() -> Result<()> {
         let mut db = new_test_db()?;
-        KeystoreDB::insert_last_off_body(&db.conn, MonotonicRawTime::now())?;
+        db.insert_last_off_body(MonotonicRawTime::now())?;
         let tx = db.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let last_off_body_1 = KeystoreDB::get_last_off_body(&tx)?;
         tx.commit()?;
