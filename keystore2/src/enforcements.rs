@@ -392,13 +392,10 @@ impl Enforcements {
                     user_auth_type = Some(*a);
                 }
                 KeyParameterValue::KeyPurpose(p) => {
-                    // Note: if there can be multiple KeyPurpose key parameters (TODO: confirm this),
-                    // following check has the effect of key_params.contains(purpose)
+                    // The following check has the effect of key_params.contains(purpose)
                     // Also, authorizing purpose can not be completed here, if there can be multiple
-                    // key parameters for KeyPurpose
-                    if !key_purpose_authorized && *p == purpose {
-                        key_purpose_authorized = true;
-                    }
+                    // key parameters for KeyPurpose.
+                    key_purpose_authorized = key_purpose_authorized || *p == purpose;
                 }
                 KeyParameterValue::CallerNonce => {
                     caller_nonce_allowed = true;
