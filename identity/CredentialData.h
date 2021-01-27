@@ -55,6 +55,7 @@ struct AuthKeyData {
 
     vector<uint8_t> certificate;
     vector<uint8_t> keyBlob;
+    int64_t expirationDateMillisSinceEpoch;
     vector<uint8_t> staticAuthenticationData;
     vector<uint8_t> pendingCertificate;
     vector<uint8_t> pendingKeyBlob;
@@ -106,17 +107,22 @@ class CredentialData : public RefBase {
 
     const vector<AuthKeyData>& getAuthKeyDatas() const;
 
+    pair<int /* keyCount */, int /*maxUsersPerKey */> getAvailableAuthenticationKeys();
+
     // Returns |nullptr| if a suitable key cannot be found. Otherwise returns
     // the authentication and increases its use-count.
-    const AuthKeyData* selectAuthKey(bool allowUsingExhaustedKeys);
+    const AuthKeyData* selectAuthKey(bool allowUsingExhaustedKeys, bool allowUsingExpiredKeys);
 
     optional<vector<vector<uint8_t>>>
     getAuthKeysNeedingCertification(const sp<IIdentityCredential>& halBinder);
 
     bool storeStaticAuthenticationData(const vector<uint8_t>& authenticationKey,
+                                       int64_t expirationDateMillisSinceEpoch,
                                        const vector<uint8_t>& staticAuthData);
 
   private:
+    AuthKeyData* findAuthKey_(bool allowUsingExhaustedKeys, bool allowUsingExpiredKeys);
+
     // Set by constructor.
     //
     string dataPath_;
