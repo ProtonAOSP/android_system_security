@@ -1792,7 +1792,7 @@ mod tests {
     };
     use crate::key_perm_set;
     use crate::permission::{KeyPerm, KeyPermSet};
-    use crate::test::utils::TempDir;
+    use keystore2_test_utils::TempDir;
     use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
         HardwareAuthToken::HardwareAuthToken,
         HardwareAuthenticatorType::HardwareAuthenticatorType as kmhw_authenticator_type,
