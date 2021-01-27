@@ -34,8 +34,3 @@ mod async_task;
 mod db_utils;
 mod gc;
 mod super_key;
-
-#[cfg(test)]
-mod test {
-    pub mod utils;
-}
