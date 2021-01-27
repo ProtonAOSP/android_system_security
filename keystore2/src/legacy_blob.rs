@@ -951,7 +951,7 @@ mod test {
             Some(&error::Error::Rc(ResponseCode::LOCKED))
         );
 
-        key_manager.unlock_user_key(0, PASSWORD, &mut db, &legacy_blob_loader)?;
+        key_manager.unlock_user_key(&mut db, 0, PASSWORD, &legacy_blob_loader)?;
 
         if let (Some((Blob { flags, value }, _params)), Some(cert), Some(chain), _kp) =
             legacy_blob_loader.load_by_uid_alias(10223, "authbound", &key_manager)?
