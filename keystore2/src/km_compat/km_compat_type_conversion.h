@@ -23,7 +23,7 @@ namespace V4_0 = ::android::hardware::keymaster::V4_0;
 namespace V4_1 = ::android::hardware::keymaster::V4_1;
 namespace KMV1 = ::aidl::android::hardware::security::keymint;
 
-static V4_0::KeyPurpose convert(KMV1::KeyPurpose p) {
+static std::optional<V4_0::KeyPurpose> convert(KMV1::KeyPurpose p) {
     switch (p) {
     case KMV1::KeyPurpose::ENCRYPT:
         return V4_0::KeyPurpose::ENCRYPT;
@@ -35,6 +35,9 @@ static V4_0::KeyPurpose convert(KMV1::KeyPurpose p) {
         return V4_0::KeyPurpose::VERIFY;
     case KMV1::KeyPurpose::WRAP_KEY:
         return V4_0::KeyPurpose::WRAP_KEY;
+    default:
+        // Can end up here because KeyMint may have KeyPurpose values not in KM4.
+        return {};
     }
 }
 
@@ -288,7 +291,10 @@ static V4_0::KeyParameter convertKeyParameterToLegacy(const KMV1::KeyParameter& 
         break;
     case KMV1::Tag::PURPOSE:
         if (auto v = KMV1::authorizationValue(KMV1::TAG_PURPOSE, kp)) {
-            return V4_0::makeKeyParameter(V4_0::TAG_PURPOSE, convert(v->get()));
+            std::optional<V4_0::KeyPurpose> purpose = convert(v->get());
+            if (purpose) {
+                return V4_0::makeKeyParameter(V4_0::TAG_PURPOSE, purpose.value());
+            }
         }
         break;
     case KMV1::Tag::ALGORITHM:
