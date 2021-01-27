@@ -413,7 +413,7 @@ impl KeystoreSecurityLevel {
         params: &[KeyParameter],
         authenticators: &[AuthenticatorSpec],
     ) -> Result<KeyMetadata> {
-        if key.domain != Domain::BLOB && key.alias.is_none() {
+        if !(key.domain == Domain::BLOB && key.alias.is_some()) {
             return Err(error::Error::Km(ErrorCode::INVALID_ARGUMENT))
                 .context("In import_wrapped_key: Alias must be specified.");
         }
