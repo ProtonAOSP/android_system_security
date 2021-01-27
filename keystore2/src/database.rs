@@ -1229,18 +1229,18 @@ impl KeystoreDB {
             // Domain::KEY_ID. In this case we load the domain and namespace from the
             // keyentry database because we need them for access control.
             Domain::KEY_ID => {
-                let mut stmt = tx
-                    .prepare(
-                        "SELECT domain, namespace FROM persistent.keyentry
-                            WHERE
-                            id = ?
-                            AND state = ?;",
-                    )
-                    .context("Domain::KEY_ID: prepare statement failed")?;
-                let mut rows = stmt
-                    .query(params![key.nspace, KeyLifeCycle::Live])
-                    .context("Domain::KEY_ID: query failed.")?;
-                let (domain, namespace): (Domain, i64) =
+                let (domain, namespace): (Domain, i64) = {
+                    let mut stmt = tx
+                        .prepare(
+                            "SELECT domain, namespace FROM persistent.keyentry
+                                WHERE
+                                id = ?
+                                AND state = ?;",
+                        )
+                        .context("Domain::KEY_ID: prepare statement failed")?;
+                    let mut rows = stmt
+                        .query(params![key.nspace, KeyLifeCycle::Live])
+                        .context("Domain::KEY_ID: query failed.")?;
                     db_utils::with_rows_extract_one(&mut rows, |row| {
                         let r =
                             row.map_or_else(|| Err(KsError::Rc(ResponseCode::KEY_NOT_FOUND)), Ok)?;
@@ -1249,13 +1249,37 @@ impl KeystoreDB {
                             r.get(1).context("Failed to unpack namespace.")?,
                         ))
                     })
-                    .context("Domain::KEY_ID.")?;
+                    .context("Domain::KEY_ID.")?
+                };
+
+                // We may use a key by id after loading it by grant.
+                // In this case we have to check if the caller has a grant for this particular
+                // key. We can skip this if we already know that the caller is the owner.
+                // But we cannot know this if domain is anything but App. E.g. in the case
+                // of Domain::SELINUX we have to speculatively check for grants because we have to
+                // consult the SEPolicy before we know if the caller is the owner.
+                let access_vector: Option<KeyPermSet> =
+                    if domain != Domain::APP || namespace != caller_uid as i64 {
+                        let access_vector: Option<i32> = tx
+                            .query_row(
+                                "SELECT access_vector FROM persistent.grant
+                                WHERE grantee = ? AND keyentryid = ?;",
+                                params![caller_uid as i64, key.nspace],
+                                |row| row.get(0),
+                            )
+                            .optional()
+                            .context("Domain::KEY_ID: query grant failed.")?;
+                        access_vector.map(|p| p.into())
+                    } else {
+                        None
+                    };
+
                 let key_id = key.nspace;
                 let mut access_key = key;
                 access_key.domain = domain;
                 access_key.nspace = namespace;
 
-                Ok((key_id, access_key, None))
+                Ok((key_id, access_key, access_vector))
             }
             _ => Err(anyhow!(KsError::sys())),
         }
@@ -2511,6 +2535,90 @@ mod tests {
                 KeyType::Client,
                 KeyEntryLoadBits::NONE,
                 2,
+                |_k, _av| Ok(()),
+            )
+            .unwrap_err()
+            .root_cause()
+            .downcast_ref::<KsError>()
+        );
+
+        Ok(())
+    }
+
+    // This test attempts to load a key by key id while the caller is not the owner
+    // but a grant exists for the given key and the caller.
+    #[test]
+    fn test_insert_and_load_full_keyentry_from_grant_by_key_id() -> Result<()> {
+        let mut db = new_test_db()?;
+        const OWNER_UID: u32 = 1u32;
+        const GRANTEE_UID: u32 = 2u32;
+        const SOMEONE_ELSE_UID: u32 = 3u32;
+        let key_id = make_test_key_entry(&mut db, Domain::APP, OWNER_UID as i64, TEST_ALIAS, None)
+            .context("test_insert_and_load_full_keyentry_from_grant_by_key_id")?
+            .0;
+
+        db.grant(
+            KeyDescriptor {
+                domain: Domain::APP,
+                nspace: 0,
+                alias: Some(TEST_ALIAS.to_string()),
+                blob: None,
+            },
+            OWNER_UID,
+            GRANTEE_UID,
+            key_perm_set![KeyPerm::use_()],
+            |_k, _av| Ok(()),
+        )
+        .unwrap();
+
+        debug_dump_grant_table(&mut db)?;
+
+        let id_descriptor =
+            KeyDescriptor { domain: Domain::KEY_ID, nspace: key_id, ..Default::default() };
+
+        let (_, key_entry) = db
+            .load_key_entry(
+                id_descriptor.clone(),
+                KeyType::Client,
+                KeyEntryLoadBits::BOTH,
+                GRANTEE_UID,
+                |k, av| {
+                    assert_eq!(Domain::APP, k.domain);
+                    assert_eq!(OWNER_UID as i64, k.nspace);
+                    assert!(av.unwrap().includes(KeyPerm::use_()));
+                    Ok(())
+                },
+            )
+            .unwrap();
+
+        assert_eq!(key_entry, make_test_key_entry_test_vector(key_id, None));
+
+        let (_, key_entry) = db
+            .load_key_entry(
+                id_descriptor.clone(),
+                KeyType::Client,
+                KeyEntryLoadBits::BOTH,
+                SOMEONE_ELSE_UID,
+                |k, av| {
+                    assert_eq!(Domain::APP, k.domain);
+                    assert_eq!(OWNER_UID as i64, k.nspace);
+                    assert!(av.is_none());
+                    Ok(())
+                },
+            )
+            .unwrap();
+
+        assert_eq!(key_entry, make_test_key_entry_test_vector(key_id, None));
+
+        db.unbind_key(id_descriptor.clone(), KeyType::Client, OWNER_UID, |_, _| Ok(())).unwrap();
+
+        assert_eq!(
+            Some(&KsError::Rc(ResponseCode::KEY_NOT_FOUND)),
+            db.load_key_entry(
+                id_descriptor,
+                KeyType::Client,
+                KeyEntryLoadBits::NONE,
+                GRANTEE_UID,
                 |_k, _av| Ok(()),
             )
             .unwrap_err()
