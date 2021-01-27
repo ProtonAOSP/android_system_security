@@ -118,7 +118,7 @@ impl KeystoreService {
         let (key_id_guard, mut key_entry) = DB
             .with(|db| {
                 db.borrow_mut().load_key_entry(
-                    key.clone(),
+                    &key,
                     KeyType::Client,
                     KeyEntryLoadBits::PUBLIC,
                     ThreadState::get_calling_uid(),
@@ -167,7 +167,7 @@ impl KeystoreService {
         DB.with::<_, Result<()>>(|db| {
             let mut db = db.borrow_mut();
             let entry = match db.load_key_entry(
-                key.clone(),
+                &key,
                 KeyType::Client,
                 KeyEntryLoadBits::NONE,
                 ThreadState::get_calling_uid(),
@@ -219,7 +219,7 @@ impl KeystoreService {
             check_key_permission(KeyPerm::rebind(), &key, &None)
                 .context("Caller does not have permission to insert this certificate.")?;
 
-            db.store_new_certificate(key, certificate_chain.unwrap(), &KEYSTORE_UUID)
+            db.store_new_certificate(&key, certificate_chain.unwrap(), &KEYSTORE_UUID)
                 .context("Failed to insert new certificate.")?;
             Ok(())
         })
@@ -271,7 +271,7 @@ impl KeystoreService {
         let caller_uid = ThreadState::get_calling_uid();
         let need_gc = DB
             .with(|db| {
-                db.borrow_mut().unbind_key(key.clone(), KeyType::Client, caller_uid, |k, av| {
+                db.borrow_mut().unbind_key(&key, KeyType::Client, caller_uid, |k, av| {
                     check_key_permission(KeyPerm::delete(), k, &av).context("During delete_key.")
                 })
             })
@@ -290,7 +290,7 @@ impl KeystoreService {
     ) -> Result<KeyDescriptor> {
         DB.with(|db| {
             db.borrow_mut().grant(
-                key.clone(),
+                &key,
                 ThreadState::get_calling_uid(),
                 grantee_uid as u32,
                 access_vector,
@@ -302,12 +302,9 @@ impl KeystoreService {
 
     fn ungrant(&self, key: &KeyDescriptor, grantee_uid: i32) -> Result<()> {
         DB.with(|db| {
-            db.borrow_mut().ungrant(
-                key.clone(),
-                ThreadState::get_calling_uid(),
-                grantee_uid as u32,
-                |k| check_key_permission(KeyPerm::grant(), k, &None),
-            )
+            db.borrow_mut().ungrant(&key, ThreadState::get_calling_uid(), grantee_uid as u32, |k| {
+                check_key_permission(KeyPerm::grant(), k, &None)
+            })
         })
         .context("In KeystoreService::ungrant.")
     }
