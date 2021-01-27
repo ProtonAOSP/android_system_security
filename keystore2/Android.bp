@@ -41,6 +41,16 @@ rust_library {
     ],
 }
 
+rust_library {
+    name: "libkeystore2_test_utils",
+    crate_name: "keystore2_test_utils",
+    srcs: ["test_utils/lib.rs"],
+    rustlibs: [
+        "liblog_rust",
+        "librand",
+    ]
+}
+
 rust_test {
     name: "keystore2_test",
     crate_name: "keystore2",
@@ -62,6 +72,7 @@ rust_test {
         "libkeystore2_crypto_rust",
         "libkeystore2_km_compat",
         "libkeystore2_selinux",
+        "libkeystore2_test_utils",
         "liblazy_static",
         "liblibc",
         "liblibsqlite3_sys",

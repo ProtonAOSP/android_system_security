@@ -12,11 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//! Implements TempDir which aids in creating an cleaning up temporary directories for testing.
+
 use std::fs::{create_dir, remove_dir_all};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::{env::temp_dir, ops::Deref};
 
+/// Represents the lifecycle of a temporary directory for testing.
 #[derive(Debug)]
 pub struct TempDir {
     path: std::path::PathBuf,
@@ -24,6 +27,11 @@ pub struct TempDir {
 }
 
 impl TempDir {
+    /// Creates a temporary directory with a name of the form <prefix>_NNNNN where NNNNN is a zero
+    /// padded random number with 5 figures. The prefix must not contain file system separators.
+    /// The location of the directory cannot be chosen.
+    /// The directory with all of its content is removed from the file system when the resulting
+    /// object gets dropped.
     pub fn new(prefix: &str) -> std::io::Result<Self> {
         let tmp = loop {
             let mut tmp = temp_dir();
@@ -40,10 +48,20 @@ impl TempDir {
         Ok(Self { path: tmp, do_drop: true })
     }
 
+    /// Returns the absolute path of the temporary directory.
     pub fn path(&self) -> &Path {
         &self.path
     }
 
+    /// Returns a path builder for convenient extension of the path.
+    ///
+    /// ## Example:
+    ///
+    /// ```
+    /// let tdir = TempDir::new("my_test")?;
+    /// let temp_foo_bar = tdir.build().push("foo").push("bar");
+    /// ```
+    /// `temp_foo_bar` derefs to a Path that represents "<tdir.path()>/foo/bar"
     pub fn build(&self) -> PathBuilder {
         PathBuilder(self.path.clone())
     }
@@ -66,9 +84,11 @@ impl Drop for TempDir {
     }
 }
 
+/// Allows for convenient building of paths from a TempDir. See TempDir.build() for more details.
 pub struct PathBuilder(PathBuf);
 
 impl PathBuilder {
+    /// Adds another segment to the end of the path. Consumes, modifies and returns self.
     pub fn push(mut self, segment: &str) -> Self {
         self.0.push(segment);
         self
