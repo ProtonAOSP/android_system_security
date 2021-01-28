@@ -111,21 +111,26 @@ impl KeystoreService {
             })
             .context("In get_key_entry, while trying to load key info.")?;
 
-        let i_sec_level = self
-            .get_security_level_internal(key_entry.sec_level())
-            .context("In get_key_entry.")?
-            .ok_or_else(|| {
-                anyhow!(error::Error::sys()).context(format!(
-                    concat!(
-                        "Found key with security level {:?} ",
-                        "but no KeyMint instance of that security level."
-                    ),
-                    key_entry.sec_level()
-                ))
-            })?;
+        let i_sec_level = if !key_entry.pure_cert() {
+            Some(
+                self.get_security_level_internal(key_entry.sec_level())
+                    .context("In get_key_entry.")?
+                    .ok_or_else(|| {
+                        anyhow!(error::Error::sys()).context(format!(
+                            concat!(
+                                "Found key with security level {:?} ",
+                                "but no KeyMint instance of that security level."
+                            ),
+                            key_entry.sec_level()
+                        ))
+                    })?,
+            )
+        } else {
+            None
+        };
 
         Ok(KeyEntryResponse {
-            iSecurityLevel: Some(i_sec_level),
+            iSecurityLevel: i_sec_level,
             metadata: KeyMetadata {
                 key: KeyDescriptor {
                     domain: Domain::KEY_ID,
@@ -154,28 +159,61 @@ impl KeystoreService {
     ) -> Result<()> {
         DB.with::<_, Result<()>>(|db| {
             let mut db = db.borrow_mut();
-            let (key_id_guard, key_entry) = db
-                .load_key_entry(
-                    key.clone(),
-                    KeyType::Client,
-                    KeyEntryLoadBits::NONE,
-                    ThreadState::get_calling_uid(),
-                    |k, av| {
-                        check_key_permission(KeyPerm::update(), k, &av)
-                            .context("In update_subcomponent.")
-                    },
-                )
-                .context("Failed to load key_entry.")?;
+            let entry = match db.load_key_entry(
+                key.clone(),
+                KeyType::Client,
+                KeyEntryLoadBits::NONE,
+                ThreadState::get_calling_uid(),
+                |k, av| {
+                    check_key_permission(KeyPerm::update(), k, &av)
+                        .context("In update_subcomponent.")
+                },
+            ) {
+                Err(e) => match e.root_cause().downcast_ref::<Error>() {
+                    Some(Error::Rc(ResponseCode::KEY_NOT_FOUND)) => Ok(None),
+                    _ => Err(e),
+                },
+                Ok(v) => Ok(Some(v)),
+            }
+            .context("Failed to load key entry.")?;
 
-            if let Some(cert) = public_cert {
-                db.insert_blob(&key_id_guard, SubComponentType::CERT, cert)
+            if let Some((key_id_guard, key_entry)) = entry {
+                db.set_blob(&key_id_guard, SubComponentType::CERT, public_cert)
                     .context("Failed to update cert subcomponent.")?;
+
+                db.set_blob(&key_id_guard, SubComponentType::CERT_CHAIN, certificate_chain)
+                    .context("Failed to update cert chain subcomponent.")?;
+                return Ok(());
             }
 
-            if let Some(cert_chain) = certificate_chain {
-                db.insert_blob(&key_id_guard, SubComponentType::CERT_CHAIN, cert_chain)
-                    .context("Failed to update cert chain subcomponent.")?;
+            // If we reach this point we have to check the special condition where a certificate
+            // entry may be made.
+            if !(public_cert.is_none() && certificate_chain.is_some()) {
+                return Err(Error::Rc(ResponseCode::KEY_NOT_FOUND)).context("No key to update.");
             }
+
+            // So we know that we have a certificate chain and no public cert.
+            // Now check that we have everything we need to make a new certificate entry.
+            let key = match (key.domain, &key.alias) {
+                (Domain::APP, Some(ref alias)) => KeyDescriptor {
+                    domain: Domain::APP,
+                    nspace: ThreadState::get_calling_uid() as i64,
+                    alias: Some(alias.clone()),
+                    blob: None,
+                },
+                (Domain::SELINUX, Some(_)) => key.clone(),
+                _ => {
+                    return Err(Error::Rc(ResponseCode::INVALID_ARGUMENT))
+                        .context("Domain must be APP or SELINUX to insert a certificate.")
+                }
+            };
+
+            // Security critical: This must return on failure. Do not remove the `?`;
+            check_key_permission(KeyPerm::rebind(), &key, &None)
+                .context("Caller does not have permission to insert this certificate.")?;
+
+            db.store_new_certificate(key, certificate_chain.unwrap())
+                .context("Failed to insert new certificate.")?;
             Ok(())
         })
         .context("In update_subcomponent.")
