@@ -14,10 +14,13 @@
 
 //! This is the Keystore 2.0 Enforcements module.
 // TODO: more description to follow.
-use crate::database::{AuthTokenEntry, MonotonicRawTime};
 use crate::error::{map_binder_status, Error, ErrorCode};
 use crate::globals::{get_timestamp_service, ASYNC_TASK, DB, ENFORCEMENTS};
 use crate::key_parameter::{KeyParameter, KeyParameterValue};
+use crate::{
+    database::{AuthTokenEntry, MonotonicRawTime},
+    gc::Gc,
+};
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
     Algorithm::Algorithm, ErrorCode::ErrorCode as Ec, HardwareAuthToken::HardwareAuthToken,
     HardwareAuthenticatorType::HardwareAuthenticatorType,
@@ -128,6 +131,8 @@ enum DeferredAuthState {
 #[derive(Debug)]
 pub struct AuthInfo {
     state: DeferredAuthState,
+    /// An optional key id required to update the usage count if the key usage is limited.
+    key_usage_limited: Option<i64>,
 }
 
 struct TokenReceiverMap {
@@ -251,14 +256,46 @@ impl AuthInfo {
         }
     }
 
+    /// This function is the authorization hook called before operation update.
+    /// It returns the auth tokens required by the operation to commence update.
+    pub fn before_update(&mut self) -> Result<(Option<HardwareAuthToken>, Option<TimeStampToken>)> {
+        self.get_auth_tokens()
+    }
+
+    /// This function is the authorization hook called before operation finish.
+    /// It returns the auth tokens required by the operation to commence finish.
+    pub fn before_finish(&mut self) -> Result<(Option<HardwareAuthToken>, Option<TimeStampToken>)> {
+        self.get_auth_tokens()
+    }
+
+    /// This function is the authorization hook called after finish succeeded.
+    /// As of this writing it checks if the key was a limited use key. If so it updates the
+    /// use counter of the key in the database. When the use counter is depleted, the key gets
+    /// marked for deletion and the garbage collector is notified.
+    pub fn after_finish(&self) -> Result<()> {
+        if let Some(key_id) = self.key_usage_limited {
+            // On the last successful use, the key gets deleted. In this case we
+            // have to notify the garbage collector.
+            let need_gc = DB
+                .with(|db| {
+                    db.borrow_mut()
+                        .check_and_update_key_usage_count(key_id)
+                        .context("Trying to update key usage count.")
+                })
+                .context("In after_finish.")?;
+            if need_gc {
+                Gc::notify_gc();
+            }
+        }
+        Ok(())
+    }
+
     /// This function returns the auth tokens as needed by the ongoing operation or fails
     /// with ErrorCode::KEY_USER_NOT_AUTHENTICATED. If this was called for the first time
     /// after a deferred authorization was requested by finalize_create_authorization, this
     /// function may block on the generation of a time stamp token. It then moves the
     /// tokens into the DeferredAuthState::Token state for future use.
-    pub fn get_auth_tokens(
-        &mut self,
-    ) -> Result<(Option<HardwareAuthToken>, Option<TimeStampToken>)> {
+    fn get_auth_tokens(&mut self) -> Result<(Option<HardwareAuthToken>, Option<TimeStampToken>)> {
         let deferred_tokens = if let DeferredAuthState::Waiting(ref auth_request) = self.state {
             let mut state = auth_request.lock().unwrap();
             Some(state.get_auth_tokens().context("In AuthInfo::get_auth_tokens.")?)
@@ -325,14 +362,18 @@ impl Enforcements {
     pub fn authorize_create(
         &self,
         purpose: KeyPurpose,
-        key_params: Option<&[KeyParameter]>,
+        key_properties: Option<&(i64, Vec<KeyParameter>)>,
         op_params: &[KmKeyParameter],
         requires_timestamp: bool,
     ) -> Result<(Option<HardwareAuthToken>, AuthInfo)> {
-        let key_params = if let Some(k) = key_params {
-            k
-        } else {
-            return Ok((None, AuthInfo { state: DeferredAuthState::NoAuthRequired }));
+        let (key_id, key_params) = match key_properties {
+            Some((key_id, key_params)) => (*key_id, key_params),
+            None => {
+                return Ok((
+                    None,
+                    AuthInfo { state: DeferredAuthState::NoAuthRequired, key_usage_limited: None },
+                ))
+            }
         };
 
         match purpose {
@@ -377,6 +418,7 @@ impl Enforcements {
         let mut key_time_out: Option<i64> = None;
         let mut allow_while_on_body = false;
         let mut unlocked_device_required = false;
+        let mut key_usage_limited: Option<i64> = None;
 
         // iterate through key parameters, recording information we need for authorization
         // enforcements later, or enforcing authorizations in place, where applicable
@@ -392,13 +434,10 @@ impl Enforcements {
                     user_auth_type = Some(*a);
                 }
                 KeyParameterValue::KeyPurpose(p) => {
-                    // Note: if there can be multiple KeyPurpose key parameters (TODO: confirm this),
-                    // following check has the effect of key_params.contains(purpose)
+                    // The following check has the effect of key_params.contains(purpose)
                     // Also, authorizing purpose can not be completed here, if there can be multiple
-                    // key parameters for KeyPurpose
-                    if !key_purpose_authorized && *p == purpose {
-                        key_purpose_authorized = true;
-                    }
+                    // key parameters for KeyPurpose.
+                    key_purpose_authorized = key_purpose_authorized || *p == purpose;
                 }
                 KeyParameterValue::CallerNonce => {
                     caller_nonce_allowed = true;
@@ -436,6 +475,12 @@ impl Enforcements {
                 }
                 KeyParameterValue::AllowWhileOnBody => {
                     allow_while_on_body = true;
+                }
+                KeyParameterValue::UsageCountLimit(_) => {
+                    // We don't examine the limit here because this is enforced on finish.
+                    // Instead, we store the key_id so that finish can look up the key
+                    // in the database again and check and update the counter.
+                    key_usage_limited = Some(key_id);
                 }
                 // NOTE: as per offline discussion, sanitizing key parameters and rejecting
                 // create operation if any non-allowed tags are present, is not done in
@@ -491,7 +536,10 @@ impl Enforcements {
         }
 
         if !unlocked_device_required && no_auth_required {
-            return Ok((None, AuthInfo { state: DeferredAuthState::NoAuthRequired }));
+            return Ok((
+                None,
+                AuthInfo { state: DeferredAuthState::NoAuthRequired, key_usage_limited },
+            ));
         }
 
         let has_sids = !user_secure_ids.is_empty();
@@ -565,7 +613,7 @@ impl Enforcements {
             (None, _, true) => (None, DeferredAuthState::OpAuthRequired),
             (None, _, false) => (None, DeferredAuthState::NoAuthRequired),
         })
-        .map(|(hat, state)| (hat, AuthInfo { state }))
+        .map(|(hat, state)| (hat, AuthInfo { state, key_usage_limited }))
     }
 
     fn find_auth_token<F>(p: F) -> Result<Option<(AuthTokenEntry, MonotonicRawTime)>>

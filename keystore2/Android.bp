@@ -26,6 +26,7 @@ rust_library {
         "android.system.keystore2-V1-rust",
         "libanyhow",
         "libbinder_rs",
+        "libkeystore2_aaid-rust",
         "libkeystore2_apc_compat-rust",
         "libkeystore2_crypto_rust",
         "libkeystore2_km_compat",
@@ -38,6 +39,16 @@ rust_library {
         "librusqlite",
         "libthiserror",
     ],
+}
+
+rust_library {
+    name: "libkeystore2_test_utils",
+    crate_name: "keystore2_test_utils",
+    srcs: ["test_utils/lib.rs"],
+    rustlibs: [
+        "liblog_rust",
+        "librand",
+    ]
 }
 
 rust_test {
@@ -56,10 +67,12 @@ rust_test {
         "libandroid_logger",
         "libanyhow",
         "libbinder_rs",
+        "libkeystore2_aaid-rust",
         "libkeystore2_apc_compat-rust",
         "libkeystore2_crypto_rust",
         "libkeystore2_km_compat",
         "libkeystore2_selinux",
+        "libkeystore2_test_utils",
         "liblazy_static",
         "liblibc",
         "liblibsqlite3_sys",

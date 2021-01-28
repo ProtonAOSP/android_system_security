@@ -840,6 +840,9 @@ pub enum KeyParameterValue {
     /// Maximum number of times that a key may be used between system reboots
     #[key_param(tag = MAX_USES_PER_BOOT, field = Integer)]
     MaxUsesPerBoot(i32),
+    /// The number of times that a limited use key can be used
+    #[key_param(tag = USAGE_COUNT_LIMIT, field = Integer)]
+    UsageCountLimit(i32),
     /// ID of the Android user that is permitted to use the key
     #[key_param(tag = USER_ID, field = Integer)]
     UserID(i32),

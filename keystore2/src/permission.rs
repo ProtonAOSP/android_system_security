@@ -482,25 +482,41 @@ pub fn check_grant_permission(
 ///                      was supplied. It is also produced if `Domain::KEY_ID` was selected, and
 ///                      on various unexpected backend failures.
 pub fn check_key_permission(
+    caller_uid: u32,
     caller_ctx: &CStr,
     perm: KeyPerm,
     key: &KeyDescriptor,
     access_vector: &Option<KeyPermSet>,
 ) -> anyhow::Result<()> {
+    // If an access vector was supplied, the key is either accessed by GRANT or by KEY_ID.
+    // In the former case, key.domain was set to GRANT and we check the failure cases
+    // further below. If the access is requested by KEY_ID, key.domain would have been
+    // resolved to APP or SELINUX depending on where the key actually resides.
+    // Either way we can return here immediately if the access vector covers the requested
+    // permission. If it does not, we can still check if the caller has access by means of
+    // ownership.
+    if let Some(access_vector) = access_vector {
+        if access_vector.includes(perm) {
+            return Ok(());
+        }
+    }
+
     let target_context = match key.domain {
         // apps get the default keystore context
-        Domain::APP => getcon().context("check_key_permission: getcon failed.")?,
+        Domain::APP => {
+            if caller_uid as i64 != key.nspace {
+                return Err(selinux::Error::perm())
+                    .context("Trying to access key without ownership.");
+            }
+            getcon().context("check_key_permission: getcon failed.")?
+        }
         Domain::SELINUX => lookup_keystore2_key_context(key.nspace)
             .context("check_key_permission: Domain::SELINUX: Failed to lookup namespace.")?,
         Domain::GRANT => {
             match access_vector {
-                Some(pv) => {
-                    if pv.includes(perm) {
-                        return Ok(());
-                    } else {
-                        return Err(selinux::Error::perm())
-                            .context(format!("\"{}\" not granted", perm.to_selinux()));
-                    }
+                Some(_) => {
+                    return Err(selinux::Error::perm())
+                        .context(format!("\"{}\" not granted", perm.to_selinux()));
                 }
                 None => {
                     // If DOMAIN_GRANT was selected an access vector must be supplied.
@@ -685,6 +701,7 @@ mod tests {
         let key = KeyDescriptor { domain: Domain::GRANT, nspace: 0, alias: None, blob: None };
 
         assert_perm_failed!(check_key_permission(
+            0,
             &selinux::Context::new("ignored").unwrap(),
             KeyPerm::grant(),
             &key,
@@ -692,6 +709,7 @@ mod tests {
         ));
 
         check_key_permission(
+            0,
             &selinux::Context::new("ignored").unwrap(),
             KeyPerm::use_(),
             &key,
@@ -707,36 +725,80 @@ mod tests {
 
         let key = KeyDescriptor { domain: Domain::APP, nspace: 0, alias: None, blob: None };
 
-        assert!(check_key_permission(&system_server_ctx, KeyPerm::use_(), &key, &None).is_ok());
-        assert!(check_key_permission(&system_server_ctx, KeyPerm::delete(), &key, &None).is_ok());
-        assert!(check_key_permission(&system_server_ctx, KeyPerm::get_info(), &key, &None).is_ok());
-        assert!(check_key_permission(&system_server_ctx, KeyPerm::rebind(), &key, &None).is_ok());
-        assert!(check_key_permission(&system_server_ctx, KeyPerm::update(), &key, &None).is_ok());
-        assert!(check_key_permission(&system_server_ctx, KeyPerm::grant(), &key, &None).is_ok());
+        assert!(check_key_permission(0, &system_server_ctx, KeyPerm::use_(), &key, &None).is_ok());
+        assert!(check_key_permission(0, &system_server_ctx, KeyPerm::delete(), &key, &None).is_ok());
         assert!(
-            check_key_permission(&system_server_ctx, KeyPerm::use_dev_id(), &key, &None).is_ok()
+            check_key_permission(0, &system_server_ctx, KeyPerm::get_info(), &key, &None).is_ok()
         );
-        assert!(check_key_permission(&gmscore_app, KeyPerm::gen_unique_id(), &key, &None).is_ok());
+        assert!(check_key_permission(0, &system_server_ctx, KeyPerm::rebind(), &key, &None).is_ok());
+        assert!(check_key_permission(0, &system_server_ctx, KeyPerm::update(), &key, &None).is_ok());
+        assert!(check_key_permission(0, &system_server_ctx, KeyPerm::grant(), &key, &None).is_ok());
+        assert!(
+            check_key_permission(0, &system_server_ctx, KeyPerm::use_dev_id(), &key, &None).is_ok()
+        );
+        assert!(
+            check_key_permission(0, &gmscore_app, KeyPerm::gen_unique_id(), &key, &None).is_ok()
+        );
 
-        assert!(check_key_permission(&shell_ctx, KeyPerm::use_(), &key, &None).is_ok());
-        assert!(check_key_permission(&shell_ctx, KeyPerm::delete(), &key, &None).is_ok());
-        assert!(check_key_permission(&shell_ctx, KeyPerm::get_info(), &key, &None).is_ok());
-        assert!(check_key_permission(&shell_ctx, KeyPerm::rebind(), &key, &None).is_ok());
-        assert!(check_key_permission(&shell_ctx, KeyPerm::update(), &key, &None).is_ok());
-        assert_perm_failed!(check_key_permission(&shell_ctx, KeyPerm::grant(), &key, &None));
+        assert!(check_key_permission(0, &shell_ctx, KeyPerm::use_(), &key, &None).is_ok());
+        assert!(check_key_permission(0, &shell_ctx, KeyPerm::delete(), &key, &None).is_ok());
+        assert!(check_key_permission(0, &shell_ctx, KeyPerm::get_info(), &key, &None).is_ok());
+        assert!(check_key_permission(0, &shell_ctx, KeyPerm::rebind(), &key, &None).is_ok());
+        assert!(check_key_permission(0, &shell_ctx, KeyPerm::update(), &key, &None).is_ok());
+        assert_perm_failed!(check_key_permission(0, &shell_ctx, KeyPerm::grant(), &key, &None));
         assert_perm_failed!(check_key_permission(
+            0,
             &shell_ctx,
             KeyPerm::req_forced_op(),
             &key,
             &None
         ));
-        assert_perm_failed!(check_key_permission(&shell_ctx, KeyPerm::manage_blob(), &key, &None));
-        assert_perm_failed!(check_key_permission(&shell_ctx, KeyPerm::use_dev_id(), &key, &None));
         assert_perm_failed!(check_key_permission(
+            0,
+            &shell_ctx,
+            KeyPerm::manage_blob(),
+            &key,
+            &None
+        ));
+        assert_perm_failed!(check_key_permission(
+            0,
+            &shell_ctx,
+            KeyPerm::use_dev_id(),
+            &key,
+            &None
+        ));
+        assert_perm_failed!(check_key_permission(
+            0,
             &shell_ctx,
             KeyPerm::gen_unique_id(),
             &key,
             &None
+        ));
+
+        // Also make sure that the permission fails if the caller is not the owner.
+        assert_perm_failed!(check_key_permission(
+            1, // the owner is 0
+            &system_server_ctx,
+            KeyPerm::use_(),
+            &key,
+            &None
+        ));
+        // Unless there was a grant.
+        assert!(check_key_permission(
+            1,
+            &system_server_ctx,
+            KeyPerm::use_(),
+            &key,
+            &Some(key_perm_set![KeyPerm::use_()])
+        )
+        .is_ok());
+        // But fail if the grant did not cover the requested permission.
+        assert_perm_failed!(check_key_permission(
+            1,
+            &system_server_ctx,
+            KeyPerm::use_(),
+            &key,
+            &Some(key_perm_set![KeyPerm::get_info()])
         ));
 
         Ok(())
@@ -753,27 +815,45 @@ mod tests {
         };
 
         if is_su {
-            assert!(check_key_permission(&sctx, KeyPerm::use_(), &key, &None).is_ok());
-            assert!(check_key_permission(&sctx, KeyPerm::delete(), &key, &None).is_ok());
-            assert!(check_key_permission(&sctx, KeyPerm::get_info(), &key, &None).is_ok());
-            assert!(check_key_permission(&sctx, KeyPerm::rebind(), &key, &None).is_ok());
-            assert!(check_key_permission(&sctx, KeyPerm::update(), &key, &None).is_ok());
-            assert!(check_key_permission(&sctx, KeyPerm::grant(), &key, &None).is_ok());
-            assert!(check_key_permission(&sctx, KeyPerm::manage_blob(), &key, &None).is_ok());
-            assert!(check_key_permission(&sctx, KeyPerm::use_dev_id(), &key, &None).is_ok());
-            assert!(check_key_permission(&sctx, KeyPerm::gen_unique_id(), &key, &None).is_ok());
-            assert!(check_key_permission(&sctx, KeyPerm::req_forced_op(), &key, &None).is_ok());
+            assert!(check_key_permission(0, &sctx, KeyPerm::use_(), &key, &None).is_ok());
+            assert!(check_key_permission(0, &sctx, KeyPerm::delete(), &key, &None).is_ok());
+            assert!(check_key_permission(0, &sctx, KeyPerm::get_info(), &key, &None).is_ok());
+            assert!(check_key_permission(0, &sctx, KeyPerm::rebind(), &key, &None).is_ok());
+            assert!(check_key_permission(0, &sctx, KeyPerm::update(), &key, &None).is_ok());
+            assert!(check_key_permission(0, &sctx, KeyPerm::grant(), &key, &None).is_ok());
+            assert!(check_key_permission(0, &sctx, KeyPerm::manage_blob(), &key, &None).is_ok());
+            assert!(check_key_permission(0, &sctx, KeyPerm::use_dev_id(), &key, &None).is_ok());
+            assert!(check_key_permission(0, &sctx, KeyPerm::gen_unique_id(), &key, &None).is_ok());
+            assert!(check_key_permission(0, &sctx, KeyPerm::req_forced_op(), &key, &None).is_ok());
         } else {
-            assert!(check_key_permission(&sctx, KeyPerm::use_(), &key, &None).is_ok());
-            assert!(check_key_permission(&sctx, KeyPerm::delete(), &key, &None).is_ok());
-            assert!(check_key_permission(&sctx, KeyPerm::get_info(), &key, &None).is_ok());
-            assert!(check_key_permission(&sctx, KeyPerm::rebind(), &key, &None).is_ok());
-            assert!(check_key_permission(&sctx, KeyPerm::update(), &key, &None).is_ok());
-            assert_perm_failed!(check_key_permission(&sctx, KeyPerm::grant(), &key, &None));
-            assert_perm_failed!(check_key_permission(&sctx, KeyPerm::req_forced_op(), &key, &None));
-            assert_perm_failed!(check_key_permission(&sctx, KeyPerm::manage_blob(), &key, &None));
-            assert_perm_failed!(check_key_permission(&sctx, KeyPerm::use_dev_id(), &key, &None));
-            assert_perm_failed!(check_key_permission(&sctx, KeyPerm::gen_unique_id(), &key, &None));
+            assert!(check_key_permission(0, &sctx, KeyPerm::use_(), &key, &None).is_ok());
+            assert!(check_key_permission(0, &sctx, KeyPerm::delete(), &key, &None).is_ok());
+            assert!(check_key_permission(0, &sctx, KeyPerm::get_info(), &key, &None).is_ok());
+            assert!(check_key_permission(0, &sctx, KeyPerm::rebind(), &key, &None).is_ok());
+            assert!(check_key_permission(0, &sctx, KeyPerm::update(), &key, &None).is_ok());
+            assert_perm_failed!(check_key_permission(0, &sctx, KeyPerm::grant(), &key, &None));
+            assert_perm_failed!(check_key_permission(
+                0,
+                &sctx,
+                KeyPerm::req_forced_op(),
+                &key,
+                &None
+            ));
+            assert_perm_failed!(check_key_permission(
+                0,
+                &sctx,
+                KeyPerm::manage_blob(),
+                &key,
+                &None
+            ));
+            assert_perm_failed!(check_key_permission(0, &sctx, KeyPerm::use_dev_id(), &key, &None));
+            assert_perm_failed!(check_key_permission(
+                0,
+                &sctx,
+                KeyPerm::gen_unique_id(),
+                &key,
+                &None
+            ));
         }
         Ok(())
     }
@@ -789,9 +869,9 @@ mod tests {
         };
 
         if is_su {
-            check_key_permission(&sctx, KeyPerm::use_(), &key, &None)
+            check_key_permission(0, &sctx, KeyPerm::use_(), &key, &None)
         } else {
-            assert_perm_failed!(check_key_permission(&sctx, KeyPerm::use_(), &key, &None));
+            assert_perm_failed!(check_key_permission(0, &sctx, KeyPerm::use_(), &key, &None));
             Ok(())
         }
     }
@@ -803,6 +883,7 @@ mod tests {
         assert_eq!(
             Some(&KsError::sys()),
             check_key_permission(
+                0,
                 &selinux::Context::new("ignored").unwrap(),
                 KeyPerm::use_(),
                 &key,

@@ -42,7 +42,7 @@
 //! callbacks.
 
 use crate::db_utils::{self, SqlField};
-use crate::error::{Error as KsError, ResponseCode};
+use crate::error::{Error as KsError, ErrorCode, ResponseCode};
 use crate::impl_metadata; // This is in db_utils.rs
 use crate::key_parameter::{KeyParameter, Tag};
 use crate::permission::KeyPermSet;
@@ -1229,18 +1229,18 @@ impl KeystoreDB {
             // Domain::KEY_ID. In this case we load the domain and namespace from the
             // keyentry database because we need them for access control.
             Domain::KEY_ID => {
-                let mut stmt = tx
-                    .prepare(
-                        "SELECT domain, namespace FROM persistent.keyentry
-                            WHERE
-                            id = ?
-                            AND state = ?;",
-                    )
-                    .context("Domain::KEY_ID: prepare statement failed")?;
-                let mut rows = stmt
-                    .query(params![key.nspace, KeyLifeCycle::Live])
-                    .context("Domain::KEY_ID: query failed.")?;
-                let (domain, namespace): (Domain, i64) =
+                let (domain, namespace): (Domain, i64) = {
+                    let mut stmt = tx
+                        .prepare(
+                            "SELECT domain, namespace FROM persistent.keyentry
+                                WHERE
+                                id = ?
+                                AND state = ?;",
+                        )
+                        .context("Domain::KEY_ID: prepare statement failed")?;
+                    let mut rows = stmt
+                        .query(params![key.nspace, KeyLifeCycle::Live])
+                        .context("Domain::KEY_ID: query failed.")?;
                     db_utils::with_rows_extract_one(&mut rows, |row| {
                         let r =
                             row.map_or_else(|| Err(KsError::Rc(ResponseCode::KEY_NOT_FOUND)), Ok)?;
@@ -1249,13 +1249,37 @@ impl KeystoreDB {
                             r.get(1).context("Failed to unpack namespace.")?,
                         ))
                     })
-                    .context("Domain::KEY_ID.")?;
+                    .context("Domain::KEY_ID.")?
+                };
+
+                // We may use a key by id after loading it by grant.
+                // In this case we have to check if the caller has a grant for this particular
+                // key. We can skip this if we already know that the caller is the owner.
+                // But we cannot know this if domain is anything but App. E.g. in the case
+                // of Domain::SELINUX we have to speculatively check for grants because we have to
+                // consult the SEPolicy before we know if the caller is the owner.
+                let access_vector: Option<KeyPermSet> =
+                    if domain != Domain::APP || namespace != caller_uid as i64 {
+                        let access_vector: Option<i32> = tx
+                            .query_row(
+                                "SELECT access_vector FROM persistent.grant
+                                WHERE grantee = ? AND keyentryid = ?;",
+                                params![caller_uid as i64, key.nspace],
+                                |row| row.get(0),
+                            )
+                            .optional()
+                            .context("Domain::KEY_ID: query grant failed.")?;
+                        access_vector.map(|p| p.into())
+                    } else {
+                        None
+                    };
+
                 let key_id = key.nspace;
                 let mut access_key = key;
                 access_key.domain = domain;
                 access_key.nspace = namespace;
 
-                Ok((key_id, access_key, None))
+                Ok((key_id, access_key, access_vector))
             }
             _ => Err(anyhow!(KsError::sys())),
         }
@@ -1330,6 +1354,43 @@ impl KeystoreDB {
         .context("In load_key_parameters.")?;
 
         Ok(parameters)
+    }
+
+    /// Decrements the usage count of a limited use key. This function first checks whether the
+    /// usage has been exhausted, if not, decreases the usage count. If the usage count reaches
+    /// zero, the key also gets marked unreferenced and scheduled for deletion.
+    /// Returns Ok(true) if the key was marked unreferenced as a hint to the garbage collector.
+    pub fn check_and_update_key_usage_count(&mut self, key_id: i64) -> Result<bool> {
+        self.with_transaction(TransactionBehavior::Immediate, |tx| {
+            let limit: Option<i32> = tx
+                .query_row(
+                    "SELECT data FROM persistent.keyparameter WHERE keyentryid = ? AND tag = ?;",
+                    params![key_id, Tag::USAGE_COUNT_LIMIT.0],
+                    |row| row.get(0),
+                )
+                .optional()
+                .context("Trying to load usage count")?;
+
+            let limit = limit
+                .ok_or(KsError::Km(ErrorCode::INVALID_KEY_BLOB))
+                .context("The Key no longer exists. Key is exhausted.")?;
+
+            tx.execute(
+                "UPDATE persistent.keyparameter
+                 SET data = data - 1
+                 WHERE keyentryid = ? AND tag = ? AND data > 0;",
+                params![key_id, Tag::USAGE_COUNT_LIMIT.0],
+            )
+            .context("Failed to update key usage count.")?;
+
+            match limit {
+                1 => Self::mark_unreferenced(tx, key_id)
+                    .context("Trying to mark limited use key for deletion."),
+                0 => Err(KsError::Km(ErrorCode::INVALID_KEY_BLOB)).context("Key is exhausted."),
+                _ => Ok(false),
+            }
+        })
+        .context("In check_and_update_key_usage_count.")
     }
 
     /// Load a key entry by the given key descriptor.
@@ -1755,7 +1816,7 @@ mod tests {
     };
     use crate::key_perm_set;
     use crate::permission::{KeyPerm, KeyPermSet};
-    use crate::test::utils::TempDir;
+    use keystore2_test_utils::TempDir;
     use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
         HardwareAuthToken::HardwareAuthToken,
         HardwareAuthenticatorType::HardwareAuthenticatorType as kmhw_authenticator_type,
@@ -2223,7 +2284,7 @@ mod tests {
     #[test]
     fn test_insert_and_load_full_keyentry_domain_app() -> Result<()> {
         let mut db = new_test_db()?;
-        let key_id = make_test_key_entry(&mut db, Domain::APP, 1, TEST_ALIAS)
+        let key_id = make_test_key_entry(&mut db, Domain::APP, 1, TEST_ALIAS, None)
             .context("test_insert_and_load_full_keyentry_domain_app")?
             .0;
         let (_key_guard, key_entry) = db
@@ -2240,7 +2301,7 @@ mod tests {
                 |_k, _av| Ok(()),
             )
             .unwrap();
-        assert_eq!(key_entry, make_test_key_entry_test_vector(key_id));
+        assert_eq!(key_entry, make_test_key_entry_test_vector(key_id, None));
 
         db.unbind_key(
             KeyDescriptor {
@@ -2280,7 +2341,7 @@ mod tests {
     #[test]
     fn test_insert_and_load_full_keyentry_domain_selinux() -> Result<()> {
         let mut db = new_test_db()?;
-        let key_id = make_test_key_entry(&mut db, Domain::SELINUX, 1, TEST_ALIAS)
+        let key_id = make_test_key_entry(&mut db, Domain::SELINUX, 1, TEST_ALIAS, None)
             .context("test_insert_and_load_full_keyentry_domain_selinux")?
             .0;
         let (_key_guard, key_entry) = db
@@ -2297,7 +2358,7 @@ mod tests {
                 |_k, _av| Ok(()),
             )
             .unwrap();
-        assert_eq!(key_entry, make_test_key_entry_test_vector(key_id));
+        assert_eq!(key_entry, make_test_key_entry_test_vector(key_id, None));
 
         db.unbind_key(
             KeyDescriptor {
@@ -2337,7 +2398,7 @@ mod tests {
     #[test]
     fn test_insert_and_load_full_keyentry_domain_key_id() -> Result<()> {
         let mut db = new_test_db()?;
-        let key_id = make_test_key_entry(&mut db, Domain::SELINUX, 1, TEST_ALIAS)
+        let key_id = make_test_key_entry(&mut db, Domain::SELINUX, 1, TEST_ALIAS, None)
             .context("test_insert_and_load_full_keyentry_domain_key_id")?
             .0;
         let (_, key_entry) = db
@@ -2350,7 +2411,7 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(key_entry, make_test_key_entry_test_vector(key_id));
+        assert_eq!(key_entry, make_test_key_entry_test_vector(key_id, None));
 
         db.unbind_key(
             KeyDescriptor { domain: Domain::KEY_ID, nspace: key_id, alias: None, blob: None },
@@ -2378,9 +2439,57 @@ mod tests {
     }
 
     #[test]
+    fn test_check_and_update_key_usage_count_with_limited_use_key() -> Result<()> {
+        let mut db = new_test_db()?;
+        let key_id = make_test_key_entry(&mut db, Domain::SELINUX, 1, TEST_ALIAS, Some(123))
+            .context("test_check_and_update_key_usage_count_with_limited_use_key")?
+            .0;
+        // Update the usage count of the limited use key.
+        db.check_and_update_key_usage_count(key_id)?;
+
+        let (_key_guard, key_entry) = db.load_key_entry(
+            KeyDescriptor { domain: Domain::KEY_ID, nspace: key_id, alias: None, blob: None },
+            KeyType::Client,
+            KeyEntryLoadBits::BOTH,
+            1,
+            |_k, _av| Ok(()),
+        )?;
+
+        // The usage count is decremented now.
+        assert_eq!(key_entry, make_test_key_entry_test_vector(key_id, Some(122)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_check_and_update_key_usage_count_with_exhausted_limited_use_key() -> Result<()> {
+        let mut db = new_test_db()?;
+        let key_id = make_test_key_entry(&mut db, Domain::SELINUX, 1, TEST_ALIAS, Some(1))
+            .context("test_check_and_update_key_usage_count_with_exhausted_limited_use_key")?
+            .0;
+        // Update the usage count of the limited use key.
+        db.check_and_update_key_usage_count(key_id).expect(concat!(
+            "In test_check_and_update_key_usage_count_with_exhausted_limited_use_key: ",
+            "This should succeed."
+        ));
+
+        // Try to update the exhausted limited use key.
+        let e = db.check_and_update_key_usage_count(key_id).expect_err(concat!(
+            "In test_check_and_update_key_usage_count_with_exhausted_limited_use_key: ",
+            "This should fail."
+        ));
+        assert_eq!(
+            &KsError::Km(ErrorCode::INVALID_KEY_BLOB),
+            e.root_cause().downcast_ref::<KsError>().unwrap()
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn test_insert_and_load_full_keyentry_from_grant() -> Result<()> {
         let mut db = new_test_db()?;
-        let key_id = make_test_key_entry(&mut db, Domain::APP, 1, TEST_ALIAS)
+        let key_id = make_test_key_entry(&mut db, Domain::APP, 1, TEST_ALIAS, None)
             .context("test_insert_and_load_full_keyentry_from_grant")?
             .0;
 
@@ -2415,7 +2524,7 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(key_entry, make_test_key_entry_test_vector(key_id));
+        assert_eq!(key_entry, make_test_key_entry_test_vector(key_id, None));
 
         db.unbind_key(granted_key.clone(), KeyType::Client, 2, |_, _| Ok(())).unwrap();
 
@@ -2436,6 +2545,90 @@ mod tests {
         Ok(())
     }
 
+    // This test attempts to load a key by key id while the caller is not the owner
+    // but a grant exists for the given key and the caller.
+    #[test]
+    fn test_insert_and_load_full_keyentry_from_grant_by_key_id() -> Result<()> {
+        let mut db = new_test_db()?;
+        const OWNER_UID: u32 = 1u32;
+        const GRANTEE_UID: u32 = 2u32;
+        const SOMEONE_ELSE_UID: u32 = 3u32;
+        let key_id = make_test_key_entry(&mut db, Domain::APP, OWNER_UID as i64, TEST_ALIAS, None)
+            .context("test_insert_and_load_full_keyentry_from_grant_by_key_id")?
+            .0;
+
+        db.grant(
+            KeyDescriptor {
+                domain: Domain::APP,
+                nspace: 0,
+                alias: Some(TEST_ALIAS.to_string()),
+                blob: None,
+            },
+            OWNER_UID,
+            GRANTEE_UID,
+            key_perm_set![KeyPerm::use_()],
+            |_k, _av| Ok(()),
+        )
+        .unwrap();
+
+        debug_dump_grant_table(&mut db)?;
+
+        let id_descriptor =
+            KeyDescriptor { domain: Domain::KEY_ID, nspace: key_id, ..Default::default() };
+
+        let (_, key_entry) = db
+            .load_key_entry(
+                id_descriptor.clone(),
+                KeyType::Client,
+                KeyEntryLoadBits::BOTH,
+                GRANTEE_UID,
+                |k, av| {
+                    assert_eq!(Domain::APP, k.domain);
+                    assert_eq!(OWNER_UID as i64, k.nspace);
+                    assert!(av.unwrap().includes(KeyPerm::use_()));
+                    Ok(())
+                },
+            )
+            .unwrap();
+
+        assert_eq!(key_entry, make_test_key_entry_test_vector(key_id, None));
+
+        let (_, key_entry) = db
+            .load_key_entry(
+                id_descriptor.clone(),
+                KeyType::Client,
+                KeyEntryLoadBits::BOTH,
+                SOMEONE_ELSE_UID,
+                |k, av| {
+                    assert_eq!(Domain::APP, k.domain);
+                    assert_eq!(OWNER_UID as i64, k.nspace);
+                    assert!(av.is_none());
+                    Ok(())
+                },
+            )
+            .unwrap();
+
+        assert_eq!(key_entry, make_test_key_entry_test_vector(key_id, None));
+
+        db.unbind_key(id_descriptor.clone(), KeyType::Client, OWNER_UID, |_, _| Ok(())).unwrap();
+
+        assert_eq!(
+            Some(&KsError::Rc(ResponseCode::KEY_NOT_FOUND)),
+            db.load_key_entry(
+                id_descriptor,
+                KeyType::Client,
+                KeyEntryLoadBits::NONE,
+                GRANTEE_UID,
+                |_k, _av| Ok(()),
+            )
+            .unwrap_err()
+            .root_cause()
+            .downcast_ref::<KsError>()
+        );
+
+        Ok(())
+    }
+
     static KEY_LOCK_TEST_ALIAS: &str = "my super duper locked key";
 
     #[test]
@@ -2444,7 +2637,7 @@ mod tests {
             let temp_dir = Arc::new(TempDir::new("id_lock_test")?);
             let temp_dir_clone = temp_dir.clone();
             let mut db = KeystoreDB::new(temp_dir.path())?;
-            let key_id = make_test_key_entry(&mut db, Domain::APP, 33, KEY_LOCK_TEST_ALIAS)
+            let key_id = make_test_key_entry(&mut db, Domain::APP, 33, KEY_LOCK_TEST_ALIAS, None)
                 .context("test_insert_and_load_full_keyentry_domain_app")?
                 .0;
             let (_key_guard, key_entry) = db
@@ -2461,7 +2654,7 @@ mod tests {
                     |_k, _av| Ok(()),
                 )
                 .unwrap();
-            assert_eq!(key_entry, make_test_key_entry_test_vector(key_id));
+            assert_eq!(key_entry, make_test_key_entry_test_vector(key_id, None));
             let state = Arc::new(AtomicU8::new(1));
             let state2 = state.clone();
 
@@ -2543,8 +2736,8 @@ mod tests {
         let list_o_keys: Vec<(i64, i64)> = LIST_O_ENTRIES
             .iter()
             .map(|(domain, ns, alias)| {
-                let entry =
-                    make_test_key_entry(&mut db, *domain, *ns, *alias).unwrap_or_else(|e| {
+                let entry = make_test_key_entry(&mut db, *domain, *ns, *alias, None)
+                    .unwrap_or_else(|e| {
                         panic!("Failed to insert {:?} {} {}. Error {:?}", domain, ns, alias, e)
                     });
                 (entry.id(), *ns)
@@ -2652,8 +2845,8 @@ mod tests {
     // Note: The parameters and SecurityLevel associations are nonsensical. This
     // collection is only used to check if the parameters are preserved as expected by the
     // database.
-    fn make_test_params() -> Vec<KeyParameter> {
-        vec![
+    fn make_test_params(max_usage_count: Option<i32>) -> Vec<KeyParameter> {
+        let mut params = vec![
             KeyParameter::new(KeyParameterValue::Invalid, SecurityLevel::TRUSTED_ENVIRONMENT),
             KeyParameter::new(
                 KeyParameterValue::KeyPurpose(KeyPurpose::SIGN),
@@ -2868,7 +3061,14 @@ mod tests {
                 KeyParameterValue::ConfirmationToken(vec![5u8, 5u8, 5u8, 5u8]),
                 SecurityLevel::TRUSTED_ENVIRONMENT,
             ),
-        ]
+        ];
+        if let Some(value) = max_usage_count {
+            params.push(KeyParameter::new(
+                KeyParameterValue::UsageCountLimit(value),
+                SecurityLevel::SOFTWARE,
+            ));
+        }
+        params
     }
 
     fn make_test_key_entry(
@@ -2876,12 +3076,16 @@ mod tests {
         domain: Domain,
         namespace: i64,
         alias: &str,
+        max_usage_count: Option<i32>,
     ) -> Result<KeyIdGuard> {
         let key_id = db.create_key_entry(domain, namespace)?;
         db.insert_blob(&key_id, SubComponentType::KEY_BLOB, TEST_KEY_BLOB)?;
         db.insert_blob(&key_id, SubComponentType::CERT, TEST_CERT_BLOB)?;
         db.insert_blob(&key_id, SubComponentType::CERT_CHAIN, TEST_CERT_CHAIN_BLOB)?;
-        db.insert_keyparameter(&key_id, &make_test_params())?;
+
+        let params = make_test_params(max_usage_count);
+        db.insert_keyparameter(&key_id, &params)?;
+
         let mut metadata = KeyMetaData::new();
         metadata.add(KeyMetaEntry::EncryptedBy(EncryptedBy::Password));
         metadata.add(KeyMetaEntry::Salt(vec![1, 2, 3]));
@@ -2892,7 +3096,9 @@ mod tests {
         Ok(key_id)
     }
 
-    fn make_test_key_entry_test_vector(key_id: i64) -> KeyEntry {
+    fn make_test_key_entry_test_vector(key_id: i64, max_usage_count: Option<i32>) -> KeyEntry {
+        let params = make_test_params(max_usage_count);
+
         let mut metadata = KeyMetaData::new();
         metadata.add(KeyMetaEntry::EncryptedBy(EncryptedBy::Password));
         metadata.add(KeyMetaEntry::Salt(vec![1, 2, 3]));
@@ -2905,7 +3111,7 @@ mod tests {
             cert: Some(TEST_CERT_BLOB.to_vec()),
             cert_chain: Some(TEST_CERT_CHAIN_BLOB.to_vec()),
             sec_level: SecurityLevel::TRUSTED_ENVIRONMENT,
-            parameters: make_test_params(),
+            parameters: params,
             metadata,
         }
     }
