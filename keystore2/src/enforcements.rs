@@ -384,6 +384,18 @@ impl Enforcements {
                 return Err(Error::Km(Ec::INCOMPATIBLE_PURPOSE))
                     .context("In authorize_create: WRAP_KEY purpose is not allowed here.");
             }
+            // Allow AGREE_KEY for EC keys only.
+            KeyPurpose::AGREE_KEY => {
+                for kp in key_params.iter() {
+                    if kp.get_tag() == Tag::ALGORITHM
+                        && *kp.key_parameter_value() != KeyParameterValue::Algorithm(Algorithm::EC)
+                    {
+                        return Err(Error::Km(Ec::UNSUPPORTED_PURPOSE)).context(
+                            "In authorize_create: key agreement is only supported for EC keys.",
+                        );
+                    }
+                }
+            }
             KeyPurpose::VERIFY | KeyPurpose::ENCRYPT => {
                 // We do not support ENCRYPT and VERIFY (the remaining two options of purpose) for
                 // asymmetric keys.
