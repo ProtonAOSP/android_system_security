@@ -368,7 +368,6 @@ impl Operation {
         self.touch();
 
         let mut out_params: Option<KeyParameterArray> = None;
-        let mut output: Option<ByteArray> = None;
 
         let km_op: Box<dyn IKeyMintOperation> =
             self.km_op.get_interface().context("In update: Failed to get KeyMintOperation.")?;
@@ -380,28 +379,39 @@ impl Operation {
             .before_update()
             .context("In update: Trying to get auth tokens.")?;
 
-        self.update_outcome(
-            &mut *outcome,
-            map_km_error(km_op.update(
-                None,
-                Some(input),
-                hat.as_ref(),
-                tst.as_ref(),
-                &mut out_params,
-                &mut output,
-            )),
-        )
-        .context("In update: KeyMint::update failed.")?;
+        let mut result: Option<Vec<u8>> = None;
+        let mut consumed = 0usize;
+        loop {
+            let mut output: Option<ByteArray> = None;
+            consumed += self
+                .update_outcome(
+                    &mut *outcome,
+                    map_km_error(km_op.update(
+                        None,
+                        Some(&input[consumed..]),
+                        hat.as_ref(),
+                        tst.as_ref(),
+                        &mut out_params,
+                        &mut output,
+                    )),
+                )
+                .context("In update: KeyMint::update failed.")? as usize;
 
-        match output {
-            Some(blob) => {
-                if blob.data.is_empty() {
-                    Ok(None)
-                } else {
-                    Ok(Some(blob.data))
+            match (output, &mut result) {
+                (Some(blob), None) => {
+                    if !blob.data.is_empty() {
+                        result = Some(blob.data)
+                    }
                 }
+                (Some(mut blob), Some(ref mut result)) => {
+                    result.append(&mut blob.data);
+                }
+                (None, _) => {}
             }
-            None => Ok(None),
+
+            if consumed == input.len() {
+                return Ok(result);
+            }
         }
     }
 
