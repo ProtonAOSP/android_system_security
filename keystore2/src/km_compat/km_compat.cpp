@@ -192,8 +192,14 @@ static KMV1::ErrorCode toErrorCode(const ScopedAStatus& status) {
 
 static std::vector<V4_0::KeyParameter>
 convertKeyParametersToLegacy(const std::vector<KeyParameter>& kps) {
-    std::vector<V4_0::KeyParameter> legacyKps(kps.size());
-    std::transform(kps.begin(), kps.end(), legacyKps.begin(), convertKeyParameterToLegacy);
+    std::vector<V4_0::KeyParameter> legacyKps;
+    legacyKps.reserve(kps.size());
+    for (const auto& kp : kps) {
+        auto p = convertKeyParameterToLegacy(kp);
+        if (p.tag != V4_0::Tag::INVALID) {
+            legacyKps.push_back(std::move(p));
+        }
+    }
     return legacyKps;
 }
 
@@ -514,6 +520,7 @@ ScopedAStatus KeyMintOperation::update(const std::optional<KeyParameterArray>& i
     if (in_inTimeStampToken.has_value()) {
         verificationToken = convertTimestampTokenToLegacy(in_inTimeStampToken.value());
     }
+
     KMV1::ErrorCode errorCode;
     auto result = mDevice->update(
         mOperationHandle, legacyParams, input, authToken, verificationToken,
@@ -526,6 +533,7 @@ ScopedAStatus KeyMintOperation::update(const std::optional<KeyParameterArray>& i
             out_output->value().data = output;
             *_aidl_return = inputConsumed;
         });
+
     if (!result.isOk()) {
         LOG(ERROR) << __func__ << " transaction failed. " << result.description();
         errorCode = KMV1::ErrorCode::UNKNOWN_ERROR;
@@ -654,6 +662,7 @@ template <KMV1::Tag tag, KMV1::TagType type>
 static auto getParam(const std::vector<KeyParameter>& keyParams, KMV1::TypedTag<type, tag> ttag)
     -> decltype(authorizationValue(ttag, KeyParameter())) {
     for (const auto& p : keyParams) {
+
         if (auto v = authorizationValue(ttag, p)) {
             return v;
         }
@@ -734,16 +743,16 @@ makeCert(::android::sp<Keymaster> mDevice, const std::vector<KeyParameter>& keyP
         serial = *blob;
     }
 
-    uint64_t activation = 0;
+    int64_t activation;
     if (auto date = getParam(keyParams, KMV1::TAG_CERTIFICATE_NOT_BEFORE)) {
-        activation = *date;
+        activation = static_cast<int64_t>(*date);
     } else {
         return KMV1::ErrorCode::MISSING_NOT_BEFORE;
     }
 
-    uint64_t expiration;
+    int64_t expiration;
     if (auto date = getParam(keyParams, KMV1::TAG_CERTIFICATE_NOT_AFTER)) {
-        expiration = *date;
+        expiration = static_cast<int64_t>(*date);
     } else {
         return KMV1::ErrorCode::MISSING_NOT_AFTER;
     }
