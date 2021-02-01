@@ -80,7 +80,7 @@ struct BasicConstraintsExtension {
  * `signCert` or `signCertWith`.
  * @param evp_pkey The public key that the certificate is issued for.
  * @param serial The certificate serial number.
- * @param subject The subject common name.
+ * @param subject The X509 name encoded subject common name.
  * @param activeDateTimeMilliSeconds The not before date in epoch milliseconds.
  * @param usageExpireDateTimeMilliSeconds The not after date in epoch milliseconds.
  * @param addSubjectKeyIdEx If true, adds the subject key id extension.
@@ -89,14 +89,14 @@ struct BasicConstraintsExtension {
  * @return CertUtilsError::Ok on success.
  */
 std::variant<CertUtilsError, X509_Ptr>
-makeCert(const EVP_PKEY* evp_pkey,                                    //
-         const uint32_t serial,                                       //
-         const char subject[],                                        //
-         const uint64_t activeDateTimeMilliSeconds,                   //
-         const uint64_t usageExpireDateTimeMilliSeconds,              //
-         bool addSubjectKeyIdEx,                                      //
-         std::optional<KeyUsageExtension> keyUsageEx,                 //
-         std::optional<BasicConstraintsExtension> basicConstraints);  //
+makeCert(const EVP_PKEY* evp_pkey,                                                   //
+         std::optional<std::reference_wrapper<const std::vector<uint8_t>>> serial,   //
+         std::optional<std::reference_wrapper<const std::vector<uint8_t>>> subject,  //
+         const uint64_t activeDateTimeMilliSeconds,                                  //
+         const uint64_t usageExpireDateTimeMilliSeconds,                             //
+         bool addSubjectKeyIdEx,                                                     //
+         std::optional<KeyUsageExtension> keyUsageEx,                                //
+         std::optional<BasicConstraintsExtension> basicConstraints);                 //
 
 /**
  * Takes the subject name from `signingCert` and sets it as issuer name in `cert`.
