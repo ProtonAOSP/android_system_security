@@ -454,9 +454,12 @@ pub fn check_grant_permission(
 
     for p in access_vec.into_iter() {
         selinux::check_access(caller_ctx, &target_context, "keystore2_key", p.to_selinux())
-            .context(concat!(
-                "check_grant_permission: check_access failed. ",
-                "The caller may have tried to grant a permission that they don't possess."
+            .context(format!(
+                concat!(
+                    "check_grant_permission: check_access failed. ",
+                    "The caller may have tried to grant a permission that they don't possess. {:?}"
+                ),
+                p
             ))?
     }
     Ok(())
@@ -575,6 +578,16 @@ mod tests {
         KeyPerm::use_(),
     ];
 
+    const SYSTEM_SERVER_PERMISSIONS_NO_GRANT: KeyPermSet = key_perm_set![
+        KeyPerm::delete(),
+        KeyPerm::use_dev_id(),
+        // No KeyPerm::grant()
+        KeyPerm::get_info(),
+        KeyPerm::rebind(),
+        KeyPerm::update(),
+        KeyPerm::use_(),
+    ];
+
     const NOT_GRANT_PERMS: KeyPermSet = key_perm_set![
         KeyPerm::manage_blob(),
         KeyPerm::delete(),
@@ -643,7 +656,6 @@ mod tests {
         assert!(check_keystore_permission(&system_server_ctx, KeystorePerm::add_auth()).is_ok());
         assert!(check_keystore_permission(&system_server_ctx, KeystorePerm::clear_ns()).is_ok());
         assert!(check_keystore_permission(&system_server_ctx, KeystorePerm::get_state()).is_ok());
-        assert!(check_keystore_permission(&system_server_ctx, KeystorePerm::list()).is_ok());
         assert!(check_keystore_permission(&system_server_ctx, KeystorePerm::lock()).is_ok());
         assert!(check_keystore_permission(&system_server_ctx, KeystorePerm::reset()).is_ok());
         assert!(check_keystore_permission(&system_server_ctx, KeystorePerm::unlock()).is_ok());
@@ -663,9 +675,10 @@ mod tests {
         let system_server_ctx = Context::new("u:r:system_server:s0")?;
         let shell_ctx = Context::new("u:r:shell:s0")?;
         let key = KeyDescriptor { domain: Domain::APP, nspace: 0, alias: None, blob: None };
-        assert!(check_grant_permission(&system_server_ctx, NOT_GRANT_PERMS, &key).is_ok());
-        // attempts to grant the grant permission must always fail even when privileged.
+        check_grant_permission(&system_server_ctx, SYSTEM_SERVER_PERMISSIONS_NO_GRANT, &key)
+            .expect("Grant permission check failed.");
 
+        // attempts to grant the grant permission must always fail even when privileged.
         assert_perm_failed!(check_grant_permission(
             &system_server_ctx,
             KeyPerm::grant().into(),
