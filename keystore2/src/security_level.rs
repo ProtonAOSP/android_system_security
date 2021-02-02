@@ -535,10 +535,10 @@ impl KeystoreSecurityLevel {
                     .context("In upgrade_keyblob_if_required_with: Upgrade failed.")?;
                 key_id_guard.map_or(Ok(()), |key_id_guard| {
                     DB.with(|db| {
-                        db.borrow_mut().insert_blob(
+                        db.borrow_mut().set_blob(
                             &key_id_guard,
                             SubComponentType::KEY_BLOB,
-                            &upgraded_blob,
+                            Some(&upgraded_blob),
                         )
                     })
                     .context(concat!(
