@@ -448,6 +448,7 @@ pub struct KeyEntry {
     sec_level: SecurityLevel,
     parameters: Vec<KeyParameter>,
     metadata: KeyMetaData,
+    pure_cert: bool,
 }
 
 impl KeyEntry {
@@ -495,10 +496,15 @@ impl KeyEntry {
     pub fn metadata(&self) -> &KeyMetaData {
         &self.metadata
     }
+    /// This returns true if the entry is a pure certificate entry with no
+    /// private key component.
+    pub fn pure_cert(&self) -> bool {
+        self.pure_cert
+    }
 }
 
 /// Indicates the sub component of a key entry for persistent storage.
-#[derive(Debug, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
 pub struct SubComponentType(u32);
 impl SubComponentType {
     /// Persistent identifier for a key blob.
@@ -878,10 +884,19 @@ impl KeystoreDB {
                 .context("In get_or_create_key_with.")?;
 
                 let (blob, metadata) = create_new_key().context("In get_or_create_key_with.")?;
-                Self::insert_blob_internal(&tx, id, SubComponentType::KEY_BLOB, &blob)
+                Self::set_blob_internal(&tx, id, SubComponentType::KEY_BLOB, Some(&blob))
                     .context("In get_of_create_key_with.")?;
                 metadata.store_in_db(id, &tx).context("In get_or_create_key_with.")?;
-                (id, KeyEntry { id, km_blob: Some(blob), metadata, ..Default::default() })
+                (
+                    id,
+                    KeyEntry {
+                        id,
+                        km_blob: Some(blob),
+                        metadata,
+                        pure_cert: false,
+                        ..Default::default()
+                    },
+                )
             }
         };
         tx.commit().context("In get_or_create_key_with: Failed to commit transaction.")?;
@@ -948,36 +963,53 @@ impl KeystoreDB {
         ))
     }
 
-    /// Inserts a new blob and associates it with the given key id. Each blob
-    /// has a sub component type and a security level.
+    /// Set a new blob and associates it with the given key id. Each blob
+    /// has a sub component type.
     /// Each key can have one of each sub component type associated. If more
     /// are added only the most recent can be retrieved, and superseded blobs
-    /// will get garbage collected. The security level field of components
-    /// other than `SubComponentType::KEY_BLOB` are ignored.
-    pub fn insert_blob(
+    /// will get garbage collected.
+    /// Components SubComponentType::CERT and SubComponentType::CERT_CHAIN can be
+    /// removed by setting blob to None.
+    pub fn set_blob(
         &mut self,
         key_id: &KeyIdGuard,
         sc_type: SubComponentType,
-        blob: &[u8],
+        blob: Option<&[u8]>,
     ) -> Result<()> {
         self.with_transaction(TransactionBehavior::Immediate, |tx| {
-            Self::insert_blob_internal(&tx, key_id.0, sc_type, blob)
+            Self::set_blob_internal(&tx, key_id.0, sc_type, blob)
         })
-        .context("In insert_blob.")
+        .context("In set_blob.")
     }
 
-    fn insert_blob_internal(
+    fn set_blob_internal(
         tx: &Transaction,
         key_id: i64,
         sc_type: SubComponentType,
-        blob: &[u8],
+        blob: Option<&[u8]>,
     ) -> Result<()> {
-        tx.execute(
-            "INSERT into persistent.blobentry (subcomponent_type, keyentryid, blob)
-                VALUES (?, ?, ?);",
-            params![sc_type, key_id, blob],
-        )
-        .context("In insert_blob_internal: Failed to insert blob.")?;
+        match (blob, sc_type) {
+            (Some(blob), _) => {
+                tx.execute(
+                    "INSERT INTO persistent.blobentry
+                     (subcomponent_type, keyentryid, blob) VALUES (?, ?, ?);",
+                    params![sc_type, key_id, blob],
+                )
+                .context("In set_blob_internal: Failed to insert blob.")?;
+            }
+            (None, SubComponentType::CERT) | (None, SubComponentType::CERT_CHAIN) => {
+                tx.execute(
+                    "DELETE FROM persistent.blobentry
+                    WHERE subcomponent_type = ? AND keyentryid = ?;",
+                    params![sc_type, key_id],
+                )
+                .context("In set_blob_internal: Failed to delete blob.")?;
+            }
+            (None, _) => {
+                return Err(KsError::sys())
+                    .context("In set_blob_internal: Other blobs cannot be deleted in this way.");
+            }
+        }
         Ok(())
     }
 
@@ -1113,29 +1145,65 @@ impl KeystoreDB {
         self.with_transaction(TransactionBehavior::Immediate, |tx| {
             let key_id = Self::create_key_entry_internal(tx, domain, namespace)
                 .context("Trying to create new key entry.")?;
-            Self::insert_blob_internal(tx, key_id.id(), SubComponentType::KEY_BLOB, blob)
+            Self::set_blob_internal(tx, key_id.id(), SubComponentType::KEY_BLOB, Some(blob))
                 .context("Trying to insert the key blob.")?;
             if let Some(cert) = cert {
-                Self::insert_blob_internal(tx, key_id.id(), SubComponentType::CERT, cert)
+                Self::set_blob_internal(tx, key_id.id(), SubComponentType::CERT, Some(&cert))
                     .context("Trying to insert the certificate.")?;
             }
             if let Some(cert_chain) = cert_chain {
-                Self::insert_blob_internal(
+                Self::set_blob_internal(
                     tx,
                     key_id.id(),
                     SubComponentType::CERT_CHAIN,
-                    cert_chain,
+                    Some(&cert_chain),
                 )
                 .context("Trying to insert the certificate chain.")?;
             }
             Self::insert_keyparameter_internal(tx, &key_id, params)
                 .context("Trying to insert key parameters.")?;
-            metadata.store_in_db(key_id.id(), tx).context("Tryin to insert key metadata.")?;
+            metadata.store_in_db(key_id.id(), tx).context("Trying to insert key metadata.")?;
             let need_gc = Self::rebind_alias(tx, &key_id, &alias, domain, namespace)
                 .context("Trying to rebind alias.")?;
             Ok((need_gc, key_id))
         })
         .context("In store_new_key.")
+    }
+
+    /// Store a new certificate
+    /// The function creates a new key entry, populates the blob field and metadata, and rebinds
+    /// the given alias to the new cert.
+    pub fn store_new_certificate(&mut self, key: KeyDescriptor, cert: &[u8]) -> Result<KeyIdGuard> {
+        let (alias, domain, namespace) = match key {
+            KeyDescriptor { alias: Some(alias), domain: Domain::APP, nspace, blob: None }
+            | KeyDescriptor { alias: Some(alias), domain: Domain::SELINUX, nspace, blob: None } => {
+                (alias, key.domain, nspace)
+            }
+            _ => {
+                return Err(KsError::Rc(ResponseCode::INVALID_ARGUMENT)).context(
+                    "In store_new_certificate: Need alias and domain must be APP or SELINUX.",
+                )
+            }
+        };
+        self.with_transaction(TransactionBehavior::Immediate, |tx| {
+            let key_id = Self::create_key_entry_internal(tx, domain, namespace)
+                .context("Trying to create new key entry.")?;
+
+            Self::set_blob_internal(tx, key_id.id(), SubComponentType::CERT_CHAIN, Some(cert))
+                .context("Trying to insert certificate.")?;
+
+            let mut metadata = KeyMetaData::new();
+            metadata.add(KeyMetaEntry::CreationDate(
+                DateTime::now().context("Trying to make creation time.")?,
+            ));
+
+            metadata.store_in_db(key_id.id(), tx).context("Trying to insert key metadata.")?;
+
+            Self::rebind_alias(tx, &key_id, &alias, domain, namespace)
+                .context("Trying to rebind alias.")?;
+            Ok(key_id)
+        })
+        .context("In store_new_certificate.")
     }
 
     // Helper function loading the key_id given the key descriptor
@@ -1294,7 +1362,7 @@ impl KeystoreDB {
         key_id: i64,
         load_bits: KeyEntryLoadBits,
         tx: &Transaction,
-    ) -> Result<(Option<Vec<u8>>, Option<Vec<u8>>, Option<Vec<u8>>)> {
+    ) -> Result<(bool, Option<Vec<u8>>, Option<Vec<u8>>, Option<Vec<u8>>)> {
         let mut stmt = tx
             .prepare(
                 "SELECT MAX(id), subcomponent_type, blob FROM persistent.blobentry
@@ -1308,9 +1376,11 @@ impl KeystoreDB {
         let mut km_blob: Option<Vec<u8>> = None;
         let mut cert_blob: Option<Vec<u8>> = None;
         let mut cert_chain_blob: Option<Vec<u8>> = None;
+        let mut has_km_blob: bool = false;
         db_utils::with_rows_extract_all(&mut rows, |row| {
             let sub_type: SubComponentType =
                 row.get(1).context("Failed to extract subcomponent_type.")?;
+            has_km_blob = has_km_blob || sub_type == SubComponentType::KEY_BLOB;
             match (sub_type, load_bits.load_public(), load_bits.load_km()) {
                 (SubComponentType::KEY_BLOB, _, true) => {
                     km_blob = Some(row.get(2).context("Failed to extract KM blob.")?);
@@ -1332,7 +1402,7 @@ impl KeystoreDB {
         })
         .context("In load_blob_components.")?;
 
-        Ok((km_blob, cert_blob, cert_chain_blob))
+        Ok((has_km_blob, km_blob, cert_blob, cert_chain_blob))
     }
 
     fn load_key_parameters(key_id: i64, tx: &Transaction) -> Result<Vec<KeyParameter>> {
@@ -1529,7 +1599,7 @@ impl KeystoreDB {
     ) -> Result<KeyEntry> {
         let metadata = KeyMetaData::load_from_db(key_id, &tx).context("In load_key_components.")?;
 
-        let (km_blob, cert_blob, cert_chain_blob) =
+        let (has_km_blob, km_blob, cert_blob, cert_chain_blob) =
             Self::load_blob_components(key_id, load_bits, &tx)
                 .context("In load_key_components.")?;
 
@@ -1554,6 +1624,7 @@ impl KeystoreDB {
             sec_level,
             parameters,
             metadata,
+            pure_cert: !has_km_blob,
         })
     }
 
@@ -2258,12 +2329,12 @@ mod tests {
     static TEST_CERT_CHAIN_BLOB: &[u8] = b"my test cert_chain";
 
     #[test]
-    fn test_insert_blob() -> Result<()> {
+    fn test_set_blob() -> Result<()> {
         let key_id = KEY_ID_LOCK.get(3000);
         let mut db = new_test_db()?;
-        db.insert_blob(&key_id, SubComponentType::KEY_BLOB, TEST_KEY_BLOB)?;
-        db.insert_blob(&key_id, SubComponentType::CERT, TEST_CERT_BLOB)?;
-        db.insert_blob(&key_id, SubComponentType::CERT_CHAIN, TEST_CERT_CHAIN_BLOB)?;
+        db.set_blob(&key_id, SubComponentType::KEY_BLOB, Some(TEST_KEY_BLOB))?;
+        db.set_blob(&key_id, SubComponentType::CERT, Some(TEST_CERT_BLOB))?;
+        db.set_blob(&key_id, SubComponentType::CERT_CHAIN, Some(TEST_CERT_CHAIN_BLOB))?;
         drop(key_id);
 
         let mut stmt = db.conn.prepare(
@@ -2327,6 +2398,75 @@ mod tests {
                 KeyDescriptor {
                     domain: Domain::APP,
                     nspace: 0,
+                    alias: Some(TEST_ALIAS.to_string()),
+                    blob: None,
+                },
+                KeyType::Client,
+                KeyEntryLoadBits::NONE,
+                1,
+                |_k, _av| Ok(()),
+            )
+            .unwrap_err()
+            .root_cause()
+            .downcast_ref::<KsError>()
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_insert_and_load_certificate_entry_domain_app() -> Result<()> {
+        let mut db = new_test_db()?;
+
+        db.store_new_certificate(
+            KeyDescriptor {
+                domain: Domain::APP,
+                nspace: 1,
+                alias: Some(TEST_ALIAS.to_string()),
+                blob: None,
+            },
+            TEST_CERT_BLOB,
+        )
+        .expect("Trying to insert cert.");
+
+        let (_key_guard, mut key_entry) = db
+            .load_key_entry(
+                KeyDescriptor {
+                    domain: Domain::APP,
+                    nspace: 1,
+                    alias: Some(TEST_ALIAS.to_string()),
+                    blob: None,
+                },
+                KeyType::Client,
+                KeyEntryLoadBits::PUBLIC,
+                1,
+                |_k, _av| Ok(()),
+            )
+            .expect("Trying to read certificate entry.");
+
+        assert!(key_entry.pure_cert());
+        assert!(key_entry.cert().is_none());
+        assert_eq!(key_entry.take_cert_chain(), Some(TEST_CERT_BLOB.to_vec()));
+
+        db.unbind_key(
+            KeyDescriptor {
+                domain: Domain::APP,
+                nspace: 1,
+                alias: Some(TEST_ALIAS.to_string()),
+                blob: None,
+            },
+            KeyType::Client,
+            1,
+            |_, _| Ok(()),
+        )
+        .unwrap();
+
+        assert_eq!(
+            Some(&KsError::Rc(ResponseCode::KEY_NOT_FOUND)),
+            db.load_key_entry(
+                KeyDescriptor {
+                    domain: Domain::APP,
+                    nspace: 1,
                     alias: Some(TEST_ALIAS.to_string()),
                     blob: None,
                 },
@@ -3084,9 +3224,9 @@ mod tests {
         max_usage_count: Option<i32>,
     ) -> Result<KeyIdGuard> {
         let key_id = db.create_key_entry(domain, namespace)?;
-        db.insert_blob(&key_id, SubComponentType::KEY_BLOB, TEST_KEY_BLOB)?;
-        db.insert_blob(&key_id, SubComponentType::CERT, TEST_CERT_BLOB)?;
-        db.insert_blob(&key_id, SubComponentType::CERT_CHAIN, TEST_CERT_CHAIN_BLOB)?;
+        db.set_blob(&key_id, SubComponentType::KEY_BLOB, Some(TEST_KEY_BLOB))?;
+        db.set_blob(&key_id, SubComponentType::CERT, Some(TEST_CERT_BLOB))?;
+        db.set_blob(&key_id, SubComponentType::CERT_CHAIN, Some(TEST_CERT_CHAIN_BLOB))?;
 
         let params = make_test_params(max_usage_count);
         db.insert_keyparameter(&key_id, &params)?;
@@ -3118,6 +3258,7 @@ mod tests {
             sec_level: SecurityLevel::TRUSTED_ENVIRONMENT,
             parameters: params,
             metadata,
+            pure_cert: false,
         }
     }
 
