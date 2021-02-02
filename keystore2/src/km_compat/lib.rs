@@ -39,23 +39,32 @@ mod tests {
 
     static COMPAT_NAME: &str = "android.security.compat";
 
-    fn get_device() -> Box<dyn IKeyMintDevice> {
+    fn get_device() -> Option<Box<dyn IKeyMintDevice>> {
         add_keymint_device_service();
         let compat_service: Box<dyn IKeystoreCompatService> =
-            binder::get_interface(COMPAT_NAME).unwrap();
-        compat_service.getKeyMintDevice(SecurityLevel::TRUSTED_ENVIRONMENT).unwrap()
+            binder::get_interface(COMPAT_NAME).ok()?;
+        compat_service.getKeyMintDevice(SecurityLevel::TRUSTED_ENVIRONMENT).ok()
+    }
+
+    macro_rules! get_device_or_skip_test {
+        () => {
+            match get_device() {
+                Some(dev) => dev,
+                None => return,
+            }
+        };
     }
 
     #[test]
     fn test_get_hardware_info() {
-        let legacy = get_device();
+        let legacy = get_device_or_skip_test!();
         let hinfo = legacy.getHardwareInfo();
         assert!(hinfo.is_ok());
     }
 
     #[test]
     fn test_add_rng_entropy() {
-        let legacy = get_device();
+        let legacy = get_device_or_skip_test!();
         let result = legacy.addRngEntropy(&[42; 16]);
         assert!(result.is_ok(), "{:?}", result);
     }
@@ -117,25 +126,25 @@ mod tests {
 
     #[test]
     fn test_generate_key_no_encrypt() {
-        let legacy = get_device();
+        let legacy = get_device_or_skip_test!();
         generate_rsa_key(legacy.as_ref(), false, false);
     }
 
     #[test]
     fn test_generate_key_encrypt() {
-        let legacy = get_device();
+        let legacy = get_device_or_skip_test!();
         generate_rsa_key(legacy.as_ref(), true, false);
     }
 
     #[test]
     fn test_generate_key_attested() {
-        let legacy = get_device();
+        let legacy = get_device_or_skip_test!();
         generate_rsa_key(legacy.as_ref(), false, true);
     }
 
     #[test]
     fn test_import_key() {
-        let legacy = get_device();
+        let legacy = get_device_or_skip_test!();
         let kps = [KeyParameter {
             tag: Tag::ALGORITHM,
             value: KeyParameterValue::Algorithm(Algorithm::AES),
@@ -149,7 +158,7 @@ mod tests {
 
     #[test]
     fn test_import_wrapped_key() {
-        let legacy = get_device();
+        let legacy = get_device_or_skip_test!();
         let result = legacy.importWrappedKey(&[], &[], &[], &[], 0, 0);
         // For this test we only care that there was no crash.
         assert!(result.is_ok() || result.is_err());
@@ -157,7 +166,7 @@ mod tests {
 
     #[test]
     fn test_upgrade_key() {
-        let legacy = get_device();
+        let legacy = get_device_or_skip_test!();
         let blob = generate_rsa_key(legacy.as_ref(), false, false);
         let result = legacy.upgradeKey(&blob, &[]);
         // For this test we only care that there was no crash.
@@ -166,7 +175,7 @@ mod tests {
 
     #[test]
     fn test_delete_key() {
-        let legacy = get_device();
+        let legacy = get_device_or_skip_test!();
         let blob = generate_rsa_key(legacy.as_ref(), false, false);
         let result = legacy.deleteKey(&blob);
         assert!(result.is_ok(), "{:?}", result);
@@ -174,14 +183,14 @@ mod tests {
 
     #[test]
     fn test_delete_all_keys() {
-        let legacy = get_device();
+        let legacy = get_device_or_skip_test!();
         let result = legacy.deleteAllKeys();
         assert!(result.is_ok(), "{:?}", result);
     }
 
     #[test]
     fn test_destroy_attestation_ids() {
-        let legacy = get_device();
+        let legacy = get_device_or_skip_test!();
         let result = legacy.destroyAttestationIds();
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().service_specific_error(), ErrorCode::UNIMPLEMENTED.0,);
@@ -243,7 +252,7 @@ mod tests {
 
     #[test]
     fn test_begin_abort() {
-        let legacy = get_device();
+        let legacy = get_device_or_skip_test!();
         let blob = generate_aes_key(legacy.as_ref());
         let begin_result = begin(legacy.as_ref(), &blob, KeyPurpose::ENCRYPT, None);
         let operation = begin_result.operation.unwrap();
@@ -255,7 +264,7 @@ mod tests {
 
     #[test]
     fn test_begin_update_finish() {
-        let legacy = get_device();
+        let legacy = get_device_or_skip_test!();
         let blob = generate_aes_key(legacy.as_ref());
 
         let begin_result = begin(legacy.as_ref(), &blob, KeyPurpose::ENCRYPT, None);
