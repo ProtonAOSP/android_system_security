@@ -617,6 +617,11 @@ impl KeystoreDB {
         perboot_path_str.push_str(&perboot_path.to_string_lossy());
 
         let conn = Self::make_connection(&persistent_path_str, &perboot_path_str)?;
+        conn.busy_handler(Some(|_| {
+            std::thread::sleep(std::time::Duration::from_micros(50));
+            true
+        }))
+        .context("In KeystoreDB::new: Failed to set busy handler.")?;
 
         Self::init_tables(&conn)?;
         Ok(Self { conn })

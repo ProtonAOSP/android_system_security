@@ -16,12 +16,166 @@
 
 #pragma once
 
+#include <aidl/android/hardware/security/keymint/ErrorCode.h>
 #include <keymasterV4_1/keymaster_tags.h>
 #include <keymint_support/keymint_tags.h>
 
 namespace V4_0 = ::android::hardware::keymaster::V4_0;
 namespace V4_1 = ::android::hardware::keymaster::V4_1;
 namespace KMV1 = ::aidl::android::hardware::security::keymint;
+
+static KMV1::ErrorCode convert(V4_0::ErrorCode error) {
+    switch (error) {
+    case V4_0::ErrorCode::OK:
+        return KMV1::ErrorCode::OK;
+    case V4_0::ErrorCode::ROOT_OF_TRUST_ALREADY_SET:
+        return KMV1::ErrorCode::ROOT_OF_TRUST_ALREADY_SET;
+    case V4_0::ErrorCode::UNSUPPORTED_PURPOSE:
+        return KMV1::ErrorCode::UNSUPPORTED_PURPOSE;
+    case V4_0::ErrorCode::INCOMPATIBLE_PURPOSE:
+        return KMV1::ErrorCode::INCOMPATIBLE_PURPOSE;
+    case V4_0::ErrorCode::UNSUPPORTED_ALGORITHM:
+        return KMV1::ErrorCode::UNSUPPORTED_ALGORITHM;
+    case V4_0::ErrorCode::INCOMPATIBLE_ALGORITHM:
+        return KMV1::ErrorCode::INCOMPATIBLE_ALGORITHM;
+    case V4_0::ErrorCode::UNSUPPORTED_KEY_SIZE:
+        return KMV1::ErrorCode::UNSUPPORTED_KEY_SIZE;
+    case V4_0::ErrorCode::UNSUPPORTED_BLOCK_MODE:
+        return KMV1::ErrorCode::UNSUPPORTED_BLOCK_MODE;
+    case V4_0::ErrorCode::INCOMPATIBLE_BLOCK_MODE:
+        return KMV1::ErrorCode::INCOMPATIBLE_BLOCK_MODE;
+    case V4_0::ErrorCode::UNSUPPORTED_MAC_LENGTH:
+        return KMV1::ErrorCode::UNSUPPORTED_MAC_LENGTH;
+    case V4_0::ErrorCode::UNSUPPORTED_PADDING_MODE:
+        return KMV1::ErrorCode::UNSUPPORTED_PADDING_MODE;
+    case V4_0::ErrorCode::INCOMPATIBLE_PADDING_MODE:
+        return KMV1::ErrorCode::INCOMPATIBLE_PADDING_MODE;
+    case V4_0::ErrorCode::UNSUPPORTED_DIGEST:
+        return KMV1::ErrorCode::UNSUPPORTED_DIGEST;
+    case V4_0::ErrorCode::INCOMPATIBLE_DIGEST:
+        return KMV1::ErrorCode::INCOMPATIBLE_DIGEST;
+    case V4_0::ErrorCode::INVALID_EXPIRATION_TIME:
+        return KMV1::ErrorCode::INVALID_EXPIRATION_TIME;
+    case V4_0::ErrorCode::INVALID_USER_ID:
+        return KMV1::ErrorCode::INVALID_USER_ID;
+    case V4_0::ErrorCode::INVALID_AUTHORIZATION_TIMEOUT:
+        return KMV1::ErrorCode::INVALID_AUTHORIZATION_TIMEOUT;
+    case V4_0::ErrorCode::UNSUPPORTED_KEY_FORMAT:
+        return KMV1::ErrorCode::UNSUPPORTED_KEY_FORMAT;
+    case V4_0::ErrorCode::INCOMPATIBLE_KEY_FORMAT:
+        return KMV1::ErrorCode::INCOMPATIBLE_KEY_FORMAT;
+    case V4_0::ErrorCode::UNSUPPORTED_KEY_ENCRYPTION_ALGORITHM:
+        return KMV1::ErrorCode::UNSUPPORTED_KEY_ENCRYPTION_ALGORITHM;
+    case V4_0::ErrorCode::UNSUPPORTED_KEY_VERIFICATION_ALGORITHM:
+        return KMV1::ErrorCode::UNSUPPORTED_KEY_VERIFICATION_ALGORITHM;
+    case V4_0::ErrorCode::INVALID_INPUT_LENGTH:
+        return KMV1::ErrorCode::INVALID_INPUT_LENGTH;
+    case V4_0::ErrorCode::KEY_EXPORT_OPTIONS_INVALID:
+        return KMV1::ErrorCode::KEY_EXPORT_OPTIONS_INVALID;
+    case V4_0::ErrorCode::DELEGATION_NOT_ALLOWED:
+        return KMV1::ErrorCode::DELEGATION_NOT_ALLOWED;
+    case V4_0::ErrorCode::KEY_NOT_YET_VALID:
+        return KMV1::ErrorCode::KEY_NOT_YET_VALID;
+    case V4_0::ErrorCode::KEY_EXPIRED:
+        return KMV1::ErrorCode::KEY_EXPIRED;
+    case V4_0::ErrorCode::KEY_USER_NOT_AUTHENTICATED:
+        return KMV1::ErrorCode::KEY_USER_NOT_AUTHENTICATED;
+    case V4_0::ErrorCode::OUTPUT_PARAMETER_NULL:
+        return KMV1::ErrorCode::OUTPUT_PARAMETER_NULL;
+    case V4_0::ErrorCode::INVALID_OPERATION_HANDLE:
+        return KMV1::ErrorCode::INVALID_OPERATION_HANDLE;
+    case V4_0::ErrorCode::INSUFFICIENT_BUFFER_SPACE:
+        return KMV1::ErrorCode::INSUFFICIENT_BUFFER_SPACE;
+    case V4_0::ErrorCode::VERIFICATION_FAILED:
+        return KMV1::ErrorCode::VERIFICATION_FAILED;
+    case V4_0::ErrorCode::TOO_MANY_OPERATIONS:
+        return KMV1::ErrorCode::TOO_MANY_OPERATIONS;
+    case V4_0::ErrorCode::UNEXPECTED_NULL_POINTER:
+        return KMV1::ErrorCode::UNEXPECTED_NULL_POINTER;
+    case V4_0::ErrorCode::INVALID_KEY_BLOB:
+        return KMV1::ErrorCode::INVALID_KEY_BLOB;
+    case V4_0::ErrorCode::IMPORTED_KEY_NOT_ENCRYPTED:
+        return KMV1::ErrorCode::IMPORTED_KEY_NOT_ENCRYPTED;
+    case V4_0::ErrorCode::IMPORTED_KEY_DECRYPTION_FAILED:
+        return KMV1::ErrorCode::IMPORTED_KEY_DECRYPTION_FAILED;
+    case V4_0::ErrorCode::IMPORTED_KEY_NOT_SIGNED:
+        return KMV1::ErrorCode::IMPORTED_KEY_NOT_SIGNED;
+    case V4_0::ErrorCode::IMPORTED_KEY_VERIFICATION_FAILED:
+        return KMV1::ErrorCode::IMPORTED_KEY_VERIFICATION_FAILED;
+    case V4_0::ErrorCode::INVALID_ARGUMENT:
+        return KMV1::ErrorCode::INVALID_ARGUMENT;
+    case V4_0::ErrorCode::UNSUPPORTED_TAG:
+        return KMV1::ErrorCode::UNSUPPORTED_TAG;
+    case V4_0::ErrorCode::INVALID_TAG:
+        return KMV1::ErrorCode::INVALID_TAG;
+    case V4_0::ErrorCode::MEMORY_ALLOCATION_FAILED:
+        return KMV1::ErrorCode::MEMORY_ALLOCATION_FAILED;
+    case V4_0::ErrorCode::IMPORT_PARAMETER_MISMATCH:
+        return KMV1::ErrorCode::IMPORT_PARAMETER_MISMATCH;
+    case V4_0::ErrorCode::SECURE_HW_ACCESS_DENIED:
+        return KMV1::ErrorCode::SECURE_HW_ACCESS_DENIED;
+    case V4_0::ErrorCode::OPERATION_CANCELLED:
+        return KMV1::ErrorCode::OPERATION_CANCELLED;
+    case V4_0::ErrorCode::CONCURRENT_ACCESS_CONFLICT:
+        return KMV1::ErrorCode::CONCURRENT_ACCESS_CONFLICT;
+    case V4_0::ErrorCode::SECURE_HW_BUSY:
+        return KMV1::ErrorCode::SECURE_HW_BUSY;
+    case V4_0::ErrorCode::SECURE_HW_COMMUNICATION_FAILED:
+        return KMV1::ErrorCode::SECURE_HW_COMMUNICATION_FAILED;
+    case V4_0::ErrorCode::UNSUPPORTED_EC_FIELD:
+        return KMV1::ErrorCode::UNSUPPORTED_EC_FIELD;
+    case V4_0::ErrorCode::MISSING_NONCE:
+        return KMV1::ErrorCode::MISSING_NONCE;
+    case V4_0::ErrorCode::INVALID_NONCE:
+        return KMV1::ErrorCode::INVALID_NONCE;
+    case V4_0::ErrorCode::MISSING_MAC_LENGTH:
+        return KMV1::ErrorCode::MISSING_MAC_LENGTH;
+    case V4_0::ErrorCode::KEY_RATE_LIMIT_EXCEEDED:
+        return KMV1::ErrorCode::KEY_RATE_LIMIT_EXCEEDED;
+    case V4_0::ErrorCode::CALLER_NONCE_PROHIBITED:
+        return KMV1::ErrorCode::CALLER_NONCE_PROHIBITED;
+    case V4_0::ErrorCode::KEY_MAX_OPS_EXCEEDED:
+        return KMV1::ErrorCode::KEY_MAX_OPS_EXCEEDED;
+    case V4_0::ErrorCode::INVALID_MAC_LENGTH:
+        return KMV1::ErrorCode::INVALID_MAC_LENGTH;
+    case V4_0::ErrorCode::MISSING_MIN_MAC_LENGTH:
+        return KMV1::ErrorCode::MISSING_MIN_MAC_LENGTH;
+    case V4_0::ErrorCode::UNSUPPORTED_MIN_MAC_LENGTH:
+        return KMV1::ErrorCode::UNSUPPORTED_MIN_MAC_LENGTH;
+    case V4_0::ErrorCode::UNSUPPORTED_KDF:
+        return KMV1::ErrorCode::UNSUPPORTED_KDF;
+    case V4_0::ErrorCode::UNSUPPORTED_EC_CURVE:
+        return KMV1::ErrorCode::UNSUPPORTED_EC_CURVE;
+    case V4_0::ErrorCode::KEY_REQUIRES_UPGRADE:
+        return KMV1::ErrorCode::KEY_REQUIRES_UPGRADE;
+    case V4_0::ErrorCode::ATTESTATION_CHALLENGE_MISSING:
+        return KMV1::ErrorCode::ATTESTATION_CHALLENGE_MISSING;
+    case V4_0::ErrorCode::KEYMASTER_NOT_CONFIGURED:
+        return KMV1::ErrorCode::KEYMINT_NOT_CONFIGURED;
+    case V4_0::ErrorCode::ATTESTATION_APPLICATION_ID_MISSING:
+        return KMV1::ErrorCode::ATTESTATION_APPLICATION_ID_MISSING;
+    case V4_0::ErrorCode::CANNOT_ATTEST_IDS:
+        return KMV1::ErrorCode::CANNOT_ATTEST_IDS;
+    case V4_0::ErrorCode::ROLLBACK_RESISTANCE_UNAVAILABLE:
+        return KMV1::ErrorCode::ROLLBACK_RESISTANCE_UNAVAILABLE;
+    case V4_0::ErrorCode::HARDWARE_TYPE_UNAVAILABLE:
+        return KMV1::ErrorCode::HARDWARE_TYPE_UNAVAILABLE;
+    case V4_0::ErrorCode::PROOF_OF_PRESENCE_REQUIRED:
+        return KMV1::ErrorCode::PROOF_OF_PRESENCE_REQUIRED;
+    case V4_0::ErrorCode::CONCURRENT_PROOF_OF_PRESENCE_REQUESTED:
+        return KMV1::ErrorCode::CONCURRENT_PROOF_OF_PRESENCE_REQUESTED;
+    case V4_0::ErrorCode::NO_USER_CONFIRMATION:
+        return KMV1::ErrorCode::NO_USER_CONFIRMATION;
+    case V4_0::ErrorCode::DEVICE_LOCKED:
+        return KMV1::ErrorCode::DEVICE_LOCKED;
+    case V4_0::ErrorCode::UNIMPLEMENTED:
+        return KMV1::ErrorCode::UNIMPLEMENTED;
+    case V4_0::ErrorCode::VERSION_MISMATCH:
+        return KMV1::ErrorCode::VERSION_MISMATCH;
+    case V4_0::ErrorCode::UNKNOWN_ERROR:
+        return KMV1::ErrorCode::UNKNOWN_ERROR;
+    }
+}
 
 static std::optional<V4_0::KeyPurpose> convert(KMV1::KeyPurpose p) {
     switch (p) {

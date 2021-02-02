@@ -18,6 +18,7 @@
 
 #include <aidl/android/hardware/security/keymint/BnKeyMintDevice.h>
 #include <aidl/android/hardware/security/keymint/BnKeyMintOperation.h>
+#include <aidl/android/hardware/security/keymint/ErrorCode.h>
 #include <aidl/android/hardware/security/secureclock/BnSecureClock.h>
 #include <aidl/android/hardware/security/sharedsecret/BnSharedSecret.h>
 #include <aidl/android/security/compat/BnKeystoreCompatService.h>
@@ -41,6 +42,7 @@ using ::aidl::android::hardware::security::keymint::KeyPurpose;
 using KeyMintSecurityLevel = ::aidl::android::hardware::security::keymint::SecurityLevel;
 using V4_0_ErrorCode = ::android::hardware::keymaster::V4_0::ErrorCode;
 using ::aidl::android::hardware::security::keymint::IKeyMintDevice;
+using KMV1_ErrorCode = ::aidl::android::hardware::security::keymint::ErrorCode;
 using ::aidl::android::hardware::security::secureclock::ISecureClock;
 using ::aidl::android::hardware::security::secureclock::TimeStampToken;
 using ::aidl::android::hardware::security::sharedsecret::ISharedSecret;
@@ -112,13 +114,13 @@ class KeyMintDevice : public aidl::android::hardware::security::keymint::BnKeyMi
     // These are public to allow testing code to use them directly.
     // This class should not be used publicly anyway.
 
-    std::variant<std::vector<Certificate>, V4_0_ErrorCode>
+    std::variant<std::vector<Certificate>, KMV1_ErrorCode>
     getCertificate(const std::vector<KeyParameter>& keyParams, const std::vector<uint8_t>& keyBlob);
 
     void setNumFreeSlots(uint8_t numFreeSlots);
 
   private:
-    std::optional<V4_0_ErrorCode> signCertificate(const std::vector<KeyParameter>& keyParams,
+    std::optional<KMV1_ErrorCode> signCertificate(const std::vector<KeyParameter>& keyParams,
                                                   const std::vector<uint8_t>& keyBlob, X509* cert);
     KeyMintSecurityLevel securityLevel_;
 };
