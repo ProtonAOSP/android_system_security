@@ -751,6 +751,20 @@ impl KeystoreDB {
         .context("Failed to initialize \"keyentry\" table.")?;
 
         tx.execute(
+            "CREATE INDEX IF NOT EXISTS persistent.keyentry_id_index
+            ON keyentry(id);",
+            NO_PARAMS,
+        )
+        .context("Failed to create index keyentry_id_index.")?;
+
+        tx.execute(
+            "CREATE INDEX IF NOT EXISTS persistent.keyentry_domain_namespace_index
+            ON keyentry(domain, namespace, alias);",
+            NO_PARAMS,
+        )
+        .context("Failed to create index keyentry_domain_namespace_index.")?;
+
+        tx.execute(
             "CREATE TABLE IF NOT EXISTS persistent.blobentry (
                     id INTEGER PRIMARY KEY,
                     subcomponent_type INTEGER,
@@ -759,6 +773,13 @@ impl KeystoreDB {
             NO_PARAMS,
         )
         .context("Failed to initialize \"blobentry\" table.")?;
+
+        tx.execute(
+            "CREATE INDEX IF NOT EXISTS persistent.blobentry_keyentryid_index
+            ON blobentry(keyentryid);",
+            NO_PARAMS,
+        )
+        .context("Failed to create index blobentry_keyentryid_index.")?;
 
         tx.execute(
             "CREATE TABLE IF NOT EXISTS persistent.keyparameter (
@@ -771,6 +792,13 @@ impl KeystoreDB {
         .context("Failed to initialize \"keyparameter\" table.")?;
 
         tx.execute(
+            "CREATE INDEX IF NOT EXISTS persistent.keyparameter_keyentryid_index
+            ON keyparameter(keyentryid);",
+            NO_PARAMS,
+        )
+        .context("Failed to create index keyparameter_keyentryid_index.")?;
+
+        tx.execute(
             "CREATE TABLE IF NOT EXISTS persistent.keymetadata (
                      keyentryid INTEGER,
                      tag INTEGER,
@@ -778,6 +806,13 @@ impl KeystoreDB {
             NO_PARAMS,
         )
         .context("Failed to initialize \"keymetadata\" table.")?;
+
+        tx.execute(
+            "CREATE INDEX IF NOT EXISTS persistent.keymetadata_keyentryid_index
+            ON keymetadata(keyentryid);",
+            NO_PARAMS,
+        )
+        .context("Failed to create index keymetadata_keyentryid_index.")?;
 
         tx.execute(
             "CREATE TABLE IF NOT EXISTS persistent.grant (
