@@ -395,6 +395,8 @@ static V4_0::SecurityLevel convert(KMV1::SecurityLevel s) {
         return V4_0::SecurityLevel::TRUSTED_ENVIRONMENT;
     case KMV1::SecurityLevel::STRONGBOX:
         return V4_0::SecurityLevel::STRONGBOX;
+    case KMV1::SecurityLevel::KEYSTORE:
+        return V4_0::SecurityLevel::SOFTWARE;
     }
 }
 
