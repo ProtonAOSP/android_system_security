@@ -89,10 +89,19 @@ convertKeyParametersFromLegacy(const std::vector<V4_0_KeyParameter>& legacyKps) 
 static std::vector<KeyCharacteristics>
 convertKeyCharacteristicsFromLegacy(KeyMintSecurityLevel securityLevel,
                                     const V4_0_KeyCharacteristics& legacyKc) {
-    KeyCharacteristics kc;
-    kc.securityLevel = securityLevel;
-    kc.authorizations = convertKeyParametersFromLegacy(legacyKc.hardwareEnforced);
-    return {kc};
+    if (securityLevel == KeyMintSecurityLevel::SOFTWARE) {
+        CHECK(legacyKc.hardwareEnforced.size() > 0);
+        KeyCharacteristics keystoreEnforced{
+            KeyMintSecurityLevel::KEYSTORE,
+            convertKeyParametersFromLegacy(legacyKc.softwareEnforced)};
+        return {keystoreEnforced};
+    }
+
+    KeyCharacteristics hwEnforced{securityLevel,
+                                  convertKeyParametersFromLegacy(legacyKc.hardwareEnforced)};
+    KeyCharacteristics keystoreEnforced{KeyMintSecurityLevel::KEYSTORE,
+                                        convertKeyParametersFromLegacy(legacyKc.softwareEnforced)};
+    return {hwEnforced, keystoreEnforced};
 }
 
 static V4_0_KeyFormat convertKeyFormatToLegacy(const KeyFormat& kf) {
