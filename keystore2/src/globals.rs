@@ -16,7 +16,6 @@
 //! database connections and connections to services that Keystore needs
 //! to talk to.
 
-use crate::enforcements::Enforcements;
 use crate::gc::Gc;
 use crate::legacy_blob::LegacyBlobLoader;
 use crate::super_key::SuperKeyManager;
@@ -24,9 +23,13 @@ use crate::utils::Asp;
 use crate::{async_task::AsyncTask, database::MonotonicRawTime};
 use crate::{
     database::KeystoreDB,
+    database::Uuid,
     error::{map_binder_status, map_binder_status_code, Error, ErrorCode},
 };
-use android_hardware_security_keymint::aidl::android::hardware::security::keymint::SecurityLevel::SecurityLevel;
+use crate::{enforcements::Enforcements, error::map_km_error};
+use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
+    KeyMintHardwareInfo::KeyMintHardwareInfo, SecurityLevel::SecurityLevel,
+};
 use android_hardware_security_keymint::binder::StatusCode;
 use android_security_compat::aidl::android::security::compat::IKeystoreCompatService::IKeystoreCompatService;
 use anyhow::{Context, Result};
@@ -77,11 +80,43 @@ thread_local! {
             RefCell::new(create_thread_local_db());
 }
 
+#[derive(Default)]
+struct DevicesMap {
+    devices_by_uuid: HashMap<Uuid, (Asp, KeyMintHardwareInfo)>,
+    uuid_by_sec_level: HashMap<SecurityLevel, Uuid>,
+}
+
+impl DevicesMap {
+    fn dev_by_sec_level(
+        &self,
+        sec_level: &SecurityLevel,
+    ) -> Option<(Asp, KeyMintHardwareInfo, Uuid)> {
+        self.uuid_by_sec_level.get(sec_level).and_then(|uuid| self.dev_by_uuid(uuid))
+    }
+
+    fn dev_by_uuid(&self, uuid: &Uuid) -> Option<(Asp, KeyMintHardwareInfo, Uuid)> {
+        self.devices_by_uuid
+            .get(uuid)
+            .map(|(dev, hw_info)| ((*dev).clone(), (*hw_info).clone(), *uuid))
+    }
+
+    /// The requested security level and the security level of the actual implementation may
+    /// differ. So we map the requested security level to the uuid of the implementation
+    /// so that there cannot be any confusion as to which KeyMint instance is requested.
+    fn insert(&mut self, sec_level: SecurityLevel, dev: Asp, hw_info: KeyMintHardwareInfo) {
+        // For now we use the reported security level of the KM instance as UUID.
+        // TODO update this section once UUID was added to the KM hardware info.
+        let uuid: Uuid = sec_level.into();
+        self.devices_by_uuid.insert(uuid, (dev, hw_info));
+        self.uuid_by_sec_level.insert(sec_level, uuid);
+    }
+}
+
 lazy_static! {
     /// Runtime database of unwrapped super keys.
     pub static ref SUPER_KEY: SuperKeyManager = Default::default();
     /// Map of KeyMint devices.
-    static ref KEY_MINT_DEVICES: Mutex<HashMap<SecurityLevel, Asp>> = Default::default();
+    static ref KEY_MINT_DEVICES: Mutex<DevicesMap> = Default::default();
     /// Timestamp service.
     static ref TIME_STAMP_DEVICE: Mutex<Option<Asp>> = Default::default();
     /// A single on-demand worker thread that handles deferred tasks with two different
@@ -100,8 +135,8 @@ static KEYMINT_SERVICE_NAME: &str = "android.hardware.security.keymint.IKeyMintD
 /// Make a new connection to a KeyMint device of the given security level.
 /// If no native KeyMint device can be found this function also brings
 /// up the compatibility service and attempts to connect to the legacy wrapper.
-fn connect_keymint(security_level: SecurityLevel) -> Result<Asp> {
-    let service_name = match security_level {
+fn connect_keymint(security_level: &SecurityLevel) -> Result<(Asp, KeyMintHardwareInfo)> {
+    let service_name = match *security_level {
         SecurityLevel::TRUSTED_ENVIRONMENT => format!("{}/default", KEYMINT_SERVICE_NAME),
         SecurityLevel::STRONGBOX => format!("{}/strongbox", KEYMINT_SERVICE_NAME),
         _ => {
@@ -121,32 +156,52 @@ fn connect_keymint(security_level: SecurityLevel) -> Result<Asp> {
                     let keystore_compat_service: Box<dyn IKeystoreCompatService> =
                         map_binder_status_code(binder::get_interface("android.security.compat"))
                             .context("In connect_keymint: Trying to connect to compat service.")?;
-                    map_binder_status(keystore_compat_service.getKeyMintDevice(security_level))
+                    map_binder_status(keystore_compat_service.getKeyMintDevice(*security_level))
                         .map_err(|e| match e {
                             Error::BinderTransaction(StatusCode::NAME_NOT_FOUND) => {
                                 Error::Km(ErrorCode::HARDWARE_TYPE_UNAVAILABLE)
                             }
                             e => e,
                         })
-                        .context("In connext_keymint: Trying to get Legacy wrapper.")
+                        .context("In connect_keymint: Trying to get Legacy wrapper.")
                 }
                 _ => Err(e),
             }
         })?;
 
-    Ok(Asp::new(keymint.as_binder()))
+    let hw_info = map_km_error(keymint.getHardwareInfo())
+        .context("In connect_keymint: Failed to get hardware info.")?;
+
+    Ok((Asp::new(keymint.as_binder()), hw_info))
 }
 
 /// Get a keymint device for the given security level either from our cache or
-/// by making a new connection.
-pub fn get_keymint_device(security_level: SecurityLevel) -> Result<Asp> {
+/// by making a new connection. Returns the device, the hardware info and the uuid.
+/// TODO the latter can be removed when the uuid is part of the hardware info.
+pub fn get_keymint_device(
+    security_level: &SecurityLevel,
+) -> Result<(Asp, KeyMintHardwareInfo, Uuid)> {
     let mut devices_map = KEY_MINT_DEVICES.lock().unwrap();
-    if let Some(dev) = devices_map.get(&security_level) {
-        Ok(dev.clone())
+    if let Some((dev, hw_info, uuid)) = devices_map.dev_by_sec_level(&security_level) {
+        Ok((dev, hw_info, uuid))
     } else {
-        let dev = connect_keymint(security_level).context("In get_keymint_device.")?;
-        devices_map.insert(security_level, dev.clone());
-        Ok(dev)
+        let (dev, hw_info) = connect_keymint(security_level).context("In get_keymint_device.")?;
+        devices_map.insert(*security_level, dev, hw_info);
+        // Unwrap must succeed because we just inserted it.
+        Ok(devices_map.dev_by_sec_level(security_level).unwrap())
+    }
+}
+
+/// Get a keymint device for the given uuid. This will only access the cache, but will not
+/// attempt to establish a new connection. It is assumed that the cache is already populated
+/// when this is called. This is a fair assumption, because service.rs iterates through all
+/// security levels when it gets instantiated.
+pub fn get_keymint_dev_by_uuid(uuid: &Uuid) -> Result<(Asp, KeyMintHardwareInfo)> {
+    let devices_map = KEY_MINT_DEVICES.lock().unwrap();
+    if let Some((dev, hw_info, _)) = devices_map.dev_by_uuid(uuid) {
+        Ok((dev, hw_info))
+    } else {
+        Err(Error::sys()).context("In get_keymint_dev_by_uuid: No KeyMint instance found.")
     }
 }
 

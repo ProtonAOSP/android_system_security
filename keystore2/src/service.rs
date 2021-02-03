@@ -18,14 +18,16 @@
 //! This crate implement the core Keystore 2.0 service API as defined by the Keystore 2.0
 //! AIDL spec.
 
-use crate::globals::DB;
-use crate::permission;
+use std::collections::HashMap;
+
 use crate::permission::{KeyPerm, KeystorePerm};
 use crate::security_level::KeystoreSecurityLevel;
 use crate::utils::{
     check_grant_permission, check_key_permission, check_keystore_permission,
     key_parameters_to_authorizations, Asp,
 };
+use crate::{database::Uuid, globals::DB};
+use crate::{database::KEYSTORE_UUID, permission};
 use crate::{
     database::{KeyEntryLoadBits, KeyType, SubComponentType},
     error::ResponseCode,
@@ -40,62 +42,76 @@ use android_system_keystore2::aidl::android::system::keystore2::{
     IKeystoreService::BnKeystoreService, IKeystoreService::IKeystoreService,
     KeyDescriptor::KeyDescriptor, KeyEntryResponse::KeyEntryResponse, KeyMetadata::KeyMetadata,
 };
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use binder::{IBinder, Interface, ThreadState};
 use error::Error;
 use keystore2_selinux as selinux;
 
 /// Implementation of the IKeystoreService.
+#[derive(Default)]
 pub struct KeystoreService {
-    sec_level_tee: Asp,
-    sec_level_strongbox: Option<Asp>,
+    i_sec_level_by_uuid: HashMap<Uuid, Asp>,
+    uuid_by_sec_level: HashMap<SecurityLevel, Uuid>,
 }
 
 impl KeystoreService {
     /// Create a new instance of the Keystore 2.0 service.
     pub fn new_native_binder() -> Result<impl IKeystoreService> {
-        let tee = KeystoreSecurityLevel::new_native_binder(SecurityLevel::TRUSTED_ENVIRONMENT)
-            .map(|tee| Asp::new(tee.as_binder()))
-            .context(concat!(
-                "In KeystoreService::new_native_binder: ",
-                "Trying to construct mendatory security level TEE."
-            ))?;
-        // Strongbox is optional, so we ignore errors and turn the result into an Option.
-        let strongbox =
+        let mut result: Self = Default::default();
+        let (dev, uuid) =
             KeystoreSecurityLevel::new_native_binder(SecurityLevel::TRUSTED_ENVIRONMENT)
-                .map(|tee| Asp::new(tee.as_binder()))
-                .ok();
+                .context(concat!(
+                    "In KeystoreService::new_native_binder: ",
+                    "Trying to construct mandatory security level TEE."
+                ))
+                .map(|(dev, uuid)| (Asp::new(dev.as_binder()), uuid))?;
+        result.i_sec_level_by_uuid.insert(uuid, dev);
+        result.uuid_by_sec_level.insert(SecurityLevel::TRUSTED_ENVIRONMENT, uuid);
 
-        let result = BnKeystoreService::new_binder(Self {
-            sec_level_tee: tee,
-            sec_level_strongbox: strongbox,
-        });
+        // Strongbox is optional, so we ignore errors and turn the result into an Option.
+        if let Ok((dev, uuid)) = KeystoreSecurityLevel::new_native_binder(SecurityLevel::STRONGBOX)
+            .map(|(dev, uuid)| (Asp::new(dev.as_binder()), uuid))
+        {
+            result.i_sec_level_by_uuid.insert(uuid, dev);
+            result.uuid_by_sec_level.insert(SecurityLevel::STRONGBOX, uuid);
+        }
+
+        let result = BnKeystoreService::new_binder(result);
         result.as_binder().set_requesting_sid(true);
         Ok(result)
     }
 
-    fn get_security_level_internal(
-        &self,
-        security_level: SecurityLevel,
-    ) -> Result<Option<Box<dyn IKeystoreSecurityLevel>>> {
-        Ok(match (security_level, &self.sec_level_strongbox) {
-            (SecurityLevel::TRUSTED_ENVIRONMENT, _) => Some(self.sec_level_tee.get_interface().context(
-                "In get_security_level_internal: Failed to get IKeystoreSecurityLevel (TEE).",
-            )?),
-            (SecurityLevel::STRONGBOX, Some(strongbox)) => Some(strongbox.get_interface().context(
-                "In get_security_level_internal: Failed to get IKeystoreSecurityLevel (Strongbox).",
-            )?),
-            _ => None,
-        })
+    fn uuid_to_sec_level(&self, uuid: &Uuid) -> SecurityLevel {
+        self.uuid_by_sec_level
+            .iter()
+            .find(|(_, v)| **v == *uuid)
+            .map(|(s, _)| *s)
+            .unwrap_or(SecurityLevel::SOFTWARE)
+    }
+
+    fn get_i_sec_level_by_uuid(&self, uuid: &Uuid) -> Result<Box<dyn IKeystoreSecurityLevel>> {
+        if let Some(dev) = self.i_sec_level_by_uuid.get(uuid) {
+            dev.get_interface().context("In get_i_sec_level_by_uuid.")
+        } else {
+            Err(error::Error::sys())
+                .context("In get_i_sec_level_by_uuid: KeyMint instance for key not found.")
+        }
     }
 
     fn get_security_level(
         &self,
-        security_level: SecurityLevel,
+        sec_level: SecurityLevel,
     ) -> Result<Box<dyn IKeystoreSecurityLevel>> {
-        self.get_security_level_internal(security_level)
-            .context("In get_security_level.")?
-            .ok_or_else(|| anyhow!(error::Error::Km(ErrorCode::HARDWARE_TYPE_UNAVAILABLE)))
+        if let Some(dev) = self
+            .uuid_by_sec_level
+            .get(&sec_level)
+            .and_then(|uuid| self.i_sec_level_by_uuid.get(uuid))
+        {
+            dev.get_interface().context("In get_security_level.")
+        } else {
+            Err(error::Error::Km(ErrorCode::HARDWARE_TYPE_UNAVAILABLE))
+                .context("In get_security_level: No such security level.")
+        }
     }
 
     fn get_key_entry(&self, key: &KeyDescriptor) -> Result<KeyEntryResponse> {
@@ -113,17 +129,8 @@ impl KeystoreService {
 
         let i_sec_level = if !key_entry.pure_cert() {
             Some(
-                self.get_security_level_internal(key_entry.sec_level())
-                    .context("In get_key_entry.")?
-                    .ok_or_else(|| {
-                        anyhow!(error::Error::sys()).context(format!(
-                            concat!(
-                                "Found key with security level {:?} ",
-                                "but no KeyMint instance of that security level."
-                            ),
-                            key_entry.sec_level()
-                        ))
-                    })?,
+                self.get_i_sec_level_by_uuid(key_entry.km_uuid())
+                    .context("In get_key_entry: Trying to get security level proxy.")?,
             )
         } else {
             None
@@ -137,7 +144,7 @@ impl KeystoreService {
                     nspace: key_id_guard.id(),
                     ..Default::default()
                 },
-                keySecurityLevel: key_entry.sec_level(),
+                keySecurityLevel: self.uuid_to_sec_level(key_entry.km_uuid()),
                 certificate: key_entry.take_cert(),
                 certificateChain: key_entry.take_cert_chain(),
                 modificationTimeMs: key_entry
@@ -212,7 +219,7 @@ impl KeystoreService {
             check_key_permission(KeyPerm::rebind(), &key, &None)
                 .context("Caller does not have permission to insert this certificate.")?;
 
-            db.store_new_certificate(key, certificate_chain.unwrap())
+            db.store_new_certificate(key, certificate_chain.unwrap(), &KEYSTORE_UUID)
                 .context("Failed to insert new certificate.")?;
             Ok(())
         })
@@ -315,7 +322,7 @@ impl IKeystoreService for KeystoreService {
         &self,
         security_level: SecurityLevel,
     ) -> binder::public_api::Result<Box<dyn IKeystoreSecurityLevel>> {
-        map_or_log_err(self.get_security_level(SecurityLevel(security_level.0)), Ok)
+        map_or_log_err(self.get_security_level(security_level), Ok)
     }
     fn getKeyEntry(&self, key: &KeyDescriptor) -> binder::public_api::Result<KeyEntryResponse> {
         map_or_log_err(self.get_key_entry(key), Ok)
