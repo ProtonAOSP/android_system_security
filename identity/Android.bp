@@ -39,8 +39,8 @@ cc_binary {
         "libkeystore-attestation-application-id",
     ],
     static_libs: [
-        "android.hardware.identity-unstable-cpp",
-        "android.hardware.keymaster-unstable-cpp",
+        "android.hardware.identity-V3-cpp",
+        "android.hardware.keymaster-V3-cpp",
         "libcppbor",
     ]
 }
