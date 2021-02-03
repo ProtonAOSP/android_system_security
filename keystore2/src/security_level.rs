@@ -16,12 +16,12 @@
 
 //! This crate implements the IKeystoreSecurityLevel interface.
 
-use crate::gc::Gc;
+use crate::{database::Uuid, gc::Gc, globals::get_keymint_device};
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
     Algorithm::Algorithm, HardwareAuthenticatorType::HardwareAuthenticatorType,
     IKeyMintDevice::IKeyMintDevice, KeyCreationResult::KeyCreationResult, KeyFormat::KeyFormat,
-    KeyParameter::KeyParameter, KeyParameterValue::KeyParameterValue, SecurityLevel::SecurityLevel,
-    Tag::Tag,
+    KeyMintHardwareInfo::KeyMintHardwareInfo, KeyParameter::KeyParameter,
+    KeyParameterValue::KeyParameterValue, SecurityLevel::SecurityLevel, Tag::Tag,
 };
 use android_system_keystore2::aidl::android::system::keystore2::{
     AuthenticatorSpec::AuthenticatorSpec, CreateOperationResponse::CreateOperationResponse,
@@ -35,7 +35,10 @@ use crate::globals::ENFORCEMENTS;
 use crate::key_parameter::KeyParameter as KsKeyParam;
 use crate::key_parameter::KeyParameterValue as KsKeyParamValue;
 use crate::utils::{check_key_permission, uid_to_android_user, Asp};
-use crate::{database::KeyIdGuard, globals::DB};
+use crate::{
+    database::{CertificateInfo, KeyIdGuard},
+    globals::DB,
+};
 use crate::{
     database::{DateTime, KeyMetaData, KeyMetaEntry, KeyType},
     permission::KeyPerm,
@@ -56,6 +59,9 @@ use binder::{IBinder, Interface, ThreadState};
 pub struct KeystoreSecurityLevel {
     security_level: SecurityLevel,
     keymint: Asp,
+    #[allow(dead_code)]
+    hw_info: KeyMintHardwareInfo,
+    km_uuid: Uuid,
     operation_db: OperationDb,
 }
 
@@ -69,15 +75,18 @@ impl KeystoreSecurityLevel {
     /// we need it for checking keystore permissions.
     pub fn new_native_binder(
         security_level: SecurityLevel,
-    ) -> Result<impl IKeystoreSecurityLevel + Send> {
+    ) -> Result<(impl IKeystoreSecurityLevel + Send, Uuid)> {
+        let (dev, hw_info, km_uuid) = get_keymint_device(&security_level)
+            .context("In KeystoreSecurityLevel::new_native_binder.")?;
         let result = BnKeystoreSecurityLevel::new_binder(Self {
             security_level,
-            keymint: crate::globals::get_keymint_device(security_level)
-                .context("In KeystoreSecurityLevel::new_native_binder.")?,
+            keymint: dev,
+            hw_info,
+            km_uuid,
             operation_db: OperationDb::new(),
         });
         result.as_binder().set_requesting_sid(true);
-        Ok(result)
+        Ok((result, km_uuid))
     }
 
     fn store_new_key(
@@ -92,7 +101,7 @@ impl KeystoreSecurityLevel {
             certificateChain: mut certificate_chain,
         } = creation_result;
 
-        let (cert, cert_chain): (Option<Vec<u8>>, Option<Vec<u8>>) = (
+        let mut cert_info: CertificateInfo = CertificateInfo::new(
             match certificate_chain.len() {
                 0 => None,
                 _ => Some(certificate_chain.remove(0).encodedCertificate),
@@ -134,9 +143,9 @@ impl KeystoreSecurityLevel {
                             key,
                             &key_parameters,
                             &key_blob,
-                            cert.as_deref(),
-                            cert_chain.as_deref(),
+                            &cert_info,
                             &metadata,
+                            &self.km_uuid,
                         )
                         .context("In store_new_key.")?;
                     if need_gc {
@@ -154,8 +163,8 @@ impl KeystoreSecurityLevel {
         Ok(KeyMetadata {
             key,
             keySecurityLevel: self.security_level,
-            certificate: cert,
-            certificateChain: cert_chain,
+            certificate: cert_info.take_cert(),
+            certificateChain: cert_info.take_cert_chain(),
             authorizations: crate::utils::key_parameters_to_authorizations(key_parameters),
             modificationTimeMs: creation_date.to_millis_epoch(),
         })
