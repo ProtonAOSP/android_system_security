@@ -34,9 +34,9 @@ use android_hardware_security_keymint::binder::StatusCode;
 use android_security_compat::aidl::android::security::compat::IKeystoreCompatService::IKeystoreCompatService;
 use anyhow::{Context, Result};
 use lazy_static::lazy_static;
-use std::collections::HashMap;
 use std::sync::Mutex;
 use std::{cell::RefCell, sync::Once};
+use std::{collections::HashMap, path::Path, path::PathBuf};
 
 static DB_INIT: Once = Once::new();
 
@@ -45,12 +45,8 @@ static DB_INIT: Once = Once::new();
 /// we also call KeystoreDB::cleanup_leftovers to restore the key lifecycle invariant. See the
 /// documentation of cleanup_leftovers for more details.
 fn create_thread_local_db() -> KeystoreDB {
-    let mut db = KeystoreDB::new(
-        // Keystore changes to the database directory on startup
-        // (see keystore2_main.rs).
-        &std::env::current_dir().expect("Could not get the current working directory."),
-    )
-    .expect("Failed to open database.");
+    let mut db = KeystoreDB::new(&DB_PATH.lock().expect("Could not get the database directory."))
+        .expect("Failed to open database.");
     DB_INIT.call_once(|| {
         log::info!("Touching Keystore 2.0 database for this first time since boot.");
         db.insert_last_off_body(MonotonicRawTime::now())
@@ -113,6 +109,9 @@ impl DevicesMap {
 }
 
 lazy_static! {
+    /// The path where keystore stores all its keys.
+    pub static ref DB_PATH: Mutex<PathBuf> = Mutex::new(
+        Path::new("/data/misc/keystore").to_path_buf());
     /// Runtime database of unwrapped super keys.
     pub static ref SUPER_KEY: SuperKeyManager = Default::default();
     /// Map of KeyMint devices.
@@ -127,7 +126,7 @@ lazy_static! {
     /// LegacyBlobLoader is initialized and exists globally.
     /// The same directory used by the database is used by the LegacyBlobLoader as well.
     pub static ref LEGACY_BLOB_LOADER: LegacyBlobLoader = LegacyBlobLoader::new(
-        &std::env::current_dir().expect("Could not get the current working directory."));
+        &DB_PATH.lock().expect("Could not get the database path for legacy blob loader."));
 }
 
 static KEYMINT_SERVICE_NAME: &str = "android.hardware.security.keymint.IKeyMintDevice";
