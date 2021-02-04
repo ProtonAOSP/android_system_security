@@ -25,6 +25,9 @@
 
 #include <fcntl.h>
 #include <vector>
+
+#include "KeyConstants.h"
+
 const char kBasicConstraints[] = "CA:TRUE";
 const char kKeyUsage[] = "critical,keyCertSign,cRLSign,digitalSignature";
 const char kSubjectKeyIdentifier[] = "hash";
@@ -66,8 +69,18 @@ Result<void> createSelfSignedCertificate(
     X509_gmtime_adj(X509_get_notBefore(x509.get()), 0);
     X509_gmtime_adj(X509_get_notAfter(x509.get()), kCertLifetimeSeconds);
 
-    auto pubKeyData = publicKey.data();
-    EVP_PKEY* public_key = d2i_PUBKEY(nullptr, &pubKeyData, publicKey.size());
+    // "publicKey" corresponds to the raw public key bytes - need to create
+    // a new RSA key with the correct exponent.
+    RSA* rsaPubkey = RSA_new();
+    rsaPubkey->n = BN_new();
+    rsaPubkey->e = BN_new();
+
+    BN_bin2bn(publicKey.data(), publicKey.size(), rsaPubkey->n);
+    BN_set_word(rsaPubkey->e, kRsaKeyExponent);
+
+    EVP_PKEY* public_key = EVP_PKEY_new();
+    EVP_PKEY_assign_RSA(public_key, rsaPubkey);
+
     if (!X509_set_pubkey(x509.get(), public_key)) {
         return Error() << "Unable to set x509 public key";
     }
@@ -117,6 +130,7 @@ Result<void> createSelfSignedCertificate(
     i2d_X509_fp(f, x509.get());
     fclose(f);
 
+    EVP_PKEY_free(public_key);
     return {};
 }
 
@@ -142,11 +156,23 @@ Result<std::vector<uint8_t>> extractPublicKey(EVP_PKEY* pkey) {
     return pubKey;
 }
 
-Result<std::vector<uint8_t>> extractPublicKeyFromX509(const std::vector<uint8_t>& keyData) {
+Result<std::vector<uint8_t>>
+extractPublicKeyFromSubjectPublicKeyInfo(const std::vector<uint8_t>& keyData) {
     auto keyDataBytes = keyData.data();
     EVP_PKEY* public_key = d2i_PUBKEY(nullptr, &keyDataBytes, keyData.size());
 
     return extractPublicKey(public_key);
+}
+
+Result<std::vector<uint8_t>> extractPublicKeyFromX509(const std::vector<uint8_t>& keyData) {
+    auto keyDataBytes = keyData.data();
+    bssl::UniquePtr<X509> decoded_cert(d2i_X509(nullptr, &keyDataBytes, keyData.size()));
+    if (decoded_cert.get() == nullptr) {
+        return Error() << "Failed to decode X509 certificate.";
+    }
+    bssl::UniquePtr<EVP_PKEY> decoded_pkey(X509_get_pubkey(decoded_cert.get()));
+
+    return extractPublicKey(decoded_pkey.get());
 }
 
 Result<std::vector<uint8_t>> extractPublicKeyFromX509(const std::string& path) {

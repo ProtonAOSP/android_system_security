@@ -22,7 +22,6 @@
 #include <iterator>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <sys/wait.h>
 #include <unistd.h>
 
 #include <android-base/file.h>
@@ -32,6 +31,7 @@
 
 #include "CertUtils.h"
 #include "KeymasterSigningKey.h"
+#include "KeystoreKey.h"
 #include "VerityUtils.h"
 
 #include "odsign_info.pb.h"
@@ -51,57 +51,12 @@ const std::string kArtArtifactsDir = "/data/misc/apexdata/com.android.art/dalvik
 
 static const char* kOdrefreshPath = "/apex/com.android.art/bin/odrefresh";
 
-static const char* kFsVerityInitPath = "/system/bin/fsverity_init";
 static const char* kFsVerityProcPath = "/proc/sys/fs/verity";
 
 static const bool kForceCompilation = false;
+static const bool kUseKeystore = false;
 
-Result<void> addCertToFsVerityKeyring(const std::string& path) {
-    const char* const argv[] = {kFsVerityInitPath, "--load-extra-key", "fsv_ods"};
-
-    // NOLINTNEXTLINE(android-cloexec-open): Deliberately not O_CLOEXEC
-    int fd = open(path.c_str(), O_RDONLY);
-    pid_t pid = fork();
-    if (pid == 0) {
-        dup2(fd, STDIN_FILENO);
-        close(fd);
-        int argc = arraysize(argv);
-        char* argv_child[argc + 1];
-        memcpy(argv_child, argv, argc * sizeof(char*));
-        argv_child[argc] = nullptr;
-        execvp(argv_child[0], const_cast<char**>(argv_child));
-        PLOG(ERROR) << "exec in ForkExecvp";
-        _exit(EXIT_FAILURE);
-    } else {
-        close(fd);
-    }
-    if (pid == -1) {
-        return ErrnoError() << "Failed to fork.";
-    }
-    int status;
-    if (waitpid(pid, &status, 0) == -1) {
-        return ErrnoError() << "waitpid() failed.";
-    }
-    if (!WIFEXITED(status)) {
-        return Error() << kFsVerityInitPath << ": abnormal process exit";
-    }
-    if (WEXITSTATUS(status)) {
-        if (status != 0) {
-            return Error() << kFsVerityInitPath << " exited with " << status;
-        }
-    }
-
-    return {};
-}
-
-Result<KeymasterSigningKey> loadAndVerifyExistingKey() {
-    if (access(kSigningKeyBlob.c_str(), F_OK) < 0) {
-        return ErrnoError() << "Key blob not found: " << kSigningKeyBlob;
-    }
-    return KeymasterSigningKey::loadFromBlobAndVerify(kSigningKeyBlob);
-}
-
-Result<void> verifyExistingCert(const KeymasterSigningKey& key) {
+Result<void> verifyExistingCert(const SigningKey& key) {
     if (access(kSigningKeyCert.c_str(), F_OK) < 0) {
         return ErrnoError() << "Key certificate not found: " << kSigningKeyCert;
     }
@@ -123,19 +78,18 @@ Result<void> verifyExistingCert(const KeymasterSigningKey& key) {
     return {};
 }
 
-Result<KeymasterSigningKey> createAndPersistKey(const std::string& path) {
-    auto key = KeymasterSigningKey::createNewKey();
+Result<void> createX509Cert(const SigningKey& key, const std::string& outPath) {
+    auto publicKey = key.getPublicKey();
 
-    if (!key.ok()) {
-        return key.error();
+    if (!publicKey.ok()) {
+        return publicKey.error();
     }
 
-    auto result = key->saveKeyblob(path);
-    if (!result.ok()) {
-        return result.error();
-    }
-
-    return key;
+    auto keymasterSignFunction = [&](const std::string& to_be_signed) {
+        return key.sign(to_be_signed);
+    };
+    createSelfSignedCertificate(*publicKey, keymasterSignFunction, outPath);
+    return {};
 }
 
 bool compileArtifacts(bool force) {
@@ -224,7 +178,7 @@ Result<void> verifyIntegrityNoFsVerity(const std::map<std::string, std::string>&
     return verifyDigests(*result, trusted_digests);
 }
 
-Result<OdsignInfo> getOdsignInfo(const KeymasterSigningKey& /* key */) {
+Result<OdsignInfo> getOdsignInfo(const SigningKey& /* key */) {
     std::string persistedSignature;
     OdsignInfo odsignInfo;
 
@@ -263,7 +217,7 @@ Result<OdsignInfo> getOdsignInfo(const KeymasterSigningKey& /* key */) {
 }
 
 Result<void> persistDigests(const std::map<std::string, std::string>& digests,
-                            const KeymasterSigningKey& key) {
+                            const SigningKey& key) {
     OdsignInfo signInfo;
     google::protobuf::Map<std::string, std::string> proto_hashes(digests.begin(), digests.end());
     auto map = signInfo.mutable_file_hashes();
@@ -304,17 +258,22 @@ int main(int /* argc */, char** /* argv */) {
     // Make sure we delete the artifacts in all early (error) exit paths
     auto scope_guard = android::base::make_scope_guard(removeArtifacts);
 
-    auto key = loadAndVerifyExistingKey();
-    if (!key.ok()) {
-        LOG(WARNING) << key.error().message();
-
-        key = createAndPersistKey(kSigningKeyBlob);
-        if (!key.ok()) {
-            LOG(ERROR) << "Failed to create or persist new key: " << key.error().message();
+    SigningKey* key;
+    if (kUseKeystore) {
+        auto keystoreResult = KeystoreKey::getInstance();
+        if (!keystoreResult.ok()) {
+            LOG(ERROR) << "Could not create keystore key: " << keystoreResult.error().message();
             return -1;
         }
+        key = keystoreResult.value();
     } else {
-        LOG(INFO) << "Found and verified existing key: " << kSigningKeyBlob;
+        // TODO - keymaster will go away
+        auto keymasterResult = KeymasterSigningKey::getInstance();
+        if (!keymasterResult.ok()) {
+            LOG(ERROR) << "Failed to create keymaster key: " << keymasterResult.error().message();
+            return -1;
+        }
+        key = keymasterResult.value();
     }
 
     bool supportsFsVerity = access(kFsVerityProcPath, F_OK) == 0;
@@ -323,12 +282,12 @@ int main(int /* argc */, char** /* argv */) {
     }
 
     if (supportsFsVerity) {
-        auto existing_cert = verifyExistingCert(key.value());
+        auto existing_cert = verifyExistingCert(*key);
         if (!existing_cert.ok()) {
             LOG(WARNING) << existing_cert.error().message();
 
             // Try to create a new cert
-            auto new_cert = key->createX509Cert(kSigningKeyCert);
+            auto new_cert = createX509Cert(*key, kSigningKeyCert);
             if (!new_cert.ok()) {
                 LOG(ERROR) << "Failed to create X509 certificate: " << new_cert.error().message();
                 // TODO apparently the key become invalid - delete the blob / cert
@@ -345,7 +304,7 @@ int main(int /* argc */, char** /* argv */) {
         }
     }
 
-    auto signInfo = getOdsignInfo(key.value());
+    auto signInfo = getOdsignInfo(*key);
     if (!signInfo.ok()) {
         int num_removed = removeArtifacts();
         // Only a warning if there were artifacts to begin with, which suggests tampering or
@@ -381,7 +340,7 @@ int main(int /* argc */, char** /* argv */) {
 
         Result<std::map<std::string, std::string>> digests;
         if (supportsFsVerity) {
-            digests = addFilesToVerityRecursive(kArtArtifactsDir, key.value());
+            digests = addFilesToVerityRecursive(kArtArtifactsDir, *key);
         } else {
             // If we can't use verity, just compute the root hashes and store
             // those, so we can reverify them at the next boot.
@@ -392,7 +351,7 @@ int main(int /* argc */, char** /* argv */) {
             return -1;
         }
 
-        auto persistStatus = persistDigests(*digests, key.value());
+        auto persistStatus = persistDigests(*digests, *key);
         if (!persistStatus.ok()) {
             LOG(ERROR) << persistStatus.error().message();
             return -1;

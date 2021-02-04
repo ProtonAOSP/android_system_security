@@ -86,6 +86,7 @@ cc_binary {
     "CertUtils.cpp",
     "Keymaster.cpp",
     "KeymasterSigningKey.cpp",
+    "KeystoreKey.cpp",
     "VerityUtils.cpp",
   ],
 
@@ -97,7 +98,10 @@ cc_binary {
 
   shared_libs: [
     "android.hardware.keymaster@4.1",
+    "android.system.keystore2-V1-cpp",
+    "android.hardware.security.keymint-V1-cpp",
     "libbase",
+    "libbinder",
     "libcrypto",
     "libcrypto_utils",
     "libfsverity",

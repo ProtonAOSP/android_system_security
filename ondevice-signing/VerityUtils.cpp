@@ -15,12 +15,14 @@
  */
 
 #include <filesystem>
+#include <map>
 #include <string>
 
 #include <fcntl.h>
 #include <linux/fs.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 
 #include <android-base/logging.h>
 #include <android-base/unique_fd.h>
@@ -28,7 +30,7 @@
 #include <linux/fsverity.h>
 
 #include "CertUtils.h"
-#include "KeymasterSigningKey.h"
+#include "SigningKey.h"
 
 #define FS_VERITY_MAX_DIGEST_SIZE 64
 
@@ -36,6 +38,8 @@ using android::base::ErrnoError;
 using android::base::Error;
 using android::base::Result;
 using android::base::unique_fd;
+
+static const char* kFsVerityInitPath = "/system/bin/fsverity_init";
 
 #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
 #define cpu_to_le16(v) ((__force __le16)(uint16_t)(v))
@@ -84,7 +88,7 @@ Result<std::vector<uint8_t>> createDigest(const std::string& path) {
     return std::vector<uint8_t>(&digest->digest[0], &digest->digest[32]);
 }
 
-static Result<std::vector<uint8_t>> signDigest(const KeymasterSigningKey& key,
+static Result<std::vector<uint8_t>> signDigest(const SigningKey& key,
                                                const std::vector<uint8_t>& digest) {
     fsverity_signed_digest* d;
     size_t signed_digest_size = sizeof(*d) + digest.size();
@@ -104,7 +108,7 @@ static Result<std::vector<uint8_t>> signDigest(const KeymasterSigningKey& key,
     return std::vector<uint8_t>(signed_digest->begin(), signed_digest->end());
 }
 
-Result<std::string> enableFsVerity(const std::string& path, const KeymasterSigningKey& key) {
+Result<std::string> enableFsVerity(const std::string& path, const SigningKey& key) {
     auto digest = createDigest(path);
     if (!digest.ok()) {
         return digest.error();
@@ -135,8 +139,8 @@ Result<std::string> enableFsVerity(const std::string& path, const KeymasterSigni
     return toHex(digest.value());
 }
 
-Result<std::map<std::string, std::string>>
-addFilesToVerityRecursive(const std::string& path, const KeymasterSigningKey& key) {
+Result<std::map<std::string, std::string>> addFilesToVerityRecursive(const std::string& path,
+                                                                     const SigningKey& key) {
     std::map<std::string, std::string> digests;
     std::error_code ec;
 
@@ -212,4 +216,41 @@ Result<std::map<std::string, std::string>> verifyAllFilesInVerity(const std::str
     }
 
     return digests;
+}
+
+Result<void> addCertToFsVerityKeyring(const std::string& path) {
+    const char* const argv[] = {kFsVerityInitPath, "--load-extra-key", "fsv_ods"};
+
+    int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
+    pid_t pid = fork();
+    if (pid == 0) {
+        dup2(fd, STDIN_FILENO);
+        close(fd);
+        int argc = arraysize(argv);
+        char* argv_child[argc + 1];
+        memcpy(argv_child, argv, argc * sizeof(char*));
+        argv_child[argc] = nullptr;
+        execvp(argv_child[0], const_cast<char**>(argv_child));
+        PLOG(ERROR) << "exec in ForkExecvp";
+        _exit(EXIT_FAILURE);
+    } else {
+        close(fd);
+    }
+    if (pid == -1) {
+        return ErrnoError() << "Failed to fork.";
+    }
+    int status;
+    if (waitpid(pid, &status, 0) == -1) {
+        return ErrnoError() << "waitpid() failed.";
+    }
+    if (!WIFEXITED(status)) {
+        return Error() << kFsVerityInitPath << ": abnormal process exit";
+    }
+    if (WEXITSTATUS(status)) {
+        if (status != 0) {
+            return Error() << kFsVerityInitPath << " exited with " << status;
+        }
+    }
+
+    return {};
 }
