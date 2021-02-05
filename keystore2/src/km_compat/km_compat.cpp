@@ -283,6 +283,7 @@ ScopedAStatus KeyMintDevice::getHardwareInfo(KeyMintHardwareInfo* _aidl_return) 
         _aidl_return->keyMintAuthorName = keymasterAuthorName;
     });
     if (!result.isOk()) {
+        LOG(ERROR) << __func__ << " transaction failed. " << result.description();
         return convertErrorCode(KMV1::ErrorCode::UNKNOWN_ERROR);
     }
     return ScopedAStatus::ok();
@@ -291,6 +292,7 @@ ScopedAStatus KeyMintDevice::getHardwareInfo(KeyMintHardwareInfo* _aidl_return) 
 ScopedAStatus KeyMintDevice::addRngEntropy(const std::vector<uint8_t>& in_data) {
     auto result = mDevice->addRngEntropy(in_data);
     if (!result.isOk()) {
+        LOG(ERROR) << __func__ << " transaction failed. " << result.description();
         return convertErrorCode(KMV1::ErrorCode::UNKNOWN_ERROR);
     }
     return convertErrorCode(result);
@@ -309,8 +311,8 @@ ScopedAStatus KeyMintDevice::generateKey(const std::vector<KeyParameter>& in_key
                 convertKeyCharacteristicsFromLegacy(securityLevel_, keyCharacteristics);
         });
     if (!result.isOk()) {
-        return ScopedAStatus::fromServiceSpecificError(
-            static_cast<int32_t>(ResponseCode::SYSTEM_ERROR));
+        LOG(ERROR) << __func__ << " transaction failed. " << result.description();
+        return convertErrorCode(KMV1::ErrorCode::UNKNOWN_ERROR);
     }
     if (errorCode == KMV1::ErrorCode::OK) {
         auto cert = getCertificate(in_keyParams, out_creationResult->keyBlob);
@@ -345,6 +347,7 @@ ScopedAStatus KeyMintDevice::importKey(const std::vector<KeyParameter>& in_inKey
                                                  securityLevel_, keyCharacteristics);
                                      });
     if (!result.isOk()) {
+        LOG(ERROR) << __func__ << " transaction failed. " << result.description();
         return convertErrorCode(KMV1::ErrorCode::UNKNOWN_ERROR);
     }
     if (errorCode == KMV1::ErrorCode::OK) {
@@ -381,6 +384,7 @@ ScopedAStatus KeyMintDevice::importWrappedKey(
                 convertKeyCharacteristicsFromLegacy(securityLevel_, keyCharacteristics);
         });
     if (!result.isOk()) {
+        LOG(ERROR) << __func__ << " transaction failed. " << result.description();
         return convertErrorCode(KMV1::ErrorCode::UNKNOWN_ERROR);
     }
     return convertErrorCode(errorCode);
@@ -398,6 +402,7 @@ ScopedAStatus KeyMintDevice::upgradeKey(const std::vector<uint8_t>& in_inKeyBlob
                                 *_aidl_return = upgradedKeyBlob;
                             });
     if (!result.isOk()) {
+        LOG(ERROR) << __func__ << " transaction failed. " << result.description();
         return convertErrorCode(KMV1::ErrorCode::UNKNOWN_ERROR);
     }
     return convertErrorCode(errorCode);
@@ -406,6 +411,7 @@ ScopedAStatus KeyMintDevice::upgradeKey(const std::vector<uint8_t>& in_inKeyBlob
 ScopedAStatus KeyMintDevice::deleteKey(const std::vector<uint8_t>& in_inKeyBlob) {
     auto result = mDevice->deleteKey(in_inKeyBlob);
     if (!result.isOk()) {
+        LOG(ERROR) << __func__ << " transaction failed. " << result.description();
         return convertErrorCode(KMV1::ErrorCode::UNKNOWN_ERROR);
     }
     return convertErrorCode(result);
@@ -414,6 +420,7 @@ ScopedAStatus KeyMintDevice::deleteKey(const std::vector<uint8_t>& in_inKeyBlob)
 ScopedAStatus KeyMintDevice::deleteAllKeys() {
     auto result = mDevice->deleteAllKeys();
     if (!result.isOk()) {
+        LOG(ERROR) << __func__ << " transaction failed. " << result.description();
         return convertErrorCode(KMV1::ErrorCode::UNKNOWN_ERROR);
     }
     return convertErrorCode(result);
@@ -449,6 +456,7 @@ ScopedAStatus KeyMintDevice::begin(KeyPurpose in_inPurpose,
                 mDevice, operationHandle, &mOperationSlots, error == V4_0_ErrorCode::OK);
         });
     if (!result.isOk()) {
+        LOG(ERROR) << __func__ << " transaction failed. " << result.description();
         errorCode = KMV1::ErrorCode::UNKNOWN_ERROR;
     }
     if (errorCode != KMV1::ErrorCode::OK) {
@@ -490,6 +498,7 @@ ScopedAStatus KeyMintOperation::update(const std::optional<KeyParameterArray>& i
             *_aidl_return = inputConsumed;
         });
     if (!result.isOk()) {
+        LOG(ERROR) << __func__ << " transaction failed. " << result.description();
         errorCode = KMV1::ErrorCode::UNKNOWN_ERROR;
     }
     if (errorCode != KMV1::ErrorCode::OK) {
@@ -531,6 +540,7 @@ ScopedAStatus KeyMintOperation::finish(const std::optional<KeyParameterArray>& i
         });
     mOperationSlot.freeSlot();
     if (!result.isOk()) {
+        LOG(ERROR) << __func__ << " transaction failed. " << result.description();
         errorCode = KMV1::ErrorCode::UNKNOWN_ERROR;
     }
     return convertErrorCode(errorCode);
@@ -540,6 +550,7 @@ ScopedAStatus KeyMintOperation::abort() {
     auto result = mDevice->abort(mOperationHandle);
     mOperationSlot.freeSlot();
     if (!result.isOk()) {
+        LOG(ERROR) << __func__ << " transaction failed. " << result.description();
         return convertErrorCode(KMV1::ErrorCode::UNKNOWN_ERROR);
     }
     return convertErrorCode(result);
@@ -567,6 +578,7 @@ ScopedAStatus SecureClock::generateTimeStamp(int64_t in_challenge, TimeStampToke
             _aidl_return->mac = token.mac;
         });
     if (!result.isOk()) {
+        LOG(ERROR) << __func__ << " transaction failed. " << result.description();
         errorCode = KMV1::ErrorCode::UNKNOWN_ERROR;
     }
     return convertErrorCode(errorCode);
@@ -584,6 +596,7 @@ ScopedAStatus SharedSecret::getSharedSecretParameters(SharedSecretParameters* _a
                       std::back_inserter(_aidl_return->nonce));
         });
     if (!result.isOk()) {
+        LOG(ERROR) << __func__ << " transaction failed. " << result.description();
         errorCode = KMV1::ErrorCode::UNKNOWN_ERROR;
     }
     return convertErrorCode(errorCode);
@@ -600,6 +613,7 @@ SharedSecret::computeSharedSecret(const std::vector<SharedSecretParameters>& in_
             *_aidl_return = sharingCheck;
         });
     if (!result.isOk()) {
+        LOG(ERROR) << __func__ << " transaction failed. " << result.description();
         errorCode = KMV1::ErrorCode::UNKNOWN_ERROR;
     }
     return convertErrorCode(errorCode);
@@ -666,6 +680,7 @@ makeCert(::android::sp<Keymaster> mDevice, const std::vector<KeyParameter>& keyP
             key = keyMaterial;
         });
     if (!result.isOk()) {
+        LOG(ERROR) << __func__ << " exportKey transaction failed. " << result.description();
         return KMV1::ErrorCode::UNKNOWN_ERROR;
     }
     if (errorCode != KMV1::ErrorCode::OK) {
