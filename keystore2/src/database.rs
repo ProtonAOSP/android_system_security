@@ -671,26 +671,39 @@ impl AuthTokenEntry {
     }
 }
 
+/// Shared in-memory databases get destroyed as soon as the last connection to them gets closed.
+/// This object does not allow access to the database connection. But it keeps a database
+/// connection alive in order to keep the in memory per boot database alive.
+pub struct PerBootDbKeepAlive(Connection);
+
 impl KeystoreDB {
+    const PERBOOT_DB_FILE_NAME: &'static str = &"file:perboot.sqlite?mode=memory&cache=shared";
+
+    /// This creates a PerBootDbKeepAlive object to keep the per boot database alive.
+    pub fn keep_perboot_db_alive() -> Result<PerBootDbKeepAlive> {
+        let conn = Connection::open_in_memory()
+            .context("In keep_perboot_db_alive: Failed to initialize SQLite connection.")?;
+
+        conn.execute("ATTACH DATABASE ? as perboot;", params![Self::PERBOOT_DB_FILE_NAME])
+            .context("In keep_perboot_db_alive: Failed to attach database perboot.")?;
+        Ok(PerBootDbKeepAlive(conn))
+    }
+
     /// This will create a new database connection connecting the two
     /// files persistent.sqlite and perboot.sqlite in the given directory.
     /// It also attempts to initialize all of the tables.
     /// KeystoreDB cannot be used by multiple threads.
     /// Each thread should open their own connection using `thread_local!`.
     pub fn new(db_root: &Path) -> Result<Self> {
-        // Build the path to the sqlite files.
+        // Build the path to the sqlite file.
         let mut persistent_path = db_root.to_path_buf();
         persistent_path.push("persistent.sqlite");
-        let mut perboot_path = db_root.to_path_buf();
-        perboot_path.push("perboot.sqlite");
 
         // Now convert them to strings prefixed with "file:"
         let mut persistent_path_str = "file:".to_owned();
         persistent_path_str.push_str(&persistent_path.to_string_lossy());
-        let mut perboot_path_str = "file:".to_owned();
-        perboot_path_str.push_str(&perboot_path.to_string_lossy());
 
-        let conn = Self::make_connection(&persistent_path_str, &perboot_path_str)?;
+        let conn = Self::make_connection(&persistent_path_str, &Self::PERBOOT_DB_FILE_NAME)?;
         conn.busy_handler(Some(|_| {
             std::thread::sleep(std::time::Duration::from_micros(50));
             true
