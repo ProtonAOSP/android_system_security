@@ -57,6 +57,97 @@ using std::chrono::duration_cast;
 
 // Utility functions
 
+// Returns true if this parameter may be passed to attestKey.
+bool isAttestationParameter(const KMV1::KeyParameter& param) {
+    switch (param.tag) {
+    case Tag::APPLICATION_ID:
+    case Tag::APPLICATION_DATA:
+    case Tag::ATTESTATION_CHALLENGE:
+    case Tag::ATTESTATION_APPLICATION_ID:
+    case Tag::ATTESTATION_ID_BRAND:
+    case Tag::ATTESTATION_ID_DEVICE:
+    case Tag::ATTESTATION_ID_PRODUCT:
+    case Tag::ATTESTATION_ID_SERIAL:
+    case Tag::ATTESTATION_ID_IMEI:
+    case Tag::ATTESTATION_ID_MEID:
+    case Tag::ATTESTATION_ID_MANUFACTURER:
+    case Tag::ATTESTATION_ID_MODEL:
+    case Tag::CERTIFICATE_SERIAL:
+    case Tag::CERTIFICATE_SUBJECT:
+    case Tag::CERTIFICATE_NOT_BEFORE:
+    case Tag::CERTIFICATE_NOT_AFTER:
+    case Tag::INCLUDE_UNIQUE_ID:
+    case Tag::DEVICE_UNIQUE_ATTESTATION:
+        return true;
+    default:
+        return false;
+    }
+}
+
+// Returns true if this parameter may be passed to generate/importKey.
+bool isKeyCreationParameter(const KMV1::KeyParameter& param) {
+    switch (param.tag) {
+    case Tag::APPLICATION_ID:
+    case Tag::APPLICATION_DATA:
+    case Tag::CERTIFICATE_SERIAL:
+    case Tag::CERTIFICATE_SUBJECT:
+    case Tag::CERTIFICATE_NOT_BEFORE:
+    case Tag::CERTIFICATE_NOT_AFTER:
+    case Tag::PURPOSE:
+    case Tag::ALGORITHM:
+    case Tag::KEY_SIZE:
+    case Tag::BLOCK_MODE:
+    case Tag::DIGEST:
+    case Tag::PADDING:
+    case Tag::CALLER_NONCE:
+    case Tag::MIN_MAC_LENGTH:
+    case Tag::EC_CURVE:
+    case Tag::RSA_PUBLIC_EXPONENT:
+    case Tag::RSA_OAEP_MGF_DIGEST:
+    case Tag::BLOB_USAGE_REQUIREMENTS:
+    case Tag::BOOTLOADER_ONLY:
+    case Tag::ROLLBACK_RESISTANCE:
+    case Tag::EARLY_BOOT_ONLY:
+    case Tag::ACTIVE_DATETIME:
+    case Tag::ORIGINATION_EXPIRE_DATETIME:
+    case Tag::USAGE_EXPIRE_DATETIME:
+    case Tag::MIN_SECONDS_BETWEEN_OPS:
+    case Tag::MAX_USES_PER_BOOT:
+    case Tag::USAGE_COUNT_LIMIT:
+    case Tag::USER_ID:
+    case Tag::USER_SECURE_ID:
+    case Tag::NO_AUTH_REQUIRED:
+    case Tag::USER_AUTH_TYPE:
+    case Tag::AUTH_TIMEOUT:
+    case Tag::ALLOW_WHILE_ON_BODY:
+    case Tag::TRUSTED_USER_PRESENCE_REQUIRED:
+    case Tag::TRUSTED_CONFIRMATION_REQUIRED:
+    case Tag::UNLOCKED_DEVICE_REQUIRED:
+    case Tag::CREATION_DATETIME:
+    case Tag::UNIQUE_ID:
+    case Tag::IDENTITY_CREDENTIAL_KEY:
+    case Tag::STORAGE_KEY:
+    case Tag::MAC_LENGTH:
+        return true;
+    default:
+        return false;
+    }
+}
+
+std::vector<KMV1::KeyParameter>
+extractGenerationParams(const std::vector<KMV1::KeyParameter>& params) {
+    std::vector<KMV1::KeyParameter> result;
+    std::copy_if(params.begin(), params.end(), std::back_inserter(result), isKeyCreationParameter);
+    return result;
+}
+
+std::vector<KMV1::KeyParameter>
+extractAttestationParams(const std::vector<KMV1::KeyParameter>& params) {
+    std::vector<KMV1::KeyParameter> result;
+    std::copy_if(params.begin(), params.end(), std::back_inserter(result), isAttestationParameter);
+    return result;
+}
+
 ScopedAStatus convertErrorCode(KMV1::ErrorCode result) {
     if (result == KMV1::ErrorCode::OK) {
         return ScopedAStatus::ok();
@@ -207,11 +298,11 @@ ScopedAStatus KeyMintDevice::addRngEntropy(const std::vector<uint8_t>& in_data) 
 
 ScopedAStatus KeyMintDevice::generateKey(const std::vector<KeyParameter>& in_keyParams,
                                          KeyCreationResult* out_creationResult) {
-    auto legacyKeyParams = convertKeyParametersToLegacy(in_keyParams);
+    auto legacyKeyGenParams = convertKeyParametersToLegacy(extractGenerationParams(in_keyParams));
     KMV1::ErrorCode errorCode;
     auto result = mDevice->generateKey(
-        legacyKeyParams, [&](V4_0_ErrorCode error, const hidl_vec<uint8_t>& keyBlob,
-                             const V4_0_KeyCharacteristics& keyCharacteristics) {
+        legacyKeyGenParams, [&](V4_0_ErrorCode error, const hidl_vec<uint8_t>& keyBlob,
+                                const V4_0_KeyCharacteristics& keyCharacteristics) {
             errorCode = convert(error);
             out_creationResult->keyBlob = keyBlob;
             out_creationResult->keyCharacteristics =
@@ -241,10 +332,10 @@ ScopedAStatus KeyMintDevice::importKey(const std::vector<KeyParameter>& in_inKey
                                        KeyFormat in_inKeyFormat,
                                        const std::vector<uint8_t>& in_inKeyData,
                                        KeyCreationResult* out_creationResult) {
-    auto legacyKeyParams = convertKeyParametersToLegacy(in_inKeyParams);
+    auto legacyKeyGENParams = convertKeyParametersToLegacy(extractGenerationParams(in_inKeyParams));
     auto legacyKeyFormat = convertKeyFormatToLegacy(in_inKeyFormat);
     KMV1::ErrorCode errorCode;
-    auto result = mDevice->importKey(legacyKeyParams, legacyKeyFormat, in_inKeyData,
+    auto result = mDevice->importKey(legacyKeyGENParams, legacyKeyFormat, in_inKeyData,
                                      [&](V4_0_ErrorCode error, const hidl_vec<uint8_t>& keyBlob,
                                          const V4_0_KeyCharacteristics& keyCharacteristics) {
                                          errorCode = convert(error);
@@ -751,7 +842,7 @@ KeyMintDevice::getCertificate(const std::vector<KeyParameter>& keyParams,
 
     // If attestation was requested, call and use attestKey.
     if (containsParam(keyParams, KMV1::TAG_ATTESTATION_CHALLENGE)) {
-        auto legacyParams = convertKeyParametersToLegacy(keyParams);
+        auto legacyParams = convertKeyParametersToLegacy(extractAttestationParams(keyParams));
         std::vector<Certificate> certs;
         KMV1::ErrorCode errorCode = KMV1::ErrorCode::OK;
         auto result = mDevice->attestKey(
