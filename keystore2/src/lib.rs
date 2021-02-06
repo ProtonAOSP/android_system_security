@@ -26,6 +26,7 @@ pub mod key_parameter;
 pub mod legacy_blob;
 pub mod operation;
 pub mod permission;
+pub mod remote_provisioning;
 pub mod security_level;
 pub mod service;
 pub mod utils;
