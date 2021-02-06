@@ -646,9 +646,12 @@ getMaximum(const std::vector<KeyParameter>& keyParams, T tag,
     auto bestSoFar = sortedOptions.end();
     for (const KeyParameter& kp : keyParams) {
         if (auto value = authorizationValue(tag, kp)) {
-            auto it = std::find(sortedOptions.begin(), sortedOptions.end(), *value);
-            if (std::distance(it, bestSoFar) < 0) {
-                bestSoFar = it;
+            auto candidate = std::find(sortedOptions.begin(), sortedOptions.end(), *value);
+            // sortedOptions is sorted from best to worst. `std::distance(first, last)` counts the
+            // hops from `first` to `last`. So a better `candidate` yields a positive distance to
+            // `bestSoFar`.
+            if (std::distance(candidate, bestSoFar) > 0) {
+                bestSoFar = candidate;
             }
         }
     }
@@ -784,9 +787,9 @@ KeyMintDevice::signCertificate(const std::vector<KeyParameter>& keyParams,
         return std::get<KMV1::ErrorCode>(paddingOrError);
     }
     auto padding = std::get<keystore::Padding>(paddingOrError);
-    auto origDigest = getMaximum(
-        keyParams, KMV1::TAG_DIGEST,
-        {Digest::SHA_2_256, Digest::SHA_2_512, Digest::SHA_2_384, Digest::SHA_2_224, Digest::SHA1});
+    auto origDigest = getMaximum(keyParams, KMV1::TAG_DIGEST,
+                                 {Digest::SHA_2_256, Digest::SHA_2_512, Digest::SHA_2_384,
+                                  Digest::SHA_2_224, Digest::SHA1, Digest::NONE});
     auto digestOrError = getKeystoreDigest(origDigest);
     if (std::holds_alternative<KMV1::ErrorCode>(digestOrError)) {
         return std::get<KMV1::ErrorCode>(digestOrError);
@@ -799,9 +802,11 @@ KeyMintDevice::signCertificate(const std::vector<KeyParameter>& keyParams,
         [&](const uint8_t* data, size_t len) {
             std::vector<uint8_t> dataVec(data, data + len);
             std::vector<KeyParameter> kps = {
-                KMV1::makeKeyParameter(KMV1::TAG_PADDING, origPadding),
                 KMV1::makeKeyParameter(KMV1::TAG_DIGEST, origDigest),
             };
+            if (algorithm == KMV1::Algorithm::RSA) {
+                kps.push_back(KMV1::makeKeyParameter(KMV1::TAG_PADDING, origPadding));
+            }
             BeginResult beginResult;
             auto error = begin(KeyPurpose::SIGN, keyBlob, kps, HardwareAuthToken(), &beginResult);
             if (!error.isOk()) {
