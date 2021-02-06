@@ -83,3 +83,25 @@ aidl_interface {
         }
     },
 }
+
+aidl_interface {
+    name: "android.security.remoteprovisioning",
+    srcs: [ "android/security/remoteprovisioning/*.aidl" ],
+    imports: [
+        "android.hardware.security.keymint",
+    ],
+    unstable: true,
+    backend: {
+        java: {
+            enabled: true,
+            sdk_version: "module_current",
+            platform_apis: true,
+        },
+        ndk: {
+            enabled: true,
+        },
+        rust: {
+            enabled: true,
+        },
+    },
+}
