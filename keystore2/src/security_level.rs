@@ -309,7 +309,11 @@ impl KeystoreSecurityLevel {
         })
     }
 
-    fn add_certificate_parameters(uid: u32, params: &[KeyParameter]) -> Result<Vec<KeyParameter>> {
+    fn add_certificate_parameters(
+        uid: u32,
+        params: &[KeyParameter],
+        key: &KeyDescriptor,
+    ) -> Result<Vec<KeyParameter>> {
         let mut result = params.to_vec();
         // If there is an attestation challenge we need to get an application id.
         if params.iter().any(|kp| kp.tag == Tag::ATTESTATION_CHALLENGE) {
@@ -320,6 +324,13 @@ impl KeystoreSecurityLevel {
                 tag: Tag::ATTESTATION_APPLICATION_ID,
                 value: KeyParameterValue::Blob(aaid),
             });
+        }
+
+        if params.iter().any(|kp| kp.tag == Tag::INCLUDE_UNIQUE_ID) {
+            check_key_permission(KeyPerm::gen_unique_id(), key, &None).context(concat!(
+                "In add_certificate_parameters: ",
+                "Caller does not have the permission for device unique attestation."
+            ))?;
         }
 
         // If we are generating/importing an asymmetric key, we need to make sure
@@ -372,7 +383,7 @@ impl KeystoreSecurityLevel {
         // generate_key requires the rebind permission.
         check_key_permission(KeyPerm::rebind(), &key, &None).context("In generate_key.")?;
 
-        let params = Self::add_certificate_parameters(caller_uid, params)
+        let params = Self::add_certificate_parameters(caller_uid, params, &key)
             .context("In generate_key: Trying to get aaid.")?;
 
         let km_dev: Box<dyn IKeyMintDevice> = self.keymint.get_interface()?;
@@ -412,7 +423,7 @@ impl KeystoreSecurityLevel {
         // import_key requires the rebind permission.
         check_key_permission(KeyPerm::rebind(), &key, &None).context("In import_key.")?;
 
-        let params = Self::add_certificate_parameters(caller_uid, params)
+        let params = Self::add_certificate_parameters(caller_uid, params, &key)
             .context("In import_key: Trying to get aaid.")?;
 
         let format = params
