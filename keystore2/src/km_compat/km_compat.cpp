@@ -134,6 +134,20 @@ bool isKeyCreationParameter(const KMV1::KeyParameter& param) {
     }
 }
 
+/*
+ * Returns true if the parameter is not understood by KM 4.1 and older but can be enforced by
+ * Keystore. These parameters need to be included in the returned KeyCharacteristics, but will not
+ * be passed to the legacy backend.
+ */
+bool isNewAndKeystoreEnforceable(const KMV1::KeyParameter& param) {
+    switch (param.tag) {
+    case KMV1::Tag::USAGE_COUNT_LIMIT:
+        return true;
+    default:
+        return false;
+    }
+}
+
 std::vector<KMV1::KeyParameter>
 extractGenerationParams(const std::vector<KMV1::KeyParameter>& params) {
     std::vector<KMV1::KeyParameter> result;
@@ -145,6 +159,14 @@ std::vector<KMV1::KeyParameter>
 extractAttestationParams(const std::vector<KMV1::KeyParameter>& params) {
     std::vector<KMV1::KeyParameter> result;
     std::copy_if(params.begin(), params.end(), std::back_inserter(result), isAttestationParameter);
+    return result;
+}
+
+std::vector<KMV1::KeyParameter>
+extractNewAndKeystoreEnforceableParams(const std::vector<KMV1::KeyParameter>& params) {
+    std::vector<KMV1::KeyParameter> result;
+    std::copy_if(params.begin(), params.end(), std::back_inserter(result),
+                 isNewAndKeystoreEnforceable);
     return result;
 }
 
@@ -183,20 +205,27 @@ convertKeyParametersFromLegacy(const std::vector<V4_0_KeyParameter>& legacyKps) 
 }
 
 static std::vector<KeyCharacteristics>
-convertKeyCharacteristicsFromLegacy(KeyMintSecurityLevel securityLevel,
-                                    const V4_0_KeyCharacteristics& legacyKc) {
+processLegacyCharacteristics(KeyMintSecurityLevel securityLevel,
+                             const std::vector<KeyParameter>& genParams,
+                             const V4_0_KeyCharacteristics& legacyKc) {
+
+    KeyCharacteristics keystoreEnforced{KeyMintSecurityLevel::KEYSTORE,
+                                        convertKeyParametersFromLegacy(legacyKc.softwareEnforced)};
+
+    // Add all parameters that we know can be enforced by keystore but not by the legacy backend.
+    auto unsupported_requested = extractNewAndKeystoreEnforceableParams(genParams);
+    std::copy(unsupported_requested.begin(), unsupported_requested.end(),
+              std::back_insert_iterator(keystoreEnforced.authorizations));
+
     if (securityLevel == KeyMintSecurityLevel::SOFTWARE) {
-        CHECK(legacyKc.hardwareEnforced.size() > 0);
-        KeyCharacteristics keystoreEnforced{
-            KeyMintSecurityLevel::KEYSTORE,
-            convertKeyParametersFromLegacy(legacyKc.softwareEnforced)};
+        // If the security level of the backend is `software` we expect the hardware enforced list
+        // to be empty. Log a warning otherwise.
+        CHECK(legacyKc.hardwareEnforced.size() == 0);
         return {keystoreEnforced};
     }
 
     KeyCharacteristics hwEnforced{securityLevel,
                                   convertKeyParametersFromLegacy(legacyKc.hardwareEnforced)};
-    KeyCharacteristics keystoreEnforced{KeyMintSecurityLevel::KEYSTORE,
-                                        convertKeyParametersFromLegacy(legacyKc.softwareEnforced)};
     return {hwEnforced, keystoreEnforced};
 }
 
@@ -298,9 +327,9 @@ ScopedAStatus KeyMintDevice::addRngEntropy(const std::vector<uint8_t>& in_data) 
     return convertErrorCode(result);
 }
 
-ScopedAStatus KeyMintDevice::generateKey(const std::vector<KeyParameter>& in_keyParams,
+ScopedAStatus KeyMintDevice::generateKey(const std::vector<KeyParameter>& inKeyParams,
                                          KeyCreationResult* out_creationResult) {
-    auto legacyKeyGenParams = convertKeyParametersToLegacy(extractGenerationParams(in_keyParams));
+    auto legacyKeyGenParams = convertKeyParametersToLegacy(extractGenerationParams(inKeyParams));
     KMV1::ErrorCode errorCode;
     auto result = mDevice->generateKey(
         legacyKeyGenParams, [&](V4_0_ErrorCode error, const hidl_vec<uint8_t>& keyBlob,
@@ -308,14 +337,14 @@ ScopedAStatus KeyMintDevice::generateKey(const std::vector<KeyParameter>& in_key
             errorCode = convert(error);
             out_creationResult->keyBlob = keyBlob;
             out_creationResult->keyCharacteristics =
-                convertKeyCharacteristicsFromLegacy(securityLevel_, keyCharacteristics);
+                processLegacyCharacteristics(securityLevel_, inKeyParams, keyCharacteristics);
         });
     if (!result.isOk()) {
         LOG(ERROR) << __func__ << " transaction failed. " << result.description();
         return convertErrorCode(KMV1::ErrorCode::UNKNOWN_ERROR);
     }
     if (errorCode == KMV1::ErrorCode::OK) {
-        auto cert = getCertificate(in_keyParams, out_creationResult->keyBlob);
+        auto cert = getCertificate(inKeyParams, out_creationResult->keyBlob);
         if (std::holds_alternative<KMV1::ErrorCode>(cert)) {
             auto code = std::get<KMV1::ErrorCode>(cert);
             // We return OK in successful cases that do not generate a certificate.
@@ -330,11 +359,11 @@ ScopedAStatus KeyMintDevice::generateKey(const std::vector<KeyParameter>& in_key
     return convertErrorCode(errorCode);
 }
 
-ScopedAStatus KeyMintDevice::importKey(const std::vector<KeyParameter>& in_inKeyParams,
+ScopedAStatus KeyMintDevice::importKey(const std::vector<KeyParameter>& inKeyParams,
                                        KeyFormat in_inKeyFormat,
                                        const std::vector<uint8_t>& in_inKeyData,
                                        KeyCreationResult* out_creationResult) {
-    auto legacyKeyGENParams = convertKeyParametersToLegacy(extractGenerationParams(in_inKeyParams));
+    auto legacyKeyGENParams = convertKeyParametersToLegacy(extractGenerationParams(inKeyParams));
     auto legacyKeyFormat = convertKeyFormatToLegacy(in_inKeyFormat);
     KMV1::ErrorCode errorCode;
     auto result = mDevice->importKey(legacyKeyGENParams, legacyKeyFormat, in_inKeyData,
@@ -343,15 +372,15 @@ ScopedAStatus KeyMintDevice::importKey(const std::vector<KeyParameter>& in_inKey
                                          errorCode = convert(error);
                                          out_creationResult->keyBlob = keyBlob;
                                          out_creationResult->keyCharacteristics =
-                                             convertKeyCharacteristicsFromLegacy(
-                                                 securityLevel_, keyCharacteristics);
+                                             processLegacyCharacteristics(
+                                                 securityLevel_, inKeyParams, keyCharacteristics);
                                      });
     if (!result.isOk()) {
         LOG(ERROR) << __func__ << " transaction failed. " << result.description();
         return convertErrorCode(KMV1::ErrorCode::UNKNOWN_ERROR);
     }
     if (errorCode == KMV1::ErrorCode::OK) {
-        auto cert = getCertificate(in_inKeyParams, out_creationResult->keyBlob);
+        auto cert = getCertificate(inKeyParams, out_creationResult->keyBlob);
         if (std::holds_alternative<KMV1::ErrorCode>(cert)) {
             auto code = std::get<KMV1::ErrorCode>(cert);
             // We return OK in successful cases that do not generate a certificate.
@@ -381,7 +410,7 @@ ScopedAStatus KeyMintDevice::importWrappedKey(
             errorCode = convert(error);
             out_creationResult->keyBlob = keyBlob;
             out_creationResult->keyCharacteristics =
-                convertKeyCharacteristicsFromLegacy(securityLevel_, keyCharacteristics);
+                processLegacyCharacteristics(securityLevel_, {}, keyCharacteristics);
         });
     if (!result.isOk()) {
         LOG(ERROR) << __func__ << " transaction failed. " << result.description();
