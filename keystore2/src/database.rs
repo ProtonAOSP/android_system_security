@@ -60,6 +60,11 @@ use android_hardware_security_secureclock::aidl::android::hardware::security::se
 use android_system_keystore2::aidl::android::system::keystore2::{
     Domain::Domain, KeyDescriptor::KeyDescriptor,
 };
+use android_security_remoteprovisioning::aidl::android::security::remoteprovisioning::{
+    AttestationPoolStatus::AttestationPoolStatus,
+};
+
+use keystore2_crypto::ZVec;
 use lazy_static::lazy_static;
 use log::error;
 #[cfg(not(test))]
@@ -72,12 +77,14 @@ use rusqlite::{
     types::{FromSqlError, Value, ValueRef},
     Connection, OptionalExtension, ToSql, Transaction, TransactionBehavior, NO_PARAMS,
 };
+
 use std::{
     collections::{HashMap, HashSet},
     path::Path,
     sync::{Condvar, Mutex},
     time::{Duration, SystemTime},
 };
+
 #[cfg(test)]
 use tests::random;
 
@@ -102,6 +109,12 @@ impl_metadata!(
         CreationDate(DateTime) with accessor creation_date,
         /// Expiration date for attestation keys.
         AttestationExpirationDate(DateTime) with accessor attestation_expiration_date,
+        /// CBOR Blob that represents a COSE_Key and associated metadata needed for remote
+        /// provisioning
+        AttestationMacedPublicKey(Vec<u8>) with accessor attestation_maced_public_key,
+        /// Vector representing the raw public key so results from the server can be matched
+        /// to the right entry
+        AttestationRawPubKey(Vec<u8>) with accessor attestation_raw_pub_key,
         //  --- ADD NEW META DATA FIELDS HERE ---
         // For backwards compatibility add new entries only to
         // end of this list and above this comment.
@@ -480,7 +493,7 @@ impl Drop for KeyIdGuard {
 }
 
 /// This type represents a certificate and certificate chain entry for a key.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct CertificateInfo {
     cert: Option<Vec<u8>>,
     cert_chain: Option<Vec<u8>>,
@@ -501,6 +514,14 @@ impl CertificateInfo {
     pub fn take_cert_chain(&mut self) -> Option<Vec<u8>> {
         self.cert_chain.take()
     }
+}
+
+/// This type represents a certificate chain with a private key corresponding to the leaf
+/// certificate. TODO(jbires): This will be used in a follow-on CL, for now it's used in the tests.
+#[allow(dead_code)]
+pub struct CertificateChain {
+    private_key: ZVec,
+    cert_chain: ZVec,
 }
 
 /// This type represents a Keystore 2.0 key entry.
@@ -1061,6 +1082,40 @@ impl KeystoreDB {
         ))
     }
 
+    /// Creates a new attestation key entry and allocates a new randomized id for the new key.
+    /// The key id gets associated with a domain and namespace later but not with an alias. The
+    /// alias will be used to denote if a key has been signed as each key can only be bound to one
+    /// domain and namespace pairing so there is no need to use them as a value for indexing into
+    /// a key.
+    pub fn create_attestation_key_entry(
+        &mut self,
+        maced_public_key: &[u8],
+        raw_public_key: &[u8],
+        private_key: &[u8],
+        km_uuid: &Uuid,
+    ) -> Result<()> {
+        self.with_transaction(TransactionBehavior::Immediate, |tx| {
+            let key_id = KEY_ID_LOCK.get(
+                Self::insert_with_retry(|id| {
+                    tx.execute(
+                        "INSERT into persistent.keyentry
+                            (id, key_type, domain, namespace, alias, state, km_uuid)
+                            VALUES(?, ?, NULL, NULL, NULL, ?, ?);",
+                        params![id, KeyType::Attestation, KeyLifeCycle::Live, km_uuid],
+                    )
+                })
+                .context("In create_key_entry")?,
+            );
+            Self::set_blob_internal(&tx, key_id.0, SubComponentType::KEY_BLOB, Some(private_key))?;
+            let mut metadata = KeyMetaData::new();
+            metadata.add(KeyMetaEntry::AttestationMacedPublicKey(maced_public_key.to_vec()));
+            metadata.add(KeyMetaEntry::AttestationRawPubKey(raw_public_key.to_vec()));
+            metadata.store_in_db(key_id.0, &tx)?;
+            Ok(())
+        })
+        .context("In create_attestation_key_entry")
+    }
+
     /// Set a new blob and associates it with the given key id. Each blob
     /// has a sub component type.
     /// Each key can have one of each sub component type associated. If more
@@ -1161,6 +1216,343 @@ impl KeystoreDB {
             metadata.store_in_db(key_id.0, &tx)
         })
         .context("In insert_key_metadata.")
+    }
+
+    /// Stores a signed certificate chain signed by a remote provisioning server, keyed
+    /// on the public key.
+    pub fn store_signed_attestation_certificate_chain(
+        &mut self,
+        raw_public_key: &[u8],
+        cert_chain: &[u8],
+        expiration_date: i64,
+        km_uuid: &Uuid,
+    ) -> Result<()> {
+        self.with_transaction(TransactionBehavior::Immediate, |tx| {
+            let mut stmt = tx
+                .prepare(
+                    "SELECT keyentryid
+                    FROM persistent.keymetadata
+                    WHERE tag = ? AND data = ? AND keyentryid IN
+                    (SELECT id
+                     FROM persistent.keyentry
+                     WHERE
+                        alias IS NULL AND
+                        domain IS NULL AND
+                        namespace IS NULL AND
+                        key_type = ? AND
+                        km_uuid = ?);",
+                )
+                .context("Failed to store attestation certificate chain.")?;
+            let mut rows = stmt
+                .query(params![
+                    KeyMetaData::AttestationRawPubKey,
+                    raw_public_key,
+                    KeyType::Attestation,
+                    km_uuid
+                ])
+                .context("Failed to fetch keyid")?;
+            let key_id = db_utils::with_rows_extract_one(&mut rows, |row| {
+                row.map_or_else(|| Err(KsError::Rc(ResponseCode::KEY_NOT_FOUND)), Ok)?
+                    .get(0)
+                    .context("Failed to unpack id.")
+            })
+            .context("Failed to get key_id.")?;
+            let num_updated = tx
+                .execute(
+                    "UPDATE persistent.keyentry
+                    SET alias = ?
+                    WHERE id = ?;",
+                    params!["signed", key_id],
+                )
+                .context("Failed to update alias.")?;
+            if num_updated != 1 {
+                return Err(KsError::sys()).context("Alias not updated for the key.");
+            }
+            let mut metadata = KeyMetaData::new();
+            metadata.add(KeyMetaEntry::AttestationExpirationDate(DateTime::from_millis_epoch(
+                expiration_date,
+            )));
+            metadata.store_in_db(key_id, &tx).context("Failed to insert key metadata.")?;
+            Self::set_blob_internal(&tx, key_id, SubComponentType::CERT_CHAIN, Some(cert_chain))
+                .context("Failed to insert cert chain")?;
+            Ok(())
+        })
+        .context("In store_signed_attestation_certificate_chain: ")
+    }
+
+    /// Assigns the next unassigned attestation key to a domain/namespace combo that does not
+    /// currently have a key assigned to it.
+    pub fn assign_attestation_key(
+        &mut self,
+        domain: Domain,
+        namespace: i64,
+        km_uuid: &Uuid,
+    ) -> Result<()> {
+        match domain {
+            Domain::APP | Domain::SELINUX => {}
+            _ => {
+                return Err(KsError::sys()).context(format!(
+                    concat!(
+                        "In assign_attestation_key: Domain {:?} ",
+                        "must be either App or SELinux.",
+                    ),
+                    domain
+                ));
+            }
+        }
+        self.with_transaction(TransactionBehavior::Immediate, |tx| {
+            let result = tx
+                .execute(
+                    "UPDATE persistent.keyentry
+                        SET domain=?1, namespace=?2
+                        WHERE
+                            id =
+                                (SELECT MIN(id)
+                                FROM persistent.keyentry
+                                WHERE ALIAS IS NOT NULL
+                                    AND domain IS NULL
+                                    AND key_type IS ?3
+                                    AND state IS ?4
+                                    AND km_uuid IS ?5)
+                            AND
+                                (SELECT COUNT(*)
+                                FROM persistent.keyentry
+                                WHERE domain=?1
+                                    AND namespace=?2
+                                    AND key_type IS ?3
+                                    AND state IS ?4
+                                    AND km_uuid IS ?5) = 0;",
+                    params![
+                        domain.0 as u32,
+                        namespace,
+                        KeyType::Attestation,
+                        KeyLifeCycle::Live,
+                        km_uuid,
+                    ],
+                )
+                .context("Failed to assign attestation key")?;
+            if result != 1 {
+                return Err(KsError::sys()).context(format!(
+                    "Expected to update a single entry but instead updated {}.",
+                    result
+                ));
+            }
+            Ok(())
+        })
+        .context("In assign_attestation_key: ")
+    }
+
+    /// Retrieves num_keys number of attestation keys that have not yet been signed by a remote
+    /// provisioning server, or the maximum number available if there are not num_keys number of
+    /// entries in the table.
+    pub fn fetch_unsigned_attestation_keys(
+        &mut self,
+        num_keys: i32,
+        km_uuid: &Uuid,
+    ) -> Result<Vec<Vec<u8>>> {
+        self.with_transaction(TransactionBehavior::Immediate, |tx| {
+            let mut stmt = tx
+                .prepare(
+                    "SELECT data
+                    FROM persistent.keymetadata
+                    WHERE tag = ? AND keyentryid IN
+                        (SELECT id
+                        FROM persistent.keyentry
+                        WHERE
+                            alias IS NULL AND
+                            domain IS NULL AND
+                            namespace IS NULL AND
+                            key_type = ? AND
+                            km_uuid = ?
+                        LIMIT ?);",
+                )
+                .context("Failed to prepare statement")?;
+            let rows = stmt
+                .query_map(
+                    params![
+                        KeyMetaData::AttestationMacedPublicKey,
+                        KeyType::Attestation,
+                        km_uuid,
+                        num_keys
+                    ],
+                    |row| Ok(row.get(0)?),
+                )?
+                .collect::<rusqlite::Result<Vec<Vec<u8>>>>()
+                .context("Failed to execute statement")?;
+            Ok(rows)
+        })
+        .context("In fetch_unsigned_attestation_keys")
+    }
+
+    /// Removes any keys that have expired as of the current time. Returns the number of keys
+    /// marked unreferenced that are bound to be garbage collected.
+    pub fn delete_expired_attestation_keys(&mut self) -> Result<i32> {
+        self.with_transaction(TransactionBehavior::Immediate, |tx| {
+            let mut stmt = tx
+                .prepare(
+                    "SELECT keyentryid, data
+                     FROM persistent.keymetadata
+                     WHERE tag = ? AND keyentryid IN
+                         (SELECT id
+                         FROM persistent.keyentry
+                         WHERE key_type = ?);",
+                )
+                .context("Failed to prepare query")?;
+            let key_ids_to_check = stmt
+                .query_map(
+                    params![KeyMetaData::AttestationExpirationDate, KeyType::Attestation],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )?
+                .collect::<rusqlite::Result<Vec<(i64, DateTime)>>>()
+                .context("Failed to get date metadata")?;
+            let curr_time = DateTime::from_millis_epoch(
+                SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)?.as_millis() as i64,
+            );
+            let mut num_deleted = 0;
+            for id in key_ids_to_check.iter().filter(|kt| kt.1 < curr_time).map(|kt| kt.0) {
+                if Self::mark_unreferenced(&tx, id)? {
+                    num_deleted += 1;
+                }
+            }
+            Ok(num_deleted)
+        })
+        .context("In delete_expired_attestation_keys: ")
+    }
+
+    /// Counts the number of keys that will expire by the provided epoch date and the number of
+    /// keys not currently assigned to a domain.
+    pub fn get_attestation_pool_status(
+        &mut self,
+        date: i64,
+        km_uuid: &Uuid,
+    ) -> Result<AttestationPoolStatus> {
+        self.with_transaction(TransactionBehavior::Immediate, |tx| {
+            let mut stmt = tx.prepare(
+                "SELECT data
+                 FROM persistent.keymetadata
+                 WHERE tag = ? AND keyentryid IN
+                     (SELECT id
+                      FROM persistent.keyentry
+                      WHERE alias IS NOT NULL
+                            AND key_type = ?
+                            AND km_uuid = ?
+                            AND state = ?);",
+            )?;
+            let times = stmt
+                .query_map(
+                    params![
+                        KeyMetaData::AttestationExpirationDate,
+                        KeyType::Attestation,
+                        km_uuid,
+                        KeyLifeCycle::Live
+                    ],
+                    |row| Ok(row.get(0)?),
+                )?
+                .collect::<rusqlite::Result<Vec<DateTime>>>()
+                .context("Failed to execute metadata statement")?;
+            let expiring =
+                times.iter().filter(|time| time < &&DateTime::from_millis_epoch(date)).count()
+                    as i32;
+            stmt = tx.prepare(
+                "SELECT alias, domain
+                 FROM persistent.keyentry
+                 WHERE key_type = ? AND km_uuid = ? AND state = ?;",
+            )?;
+            let rows = stmt
+                .query_map(params![KeyType::Attestation, km_uuid, KeyLifeCycle::Live], |row| {
+                    Ok((row.get(0)?, row.get(1)?))
+                })?
+                .collect::<rusqlite::Result<Vec<(Option<String>, Option<u32>)>>>()
+                .context("Failed to execute keyentry statement")?;
+            let mut unassigned = 0i32;
+            let mut attested = 0i32;
+            let total = rows.len() as i32;
+            for (alias, domain) in rows {
+                match (alias, domain) {
+                    (Some(_alias), None) => {
+                        attested += 1;
+                        unassigned += 1;
+                    }
+                    (Some(_alias), Some(_domain)) => {
+                        attested += 1;
+                    }
+                    _ => {}
+                }
+            }
+            Ok(AttestationPoolStatus { expiring, unassigned, attested, total })
+        })
+        .context("In get_attestation_pool_status: ")
+    }
+
+    /// Fetches the private key and corresponding certificate chain assigned to a
+    /// domain/namespace pair. Will either return nothing if the domain/namespace is
+    /// not assigned, or one CertificateChain.
+    pub fn retrieve_attestation_key_and_cert_chain(
+        &mut self,
+        domain: Domain,
+        namespace: i64,
+        km_uuid: &Uuid,
+    ) -> Result<Option<CertificateChain>> {
+        match domain {
+            Domain::APP | Domain::SELINUX => {}
+            _ => {
+                return Err(KsError::sys())
+                    .context(format!("Domain {:?} must be either App or SELinux.", domain));
+            }
+        }
+        let mut stmt = self.conn.prepare(
+            "SELECT subcomponent_type, blob
+             FROM persistent.blobentry
+             WHERE keyentryid IN
+                (SELECT id
+                 FROM persistent.keyentry
+                 WHERE key_type = ?
+                       AND domain = ?
+                       AND namespace = ?
+                       AND state = ?
+                       AND km_uuid = ?);",
+        )?;
+        let rows = stmt
+            .query_map(
+                params![
+                    KeyType::Attestation,
+                    domain.0 as u32,
+                    namespace,
+                    KeyLifeCycle::Live,
+                    km_uuid
+                ],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?
+            .collect::<rusqlite::Result<Vec<(SubComponentType, Vec<u8>)>>>()
+            .context("In retrieve_attestation_key_and_cert_chain: query failed.")?;
+        if rows.is_empty() {
+            return Ok(None);
+        } else if rows.len() != 2 {
+            return Err(KsError::sys()).context(format!(
+                concat!(
+                "In retrieve_attestation_key_and_cert_chain: Expected to get a single attestation",
+                "key chain but instead got {}."),
+                rows.len()
+            ));
+        }
+        let mut km_blob: Vec<u8> = Vec::new();
+        let mut cert_chain_blob: Vec<u8> = Vec::new();
+        for row in rows {
+            let sub_type: SubComponentType = row.0;
+            match sub_type {
+                SubComponentType::KEY_BLOB => {
+                    km_blob = row.1;
+                }
+                SubComponentType::CERT_CHAIN => {
+                    cert_chain_blob = row.1;
+                }
+                _ => Err(KsError::sys()).context("Unknown or incorrect subcomponent type.")?,
+            }
+        }
+        Ok(Some(CertificateChain {
+            private_key: ZVec::try_from(km_blob)?,
+            cert_chain: ZVec::try_from(cert_chain_blob)?,
+        }))
     }
 
     /// Updates the alias column of the given key id `newid` with the given alias,
@@ -2222,6 +2614,148 @@ mod tests {
     }
 
     #[test]
+    fn test_add_unsigned_key() -> Result<()> {
+        let mut db = new_test_db()?;
+        let public_key: Vec<u8> = vec![0x01, 0x02, 0x03];
+        let private_key: Vec<u8> = vec![0x04, 0x05, 0x06];
+        let raw_public_key: Vec<u8> = vec![0x07, 0x08, 0x09];
+        db.create_attestation_key_entry(
+            &public_key,
+            &raw_public_key,
+            &private_key,
+            &KEYSTORE_UUID,
+        )?;
+        let keys = db.fetch_unsigned_attestation_keys(5, &KEYSTORE_UUID)?;
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0], public_key);
+        Ok(())
+    }
+
+    #[test]
+    fn test_store_signed_attestation_certificate_chain() -> Result<()> {
+        let mut db = new_test_db()?;
+        let expiration_date: i64 = 20;
+        let namespace: i64 = 30;
+        let base_byte: u8 = 1;
+        let loaded_values =
+            load_attestation_key_pool(&mut db, expiration_date, namespace, base_byte)?;
+        let chain =
+            db.retrieve_attestation_key_and_cert_chain(Domain::APP, namespace, &KEYSTORE_UUID)?;
+        assert_eq!(true, chain.is_some());
+        let cert_chain = chain.unwrap();
+        assert_eq!(cert_chain.private_key.to_vec(), loaded_values[2]);
+        assert_eq!(cert_chain.cert_chain.to_vec(), loaded_values[1]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_attestation_pool_status() -> Result<()> {
+        let mut db = new_test_db()?;
+        let namespace: i64 = 30;
+        load_attestation_key_pool(
+            &mut db, 10, /* expiration */
+            namespace, 0x01, /* base_byte */
+        )?;
+        load_attestation_key_pool(&mut db, 20 /* expiration */, namespace + 1, 0x02)?;
+        load_attestation_key_pool(&mut db, 40 /* expiration */, namespace + 2, 0x03)?;
+        let mut status = db.get_attestation_pool_status(9 /* expiration */, &KEYSTORE_UUID)?;
+        assert_eq!(status.expiring, 0);
+        assert_eq!(status.attested, 3);
+        assert_eq!(status.unassigned, 0);
+        assert_eq!(status.total, 3);
+        assert_eq!(
+            db.get_attestation_pool_status(15 /* expiration */, &KEYSTORE_UUID)?.expiring,
+            1
+        );
+        assert_eq!(
+            db.get_attestation_pool_status(25 /* expiration */, &KEYSTORE_UUID)?.expiring,
+            2
+        );
+        assert_eq!(
+            db.get_attestation_pool_status(60 /* expiration */, &KEYSTORE_UUID)?.expiring,
+            3
+        );
+        let public_key: Vec<u8> = vec![0x01, 0x02, 0x03];
+        let private_key: Vec<u8> = vec![0x04, 0x05, 0x06];
+        let raw_public_key: Vec<u8> = vec![0x07, 0x08, 0x09];
+        let cert_chain: Vec<u8> = vec![0x0a, 0x0b, 0x0c];
+        db.create_attestation_key_entry(
+            &public_key,
+            &raw_public_key,
+            &private_key,
+            &KEYSTORE_UUID,
+        )?;
+        status = db.get_attestation_pool_status(0 /* expiration */, &KEYSTORE_UUID)?;
+        assert_eq!(status.attested, 3);
+        assert_eq!(status.unassigned, 0);
+        assert_eq!(status.total, 4);
+        db.store_signed_attestation_certificate_chain(
+            &raw_public_key,
+            &cert_chain,
+            20,
+            &KEYSTORE_UUID,
+        )?;
+        status = db.get_attestation_pool_status(0 /* expiration */, &KEYSTORE_UUID)?;
+        assert_eq!(status.attested, 4);
+        assert_eq!(status.unassigned, 1);
+        assert_eq!(status.total, 4);
+        Ok(())
+    }
+
+    #[test]
+    fn test_remove_expired_certs() -> Result<()> {
+        let mut db = new_test_db()?;
+        let expiration_date: i64 =
+            SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)?.as_millis() as i64 + 10000;
+        let namespace: i64 = 30;
+        let namespace_del1: i64 = 45;
+        let namespace_del2: i64 = 60;
+        let entry_values = load_attestation_key_pool(
+            &mut db,
+            expiration_date,
+            namespace,
+            0x01, /* base_byte */
+        )?;
+        load_attestation_key_pool(&mut db, 45, namespace_del1, 0x02)?;
+        load_attestation_key_pool(&mut db, 60, namespace_del2, 0x03)?;
+        assert_eq!(db.delete_expired_attestation_keys()?, 2);
+
+        let mut cert_chain =
+            db.retrieve_attestation_key_and_cert_chain(Domain::APP, namespace, &KEYSTORE_UUID)?;
+        assert_eq!(true, cert_chain.is_some());
+        let value = cert_chain.unwrap();
+        assert_eq!(entry_values[1], value.cert_chain.to_vec());
+        assert_eq!(entry_values[2], value.private_key.to_vec());
+
+        cert_chain = db.retrieve_attestation_key_and_cert_chain(
+            Domain::APP,
+            namespace_del1,
+            &KEYSTORE_UUID,
+        )?;
+        assert_eq!(false, cert_chain.is_some());
+        cert_chain = db.retrieve_attestation_key_and_cert_chain(
+            Domain::APP,
+            namespace_del2,
+            &KEYSTORE_UUID,
+        )?;
+        assert_eq!(false, cert_chain.is_some());
+
+        let mut option_entry = db.get_unreferenced_key()?;
+        assert_eq!(true, option_entry.is_some());
+        let (key_guard, _) = option_entry.unwrap();
+        db.purge_key_entry(key_guard)?;
+
+        option_entry = db.get_unreferenced_key()?;
+        assert_eq!(true, option_entry.is_some());
+        let (key_guard, _) = option_entry.unwrap();
+        db.purge_key_entry(key_guard)?;
+
+        option_entry = db.get_unreferenced_key()?;
+        assert_eq!(false, option_entry.is_some());
+        Ok(())
+    }
+
+    #[test]
     fn test_rebind_alias() -> Result<()> {
         fn extractor(
             ke: &KeyEntryRow,
@@ -3113,6 +3647,32 @@ mod tests {
             })?
             .map(|r| r.context("Could not read keyentry row."))
             .collect::<Result<Vec<_>>>()
+    }
+
+    fn load_attestation_key_pool(
+        db: &mut KeystoreDB,
+        expiration_date: i64,
+        namespace: i64,
+        base_byte: u8,
+    ) -> Result<Vec<Vec<u8>>> {
+        let mut chain: Vec<Vec<u8>> = Vec::new();
+        let public_key: Vec<u8> = vec![base_byte, 0x02 * base_byte];
+        let cert_chain: Vec<u8> = vec![0x03 * base_byte, 0x04 * base_byte];
+        let priv_key: Vec<u8> = vec![0x05 * base_byte, 0x06 * base_byte];
+        let raw_public_key: Vec<u8> = vec![0x0b * base_byte, 0x0c * base_byte];
+        db.create_attestation_key_entry(&public_key, &raw_public_key, &priv_key, &KEYSTORE_UUID)?;
+        db.store_signed_attestation_certificate_chain(
+            &raw_public_key,
+            &cert_chain,
+            expiration_date,
+            &KEYSTORE_UUID,
+        )?;
+        db.assign_attestation_key(Domain::APP, namespace, &KEYSTORE_UUID)?;
+        chain.push(public_key);
+        chain.push(cert_chain);
+        chain.push(priv_key);
+        chain.push(raw_public_key);
+        Ok(chain)
     }
 
     // Note: The parameters and SecurityLevel associations are nonsensical. This
