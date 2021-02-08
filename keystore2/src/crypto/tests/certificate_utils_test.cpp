@@ -173,8 +173,8 @@ TEST_P(CertificateUtilsWithEcCurve, CertSigningWithCallbackEC) {
         .isCertificationKey = true,
     };
 
-    auto certV = makeCert(pkey.get(), 1, "Me", now_ms - kValidity, now_ms + kValidity,
-                          true /* subject key id extension */, keyUsage, bcons);
+    auto certV = makeCert(pkey.get(), std::nullopt, std::nullopt, now_ms - kValidity,
+                          now_ms + kValidity, true /* subject key id extension */, keyUsage, bcons);
     ASSERT_TRUE(std::holds_alternative<X509_Ptr>(certV));
     auto& cert = std::get<X509_Ptr>(certV);
     ASSERT_TRUE(!setIssuer(cert.get(), cert.get(), true));
@@ -272,8 +272,8 @@ TEST_P(CertificateUtilsWithRsa, CertSigningWithCallbackRsa) {
         .isCertificationKey = true,
     };
 
-    auto certV = makeCert(pkey.get(), 1, "Me", now_ms - kValidity, now_ms + kValidity,
-                          true /* subject key id extension */, keyUsage, bcons);
+    auto certV = makeCert(pkey.get(), std::nullopt, std::nullopt, now_ms - kValidity,
+                          now_ms + kValidity, true /* subject key id extension */, keyUsage, bcons);
     ASSERT_TRUE(std::holds_alternative<X509_Ptr>(certV));
     auto& cert = std::get<X509_Ptr>(certV);
     ASSERT_TRUE(!setIssuer(cert.get(), cert.get(), true));

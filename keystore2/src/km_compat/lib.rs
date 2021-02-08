@@ -76,6 +76,10 @@ mod tests {
         creation_result
     }
 
+    // Per RFC 5280 4.1.2.5, an undefined expiration (not-after) field should be set to GeneralizedTime
+    // 999912312359559, which is 253402300799000 ms from Jan 1, 1970.
+    const UNDEFINED_NOT_AFTER: i64 = 253402300799000i64;
+
     fn generate_rsa_key(legacy: &dyn IKeyMintDevice, encrypt: bool, attest: bool) -> Vec<u8> {
         let mut kps = vec![
             KeyParameter {
@@ -96,6 +100,14 @@ mod tests {
             KeyParameter {
                 tag: Tag::PURPOSE,
                 value: KeyParameterValue::KeyPurpose(KeyPurpose::SIGN),
+            },
+            KeyParameter {
+                tag: Tag::CERTIFICATE_NOT_BEFORE,
+                value: KeyParameterValue::DateTime(0),
+            },
+            KeyParameter {
+                tag: Tag::CERTIFICATE_NOT_AFTER,
+                value: KeyParameterValue::DateTime(UNDEFINED_NOT_AFTER),
             },
         ];
         if encrypt {
