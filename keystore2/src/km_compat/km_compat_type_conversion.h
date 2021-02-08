@@ -734,7 +734,11 @@ static V4_0::KeyParameter convertKeyParameterToLegacy(const KMV1::KeyParameter& 
         }
         break;
     case KMV1::Tag::RSA_OAEP_MGF_DIGEST:
-        // Does not exist in KM < KeyMint 1.0.
+    case KMV1::Tag::CERTIFICATE_SERIAL:
+    case KMV1::Tag::CERTIFICATE_SUBJECT:
+    case KMV1::Tag::CERTIFICATE_NOT_BEFORE:
+    case KMV1::Tag::CERTIFICATE_NOT_AFTER:
+        // These tags do not exist in KM < KeyMint 1.0.
         break;
     }
     return V4_0::KeyParameter{.tag = V4_0::Tag::INVALID};

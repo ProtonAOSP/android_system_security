@@ -30,6 +30,8 @@
 #include <keymasterV4_1/Keymaster3.h>
 #include <keymasterV4_1/Keymaster4.h>
 
+#include <chrono>
+
 #include "certificate_utils.h"
 
 using ::aidl::android::hardware::security::keymint::Algorithm;
@@ -49,6 +51,9 @@ using V4_0_VerificationToken = ::android::hardware::keymaster::V4_0::Verificatio
 namespace V4_0 = ::android::hardware::keymaster::V4_0;
 namespace V4_1 = ::android::hardware::keymaster::V4_1;
 namespace KMV1 = ::aidl::android::hardware::security::keymint;
+
+using namespace std::chrono_literals;
+using std::chrono::duration_cast;
 
 // Utility functions
 
@@ -579,21 +584,34 @@ makeCert(::android::sp<Keymaster> mDevice, const std::vector<KeyParameter>& keyP
     CBS cbs;
     CBS_init(&cbs, key.data(), key.size());
     auto pkey = EVP_parse_public_key(&cbs);
+
     // makeCert
-    // TODO: Get the serial and subject from key params once the tags are added.  Also use new tags
-    // for the two datetime parameters once we get those.
+    std::optional<std::reference_wrapper<const std::vector<uint8_t>>> subject;
+    if (auto blob = getParam(keyParams, KMV1::TAG_CERTIFICATE_SUBJECT)) {
+        subject = *blob;
+    }
+
+    std::optional<std::reference_wrapper<const std::vector<uint8_t>>> serial;
+    if (auto blob = getParam(keyParams, KMV1::TAG_CERTIFICATE_SERIAL)) {
+        serial = *blob;
+    }
 
     uint64_t activation = 0;
-    if (auto date = getParam(keyParams, KMV1::TAG_ACTIVE_DATETIME)) {
+    if (auto date = getParam(keyParams, KMV1::TAG_CERTIFICATE_NOT_BEFORE)) {
         activation = *date;
+    } else {
+        return KMV1::ErrorCode::MISSING_NOT_BEFORE;
     }
-    uint64_t expiration = std::numeric_limits<uint64_t>::max();
-    if (auto date = getParam(keyParams, KMV1::TAG_USAGE_EXPIRE_DATETIME)) {
+
+    uint64_t expiration;
+    if (auto date = getParam(keyParams, KMV1::TAG_CERTIFICATE_NOT_AFTER)) {
         expiration = *date;
+    } else {
+        return KMV1::ErrorCode::MISSING_NOT_AFTER;
     }
 
     auto certOrError = keystore::makeCert(
-        pkey, 42, "TODO", activation, expiration, false /* intentionally left blank */,
+        pkey, serial, subject, activation, expiration, false /* intentionally left blank */,
         std::nullopt /* intentionally left blank */, std::nullopt /* intentionally left blank */);
     if (std::holds_alternative<keystore::CertUtilsError>(certOrError)) {
         LOG(ERROR) << __func__ << ": Failed to make certificate";
