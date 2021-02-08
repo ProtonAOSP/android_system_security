@@ -58,6 +58,7 @@ rust_test {
     srcs: ["src/lib.rs"],
     test_suites: ["general-tests"],
     auto_gen_config: true,
+    compile_multilib: "first",
     rustlibs: [
         "android.hardware.security.keymint-V1-rust",
         "android.hardware.security.secureclock-V1-rust",
