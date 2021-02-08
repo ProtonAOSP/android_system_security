@@ -68,6 +68,10 @@ pub struct KeystoreSecurityLevel {
 // Blob of 32 zeroes used as empty masking key.
 static ZERO_BLOB_32: &[u8] = &[0; 32];
 
+// Per RFC 5280 4.1.2.5, an undefined expiration (not-after) field should be set to GeneralizedTime
+// 999912312359559, which is 253402300799000 ms from Jan 1, 1970.
+const UNDEFINED_NOT_AFTER: i64 = 253402300799000i64;
+
 impl KeystoreSecurityLevel {
     /// Creates a new security level instance wrapped in a
     /// BnKeystoreSecurityLevel proxy object. It also
@@ -305,16 +309,38 @@ impl KeystoreSecurityLevel {
         })
     }
 
-    fn add_attestation_parameters(uid: u32, params: &[KeyParameter]) -> Result<Vec<KeyParameter>> {
+    fn add_certificate_parameters(uid: u32, params: &[KeyParameter]) -> Result<Vec<KeyParameter>> {
         let mut result = params.to_vec();
+        // If there is an attestation challenge we need to get an application id.
         if params.iter().any(|kp| kp.tag == Tag::ATTESTATION_CHALLENGE) {
             let aaid = keystore2_aaid::get_aaid(uid).map_err(|e| {
-                anyhow!(format!("In add_attestation_parameters: get_aaid returned status {}.", e))
+                anyhow!(format!("In add_certificate_parameters: get_aaid returned status {}.", e))
             })?;
             result.push(KeyParameter {
                 tag: Tag::ATTESTATION_APPLICATION_ID,
                 value: KeyParameterValue::Blob(aaid),
             });
+        }
+
+        // If we are generating/importing an asymmetric key, we need to make sure
+        // that NOT_BEFORE and NOT_AFTER are present.
+        match params.iter().find(|kp| kp.tag == Tag::ALGORITHM) {
+            Some(KeyParameter { tag: _, value: KeyParameterValue::Algorithm(Algorithm::RSA) })
+            | Some(KeyParameter { tag: _, value: KeyParameterValue::Algorithm(Algorithm::EC) }) => {
+                if !params.iter().any(|kp| kp.tag == Tag::CERTIFICATE_NOT_BEFORE) {
+                    result.push(KeyParameter {
+                        tag: Tag::CERTIFICATE_NOT_BEFORE,
+                        value: KeyParameterValue::DateTime(0),
+                    })
+                }
+                if !params.iter().any(|kp| kp.tag == Tag::CERTIFICATE_NOT_AFTER) {
+                    result.push(KeyParameter {
+                        tag: Tag::CERTIFICATE_NOT_AFTER,
+                        value: KeyParameterValue::DateTime(UNDEFINED_NOT_AFTER),
+                    })
+                }
+            }
+            _ => {}
         }
         Ok(result)
     }
@@ -346,7 +372,7 @@ impl KeystoreSecurityLevel {
         // generate_key requires the rebind permission.
         check_key_permission(KeyPerm::rebind(), &key, &None).context("In generate_key.")?;
 
-        let params = Self::add_attestation_parameters(caller_uid, params)
+        let params = Self::add_certificate_parameters(caller_uid, params)
             .context("In generate_key: Trying to get aaid.")?;
 
         let km_dev: Box<dyn IKeyMintDevice> = self.keymint.get_interface()?;
@@ -386,7 +412,7 @@ impl KeystoreSecurityLevel {
         // import_key requires the rebind permission.
         check_key_permission(KeyPerm::rebind(), &key, &None).context("In import_key.")?;
 
-        let params = Self::add_attestation_parameters(caller_uid, params)
+        let params = Self::add_certificate_parameters(caller_uid, params)
             .context("In import_key: Trying to get aaid.")?;
 
         let format = params
