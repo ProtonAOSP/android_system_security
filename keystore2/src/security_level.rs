@@ -144,7 +144,7 @@ impl KeystoreSecurityLevel {
                     let mut db = db.borrow_mut();
                     let (need_gc, key_id) = db
                         .store_new_key(
-                            key,
+                            &key,
                             &key_parameters,
                             &key_blob,
                             &cert_info,
@@ -207,7 +207,7 @@ impl KeystoreSecurityLevel {
                 let (key_id_guard, mut key_entry) = DB
                     .with::<_, Result<(KeyIdGuard, KeyEntry)>>(|db| {
                         db.borrow_mut().load_key_entry(
-                            key.clone(),
+                            &key,
                             KeyType::Client,
                             KeyEntryLoadBits::KM,
                             caller_uid,
@@ -485,7 +485,7 @@ impl KeystoreSecurityLevel {
         let (wrapping_key_id_guard, wrapping_key_entry) = DB
             .with(|db| {
                 db.borrow_mut().load_key_entry(
-                    wrapping_key.clone(),
+                    &wrapping_key,
                     KeyType::Client,
                     KeyEntryLoadBits::KM,
                     caller_uid,
