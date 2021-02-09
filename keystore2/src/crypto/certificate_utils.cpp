@@ -42,17 +42,30 @@ DEFINE_OPENSSL_OBJECT_POINTER(RSA_PSS_PARAMS);
 DEFINE_OPENSSL_OBJECT_POINTER(AUTHORITY_KEYID);
 DEFINE_OPENSSL_OBJECT_POINTER(BASIC_CONSTRAINTS);
 DEFINE_OPENSSL_OBJECT_POINTER(X509_ALGOR);
+DEFINE_OPENSSL_OBJECT_POINTER(BIGNUM);
 
 }  // namespace
 
-std::variant<CertUtilsError, X509_NAME_Ptr> makeCommonName(const std::string& name) {
+constexpr const char kDefaultCommonName[] = "Default Common Name";
+
+std::variant<CertUtilsError, X509_NAME_Ptr>
+makeCommonName(std::optional<std::reference_wrapper<const std::vector<uint8_t>>> name) {
+    if (name) {
+        const uint8_t* p = name->get().data();
+        X509_NAME_Ptr x509_name(d2i_X509_NAME(nullptr, &p, name->get().size()));
+        if (!x509_name) {
+            return CertUtilsError::MemoryAllocation;
+        }
+        return x509_name;
+    }
+
     X509_NAME_Ptr x509_name(X509_NAME_new());
     if (!x509_name) {
-        return CertUtilsError::BoringSsl;
+        return CertUtilsError::MemoryAllocation;
     }
     if (!X509_NAME_add_entry_by_txt(x509_name.get(), "CN", MBSTRING_ASC,
-                                    reinterpret_cast<const uint8_t*>(name.c_str()), name.length(),
-                                    -1 /* loc */, 0 /* set */)) {
+                                    reinterpret_cast<const uint8_t*>(kDefaultCommonName),
+                                    sizeof(kDefaultCommonName) - 1, -1 /* loc */, 0 /* set */)) {
         return CertUtilsError::BoringSsl;
     }
     return x509_name;
@@ -159,13 +172,10 @@ makeKeyUsageExtension(bool is_signing_key, bool is_encryption_key, bool is_cert_
 // Callers should pass an empty X509_Ptr and check the return value for CertUtilsError::Ok (0)
 // before accessing the result.
 std::variant<CertUtilsError, X509_Ptr>
-makeCertRump(const uint32_t serial, const char subject[], const uint64_t activeDateTimeMilliSeconds,
+makeCertRump(std::optional<std::reference_wrapper<const std::vector<uint8_t>>> serial,
+             std::optional<std::reference_wrapper<const std::vector<uint8_t>>> subject,
+             const uint64_t activeDateTimeMilliSeconds,
              const uint64_t usageExpireDateTimeMilliSeconds) {
-
-    // Sanitize pointer arguments.
-    if (!subject || strlen(subject) == 0) {
-        return CertUtilsError::InvalidArgument;
-    }
 
     // Create certificate structure.
     X509_Ptr certificate(X509_new());
@@ -178,9 +188,23 @@ makeCertRump(const uint32_t serial, const char subject[], const uint64_t activeD
         return CertUtilsError::BoringSsl;
     }
 
+    BIGNUM_Ptr bn_serial;
+    if (serial) {
+        bn_serial = BIGNUM_Ptr(BN_bin2bn(serial->get().data(), serial->get().size(), nullptr));
+        if (!bn_serial) {
+            return CertUtilsError::MemoryAllocation;
+        }
+    } else {
+        bn_serial = BIGNUM_Ptr(BN_new());
+        if (!bn_serial) {
+            return CertUtilsError::MemoryAllocation;
+        }
+        BN_zero(bn_serial.get());
+    }
+
     // Set the certificate serialNumber
     ASN1_INTEGER_Ptr serialNumber(ASN1_INTEGER_new());
-    if (!serialNumber || !ASN1_INTEGER_set(serialNumber.get(), serial) ||
+    if (!serialNumber || !BN_to_ASN1_INTEGER(bn_serial.get(), serialNumber.get()) ||
         !X509_set_serialNumber(certificate.get(), serialNumber.get() /* Don't release; copied */))
         return CertUtilsError::BoringSsl;
 
@@ -215,7 +239,9 @@ makeCertRump(const uint32_t serial, const char subject[], const uint64_t activeD
 }
 
 std::variant<CertUtilsError, X509_Ptr>
-makeCert(const EVP_PKEY* evp_pkey, const uint32_t serial, const char subject[],
+makeCert(const EVP_PKEY* evp_pkey,
+         std::optional<std::reference_wrapper<const std::vector<uint8_t>>> serial,
+         std::optional<std::reference_wrapper<const std::vector<uint8_t>>> subject,
          const uint64_t activeDateTimeMilliSeconds, const uint64_t usageExpireDateTimeMilliSeconds,
          bool addSubjectKeyIdEx, std::optional<KeyUsageExtension> keyUsageEx,
          std::optional<BasicConstraintsExtension> basicConstraints) {

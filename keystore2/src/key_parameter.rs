@@ -948,9 +948,23 @@ pub enum KeyParameterValue {
     #[key_param(tag = RESET_SINCE_ID_ROTATION, field = BoolValue)]
     ResetSinceIdRotation,
     /// Used to deliver a cryptographic token proving that the user
-    ///  confirmed a signing request
+    /// confirmed a signing request
     #[key_param(tag = CONFIRMATION_TOKEN, field = Blob)]
     ConfirmationToken(Vec<u8>),
+    /// Used to deliver the certificate serial number to the KeyMint instance
+    /// certificate generation.
+    #[key_param(tag = CERTIFICATE_SERIAL, field = Blob)]
+    CertificateSerial(Vec<u8>),
+    /// Used to deliver the certificate subject to the KeyMint instance
+    /// certificate generation. This must be DER encoded X509 name.
+    #[key_param(tag = CERTIFICATE_SUBJECT, field = Blob)]
+    CertificateSubject(Vec<u8>),
+    /// Used to deliver the not before date in milliseconds to KeyMint during key generation/import.
+    #[key_param(tag = CERTIFICATE_NOT_BEFORE, field = DateTime)]
+    CertificateNotBefore(i64),
+    /// Used to deliver the not after date in milliseconds to KeyMint during key generation/import.
+    #[key_param(tag = CERTIFICATE_NOT_AFTER, field = DateTime)]
+    CertificateNotAfter(i64),
 }
 }
 
