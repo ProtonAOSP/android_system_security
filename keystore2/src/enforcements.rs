@@ -31,12 +31,15 @@ use android_hardware_security_secureclock::aidl::android::hardware::security::se
 };
 use android_system_keystore2::aidl::android::system::keystore2::OperationChallenge::OperationChallenge;
 use anyhow::{Context, Result};
-use std::collections::{HashMap, HashSet};
 use std::sync::{
     mpsc::{channel, Receiver, Sender},
     Arc, Mutex, Weak,
 };
 use std::time::SystemTime;
+use std::{
+    collections::{HashMap, HashSet},
+    sync::mpsc::TryRecvError,
+};
 
 #[derive(Debug)]
 enum AuthRequestState {
@@ -133,6 +136,7 @@ pub struct AuthInfo {
     state: DeferredAuthState,
     /// An optional key id required to update the usage count if the key usage is limited.
     key_usage_limited: Option<i64>,
+    confirmation_token_receiver: Option<Arc<Mutex<Option<Receiver<Vec<u8>>>>>>,
 }
 
 struct TokenReceiverMap {
@@ -264,8 +268,32 @@ impl AuthInfo {
 
     /// This function is the authorization hook called before operation finish.
     /// It returns the auth tokens required by the operation to commence finish.
-    pub fn before_finish(&mut self) -> Result<(Option<HardwareAuthToken>, Option<TimeStampToken>)> {
-        self.get_auth_tokens()
+    /// The third token is a confirmation token.
+    pub fn before_finish(
+        &mut self,
+    ) -> Result<(Option<HardwareAuthToken>, Option<TimeStampToken>, Option<Vec<u8>>)> {
+        let mut confirmation_token: Option<Vec<u8>> = None;
+        if let Some(ref confirmation_token_receiver) = self.confirmation_token_receiver {
+            let locked_receiver = confirmation_token_receiver.lock().unwrap();
+            if let Some(ref receiver) = *locked_receiver {
+                loop {
+                    match receiver.try_recv() {
+                        // As long as we get tokens we loop and discard all but the most
+                        // recent one.
+                        Ok(t) => confirmation_token = Some(t),
+                        Err(TryRecvError::Empty) => break,
+                        Err(TryRecvError::Disconnected) => {
+                            log::error!(concat!(
+                                "We got disconnected from the APC service, ",
+                                "this should never happen."
+                            ));
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        self.get_auth_tokens().map(|(hat, tst)| (hat, tst, confirmation_token))
     }
 
     /// This function is the authorization hook called after finish succeeded.
@@ -337,6 +365,9 @@ pub struct Enforcements {
     /// stale, because the operation gets dropped before an auth token is received, the map
     /// is cleaned up in regular intervals.
     op_auth_map: TokenReceiverMap,
+    /// The enforcement module will try to get a confirmation token from this channel whenever
+    /// an operation that requires confirmation finishes.
+    confirmation_token_receiver: Arc<Mutex<Option<Receiver<Vec<u8>>>>>,
 }
 
 impl Enforcements {
@@ -345,7 +376,18 @@ impl Enforcements {
         Enforcements {
             device_unlocked_set: Mutex::new(HashSet::new()),
             op_auth_map: Default::default(),
+            confirmation_token_receiver: Default::default(),
         }
+    }
+
+    /// Install the confirmation token receiver. The enforcement module will try to get a
+    /// confirmation token from this channel whenever an operation that requires confirmation
+    /// finishes.
+    pub fn install_confirmation_token_receiver(
+        &self,
+        confirmation_token_receiver: Receiver<Vec<u8>>,
+    ) {
+        *self.confirmation_token_receiver.lock().unwrap() = Some(confirmation_token_receiver);
     }
 
     /// Checks if a create call is authorized, given key parameters and operation parameters.
@@ -371,7 +413,11 @@ impl Enforcements {
             None => {
                 return Ok((
                     None,
-                    AuthInfo { state: DeferredAuthState::NoAuthRequired, key_usage_limited: None },
+                    AuthInfo {
+                        state: DeferredAuthState::NoAuthRequired,
+                        key_usage_limited: None,
+                        confirmation_token_receiver: None,
+                    },
                 ))
             }
         };
@@ -431,6 +477,7 @@ impl Enforcements {
         let mut allow_while_on_body = false;
         let mut unlocked_device_required = false;
         let mut key_usage_limited: Option<i64> = None;
+        let mut confirmation_token_receiver: Option<Arc<Mutex<Option<Receiver<Vec<u8>>>>>> = None;
 
         // iterate through key parameters, recording information we need for authorization
         // enforcements later, or enforcing authorizations in place, where applicable
@@ -494,6 +541,9 @@ impl Enforcements {
                     // in the database again and check and update the counter.
                     key_usage_limited = Some(key_id);
                 }
+                KeyParameterValue::TrustedConfirmationRequired => {
+                    confirmation_token_receiver = Some(self.confirmation_token_receiver.clone());
+                }
                 // NOTE: as per offline discussion, sanitizing key parameters and rejecting
                 // create operation if any non-allowed tags are present, is not done in
                 // authorize_create (unlike in legacy keystore where AuthorizeBegin is rejected if
@@ -550,7 +600,11 @@ impl Enforcements {
         if !unlocked_device_required && no_auth_required {
             return Ok((
                 None,
-                AuthInfo { state: DeferredAuthState::NoAuthRequired, key_usage_limited },
+                AuthInfo {
+                    state: DeferredAuthState::NoAuthRequired,
+                    key_usage_limited,
+                    confirmation_token_receiver,
+                },
             ));
         }
 
@@ -625,7 +679,9 @@ impl Enforcements {
             (None, _, true) => (None, DeferredAuthState::OpAuthRequired),
             (None, _, false) => (None, DeferredAuthState::NoAuthRequired),
         })
-        .map(|(hat, state)| (hat, AuthInfo { state, key_usage_limited }))
+        .map(|(hat, state)| {
+            (hat, AuthInfo { state, key_usage_limited, confirmation_token_receiver })
+        })
     }
 
     fn find_auth_token<F>(p: F) -> Result<Option<(AuthTokenEntry, MonotonicRawTime)>>
