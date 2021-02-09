@@ -429,18 +429,25 @@ impl Operation {
         let km_op: Box<dyn IKeyMintOperation> =
             self.km_op.get_interface().context("In finish: Failed to get KeyMintOperation.")?;
 
-        let (hat, tst) = self
+        let (hat, tst, confirmation_token) = self
             .auth_info
             .lock()
             .unwrap()
             .before_finish()
             .context("In finish: Trying to get auth tokens.")?;
 
+        let in_params = confirmation_token.map(|token| KeyParameterArray {
+            params: vec![KmParam {
+                tag: Tag::CONFIRMATION_TOKEN,
+                value: KmParamValue::Blob(token),
+            }],
+        });
+
         let output = self
             .update_outcome(
                 &mut *outcome,
                 map_km_error(km_op.finish(
-                    None,
+                    in_params.as_ref(),
                     input,
                     signature,
                     hat.as_ref(),

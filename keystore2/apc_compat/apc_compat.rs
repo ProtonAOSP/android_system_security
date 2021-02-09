@@ -141,6 +141,10 @@ impl ApcHal {
     /// data_confirmed: Option<&[u8]> and
     /// confirmation_token: Option<&[u8]> hold the confirmed message and the confirmation token
     /// respectively. They must be `Some()` if `rc == APC_COMPAT_ERROR_OK` and `None` otherwise.
+    ///
+    /// `cb` does not get called if this function returns an error.
+    /// (Thus the allow(unused_must_use))
+    #[allow(unused_must_use)]
     pub fn prompt_user_confirmation<F>(
         &self,
         prompt_text: &str,
@@ -150,9 +154,9 @@ impl ApcHal {
         cb: F,
     ) -> Result<(), u32>
     where
-        F: FnOnce(u32, Option<&[u8]>, Option<&[u8]>),
+        F: FnOnce(u32, Option<&[u8]>, Option<&[u8]>) + 'static,
     {
-        let cb_data_ptr = Box::into_raw(Box::new(Box::new(cb)));
+        let cb_data_ptr = Box::into_raw(Box::new(Box::new(cb) as Box<Callback>));
         let cb = ApcCompatCallback {
             data: cb_data_ptr as *mut std::ffi::c_void,
             result: Some(confirmation_result_callback),
