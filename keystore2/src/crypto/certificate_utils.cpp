@@ -167,6 +167,47 @@ makeKeyUsageExtension(bool is_signing_key, bool is_encryption_key, bool is_cert_
     return key_usage;
 }
 
+template <typename Out, typename In> static Out saturate(In in) {
+    if constexpr (std::is_signed_v<Out> == std::is_signed_v<In>) {
+        if constexpr (sizeof(Out) >= sizeof(In)) {
+            // Same sign, and In fits into Out. Cast is lossless.
+            return static_cast<Out>(in);
+        } else {
+            // Out is smaller than In we may need to truncate.
+            // We pick the smaller of `out::max()` and the greater of `out::min()` and `in`.
+            return static_cast<Out>(
+                std::min(static_cast<In>(std::numeric_limits<Out>::max()),
+                         std::max(static_cast<In>(std::numeric_limits<Out>::min()), in)));
+        }
+    } else {
+        // So we have different signs. This puts the lower bound at 0 because either input or output
+        // is unsigned. The upper bound is max of the smaller type or, if they are equal the max of
+        // the signed type.
+        if constexpr (std::is_signed_v<Out>) {
+            if constexpr (sizeof(Out) > sizeof(In)) {
+                return static_cast<Out>(in);
+            } else {
+                // Because `out` is the signed one, the lower bound of `in` is 0 and fits into
+                // `out`. We just have to compare the maximum and we do it in type In because it has
+                // a greater range than Out, so Out::max() is guaranteed to fit.
+                return static_cast<Out>(
+                    std::min(static_cast<In>(std::numeric_limits<Out>::max()), in));
+            }
+        } else {
+            // Out is unsigned. So we can return 0 if in is negative.
+            if (in < 0) return 0;
+            if constexpr (sizeof(Out) >= sizeof(In)) {
+                // If Out is wider or equal we can assign lossless.
+                return static_cast<Out>(in);
+            } else {
+                // Otherwise we have to take the minimum of Out::max() and `in`.
+                return static_cast<Out>(
+                    std::min(static_cast<In>(std::numeric_limits<Out>::max()), in));
+            }
+        }
+    }
+}
+
 // Creates a rump certificate structure with serial, subject and issuer names, as well as
 // activation and expiry date.
 // Callers should pass an empty X509_Ptr and check the return value for CertUtilsError::Ok (0)
@@ -174,8 +215,8 @@ makeKeyUsageExtension(bool is_signing_key, bool is_encryption_key, bool is_cert_
 std::variant<CertUtilsError, X509_Ptr>
 makeCertRump(std::optional<std::reference_wrapper<const std::vector<uint8_t>>> serial,
              std::optional<std::reference_wrapper<const std::vector<uint8_t>>> subject,
-             const uint64_t activeDateTimeMilliSeconds,
-             const uint64_t usageExpireDateTimeMilliSeconds) {
+             const int64_t activeDateTimeMilliSeconds,
+             const int64_t usageExpireDateTimeMilliSeconds) {
 
     // Create certificate structure.
     X509_Ptr certificate(X509_new());
@@ -218,16 +259,16 @@ makeCertRump(std::optional<std::reference_wrapper<const std::vector<uint8_t>>> s
         return std::get<CertUtilsError>(subjectName);
     }
 
+    time_t notBeforeTime = saturate<time_t>(activeDateTimeMilliSeconds / 1000);
     // Set activation date.
     ASN1_TIME_Ptr notBefore(ASN1_TIME_new());
-    if (!notBefore || !ASN1_TIME_set(notBefore.get(), activeDateTimeMilliSeconds / 1000) ||
+    if (!notBefore || !ASN1_TIME_set(notBefore.get(), notBeforeTime) ||
         !X509_set_notBefore(certificate.get(), notBefore.get() /* Don't release; copied */))
         return CertUtilsError::BoringSsl;
 
     // Set expiration date.
     time_t notAfterTime;
-    notAfterTime = (time_t)std::min((uint64_t)std::numeric_limits<time_t>::max(),
-                                    usageExpireDateTimeMilliSeconds / 1000);
+    notAfterTime = saturate<time_t>(usageExpireDateTimeMilliSeconds / 1000);
 
     ASN1_TIME_Ptr notAfter(ASN1_TIME_new());
     if (!notAfter || !ASN1_TIME_set(notAfter.get(), notAfterTime) ||
@@ -242,7 +283,7 @@ std::variant<CertUtilsError, X509_Ptr>
 makeCert(const EVP_PKEY* evp_pkey,
          std::optional<std::reference_wrapper<const std::vector<uint8_t>>> serial,
          std::optional<std::reference_wrapper<const std::vector<uint8_t>>> subject,
-         const uint64_t activeDateTimeMilliSeconds, const uint64_t usageExpireDateTimeMilliSeconds,
+         const int64_t activeDateTimeMilliSeconds, const int64_t usageExpireDateTimeMilliSeconds,
          bool addSubjectKeyIdEx, std::optional<KeyUsageExtension> keyUsageEx,
          std::optional<BasicConstraintsExtension> basicConstraints) {
 
