@@ -309,7 +309,11 @@ impl KeystoreSecurityLevel {
         })
     }
 
-    fn add_certificate_parameters(uid: u32, params: &[KeyParameter]) -> Result<Vec<KeyParameter>> {
+    fn add_certificate_parameters(
+        uid: u32,
+        params: &[KeyParameter],
+        key: &KeyDescriptor,
+    ) -> Result<Vec<KeyParameter>> {
         let mut result = params.to_vec();
         // If there is an attestation challenge we need to get an application id.
         if params.iter().any(|kp| kp.tag == Tag::ATTESTATION_CHALLENGE) {
@@ -320,6 +324,13 @@ impl KeystoreSecurityLevel {
                 tag: Tag::ATTESTATION_APPLICATION_ID,
                 value: KeyParameterValue::Blob(aaid),
             });
+        }
+
+        if params.iter().any(|kp| kp.tag == Tag::INCLUDE_UNIQUE_ID) {
+            check_key_permission(KeyPerm::gen_unique_id(), key, &None).context(concat!(
+                "In add_certificate_parameters: ",
+                "Caller does not have the permission for device unique attestation."
+            ))?;
         }
 
         // If we are generating/importing an asymmetric key, we need to make sure
@@ -372,7 +383,7 @@ impl KeystoreSecurityLevel {
         // generate_key requires the rebind permission.
         check_key_permission(KeyPerm::rebind(), &key, &None).context("In generate_key.")?;
 
-        let params = Self::add_certificate_parameters(caller_uid, params)
+        let params = Self::add_certificate_parameters(caller_uid, params, &key)
             .context("In generate_key: Trying to get aaid.")?;
 
         let km_dev: Box<dyn IKeyMintDevice> = self.keymint.get_interface()?;
@@ -412,7 +423,7 @@ impl KeystoreSecurityLevel {
         // import_key requires the rebind permission.
         check_key_permission(KeyPerm::rebind(), &key, &None).context("In import_key.")?;
 
-        let params = Self::add_certificate_parameters(caller_uid, params)
+        let params = Self::add_certificate_parameters(caller_uid, params, &key)
             .context("In import_key: Trying to get aaid.")?;
 
         let format = params
@@ -448,25 +459,27 @@ impl KeystoreSecurityLevel {
         params: &[KeyParameter],
         authenticators: &[AuthenticatorSpec],
     ) -> Result<KeyMetadata> {
-        if !(key.domain == Domain::BLOB && key.alias.is_some()) {
-            return Err(error::Error::Km(ErrorCode::INVALID_ARGUMENT))
-                .context("In import_wrapped_key: Alias must be specified.");
-        }
+        let wrapped_data: &[u8] = match key {
+            KeyDescriptor { domain: Domain::APP, blob: Some(ref blob), alias: Some(_), .. }
+            | KeyDescriptor {
+                domain: Domain::SELINUX, blob: Some(ref blob), alias: Some(_), ..
+            } => blob,
+            _ => {
+                return Err(error::Error::Km(ErrorCode::INVALID_ARGUMENT)).context(format!(
+                    concat!(
+                        "In import_wrapped_key: Alias and blob must be specified ",
+                        "and domain must be APP or SELINUX. {:?}"
+                    ),
+                    key
+                ))
+            }
+        };
 
         if wrapping_key.domain == Domain::BLOB {
             return Err(error::Error::Km(ErrorCode::INVALID_ARGUMENT)).context(
                 "In import_wrapped_key: Import wrapped key not supported for self managed blobs.",
             );
         }
-
-        let wrapped_data = match &key.blob {
-            Some(d) => d,
-            None => {
-                return Err(error::Error::Km(ErrorCode::INVALID_ARGUMENT)).context(
-                    "In import_wrapped_key: Blob must be specified and hold wrapped key data.",
-                )
-            }
-        };
 
         let caller_uid = ThreadState::get_calling_uid();
         let key = match key.domain {
@@ -476,7 +489,13 @@ impl KeystoreSecurityLevel {
                 alias: key.alias.clone(),
                 blob: None,
             },
-            _ => key.clone(),
+            Domain::SELINUX => KeyDescriptor {
+                domain: Domain::SELINUX,
+                nspace: key.nspace,
+                alias: key.alias.clone(),
+                blob: None,
+            },
+            _ => panic!("Unreachable."),
         };
 
         // import_wrapped_key requires the rebind permission for the new key.
@@ -513,8 +532,7 @@ impl KeystoreSecurityLevel {
                 HardwareAuthenticatorType::PASSWORD => Some(a.authenticatorId),
                 _ => None,
             })
-            .ok_or(error::Error::Km(ErrorCode::INVALID_ARGUMENT))
-            .context("A password authenticator SID must be specified.")?;
+            .unwrap_or(-1);
 
         let fp_sid = authenticators
             .iter()
@@ -522,8 +540,7 @@ impl KeystoreSecurityLevel {
                 HardwareAuthenticatorType::FINGERPRINT => Some(a.authenticatorId),
                 _ => None,
             })
-            .ok_or(error::Error::Km(ErrorCode::INVALID_ARGUMENT))
-            .context("A fingerprint authenticator SID must be specified.")?;
+            .unwrap_or(-1);
 
         let masking_key = masking_key.unwrap_or(ZERO_BLOB_32);
 
