@@ -92,8 +92,8 @@ std::variant<CertUtilsError, X509_Ptr>
 makeCert(const EVP_PKEY* evp_pkey,                                                   //
          std::optional<std::reference_wrapper<const std::vector<uint8_t>>> serial,   //
          std::optional<std::reference_wrapper<const std::vector<uint8_t>>> subject,  //
-         const uint64_t activeDateTimeMilliSeconds,                                  //
-         const uint64_t usageExpireDateTimeMilliSeconds,                             //
+         const int64_t activeDateTimeMilliSeconds,                                   //
+         const int64_t usageExpireDateTimeMilliSeconds,                              //
          bool addSubjectKeyIdEx,                                                     //
          std::optional<KeyUsageExtension> keyUsageEx,                                //
          std::optional<BasicConstraintsExtension> basicConstraints);                 //
