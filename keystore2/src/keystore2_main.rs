@@ -17,9 +17,10 @@
 use binder::Interface;
 use keystore2::apc::ApcManager;
 use keystore2::authorization::AuthorizationManager;
+use keystore2::globals::ENFORCEMENTS;
 use keystore2::service::KeystoreService;
 use log::{error, info};
-use std::{panic, path::Path};
+use std::{panic, path::Path, sync::mpsc::channel};
 
 static KS2_SERVICE_NAME: &str = "android.system.keystore2";
 static APC_SERVICE_NAME: &str = "android.security.apc";
@@ -57,6 +58,10 @@ fn main() {
         panic!("Must specify a working directory.");
     }
 
+    let (confirmation_token_sender, confirmation_token_receiver) = channel();
+
+    ENFORCEMENTS.install_confirmation_token_receiver(confirmation_token_receiver);
+
     info!("Starting thread pool now.");
     binder::ProcessState::start_thread_pool();
 
@@ -67,9 +72,10 @@ fn main() {
         panic!("Failed to register service {} because of {:?}.", KS2_SERVICE_NAME, e);
     });
 
-    let apc_service = ApcManager::new_native_binder().unwrap_or_else(|e| {
-        panic!("Failed to create service {} because of {:?}.", APC_SERVICE_NAME, e);
-    });
+    let apc_service =
+        ApcManager::new_native_binder(confirmation_token_sender).unwrap_or_else(|e| {
+            panic!("Failed to create service {} because of {:?}.", APC_SERVICE_NAME, e);
+        });
     binder::add_service(APC_SERVICE_NAME, apc_service.as_binder()).unwrap_or_else(|e| {
         panic!("Failed to register service {} because of {:?}.", APC_SERVICE_NAME, e);
     });
