@@ -12,16 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// TODO The confirmation token is yet unused.
-#![allow(unused_variables)]
-
 //! This module implements the Android Protected Confirmation (APC) service as defined
 //! in the android.security.apc AIDL spec.
 
 use std::{
     cmp::PartialEq,
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{mpsc::Sender, Arc, Mutex},
 };
 
 use crate::utils::{compat_2_response_code, ui_opts_2_compat};
@@ -182,10 +179,16 @@ struct ApcSessionState {
     client_aborted: bool,
 }
 
-#[derive(Default)]
 struct ApcState {
     session: Option<ApcSessionState>,
     rate_limiting: HashMap<u32, RateInfo>,
+    confirmation_token_sender: Sender<Vec<u8>>,
+}
+
+impl ApcState {
+    fn new(confirmation_token_sender: Sender<Vec<u8>>) -> Self {
+        Self { session: None, rate_limiting: Default::default(), confirmation_token_sender }
+    }
 }
 
 /// Implementation of the APC service.
@@ -197,9 +200,11 @@ impl Interface for ApcManager {}
 
 impl ApcManager {
     /// Create a new instance of the Android Protected Confirmation service.
-    pub fn new_native_binder() -> Result<impl IProtectedConfirmation> {
+    pub fn new_native_binder(
+        confirmation_token_sender: Sender<Vec<u8>>,
+    ) -> Result<impl IProtectedConfirmation> {
         let result = BnProtectedConfirmation::new_binder(Self {
-            state: Arc::new(Mutex::new(Default::default())),
+            state: Arc::new(Mutex::new(ApcState::new(confirmation_token_sender))),
         });
         result.as_binder().set_requesting_sid(true);
         Ok(result)
@@ -222,20 +227,27 @@ impl ApcManager {
         let rc = compat_2_response_code(rc);
 
         // Update rate limiting information.
-        match (rc, client_aborted) {
+        match (rc, client_aborted, confirmation_token) {
             // If the user confirmed the dialog.
-            (ResponseCode::OK, _) => {
+            (ResponseCode::OK, _, Some(confirmation_token)) => {
                 // Reset counter.
                 state.rate_limiting.remove(&uid);
-                // TODO at this point we need to send the confirmation token to where keystore can
-                // use it.
+                // Send confirmation token to the enforcement module.
+                if let Err(e) = state.confirmation_token_sender.send(confirmation_token.to_vec()) {
+                    log::error!("Got confirmation token, but receiver would not have it. {:?}", e);
+                }
             }
             // If cancelled by the user or if aborted by the client.
-            (ResponseCode::CANCELLED, _) | (ResponseCode::ABORTED, true) => {
+            (ResponseCode::CANCELLED, _, _) | (ResponseCode::ABORTED, true, _) => {
                 // Penalize.
                 let mut rate_info = state.rate_limiting.entry(uid).or_default();
                 rate_info.counter += 1;
                 rate_info.timestamp = start;
+            }
+            (ResponseCode::OK, _, None) => {
+                log::error!(
+                    "Confirmation prompt was successful but no confirmation token was returned."
+                );
             }
             // In any other case this try does not count at all.
             _ => {}
@@ -299,7 +311,7 @@ impl ApcManager {
             extra_data,
             locale,
             ui_opts,
-            |rc, data_confirmed, confirmation_token| {
+            move |rc, data_confirmed, confirmation_token| {
                 Self::result(state_clone, rc, data_confirmed, confirmation_token)
             },
         )
