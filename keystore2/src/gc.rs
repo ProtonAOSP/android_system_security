@@ -21,6 +21,7 @@
 use crate::globals::{get_keymint_dev_by_uuid, DB};
 use crate::{error::map_km_error, globals::ASYNC_TASK};
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::IKeyMintDevice::IKeyMintDevice;
+use android_hardware_security_keymint::binder::Strong;
 use anyhow::Result;
 
 #[derive(Clone, Copy)]
@@ -41,7 +42,7 @@ impl Gc {
             let mut db = db.borrow_mut();
             if let Some((key_id, mut key_entry)) = db.get_unreferenced_key()? {
                 if let Some(blob) = key_entry.take_km_blob() {
-                    let km_dev: Box<dyn IKeyMintDevice> =
+                    let km_dev: Strong<dyn IKeyMintDevice> =
                         get_keymint_dev_by_uuid(key_entry.km_uuid())
                             .map(|(dev, _)| dev)?
                             .get_interface()?;
