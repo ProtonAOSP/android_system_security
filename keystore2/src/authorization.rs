@@ -25,8 +25,8 @@ use android_hardware_security_keymint::aidl::android::hardware::security::keymin
 use android_hardware_security_secureclock::aidl::android::hardware::security::secureclock::{
     Timestamp::Timestamp,
 };
-use android_security_authorization::binder::{Interface, Result as BinderResult};
-use android_security_authorization:: aidl::android::security::authorization::IKeystoreAuthorization::{
+use android_security_authorization::binder::{Interface, Result as BinderResult, Strong};
+use android_security_authorization::aidl::android::security::authorization::IKeystoreAuthorization::{
         BnKeystoreAuthorization, IKeystoreAuthorization,
 };
 use android_security_authorization:: aidl::android::security::authorization::LockScreenEvent::LockScreenEvent;
@@ -40,7 +40,7 @@ pub struct AuthorizationManager;
 
 impl AuthorizationManager {
     /// Create a new instance of Keystore Authorization service.
-    pub fn new_native_binder() -> Result<impl IKeystoreAuthorization> {
+    pub fn new_native_binder() -> Result<Strong<dyn IKeystoreAuthorization>> {
         let result = BnKeystoreAuthorization::new_binder(Self);
         result.as_binder().set_requesting_sid(true);
         Ok(result)

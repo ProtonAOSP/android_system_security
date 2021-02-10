@@ -34,14 +34,14 @@ mod tests {
         KeyParameterArray::KeyParameterArray, KeyParameterValue::KeyParameterValue,
         KeyPurpose::KeyPurpose, PaddingMode::PaddingMode, SecurityLevel::SecurityLevel, Tag::Tag,
     };
-    use android_hardware_security_keymint::binder;
+    use android_hardware_security_keymint::binder::{self, Strong};
     use android_security_compat::aidl::android::security::compat::IKeystoreCompatService::IKeystoreCompatService;
 
     static COMPAT_NAME: &str = "android.security.compat";
 
-    fn get_device() -> Option<Box<dyn IKeyMintDevice>> {
+    fn get_device() -> Option<Strong<dyn IKeyMintDevice>> {
         add_keymint_device_service();
-        let compat_service: Box<dyn IKeystoreCompatService> =
+        let compat_service: Strong<dyn IKeystoreCompatService> =
             binder::get_interface(COMPAT_NAME).ok()?;
         compat_service.getKeyMintDevice(SecurityLevel::TRUSTED_ENVIRONMENT).ok()
     }
@@ -321,7 +321,7 @@ mod tests {
     #[test]
     fn test_secure_clock() {
         add_keymint_device_service();
-        let compat_service: Box<dyn IKeystoreCompatService> =
+        let compat_service: binder::Strong<dyn IKeystoreCompatService> =
             binder::get_interface(COMPAT_NAME).unwrap();
         let secure_clock = compat_service.getSecureClock().unwrap();
 
@@ -336,7 +336,7 @@ mod tests {
     #[test]
     fn test_shared_secret() {
         add_keymint_device_service();
-        let compat_service: Box<dyn IKeystoreCompatService> =
+        let compat_service: binder::Strong<dyn IKeystoreCompatService> =
             binder::get_interface(COMPAT_NAME).unwrap();
         let shared_secret =
             compat_service.getSharedSecret(SecurityLevel::TRUSTED_ENVIRONMENT).unwrap();
