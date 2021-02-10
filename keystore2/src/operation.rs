@@ -137,7 +137,7 @@ use android_system_keystore2::aidl::android::system::keystore2::{
     IKeystoreOperation::BnKeystoreOperation, IKeystoreOperation::IKeystoreOperation,
 };
 use anyhow::{anyhow, Context, Result};
-use binder::{IBinder, Interface};
+use binder::IBinder;
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex, MutexGuard, Weak},
@@ -184,7 +184,7 @@ impl Operation {
     /// Constructor
     pub fn new(
         index: usize,
-        km_op: Box<dyn IKeyMintOperation>,
+        km_op: binder::Strong<dyn IKeyMintOperation>,
         owner: u32,
         auth_info: AuthInfo,
     ) -> Self {
@@ -247,13 +247,14 @@ impl Operation {
         }
         *locked_outcome = Outcome::Pruned;
 
-        let km_op: Box<dyn IKeyMintOperation> = match self.km_op.get_interface() {
-            Ok(km_op) => km_op,
-            Err(e) => {
-                log::error!("In prune: Failed to get KeyMintOperation interface.\n    {:?}", e);
-                return Err(Error::sys());
-            }
-        };
+        let km_op: binder::public_api::Strong<dyn IKeyMintOperation> =
+            match self.km_op.get_interface() {
+                Ok(km_op) => km_op,
+                Err(e) => {
+                    log::error!("In prune: Failed to get KeyMintOperation interface.\n    {:?}", e);
+                    return Err(Error::sys());
+                }
+            };
 
         // We abort the operation. If there was an error we log it but ignore it.
         if let Err(e) = map_km_error(km_op.abort()) {
@@ -334,7 +335,7 @@ impl Operation {
         let mut out_params: Option<KeyParameterArray> = None;
         let mut output: Option<ByteArray> = None;
 
-        let km_op: Box<dyn IKeyMintOperation> =
+        let km_op: binder::public_api::Strong<dyn IKeyMintOperation> =
             self.km_op.get_interface().context("In update: Failed to get KeyMintOperation.")?;
 
         let (hat, tst) = self
@@ -369,7 +370,7 @@ impl Operation {
 
         let mut out_params: Option<KeyParameterArray> = None;
 
-        let km_op: Box<dyn IKeyMintOperation> =
+        let km_op: binder::public_api::Strong<dyn IKeyMintOperation> =
             self.km_op.get_interface().context("In update: Failed to get KeyMintOperation.")?;
 
         let (hat, tst) = self
@@ -426,7 +427,7 @@ impl Operation {
 
         let mut out_params: Option<KeyParameterArray> = None;
 
-        let km_op: Box<dyn IKeyMintOperation> =
+        let km_op: binder::public_api::Strong<dyn IKeyMintOperation> =
             self.km_op.get_interface().context("In finish: Failed to get KeyMintOperation.")?;
 
         let (hat, tst, confirmation_token) = self
@@ -475,7 +476,7 @@ impl Operation {
     fn abort(&self, outcome: Outcome) -> Result<()> {
         let mut locked_outcome = self.check_active().context("In abort")?;
         *locked_outcome = outcome;
-        let km_op: Box<dyn IKeyMintOperation> =
+        let km_op: binder::public_api::Strong<dyn IKeyMintOperation> =
             self.km_op.get_interface().context("In abort: Failed to get KeyMintOperation.")?;
 
         map_km_error(km_op.abort()).context("In abort: KeyMint::abort failed.")
@@ -514,7 +515,7 @@ impl OperationDb {
     /// owner uid and returns a new Operation wrapped in a `std::sync::Arc`.
     pub fn create_operation(
         &self,
-        km_op: Box<dyn IKeyMintOperation>,
+        km_op: binder::public_api::Strong<dyn IKeyMintOperation>,
         owner: u32,
         auth_info: AuthInfo,
     ) -> Arc<Operation> {
@@ -770,7 +771,9 @@ impl KeystoreOperation {
     /// BnKeystoreOperation proxy object. It also
     /// calls `IBinder::set_requesting_sid` on the new interface, because
     /// we need it for checking Keystore permissions.
-    pub fn new_native_binder(operation: Arc<Operation>) -> impl IKeystoreOperation + Send {
+    pub fn new_native_binder(
+        operation: Arc<Operation>,
+    ) -> binder::public_api::Strong<dyn IKeystoreOperation> {
         let result =
             BnKeystoreOperation::new_binder(Self { operation: Mutex::new(Some(operation)) });
         result.as_binder().set_requesting_sid(true);

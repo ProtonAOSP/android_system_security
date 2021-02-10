@@ -25,6 +25,7 @@ use android_security_remoteprovisioning::aidl::android::security::remoteprovisio
     AttestationPoolStatus::AttestationPoolStatus, IRemoteProvisioning::BnRemoteProvisioning,
     IRemoteProvisioning::IRemoteProvisioning,
 };
+use android_security_remoteprovisioning::binder::Strong;
 use anyhow::Result;
 
 use crate::error::map_or_log_err;
@@ -37,7 +38,7 @@ pub struct RemoteProvisioningService {
 
 impl RemoteProvisioningService {
     /// Creates a new instance of the remote provisioning service
-    pub fn new_native_binder() -> Result<impl IRemoteProvisioning> {
+    pub fn new_native_binder() -> Result<Strong<dyn IRemoteProvisioning>> {
         let result = BnRemoteProvisioning::new_binder(Self {});
         Ok(result)
     }
