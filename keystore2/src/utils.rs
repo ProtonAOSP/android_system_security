@@ -103,7 +103,7 @@ impl Asp {
     }
 
     /// Clones the owned SpIBinder and attempts to convert it into the requested interface.
-    pub fn get_interface<T: FromIBinder + ?Sized>(&self) -> anyhow::Result<Box<T>> {
+    pub fn get_interface<T: FromIBinder + ?Sized>(&self) -> anyhow::Result<binder::Strong<T>> {
         // We can use unwrap here because we never panic when locked, so the mutex
         // can never be poisoned.
         let lock = self.0.lock().unwrap();
