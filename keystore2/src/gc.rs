@@ -82,7 +82,7 @@ impl Gc {
             }
         }
         if self.remaining_tries != 0 {
-            ASYNC_TASK.queue_lo(move || {
+            ASYNC_TASK.queue_lo(move |_| {
                 self.process_all();
             })
         }
@@ -92,6 +92,6 @@ impl Gc {
     /// their deletion. We only process one key at a time and then schedule another
     /// attempt by queueing it in the async_task (low priority) queue.
     pub fn notify_gc() {
-        ASYNC_TASK.queue_lo(|| Self { remaining_tries: Self::MAX_ERROR_RETRIES }.process_all())
+        ASYNC_TASK.queue_lo(|_| Self { remaining_tries: Self::MAX_ERROR_RETRIES }.process_all())
     }
 }

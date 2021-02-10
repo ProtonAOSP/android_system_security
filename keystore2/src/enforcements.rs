@@ -245,7 +245,7 @@ impl AuthInfo {
                 let token_receiver = TokenReceiver(Arc::downgrade(&auth_request));
                 ENFORCEMENTS.register_op_auth_receiver(challenge, token_receiver);
 
-                ASYNC_TASK.queue_hi(move || timestamp_token_request(challenge, sender));
+                ASYNC_TASK.queue_hi(move |_| timestamp_token_request(challenge, sender));
                 self.state = DeferredAuthState::Waiting(auth_request);
                 Some(OperationChallenge { challenge })
             }
@@ -253,7 +253,7 @@ impl AuthInfo {
                 let hat = (*hat).clone();
                 let (sender, receiver) = channel::<Result<TimeStampToken, Error>>();
                 let auth_request = AuthRequest::timestamp(hat, receiver);
-                ASYNC_TASK.queue_hi(move || timestamp_token_request(challenge, sender));
+                ASYNC_TASK.queue_hi(move |_| timestamp_token_request(challenge, sender));
                 self.state = DeferredAuthState::Waiting(auth_request);
                 None
             }
