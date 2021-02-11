@@ -634,8 +634,98 @@ impl LegacyBlobLoader {
         Ok(Some(Self::new_from_stream(&mut file).context("In read_generic_blob.")?))
     }
 
-    /// This function constructs the blob file name which has the form:
+    /// Read a legacy vpn profile blob.
+    pub fn read_vpn_profile(&self, uid: u32, alias: &str) -> Result<Option<Vec<u8>>> {
+        let path = match self.make_vpn_profile_filename(uid, alias) {
+            Some(path) => path,
+            None => return Ok(None),
+        };
+
+        let blob =
+            Self::read_generic_blob(&path).context("In read_vpn_profile: Failed to read blob.")?;
+
+        Ok(blob.and_then(|blob| match blob.value {
+            BlobValue::Generic(blob) => Some(blob),
+            _ => {
+                log::info!("Unexpected vpn profile blob type. Ignoring");
+                None
+            }
+        }))
+    }
+
+    /// Remove a vpn profile by the name alias with owner uid.
+    pub fn remove_vpn_profile(&self, uid: u32, alias: &str) -> Result<()> {
+        let path = match self.make_vpn_profile_filename(uid, alias) {
+            Some(path) => path,
+            None => return Ok(()),
+        };
+
+        if let Err(e) = Self::with_retry_interrupted(|| fs::remove_file(path.as_path())) {
+            match e.kind() {
+                ErrorKind::NotFound => return Ok(()),
+                _ => return Err(e).context("In remove_vpn_profile."),
+            }
+        }
+
+        let user_id = uid_to_android_user(uid);
+        self.remove_user_dir_if_empty(user_id)
+            .context("In remove_vpn_profile: Trying to remove empty user dir.")
+    }
+
+    fn is_vpn_profile(encoded_alias: &str) -> bool {
+        // We can check the encoded alias because the prefixes we are interested
+        // in are all in the printable range that don't get mangled.
+        encoded_alias.starts_with("VPN_")
+            || encoded_alias.starts_with("PLATFORM_VPN_")
+            || encoded_alias == "LOCKDOWN_VPN"
+    }
+
+    /// List all profiles belonging to the given uid.
+    pub fn list_vpn_profiles(&self, uid: u32) -> Result<Vec<String>> {
+        let mut path = self.path.clone();
+        let user_id = uid_to_android_user(uid);
+        path.push(format!("user_{}", user_id));
+        let uid_str = uid.to_string();
+        let dir =
+            Self::with_retry_interrupted(|| fs::read_dir(path.as_path())).with_context(|| {
+                format!("In list_vpn_profiles: Failed to open legacy blob database. {:?}", path)
+            })?;
+        let mut result: Vec<String> = Vec::new();
+        for entry in dir {
+            let file_name =
+                entry.context("In list_vpn_profiles: Trying to access dir entry")?.file_name();
+            if let Some(f) = file_name.to_str() {
+                let encoded_alias = &f[uid_str.len() + 1..];
+                if f.starts_with(&uid_str) && Self::is_vpn_profile(encoded_alias) {
+                    result.push(
+                        Self::decode_alias(encoded_alias)
+                            .context("In list_vpn_profiles: Trying to decode alias.")?,
+                    )
+                }
+            }
+        }
+        Ok(result)
+    }
+
+    /// This function constructs the vpn_profile file name which has the form:
     /// user_<android user id>/<uid>_<alias>.
+    fn make_vpn_profile_filename(&self, uid: u32, alias: &str) -> Option<PathBuf> {
+        // legacy vpn entries must start with VPN_ or PLATFORM_VPN_ or are literally called
+        // LOCKDOWN_VPN.
+        if !Self::is_vpn_profile(alias) {
+            return None;
+        }
+
+        let mut path = self.path.clone();
+        let user_id = uid_to_android_user(uid);
+        let encoded_alias = Self::encode_alias(alias);
+        path.push(format!("user_{}", user_id));
+        path.push(format!("{}_{}", uid, encoded_alias));
+        Some(path)
+    }
+
+    /// This function constructs the blob file name which has the form:
+    /// user_<android user id>/<uid>_<prefix>_<alias>.
     fn make_blob_filename(&self, uid: u32, alias: &str, prefix: &str) -> PathBuf {
         let user_id = uid_to_android_user(uid);
         let encoded_alias = Self::encode_alias(&format!("{}_{}", prefix, alias));
@@ -838,16 +928,22 @@ impl LegacyBlobLoader {
 
         if something_was_deleted {
             let user_id = uid_to_android_user(uid);
-            if self
-                .is_empty_user(user_id)
-                .context("In remove_keystore_entry: Trying to check for empty user dir.")?
-            {
-                let user_path = self.make_user_path_name(user_id);
-                Self::with_retry_interrupted(|| fs::remove_dir(user_path.as_path())).ok();
-            }
+            self.remove_user_dir_if_empty(user_id)
+                .context("In remove_keystore_entry: Trying to remove empty user dir.")?;
         }
 
         Ok(something_was_deleted)
+    }
+
+    fn remove_user_dir_if_empty(&self, user_id: u32) -> Result<()> {
+        if self
+            .is_empty_user(user_id)
+            .context("In remove_user_dir_if_empty: Trying to check for empty user dir.")?
+        {
+            let user_path = self.make_user_path_name(user_id);
+            Self::with_retry_interrupted(|| fs::remove_dir(user_path.as_path())).ok();
+        }
+        Ok(())
     }
 
     /// Load a legacy key blob entry by uid and alias.

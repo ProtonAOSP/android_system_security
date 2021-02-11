@@ -16,6 +16,7 @@
 #![recursion_limit = "256"]
 
 pub mod apc;
+pub mod async_task;
 pub mod authorization;
 pub mod database;
 pub mod enforcements;
@@ -33,7 +34,6 @@ pub mod service;
 pub mod user_manager;
 pub mod utils;
 
-mod async_task;
 mod db_utils;
 mod gc;
 mod super_key;
