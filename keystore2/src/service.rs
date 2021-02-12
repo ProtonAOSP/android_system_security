@@ -43,7 +43,7 @@ use android_system_keystore2::aidl::android::system::keystore2::{
     KeyDescriptor::KeyDescriptor, KeyEntryResponse::KeyEntryResponse, KeyMetadata::KeyMetadata,
 };
 use anyhow::{Context, Result};
-use binder::{IBinder, Interface, ThreadState};
+use binder::{IBinder, Strong, ThreadState};
 use error::Error;
 use keystore2_selinux as selinux;
 
@@ -56,7 +56,7 @@ pub struct KeystoreService {
 
 impl KeystoreService {
     /// Create a new instance of the Keystore 2.0 service.
-    pub fn new_native_binder() -> Result<impl IKeystoreService> {
+    pub fn new_native_binder() -> Result<Strong<dyn IKeystoreService>> {
         let mut result: Self = Default::default();
         let (dev, uuid) =
             KeystoreSecurityLevel::new_native_binder(SecurityLevel::TRUSTED_ENVIRONMENT)
@@ -89,7 +89,7 @@ impl KeystoreService {
             .unwrap_or(SecurityLevel::SOFTWARE)
     }
 
-    fn get_i_sec_level_by_uuid(&self, uuid: &Uuid) -> Result<Box<dyn IKeystoreSecurityLevel>> {
+    fn get_i_sec_level_by_uuid(&self, uuid: &Uuid) -> Result<Strong<dyn IKeystoreSecurityLevel>> {
         if let Some(dev) = self.i_sec_level_by_uuid.get(uuid) {
             dev.get_interface().context("In get_i_sec_level_by_uuid.")
         } else {
@@ -101,7 +101,7 @@ impl KeystoreService {
     fn get_security_level(
         &self,
         sec_level: SecurityLevel,
-    ) -> Result<Box<dyn IKeystoreSecurityLevel>> {
+    ) -> Result<Strong<dyn IKeystoreSecurityLevel>> {
         if let Some(dev) = self
             .uuid_by_sec_level
             .get(&sec_level)
@@ -318,7 +318,7 @@ impl IKeystoreService for KeystoreService {
     fn getSecurityLevel(
         &self,
         security_level: SecurityLevel,
-    ) -> binder::public_api::Result<Box<dyn IKeystoreSecurityLevel>> {
+    ) -> binder::public_api::Result<Strong<dyn IKeystoreSecurityLevel>> {
         map_or_log_err(self.get_security_level(security_level), Ok)
     }
     fn getKeyEntry(&self, key: &KeyDescriptor) -> binder::public_api::Result<KeyEntryResponse> {

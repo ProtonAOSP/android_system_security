@@ -53,7 +53,7 @@ use crate::{
     utils::key_characteristics_to_internal,
 };
 use anyhow::{anyhow, Context, Result};
-use binder::{IBinder, Interface, ThreadState};
+use binder::{IBinder, Strong, ThreadState};
 
 /// Implementation of the IKeystoreSecurityLevel Interface.
 pub struct KeystoreSecurityLevel {
@@ -79,7 +79,7 @@ impl KeystoreSecurityLevel {
     /// we need it for checking keystore permissions.
     pub fn new_native_binder(
         security_level: SecurityLevel,
-    ) -> Result<(impl IKeystoreSecurityLevel + Send, Uuid)> {
+    ) -> Result<(Strong<dyn IKeystoreSecurityLevel>, Uuid)> {
         let (dev, hw_info, km_uuid) = get_keymint_device(&security_level)
             .context("In KeystoreSecurityLevel::new_native_binder.")?;
         let result = BnKeystoreSecurityLevel::new_binder(Self {
@@ -256,7 +256,7 @@ impl KeystoreSecurityLevel {
 
         let immediate_hat = immediate_hat.unwrap_or_default();
 
-        let km_dev: Box<dyn IKeyMintDevice> = self
+        let km_dev: Strong<dyn IKeyMintDevice> = self
             .keymint
             .get_interface()
             .context("In create_operation: Failed to get KeyMint device")?;
@@ -293,7 +293,7 @@ impl KeystoreSecurityLevel {
             None => return Err(Error::sys()).context("In create_operation: Begin operation returned successfully, but did not return a valid operation."),
         };
 
-        let op_binder: Box<dyn IKeystoreOperation> =
+        let op_binder: binder::public_api::Strong<dyn IKeystoreOperation> =
             KeystoreOperation::new_native_binder(operation)
                 .as_binder()
                 .into_interface()
@@ -386,7 +386,7 @@ impl KeystoreSecurityLevel {
         let params = Self::add_certificate_parameters(caller_uid, params, &key)
             .context("In generate_key: Trying to get aaid.")?;
 
-        let km_dev: Box<dyn IKeyMintDevice> = self.keymint.get_interface()?;
+        let km_dev: Strong<dyn IKeyMintDevice> = self.keymint.get_interface()?;
         map_km_error(km_dev.addRngEntropy(entropy))
             .context("In generate_key: Trying to add entropy.")?;
         let creation_result = map_km_error(km_dev.generateKey(&params))
@@ -442,7 +442,7 @@ impl KeystoreSecurityLevel {
             })
             .context("In import_key.")?;
 
-        let km_dev: Box<dyn IKeyMintDevice> =
+        let km_dev: Strong<dyn IKeyMintDevice> =
             self.keymint.get_interface().context("In import_key: Trying to get the KM device")?;
         let creation_result = map_km_error(km_dev.importKey(&params, format, key_data))
             .context("In import_key: Trying to call importKey")?;
@@ -544,7 +544,7 @@ impl KeystoreSecurityLevel {
 
         let masking_key = masking_key.unwrap_or(ZERO_BLOB_32);
 
-        let km_dev: Box<dyn IKeyMintDevice> = self.keymint.get_interface()?;
+        let km_dev: Strong<dyn IKeyMintDevice> = self.keymint.get_interface()?;
         let (creation_result, _) = self
             .upgrade_keyblob_if_required_with(
                 &*km_dev,
