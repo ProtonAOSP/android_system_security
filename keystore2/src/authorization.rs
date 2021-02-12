@@ -20,10 +20,7 @@ use crate::globals::{DB, ENFORCEMENTS, LEGACY_BLOB_LOADER, SUPER_KEY};
 use crate::permission::KeystorePerm;
 use crate::utils::check_keystore_permission;
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
-    HardwareAuthToken::HardwareAuthToken, HardwareAuthenticatorType::HardwareAuthenticatorType,
-};
-use android_hardware_security_secureclock::aidl::android::hardware::security::secureclock::{
-    Timestamp::Timestamp,
+    HardwareAuthToken::HardwareAuthToken,
 };
 use android_security_authorization::binder::{Interface, Result as BinderResult, Strong};
 use android_security_authorization::aidl::android::security::authorization::IKeystoreAuthorization::{
@@ -50,16 +47,7 @@ impl AuthorizationManager {
         //check keystore permission
         check_keystore_permission(KeystorePerm::add_auth()).context("In add_auth_token.")?;
 
-        //TODO: Keymint's HardwareAuthToken aidl needs to implement Copy/Clone
-        let auth_token_copy = HardwareAuthToken {
-            challenge: auth_token.challenge,
-            userId: auth_token.userId,
-            authenticatorId: auth_token.authenticatorId,
-            authenticatorType: HardwareAuthenticatorType(auth_token.authenticatorType.0),
-            timestamp: Timestamp { milliSeconds: auth_token.timestamp.milliSeconds },
-            mac: auth_token.mac.clone(),
-        };
-        ENFORCEMENTS.add_auth_token(auth_token_copy)?;
+        ENFORCEMENTS.add_auth_token(auth_token.clone())?;
         Ok(())
     }
 
