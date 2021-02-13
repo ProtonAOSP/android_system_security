@@ -500,6 +500,29 @@ ScopedAStatus KeyMintDevice::begin(KeyPurpose in_inPurpose,
     return convertErrorCode(errorCode);
 }
 
+ScopedAStatus KeyMintDevice::deviceLocked(bool passwordOnly,
+                                          const std::optional<TimeStampToken>& timestampToken) {
+    V4_0_VerificationToken token;
+    if (timestampToken.has_value()) {
+        token = convertTimestampTokenToLegacy(timestampToken.value());
+    }
+    auto ret = mDevice->deviceLocked(passwordOnly, token);
+    if (!ret.isOk()) {
+        return convertErrorCode(KMV1::ErrorCode::UNKNOWN_ERROR);
+    } else {
+        return convertErrorCode(KMV1::ErrorCode::OK);
+    }
+}
+
+ScopedAStatus KeyMintDevice::earlyBootEnded() {
+    auto ret = mDevice->earlyBootEnded();
+    if (!ret.isOk()) {
+        return convertErrorCode(KMV1::ErrorCode::UNKNOWN_ERROR);
+    } else {
+        return convertErrorCode(KMV1::ErrorCode::OK);
+    }
+}
+
 ScopedAStatus KeyMintOperation::update(const std::optional<KeyParameterArray>& in_inParams,
                                        const std::optional<std::vector<uint8_t>>& in_input,
                                        const std::optional<HardwareAuthToken>& in_inAuthToken,
