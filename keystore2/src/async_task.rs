@@ -71,6 +71,19 @@ impl Shelf {
             .downcast_mut::<T>()
             .unwrap()
     }
+
+    /// Gets a mutable reference to the entry of the given type or creates it using the init
+    /// function. Init is not executed if the entry already existed.
+    pub fn get_or_put_with<T: Any + Send, F>(&mut self, init: F) -> &mut T
+    where
+        F: FnOnce() -> T,
+    {
+        self.0
+            .entry(TypeId::of::<T>())
+            .or_insert_with(|| Box::new(init()) as Box<dyn Any + Send>)
+            .downcast_mut::<T>()
+            .unwrap()
+    }
 }
 
 struct AsyncTaskState {
@@ -84,7 +97,10 @@ struct AsyncTaskState {
 }
 
 /// AsyncTask spawns one worker thread on demand to process jobs inserted into
-/// a low and a high priority work queue.
+/// a low and a high priority work queue. The queues are processed FIFO, and low
+/// priority queue is processed if the high priority queue is empty.
+/// Note: Because there is only one worker thread at a time for a given AsyncTask instance,
+/// all scheduled requests are guaranteed to be serialized with respect to one another.
 pub struct AsyncTask {
     state: Arc<(Condvar, Mutex<AsyncTaskState>)>,
 }
