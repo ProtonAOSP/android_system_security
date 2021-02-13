@@ -110,7 +110,9 @@ class KeyMintDevice : public aidl::android::hardware::security::keymint::BnKeyMi
                         const std::vector<KeyParameter>& in_inParams,
                         const HardwareAuthToken& in_inAuthToken,
                         BeginResult* _aidl_return) override;
-
+    ScopedAStatus deviceLocked(bool passwordOnly,
+                               const std::optional<TimeStampToken>& timestampToken) override;
+    ScopedAStatus earlyBootEnded() override;
     // These are public to allow testing code to use them directly.
     // This class should not be used publicly anyway.
 
