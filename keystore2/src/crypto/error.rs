@@ -85,4 +85,8 @@ pub enum Error {
     /// This is returned if the C implementation of ECPOINTOct2Point returned null.
     #[error("Failed to convert oct to point.")]
     ECOct2PointFailed,
+
+    /// This is returned if the C implementation of extractSubjectFromCertificate failed.
+    #[error("Failed to extract certificate subject.")]
+    ExtractSubjectFailed,
 }
