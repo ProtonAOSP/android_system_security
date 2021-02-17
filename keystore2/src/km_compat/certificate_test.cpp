@@ -50,7 +50,7 @@ getCertificate(const std::vector<KeyParameter>& keyParams) {
         return ScopedAStatus::fromStatus(STATUS_NAME_NOT_FOUND);
     }
     KeyCreationResult creationResult;
-    auto status = device->generateKey(keyParams, &creationResult);
+    auto status = device->generateKey(keyParams, std::nullopt /* attest_key */, &creationResult);
     if (!status.isOk()) {
         return status;
     }

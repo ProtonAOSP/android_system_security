@@ -389,7 +389,7 @@ impl KeystoreSecurityLevel {
         let km_dev: Strong<dyn IKeyMintDevice> = self.keymint.get_interface()?;
         map_km_error(km_dev.addRngEntropy(entropy))
             .context("In generate_key: Trying to add entropy.")?;
-        let creation_result = map_km_error(km_dev.generateKey(&params))
+        let creation_result = map_km_error(km_dev.generateKey(&params, None /* attestKey */))
             .context("In generate_key: While generating Key")?;
 
         let user_id = uid_to_android_user(caller_uid);
@@ -444,8 +444,9 @@ impl KeystoreSecurityLevel {
 
         let km_dev: Strong<dyn IKeyMintDevice> =
             self.keymint.get_interface().context("In import_key: Trying to get the KM device")?;
-        let creation_result = map_km_error(km_dev.importKey(&params, format, key_data))
-            .context("In import_key: Trying to call importKey")?;
+        let creation_result =
+            map_km_error(km_dev.importKey(&params, format, key_data, None /* attestKey */))
+                .context("In import_key: Trying to call importKey")?;
 
         let user_id = uid_to_android_user(caller_uid);
         self.store_new_key(key, creation_result, user_id).context("In import_key.")

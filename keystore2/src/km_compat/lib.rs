@@ -71,7 +71,8 @@ mod tests {
 
     // TODO: If I only need the key itself, don't return the other things.
     fn generate_key(legacy: &dyn IKeyMintDevice, kps: Vec<KeyParameter>) -> KeyCreationResult {
-        let creation_result = legacy.generateKey(&kps).expect("Failed to generate key");
+        let creation_result =
+            legacy.generateKey(&kps, None /* attest_key */).expect("Failed to generate key");
         assert_ne!(creation_result.keyBlob.len(), 0);
         creation_result
     }
@@ -163,7 +164,8 @@ mod tests {
         }];
         let kf = KeyFormat::RAW;
         let kd = [0; 16];
-        let creation_result = legacy.importKey(&kps, kf, &kd).expect("Failed to import key");
+        let creation_result =
+            legacy.importKey(&kps, kf, &kd, None /* attest_key */).expect("Failed to import key");
         assert_ne!(creation_result.keyBlob.len(), 0);
         assert_eq!(creation_result.certificateChain.len(), 0);
     }
