@@ -333,8 +333,10 @@ ScopedAStatus KeyMintDevice::addRngEntropy(const std::vector<uint8_t>& in_data) 
     return convertErrorCode(result);
 }
 
-ScopedAStatus KeyMintDevice::generateKey(const std::vector<KeyParameter>& inKeyParams,
-                                         KeyCreationResult* out_creationResult) {
+ScopedAStatus
+KeyMintDevice::generateKey(const std::vector<KeyParameter>& inKeyParams,
+                           const std::optional<AttestationKey>& /* in_attestationKey */,
+                           KeyCreationResult* out_creationResult) {
     auto legacyKeyGenParams = convertKeyParametersToLegacy(extractGenerationParams(inKeyParams));
     KMV1::ErrorCode errorCode;
     auto result = mDevice->generateKey(
@@ -368,6 +370,7 @@ ScopedAStatus KeyMintDevice::generateKey(const std::vector<KeyParameter>& inKeyP
 ScopedAStatus KeyMintDevice::importKey(const std::vector<KeyParameter>& inKeyParams,
                                        KeyFormat in_inKeyFormat,
                                        const std::vector<uint8_t>& in_inKeyData,
+                                       const std::optional<AttestationKey>& /* in_attestationKey */,
                                        KeyCreationResult* out_creationResult) {
     auto legacyKeyGENParams = convertKeyParametersToLegacy(extractGenerationParams(inKeyParams));
     auto legacyKeyFormat = convertKeyFormatToLegacy(in_inKeyFormat);
@@ -401,11 +404,13 @@ ScopedAStatus KeyMintDevice::importKey(const std::vector<KeyParameter>& inKeyPar
     return convertErrorCode(errorCode);
 }
 
-ScopedAStatus KeyMintDevice::importWrappedKey(
-    const std::vector<uint8_t>& in_inWrappedKeyData,
-    const std::vector<uint8_t>& in_inWrappingKeyBlob, const std::vector<uint8_t>& in_inMaskingKey,
-    const std::vector<KeyParameter>& in_inUnwrappingParams, int64_t in_inPasswordSid,
-    int64_t in_inBiometricSid, KeyCreationResult* out_creationResult) {
+ScopedAStatus
+KeyMintDevice::importWrappedKey(const std::vector<uint8_t>& in_inWrappedKeyData,
+                                const std::vector<uint8_t>& in_inWrappingKeyBlob,  //
+                                const std::vector<uint8_t>& in_inMaskingKey,
+                                const std::vector<KeyParameter>& in_inUnwrappingParams,
+                                int64_t in_inPasswordSid, int64_t in_inBiometricSid,
+                                KeyCreationResult* out_creationResult) {
     auto legacyUnwrappingParams = convertKeyParametersToLegacy(in_inUnwrappingParams);
     KMV1::ErrorCode errorCode;
     auto result = mDevice->importWrappedKey(

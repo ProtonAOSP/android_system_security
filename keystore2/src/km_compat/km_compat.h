@@ -28,6 +28,7 @@
 
 #include "certificate_utils.h"
 
+using ::aidl::android::hardware::security::keymint::AttestationKey;
 using ::aidl::android::hardware::security::keymint::BeginResult;
 using ::aidl::android::hardware::security::keymint::ByteArray;
 using ::aidl::android::hardware::security::keymint::Certificate;
@@ -90,9 +91,11 @@ class KeyMintDevice : public aidl::android::hardware::security::keymint::BnKeyMi
     ScopedAStatus getHardwareInfo(KeyMintHardwareInfo* _aidl_return) override;
     ScopedAStatus addRngEntropy(const std::vector<uint8_t>& in_data) override;
     ScopedAStatus generateKey(const std::vector<KeyParameter>& in_keyParams,
+                              const std::optional<AttestationKey>& in_attestationKey,
                               KeyCreationResult* out_creationResult) override;
     ScopedAStatus importKey(const std::vector<KeyParameter>& in_inKeyParams,
                             KeyFormat in_inKeyFormat, const std::vector<uint8_t>& in_inKeyData,
+                            const std::optional<AttestationKey>& in_attestationKey,
                             KeyCreationResult* out_creationResult) override;
     ScopedAStatus importWrappedKey(const std::vector<uint8_t>& in_inWrappedKeyData,
                                    const std::vector<uint8_t>& in_inWrappingKeyBlob,

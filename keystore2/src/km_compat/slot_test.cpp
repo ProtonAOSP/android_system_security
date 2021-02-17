@@ -47,7 +47,7 @@ static std::vector<uint8_t> generateAESKey(std::shared_ptr<KeyMintDevice> device
         KMV1::makeKeyParameter(KMV1::TAG_PURPOSE, KeyPurpose::DECRYPT),
     });
     KeyCreationResult creationResult;
-    auto status = device->generateKey(keyParams, &creationResult);
+    auto status = device->generateKey(keyParams, std::nullopt /* attest_key */, &creationResult);
     if (!status.isOk()) {
         return {};
     }
@@ -150,13 +150,13 @@ TEST(SlotTest, TestSlots) {
         KMV1::makeKeyParameter(KMV1::TAG_NO_AUTH_REQUIRED, true),
     });
     KeyCreationResult creationResult;
-    status = device->generateKey(kps, &creationResult);
+    status = device->generateKey(kps, std::nullopt /* attest_key */, &creationResult);
     ASSERT_TRUE(!status.isOk());
     ASSERT_EQ(status.getServiceSpecificError(),
               static_cast<int32_t>(ErrorCode::TOO_MANY_OPERATIONS));
     // But generating a certificate with signCert does not use a slot.
     kps.pop_back();
-    status = device->generateKey(kps, &creationResult);
+    status = device->generateKey(kps, std::nullopt /* attest_key */, &creationResult);
     ASSERT_TRUE(status.isOk());
 
     // Destructing operations should free up their slots.
