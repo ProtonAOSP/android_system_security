@@ -15,7 +15,7 @@
 #![allow(dead_code)]
 
 use crate::{
-    database::EncryptedBy, database::KeyMetaData, database::KeyMetaEntry, database::KeystoreDB,
+    database::BlobMetaData, database::BlobMetaEntry, database::EncryptedBy, database::KeystoreDB,
     error::Error, error::ResponseCode, legacy_blob::LegacyBlobLoader,
 };
 use android_system_keystore2::aidl::android::system::keystore2::Domain::Domain;
@@ -141,49 +141,50 @@ impl SuperKeyManager {
                         generate_salt().context("In create_new_key: Failed to generate salt.")?;
                     let derived_key = derive_key_from_password(pw, Some(&salt), AES_256_KEY_LENGTH)
                         .context("In create_new_key: Failed to derive password.")?;
-                    let mut metadata = KeyMetaData::new();
-                    metadata.add(KeyMetaEntry::EncryptedBy(EncryptedBy::Password));
-                    metadata.add(KeyMetaEntry::Salt(salt));
+                    let mut metadata = BlobMetaData::new();
+                    metadata.add(BlobMetaEntry::EncryptedBy(EncryptedBy::Password));
+                    metadata.add(BlobMetaEntry::Salt(salt));
                     let (encrypted_key, iv, tag) = aes_gcm_encrypt(&super_key, &derived_key)
                         .context("In create_new_key: Failed to encrypt new super key.")?;
-                    metadata.add(KeyMetaEntry::Iv(iv));
-                    metadata.add(KeyMetaEntry::AeadTag(tag));
+                    metadata.add(BlobMetaEntry::Iv(iv));
+                    metadata.add(BlobMetaEntry::AeadTag(tag));
                     Ok((encrypted_key, metadata))
                 },
             )
             .context("In unlock_user_key: Failed to get key id.")?;
 
-        let metadata = entry.metadata();
-        let super_key = match (
-            metadata.encrypted_by(),
-            metadata.salt(),
-            metadata.iv(),
-            metadata.aead_tag(),
-            entry.km_blob(),
-        ) {
-            (Some(&EncryptedBy::Password), Some(salt), Some(iv), Some(tag), Some(blob)) => {
-                let key = derive_key_from_password(pw, Some(salt), AES_256_KEY_LENGTH)
-                    .context("In unlock_user_key: Failed to generate key from password.")?;
+        if let Some((ref blob, ref metadata)) = entry.key_blob_info() {
+            let super_key = match (
+                metadata.encrypted_by(),
+                metadata.salt(),
+                metadata.iv(),
+                metadata.aead_tag(),
+            ) {
+                (Some(&EncryptedBy::Password), Some(salt), Some(iv), Some(tag)) => {
+                    let key = derive_key_from_password(pw, Some(salt), AES_256_KEY_LENGTH)
+                        .context("In unlock_user_key: Failed to generate key from password.")?;
 
-                aes_gcm_decrypt(blob, iv, tag, &key)
-                    .context("In unlock_user_key: Failed to decrypt key blob.")?
-            }
-            (enc_by, salt, iv, tag, blob) => {
-                return Err(Error::Rc(ResponseCode::VALUE_CORRUPTED)).context(format!(
-                    concat!(
-                        "In unlock_user_key: Super key has incomplete metadata.",
-                        "Present: encrypted_by: {}, salt: {}, iv: {}, aead_tag: {}, blob: {}."
-                    ),
-                    enc_by.is_some(),
-                    salt.is_some(),
-                    iv.is_some(),
-                    tag.is_some(),
-                    blob.is_some()
-                ));
-            }
-        };
-
-        self.install_per_boot_key_for_user(user, entry.id(), super_key);
+                    aes_gcm_decrypt(blob, iv, tag, &key)
+                        .context("In unlock_user_key: Failed to decrypt key blob.")?
+                }
+                (enc_by, salt, iv, tag) => {
+                    return Err(Error::Rc(ResponseCode::VALUE_CORRUPTED)).context(format!(
+                        concat!(
+                            "In unlock_user_key: Super key has incomplete metadata.",
+                            "Present: encrypted_by: {}, salt: {}, iv: {}, aead_tag: {}."
+                        ),
+                        enc_by.is_some(),
+                        salt.is_some(),
+                        iv.is_some(),
+                        tag.is_some(),
+                    ));
+                }
+            };
+            self.install_per_boot_key_for_user(user, entry.id(), super_key);
+        } else {
+            return Err(Error::Rc(ResponseCode::VALUE_CORRUPTED))
+                .context("In unlock_user_key: Key entry has no key blob.");
+        }
 
         Ok(())
     }
@@ -192,7 +193,7 @@ impl SuperKeyManager {
     /// The function queries `metadata.encrypted_by()` to determine the encryption key.
     /// It then check if the required key is memory resident, and if so decrypts the
     /// blob.
-    pub fn unwrap_key(&self, blob: &[u8], metadata: &KeyMetaData) -> Result<ZVec> {
+    pub fn unwrap_key(&self, blob: &[u8], metadata: &BlobMetaData) -> Result<ZVec> {
         match metadata.encrypted_by() {
             Some(EncryptedBy::KeyId(key_id)) => match self.get_key(key_id) {
                 Some(key) => {
@@ -207,7 +208,7 @@ impl SuperKeyManager {
     }
 
     /// Unwraps an encrypted key blob given an encryption key.
-    fn unwrap_key_with_key(blob: &[u8], metadata: &KeyMetaData, key: &[u8]) -> Result<ZVec> {
+    fn unwrap_key_with_key(blob: &[u8], metadata: &BlobMetaData, key: &[u8]) -> Result<ZVec> {
         match (metadata.iv(), metadata.aead_tag()) {
             (Some(iv), Some(tag)) => aes_gcm_decrypt(blob, iv, tag, key)
                 .context("In unwrap_key_with_key: Failed to decrypt the key blob."),
