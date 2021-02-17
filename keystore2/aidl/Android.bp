@@ -114,3 +114,20 @@ aidl_interface {
         },
     },
 }
+
+aidl_interface {
+    name: "android.security.usermanager",
+    srcs: [ "android/security/usermanager/*.aidl" ],
+    unstable: true,
+    backend: {
+        java: {
+            sdk_version: "module_current",
+        },
+        rust: {
+            enabled: true,
+        },
+        ndk: {
+            enabled: true,
+        }
+    },
+}
