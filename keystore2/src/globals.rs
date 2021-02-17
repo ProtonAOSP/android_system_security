@@ -28,13 +28,14 @@ use crate::{
 };
 use crate::{enforcements::Enforcements, error::map_km_error};
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
-    KeyMintHardwareInfo::KeyMintHardwareInfo, SecurityLevel::SecurityLevel,
+    IKeyMintDevice::IKeyMintDevice, KeyMintHardwareInfo::KeyMintHardwareInfo,
+    SecurityLevel::SecurityLevel,
 };
 use android_hardware_security_keymint::binder::{StatusCode, Strong};
 use android_security_compat::aidl::android::security::compat::IKeystoreCompatService::IKeystoreCompatService;
 use anyhow::{Context, Result};
 use lazy_static::lazy_static;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::{cell::RefCell, sync::Once};
 use std::{collections::HashMap, path::Path, path::PathBuf};
 
@@ -43,10 +44,28 @@ static DB_INIT: Once = Once::new();
 /// Open a connection to the Keystore 2.0 database. This is called during the initialization of
 /// the thread local DB field. It should never be called directly. The first time this is called
 /// we also call KeystoreDB::cleanup_leftovers to restore the key lifecycle invariant. See the
-/// documentation of cleanup_leftovers for more details.
+/// documentation of cleanup_leftovers for more details. The function also constructs a blob
+/// garbage collector. The initializing closure constructs another database connection without
+/// a gc. Although one GC is created for each thread local database connection, this closure
+/// is run only once, as long as the ASYNC_TASK instance is the same. So only one additional
+/// database connection is created for the garbage collector worker.
 fn create_thread_local_db() -> KeystoreDB {
-    let mut db = KeystoreDB::new(&DB_PATH.lock().expect("Could not get the database directory."))
-        .expect("Failed to open database.");
+    let gc = Gc::new_init_with(ASYNC_TASK.clone(), || {
+        (
+            Box::new(|uuid, blob| {
+                let km_dev: Strong<dyn IKeyMintDevice> =
+                    get_keymint_dev_by_uuid(uuid).map(|(dev, _)| dev)?.get_interface()?;
+                map_km_error(km_dev.deleteKey(&*blob))
+                    .context("In invalidate key closure: Trying to invalidate key blob.")
+            }),
+            KeystoreDB::new(&DB_PATH.lock().expect("Could not get the database directory."), None)
+                .expect("Failed to open database."),
+        )
+    });
+
+    let mut db =
+        KeystoreDB::new(&DB_PATH.lock().expect("Could not get the database directory."), Some(gc))
+            .expect("Failed to open database.");
     DB_INIT.call_once(|| {
         log::info!("Touching Keystore 2.0 database for this first time since boot.");
         db.insert_last_off_body(MonotonicRawTime::now())
@@ -62,7 +81,6 @@ fn create_thread_local_db() -> KeystoreDB {
                 n
             );
         }
-        Gc::notify_gc();
     });
     db
 }
@@ -113,14 +131,14 @@ lazy_static! {
     pub static ref DB_PATH: Mutex<PathBuf> = Mutex::new(
         Path::new("/data/misc/keystore").to_path_buf());
     /// Runtime database of unwrapped super keys.
-    pub static ref SUPER_KEY: SuperKeyManager = Default::default();
+    pub static ref SUPER_KEY: Arc<SuperKeyManager> = Default::default();
     /// Map of KeyMint devices.
     static ref KEY_MINT_DEVICES: Mutex<DevicesMap> = Default::default();
     /// Timestamp service.
     static ref TIME_STAMP_DEVICE: Mutex<Option<Asp>> = Default::default();
     /// A single on-demand worker thread that handles deferred tasks with two different
     /// priorities.
-    pub static ref ASYNC_TASK: AsyncTask = Default::default();
+    pub static ref ASYNC_TASK: Arc<AsyncTask> = Default::default();
     /// Singleton for enforcements.
     pub static ref ENFORCEMENTS: Enforcements = Enforcements::new();
     /// LegacyBlobLoader is initialized and exists globally.
