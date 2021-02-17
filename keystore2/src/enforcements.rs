@@ -14,13 +14,10 @@
 
 //! This is the Keystore 2.0 Enforcements module.
 // TODO: more description to follow.
+use crate::database::{AuthTokenEntry, MonotonicRawTime};
 use crate::error::{map_binder_status, Error, ErrorCode};
 use crate::globals::{get_timestamp_service, ASYNC_TASK, DB, ENFORCEMENTS};
 use crate::key_parameter::{KeyParameter, KeyParameterValue};
-use crate::{
-    database::{AuthTokenEntry, MonotonicRawTime},
-    gc::Gc,
-};
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
     Algorithm::Algorithm, ErrorCode::ErrorCode as Ec, HardwareAuthToken::HardwareAuthToken,
     HardwareAuthenticatorType::HardwareAuthenticatorType,
@@ -245,7 +242,7 @@ impl AuthInfo {
                 let token_receiver = TokenReceiver(Arc::downgrade(&auth_request));
                 ENFORCEMENTS.register_op_auth_receiver(challenge, token_receiver);
 
-                ASYNC_TASK.queue_hi(move || timestamp_token_request(challenge, sender));
+                ASYNC_TASK.queue_hi(move |_| timestamp_token_request(challenge, sender));
                 self.state = DeferredAuthState::Waiting(auth_request);
                 Some(OperationChallenge { challenge })
             }
@@ -253,7 +250,7 @@ impl AuthInfo {
                 let hat = (*hat).clone();
                 let (sender, receiver) = channel::<Result<TimeStampToken, Error>>();
                 let auth_request = AuthRequest::timestamp(hat, receiver);
-                ASYNC_TASK.queue_hi(move || timestamp_token_request(challenge, sender));
+                ASYNC_TASK.queue_hi(move |_| timestamp_token_request(challenge, sender));
                 self.state = DeferredAuthState::Waiting(auth_request);
                 None
             }
@@ -305,16 +302,12 @@ impl AuthInfo {
         if let Some(key_id) = self.key_usage_limited {
             // On the last successful use, the key gets deleted. In this case we
             // have to notify the garbage collector.
-            let need_gc = DB
-                .with(|db| {
-                    db.borrow_mut()
-                        .check_and_update_key_usage_count(key_id)
-                        .context("Trying to update key usage count.")
-                })
-                .context("In after_finish.")?;
-            if need_gc {
-                Gc::notify_gc();
-            }
+            DB.with(|db| {
+                db.borrow_mut()
+                    .check_and_update_key_usage_count(key_id)
+                    .context("Trying to update key usage count.")
+            })
+            .context("In after_finish.")?;
         }
         Ok(())
     }

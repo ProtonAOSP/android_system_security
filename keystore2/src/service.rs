@@ -20,6 +20,7 @@
 
 use std::collections::HashMap;
 
+use crate::error::{self, map_or_log_err, ErrorCode};
 use crate::permission::{KeyPerm, KeystorePerm};
 use crate::security_level::KeystoreSecurityLevel;
 use crate::utils::{
@@ -31,10 +32,6 @@ use crate::{database::KEYSTORE_UUID, permission};
 use crate::{
     database::{KeyEntryLoadBits, KeyType, SubComponentType},
     error::ResponseCode,
-};
-use crate::{
-    error::{self, map_or_log_err, ErrorCode},
-    gc::Gc,
 };
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::SecurityLevel::SecurityLevel;
 use android_system_keystore2::aidl::android::system::keystore2::{
@@ -185,10 +182,10 @@ impl KeystoreService {
             .context("Failed to load key entry.")?;
 
             if let Some((key_id_guard, key_entry)) = entry {
-                db.set_blob(&key_id_guard, SubComponentType::CERT, public_cert)
+                db.set_blob(&key_id_guard, SubComponentType::CERT, public_cert, None)
                     .context("Failed to update cert subcomponent.")?;
 
-                db.set_blob(&key_id_guard, SubComponentType::CERT_CHAIN, certificate_chain)
+                db.set_blob(&key_id_guard, SubComponentType::CERT_CHAIN, certificate_chain, None)
                     .context("Failed to update cert chain subcomponent.")?;
                 return Ok(());
             }
@@ -269,16 +266,12 @@ impl KeystoreService {
 
     fn delete_key(&self, key: &KeyDescriptor) -> Result<()> {
         let caller_uid = ThreadState::get_calling_uid();
-        let need_gc = DB
-            .with(|db| {
-                db.borrow_mut().unbind_key(&key, KeyType::Client, caller_uid, |k, av| {
-                    check_key_permission(KeyPerm::delete(), k, &av).context("During delete_key.")
-                })
+        DB.with(|db| {
+            db.borrow_mut().unbind_key(&key, KeyType::Client, caller_uid, |k, av| {
+                check_key_permission(KeyPerm::delete(), k, &av).context("During delete_key.")
             })
-            .context("In delete_key: Trying to unbind the key.")?;
-        if need_gc {
-            Gc::notify_gc();
-        }
+        })
+        .context("In delete_key: Trying to unbind the key.")?;
         Ok(())
     }
 
