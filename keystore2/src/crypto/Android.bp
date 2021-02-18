@@ -74,6 +74,7 @@ rust_bindgen {
         "--whitelist-function", "ECPOINTOct2Point",
         "--whitelist-function", "EC_KEY_free",
         "--whitelist-function", "EC_POINT_free",
+        "--whitelist-function", "extractSubjectFromCertificate",
         "--whitelist-type", "EC_KEY",
         "--whitelist-type", "EC_POINT",
         "--whitelist-var", "EC_MAX_BYTES",
