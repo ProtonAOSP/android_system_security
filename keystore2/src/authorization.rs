@@ -16,7 +16,7 @@
 
 use crate::error::Error as KeystoreError;
 use crate::error::map_or_log_err;
-use crate::globals::{ENFORCEMENTS, SUPER_KEY, DB};
+use crate::globals::{ENFORCEMENTS, SUPER_KEY, DB, LEGACY_MIGRATOR};
 use crate::permission::KeystorePerm;
 use crate::super_key::UserState;
 use crate::utils::check_keystore_permission;
@@ -70,6 +70,7 @@ impl AuthorizationManager {
                     .with(|db| {
                         UserState::get_with_password_unlock(
                             &mut db.borrow_mut(),
+                            &LEGACY_MIGRATOR,
                             &SUPER_KEY,
                             user_id as u32,
                             user_password,

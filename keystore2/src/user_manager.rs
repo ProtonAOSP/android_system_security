@@ -16,7 +16,7 @@
 
 use crate::error::map_or_log_err;
 use crate::error::Error as KeystoreError;
-use crate::globals::{DB, SUPER_KEY};
+use crate::globals::{DB, LEGACY_MIGRATOR, SUPER_KEY};
 use crate::permission::KeystorePerm;
 use crate::super_key::UserState;
 use crate::utils::check_keystore_permission;
@@ -50,6 +50,7 @@ impl UserManager {
             .with(|db| {
                 UserState::get_with_password_changed(
                     &mut db.borrow_mut(),
+                    &LEGACY_MIGRATOR,
                     &SUPER_KEY,
                     user_id as u32,
                     password,

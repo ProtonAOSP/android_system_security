@@ -24,6 +24,7 @@ pub mod globals;
 /// Internal Representation of Key Parameter and convenience functions.
 pub mod key_parameter;
 pub mod legacy_blob;
+pub mod legacy_migrator;
 pub mod operation;
 pub mod permission;
 pub mod remote_provisioning;
