@@ -60,6 +60,29 @@ extern "C" {
   size_t ECPOINTPoint2Oct(const EC_POINT *point, uint8_t *buf, size_t len);
 
   EC_POINT* ECPOINTOct2Point(const uint8_t *buf, size_t len);
+
 }
+
+// Parse a DER-encoded X.509 certificate contained in cert_buf, with length
+// cert_len, extract the subject, DER-encode it and write the result to
+// subject_buf, which has subject_buf_len capacity.
+//
+// Because the length of the issuer is unknown, and becaue we'd like to (a) be
+// able to handle subjects of any size and (b) avoid parsing the certificate
+// twice most of the time, once to discover the length and once to parse it, the
+// return value is overloaded.
+//
+// If the return value > 0 it specifies the number of bytes written into
+// subject_buf; the operation was successful.
+//
+// If the return value == 0, certificate parsing failed unrecoverably.  The
+// reason will be logged.
+//
+// If the return value < 0, the operation failed because the subject size >
+// subject_buf_len.  The return value is -(subject_size), where subject_size is
+// the size of the extracted DER-encoded subject field.  Call
+// extractSubjectFromCertificate again with a sufficiently-large buffer.
+int extractSubjectFromCertificate(const uint8_t* cert_buf, size_t cert_len,
+                                  uint8_t* subject_buf, size_t subject_buf_len);
 
 #endif  //  __CRYPTO_H__

@@ -26,6 +26,7 @@
 #include <openssl/evp.h>
 #include <openssl/hkdf.h>
 #include <openssl/rand.h>
+#include <openssl/x509.h>
 
 #include <vector>
 
@@ -260,4 +261,43 @@ EC_POINT* ECPOINTOct2Point(const uint8_t* buf, size_t len) {
         return nullptr;
     }
     return point;
+}
+
+int extractSubjectFromCertificate(const uint8_t* cert_buf, size_t cert_len, uint8_t* subject_buf,
+                                  size_t subject_buf_len) {
+    if (!cert_buf || !subject_buf) {
+        ALOGE("extractSubjectFromCertificate: received null pointer");
+        return 0;
+    }
+
+    const uint8_t* p = cert_buf;
+    bssl::UniquePtr<X509> cert(d2i_X509(nullptr /* Allocate X509 struct */, &p, cert_len));
+    if (!cert) {
+        ALOGE("extractSubjectFromCertificate: failed to parse certificate");
+        return 0;
+    }
+
+    X509_NAME* subject = X509_get_subject_name(cert.get());
+    if (!subject) {
+        ALOGE("extractSubjectFromCertificate: failed to retrieve subject name");
+        return 0;
+    }
+
+    int subject_len = i2d_X509_NAME(subject, nullptr /* Don't copy the data */);
+    if (subject_len < 0) {
+        ALOGE("extractSubjectFromCertificate: error obtaining encoded subject name length");
+        return 0;
+    }
+
+    if (subject_len > subject_buf_len) {
+        // Return the subject length, negated, so the caller knows how much
+        // buffer space is required.
+        ALOGI("extractSubjectFromCertificate: needed %d bytes for subject, caller provided %zu",
+              subject_len, subject_buf_len);
+        return -subject_len;
+    }
+
+    // subject_buf has enough space.
+    uint8_t* tmp = subject_buf;
+    return i2d_X509_NAME(subject, &tmp);
 }
