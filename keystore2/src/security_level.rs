@@ -16,7 +16,7 @@
 
 //! This crate implements the IKeystoreSecurityLevel interface.
 
-use crate::{database::Uuid, gc::Gc, globals::get_keymint_device};
+use crate::globals::get_keymint_device;
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
     Algorithm::Algorithm, HardwareAuthenticatorType::HardwareAuthenticatorType,
     IKeyMintDevice::IKeyMintDevice, KeyCreationResult::KeyCreationResult, KeyFormat::KeyFormat,
@@ -36,17 +36,17 @@ use crate::key_parameter::KeyParameter as KsKeyParam;
 use crate::key_parameter::KeyParameterValue as KsKeyParamValue;
 use crate::utils::{check_key_permission, uid_to_android_user, Asp};
 use crate::{
-    database::{CertificateInfo, KeyIdGuard},
-    globals::DB,
-};
-use crate::{
-    database::{DateTime, KeyMetaData, KeyMetaEntry, KeyType},
+    database::{
+        BlobMetaData, BlobMetaEntry, DateTime, KeyEntry, KeyEntryLoadBits, KeyMetaData,
+        KeyMetaEntry, KeyType, SubComponentType, Uuid,
+    },
+    operation::KeystoreOperation,
+    operation::OperationDb,
     permission::KeyPerm,
 };
 use crate::{
-    database::{KeyEntry, KeyEntryLoadBits, SubComponentType},
-    operation::KeystoreOperation,
-    operation::OperationDb,
+    database::{CertificateInfo, KeyIdGuard},
+    globals::DB,
 };
 use crate::{
     error::{self, map_km_error, map_or_log_err, Error, ErrorCode},
@@ -138,23 +138,22 @@ impl KeystoreSecurityLevel {
             }
             _ => DB
                 .with::<_, Result<KeyDescriptor>>(|db| {
-                    let mut metadata = KeyMetaData::new();
-                    metadata.add(KeyMetaEntry::CreationDate(creation_date));
+                    let mut key_metadata = KeyMetaData::new();
+                    key_metadata.add(KeyMetaEntry::CreationDate(creation_date));
+                    let mut blob_metadata = BlobMetaData::new();
+                    blob_metadata.add(BlobMetaEntry::KmUuid(self.km_uuid));
 
                     let mut db = db.borrow_mut();
-                    let (need_gc, key_id) = db
+                    let key_id = db
                         .store_new_key(
                             &key,
                             &key_parameters,
-                            &key_blob,
+                            &(&key_blob, &blob_metadata),
                             &cert_info,
-                            &metadata,
+                            &key_metadata,
                             &self.km_uuid,
                         )
                         .context("In store_new_key.")?;
-                    if need_gc {
-                        Gc::notify_gc();
-                    }
                     Ok(KeyDescriptor {
                         domain: Domain::KEY_ID,
                         nspace: key_id.id(),
@@ -185,7 +184,7 @@ impl KeystoreSecurityLevel {
         // so that we can use it by reference like the blob provided by the key descriptor.
         // Otherwise, we would have to clone the blob from the key descriptor.
         let scoping_blob: Vec<u8>;
-        let (km_blob, key_properties, key_id_guard) = match key.domain {
+        let (km_blob, key_properties, key_id_guard, blob_metadata) = match key.domain {
             Domain::BLOB => {
                 check_key_permission(KeyPerm::use_(), key, &None)
                     .context("In create_operation: checking use permission for Domain::BLOB.")?;
@@ -199,6 +198,7 @@ impl KeystoreSecurityLevel {
                             ))
                         }
                     },
+                    None,
                     None,
                     None,
                 )
@@ -215,19 +215,19 @@ impl KeystoreSecurityLevel {
                         )
                     })
                     .context("In create_operation: Failed to load key blob.")?;
-                scoping_blob = match key_entry.take_km_blob() {
-                    Some(blob) => blob,
-                    None => {
-                        return Err(Error::sys()).context(concat!(
-                            "In create_operation: Successfully loaded key entry,",
-                            " but KM blob was missing."
-                        ))
-                    }
-                };
+
+                let (blob, blob_metadata) =
+                    key_entry.take_key_blob_info().ok_or_else(Error::sys).context(concat!(
+                        "In create_operation: Successfully loaded key entry, ",
+                        "but KM blob was missing."
+                    ))?;
+                scoping_blob = blob;
+
                 (
                     &scoping_blob,
                     Some((key_id_guard.id(), key_entry.into_key_parameters())),
                     Some(key_id_guard),
+                    Some(blob_metadata),
                 )
             }
         };
@@ -265,7 +265,7 @@ impl KeystoreSecurityLevel {
             .upgrade_keyblob_if_required_with(
                 &*km_dev,
                 key_id_guard,
-                &km_blob,
+                &(km_blob, blob_metadata.as_ref()),
                 &operation_parameters,
                 |blob| loop {
                     match map_km_error(km_dev.begin(
@@ -389,7 +389,7 @@ impl KeystoreSecurityLevel {
         let km_dev: Strong<dyn IKeyMintDevice> = self.keymint.get_interface()?;
         map_km_error(km_dev.addRngEntropy(entropy))
             .context("In generate_key: Trying to add entropy.")?;
-        let creation_result = map_km_error(km_dev.generateKey(&params))
+        let creation_result = map_km_error(km_dev.generateKey(&params, None /* attestKey */))
             .context("In generate_key: While generating Key")?;
 
         let user_id = uid_to_android_user(caller_uid);
@@ -444,8 +444,9 @@ impl KeystoreSecurityLevel {
 
         let km_dev: Strong<dyn IKeyMintDevice> =
             self.keymint.get_interface().context("In import_key: Trying to get the KM device")?;
-        let creation_result = map_km_error(km_dev.importKey(&params, format, key_data))
-            .context("In import_key: Trying to call importKey")?;
+        let creation_result =
+            map_km_error(km_dev.importKey(&params, format, key_data, None /* attestKey */))
+                .context("In import_key: Trying to call importKey")?;
 
         let user_id = uid_to_android_user(caller_uid);
         self.store_new_key(key, creation_result, user_id).context("In import_key.")
@@ -498,7 +499,7 @@ impl KeystoreSecurityLevel {
             _ => panic!("Unreachable."),
         };
 
-        // import_wrapped_key requires the rebind permission for the new key.
+        // Import_wrapped_key requires the rebind permission for the new key.
         check_key_permission(KeyPerm::rebind(), &key, &None).context("In import_wrapped_key.")?;
 
         let (wrapping_key_id_guard, wrapping_key_entry) = DB
@@ -512,8 +513,8 @@ impl KeystoreSecurityLevel {
                 )
             })
             .context("Failed to load wrapping key.")?;
-        let wrapping_key_blob = match wrapping_key_entry.km_blob() {
-            Some(blob) => blob,
+        let (wrapping_key_blob, wrapping_blob_metadata) = match wrapping_key_entry.key_blob_info() {
+            Some((blob, metadata)) => (blob, metadata),
             None => {
                 return Err(error::Error::sys()).context(concat!(
                     "No km_blob after successfully loading key.",
@@ -549,12 +550,12 @@ impl KeystoreSecurityLevel {
             .upgrade_keyblob_if_required_with(
                 &*km_dev,
                 Some(wrapping_key_id_guard),
-                wrapping_key_blob,
+                &(&wrapping_key_blob, Some(&wrapping_blob_metadata)),
                 &[],
                 |wrapping_blob| {
                     let creation_result = map_km_error(km_dev.importWrappedKey(
                         wrapped_data,
-                        wrapping_key_blob,
+                        wrapping_blob,
                         masking_key,
                         &params,
                         pw_sid,
@@ -574,16 +575,16 @@ impl KeystoreSecurityLevel {
         &self,
         km_dev: &dyn IKeyMintDevice,
         key_id_guard: Option<KeyIdGuard>,
-        blob: &[u8],
+        blob_info: &(&[u8], Option<&BlobMetaData>),
         params: &[KeyParameter],
         f: F,
     ) -> Result<(T, Option<Vec<u8>>)>
     where
         F: Fn(&[u8]) -> Result<T, Error>,
     {
-        match f(blob) {
+        match f(blob_info.0) {
             Err(Error::Km(ErrorCode::KEY_REQUIRES_UPGRADE)) => {
-                let upgraded_blob = map_km_error(km_dev.upgradeKey(blob, params))
+                let upgraded_blob = map_km_error(km_dev.upgradeKey(blob_info.0, params))
                     .context("In upgrade_keyblob_if_required_with: Upgrade failed.")?;
                 key_id_guard.map_or(Ok(()), |key_id_guard| {
                     DB.with(|db| {
@@ -591,6 +592,7 @@ impl KeystoreSecurityLevel {
                             &key_id_guard,
                             SubComponentType::KEY_BLOB,
                             Some(&upgraded_blob),
+                            blob_info.1,
                         )
                     })
                     .context(concat!(

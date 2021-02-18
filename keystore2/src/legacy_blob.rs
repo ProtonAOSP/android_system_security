@@ -938,7 +938,7 @@ mod test {
         )?;
 
         let key_manager = crate::super_key::SuperKeyManager::new();
-        let mut db = crate::database::KeystoreDB::new(temp_dir.path())?;
+        let mut db = crate::database::KeystoreDB::new(temp_dir.path(), None)?;
         let legacy_blob_loader = LegacyBlobLoader::new(temp_dir.path());
 
         assert_eq!(

@@ -18,80 +18,96 @@
 //! optionally dispose of sensitive key material appropriately, and then delete
 //! the key entry from the database.
 
-use crate::globals::{get_keymint_dev_by_uuid, DB};
-use crate::{error::map_km_error, globals::ASYNC_TASK};
-use android_hardware_security_keymint::aidl::android::hardware::security::keymint::IKeyMintDevice::IKeyMintDevice;
-use android_hardware_security_keymint::binder::Strong;
-use anyhow::Result;
+use crate::{
+    async_task,
+    database::{KeystoreDB, Uuid},
+};
+use anyhow::{Context, Result};
+use async_task::AsyncTask;
+use std::sync::Arc;
 
-#[derive(Clone, Copy)]
 pub struct Gc {
-    remaining_tries: u32,
+    async_task: Arc<AsyncTask>,
 }
 
 impl Gc {
-    const MAX_ERROR_RETRIES: u32 = 3u32;
+    /// Creates a garbage collector using the given async_task.
+    /// The garbage collector needs a function to invalidate key blobs and a database connection.
+    /// Both are obtained from the init function. The function is only called if this is first
+    /// time a garbage collector was initialized with the given AsyncTask instance.
+    pub fn new_init_with<F>(async_task: Arc<AsyncTask>, init: F) -> Self
+    where
+        F: FnOnce() -> (Box<dyn Fn(&Uuid, &[u8]) -> Result<()> + Send + 'static>, KeystoreDB)
+            + Send
+            + 'static,
+    {
+        let weak_at = Arc::downgrade(&async_task);
+        // Initialize the task's shelf.
+        async_task.queue_hi(move |shelf| {
+            let (invalidate_key, db) = init();
+            shelf.get_or_put_with(|| GcInternal {
+                blob_id_to_delete: None,
+                invalidate_key,
+                db,
+                async_task: weak_at,
+            });
+        });
+        Self { async_task }
+    }
 
-    /// Attempts to process one unreferenced key from the database.
-    /// Returns Ok(true) if a key was deleted and Ok(false) if there were no more keys to process.
+    /// Notifies the key garbage collector to iterate through orphaned and superseded blobs and
+    /// attempts their deletion. We only process one key at a time and then schedule another
+    /// attempt by queueing it in the async_task (low priority) queue.
+    pub fn notify_gc(&self) {
+        self.async_task.queue_lo(|shelf| shelf.get_downcast_mut::<GcInternal>().unwrap().step())
+    }
+}
+
+struct GcInternal {
+    blob_id_to_delete: Option<i64>,
+    invalidate_key: Box<dyn Fn(&Uuid, &[u8]) -> Result<()> + Send + 'static>,
+    db: KeystoreDB,
+    async_task: std::sync::Weak<AsyncTask>,
+}
+
+impl GcInternal {
+    /// Attempts to process one blob from the database.
     /// We process one key at a time, because deleting a key is a time consuming process which
     /// may involve calling into the KeyMint backend and we don't want to hog neither the backend
     /// nor the database for extended periods of time.
-    fn process_one_key() -> Result<bool> {
-        DB.with(|db| {
-            let mut db = db.borrow_mut();
-            if let Some((key_id, mut key_entry)) = db.get_unreferenced_key()? {
-                if let Some(blob) = key_entry.take_km_blob() {
-                    let km_dev: Strong<dyn IKeyMintDevice> =
-                        get_keymint_dev_by_uuid(key_entry.km_uuid())
-                            .map(|(dev, _)| dev)?
-                            .get_interface()?;
-                    if let Err(e) = map_km_error(km_dev.deleteKey(&blob)) {
-                        // Log but ignore error.
-                        log::error!("Error trying to delete key. {:?}", e);
-                    }
-                }
-                db.purge_key_entry(key_id)?;
-                return Ok(true);
-            }
-            Ok(false)
-        })
-    }
+    fn process_one_key(&mut self) -> Result<()> {
+        if let Some((blob_id, blob, blob_metadata)) = self
+            .db
+            .handle_next_superseded_blob(self.blob_id_to_delete.take())
+            .context("In process_one_key: Trying to handle superseded blob.")?
+        {
+            // Set the blob_id as the next to be deleted blob. So it will be
+            // removed from the database regardless of whether the following
+            // succeeds or not.
+            self.blob_id_to_delete = Some(blob_id);
 
-    /// Processes one key and then schedules another attempt until it runs out of tries or keys
-    /// to delete.
-    fn process_all(mut self) {
-        match Self::process_one_key() {
-            // We successfully removed a key.
-            Ok(true) => self.remaining_tries = Self::MAX_ERROR_RETRIES,
-            // There were no more keys to remove. We may exit.
-            Ok(false) => self.remaining_tries = 0,
-            // An error occurred. We retry in case the error was transient, but
-            // we also count down the number of tries so that we don't spin
-            // indefinitely.
-            Err(e) => {
-                self.remaining_tries -= 1;
-                log::error!(
-                    concat!(
-                        "Failed to delete key. Retrying in case this error was transient. ",
-                        "(Tries remaining {}) {:?}"
-                    ),
-                    self.remaining_tries,
-                    e
-                )
+            // If the key has a km_uuid we try to get the corresponding device
+            // and delete the key, unwrapping if necessary and possible.
+            // (At this time keys may get deleted without having the super encryption
+            // key in this case we can only delete the key from the database.)
+            if let Some(uuid) = blob_metadata.km_uuid() {
+                (self.invalidate_key)(&uuid, &*blob)
+                    .context("In process_one_key: Trying to invalidate key.")?;
             }
         }
-        if self.remaining_tries != 0 {
-            ASYNC_TASK.queue_lo(move || {
-                self.process_all();
-            })
-        }
+        Ok(())
     }
 
-    /// Notifies the key garbage collector to iterate through unreferenced keys and attempt
-    /// their deletion. We only process one key at a time and then schedule another
-    /// attempt by queueing it in the async_task (low priority) queue.
-    pub fn notify_gc() {
-        ASYNC_TASK.queue_lo(|| Self { remaining_tries: Self::MAX_ERROR_RETRIES }.process_all())
+    /// Processes one key and then schedules another attempt until it runs out of blobs to delete.
+    fn step(&mut self) {
+        if let Err(e) = self.process_one_key() {
+            log::error!("Error trying to delete blob entry. {:?}", e);
+        }
+        // Schedule the next step. This gives high priority requests a chance to interleave.
+        if self.blob_id_to_delete.is_some() {
+            if let Some(at) = self.async_task.upgrade() {
+                at.queue_lo(move |shelf| shelf.get_downcast_mut::<GcInternal>().unwrap().step());
+            }
+        }
     }
 }
