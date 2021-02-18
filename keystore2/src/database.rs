@@ -1167,6 +1167,32 @@ impl KeystoreDB {
         .context("In store_super_key.")
     }
 
+    /// Loads super key of a given user, if exists
+    pub fn load_super_key(&mut self, user_id: u32) -> Result<Option<(KeyIdGuard, KeyEntry)>> {
+        self.with_transaction(TransactionBehavior::Immediate, |tx| {
+            let key_descriptor = KeyDescriptor {
+                domain: Domain::APP,
+                nspace: user_id as u64 as i64,
+                alias: Some(String::from("USER_SUPER_KEY")),
+                blob: None,
+            };
+            let id = Self::load_key_entry_id(&tx, &key_descriptor, KeyType::Super);
+            match id {
+                Ok(id) => {
+                    let key_entry = Self::load_key_components(&tx, KeyEntryLoadBits::KM, id)
+                        .context("In load_super_key. Failed to load key entry.")?;
+                    Ok(Some((KEY_ID_LOCK.get(id), key_entry)))
+                }
+                Err(error) => match error.root_cause().downcast_ref::<KsError>() {
+                    Some(KsError::Rc(ResponseCode::KEY_NOT_FOUND)) => Ok(None),
+                    _ => Err(error).context("In load_super_key."),
+                },
+            }
+            .no_gc()
+        })
+        .context("In load_super_key.")
+    }
+
     /// Atomically loads a key entry and associated metadata or creates it using the
     /// callback create_new_key callback. The callback is called during a database
     /// transaction. This means that implementers should be mindful about using
@@ -4730,16 +4756,7 @@ mod tests {
         //check if super key exists
         assert!(db.key_exists(Domain::APP, 1, "USER_SUPER_KEY", KeyType::Super)?);
 
-        //load the super key from the database
-        let tx = db.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let key_descriptor = KeyDescriptor {
-            domain: Domain::APP,
-            nspace: 1,
-            alias: Some(String::from("USER_SUPER_KEY")),
-            blob: None,
-        };
-        let id = KeystoreDB::load_key_entry_id(&tx, &key_descriptor, KeyType::Super)?;
-        let key_entry = KeystoreDB::load_key_components(&tx, KeyEntryLoadBits::KM, id)?;
+        let (_, key_entry) = db.load_super_key(1)?.unwrap();
         let loaded_super_key = SuperKeyManager::extract_super_key_from_key_entry(key_entry, &pw)?;
 
         let decrypted_secret_bytes = keystore2_crypto::aes_gcm_decrypt(
