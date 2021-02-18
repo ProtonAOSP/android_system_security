@@ -18,6 +18,7 @@
 
 use crate::gc::Gc;
 use crate::legacy_blob::LegacyBlobLoader;
+use crate::legacy_migrator::LegacyMigrator;
 use crate::super_key::SuperKeyManager;
 use crate::utils::Asp;
 use crate::{async_task::AsyncTask, database::MonotonicRawTime};
@@ -49,7 +50,7 @@ static DB_INIT: Once = Once::new();
 /// a gc. Although one GC is created for each thread local database connection, this closure
 /// is run only once, as long as the ASYNC_TASK instance is the same. So only one additional
 /// database connection is created for the garbage collector worker.
-fn create_thread_local_db() -> KeystoreDB {
+pub fn create_thread_local_db() -> KeystoreDB {
     let gc = Gc::new_init_with(ASYNC_TASK.clone(), || {
         (
             Box::new(|uuid, blob| {
@@ -60,6 +61,7 @@ fn create_thread_local_db() -> KeystoreDB {
             }),
             KeystoreDB::new(&DB_PATH.lock().expect("Could not get the database directory."), None)
                 .expect("Failed to open database."),
+            SUPER_KEY.clone(),
         )
     });
 
@@ -143,8 +145,11 @@ lazy_static! {
     pub static ref ENFORCEMENTS: Enforcements = Enforcements::new();
     /// LegacyBlobLoader is initialized and exists globally.
     /// The same directory used by the database is used by the LegacyBlobLoader as well.
-    pub static ref LEGACY_BLOB_LOADER: LegacyBlobLoader = LegacyBlobLoader::new(
-        &DB_PATH.lock().expect("Could not get the database path for legacy blob loader."));
+    pub static ref LEGACY_BLOB_LOADER: Arc<LegacyBlobLoader> = Arc::new(LegacyBlobLoader::new(
+        &DB_PATH.lock().expect("Could not get the database path for legacy blob loader.")));
+    /// Legacy migrator. Atomically migrates legacy blobs to the database.
+    pub static ref LEGACY_MIGRATOR: Arc<LegacyMigrator> =
+        Arc::new(LegacyMigrator::new(ASYNC_TASK.clone()));
 }
 
 static KEYMINT_SERVICE_NAME: &str = "android.hardware.security.keymint.IKeyMintDevice";

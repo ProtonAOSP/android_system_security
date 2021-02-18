@@ -26,7 +26,10 @@ use android_hardware_security_keymint::aidl::android::hardware::security::keymin
 use android_hardware_security_secureclock::aidl::android::hardware::security::secureclock::{
     ISecureClock::ISecureClock, TimeStampToken::TimeStampToken,
 };
-use android_system_keystore2::aidl::android::system::keystore2::OperationChallenge::OperationChallenge;
+use android_system_keystore2::aidl::android::system::keystore2::{
+    IKeystoreSecurityLevel::KEY_FLAG_AUTH_BOUND_WITHOUT_CRYPTOGRAPHIC_LSKF_BINDING,
+    OperationChallenge::OperationChallenge,
+};
 use android_system_keystore2::binder::Strong;
 use anyhow::{Context, Result};
 use std::sync::{
@@ -743,6 +746,19 @@ impl Enforcements {
     /// by the DeferredAuthState.
     fn register_op_auth_receiver(&self, challenge: i64, recv: TokenReceiver) {
         self.op_auth_map.add_receiver(challenge, recv);
+    }
+
+    /// Given the set of key parameters and flags, check if super encryption is required.
+    pub fn super_encryption_required(key_parameters: &[KeyParameter], flags: Option<i32>) -> bool {
+        let auth_bound = key_parameters.iter().any(|kp| kp.get_tag() == Tag::USER_SECURE_ID);
+
+        let skip_lskf_binding = if let Some(flags) = flags {
+            (flags & KEY_FLAG_AUTH_BOUND_WITHOUT_CRYPTOGRAPHIC_LSKF_BINDING) != 0
+        } else {
+            false
+        };
+
+        auth_bound && !skip_lskf_binding
     }
 }
 
