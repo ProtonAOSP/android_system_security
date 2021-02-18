@@ -60,6 +60,7 @@ fn create_thread_local_db() -> KeystoreDB {
             }),
             KeystoreDB::new(&DB_PATH.lock().expect("Could not get the database directory."), None)
                 .expect("Failed to open database."),
+            SUPER_KEY.clone(),
         )
     });
 
