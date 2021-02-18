@@ -673,7 +673,8 @@ impl LegacyBlobLoader {
                             let decrypted = match key_manager
                                 .get_per_boot_key_by_user_id(uid_to_android_user(uid))
                             {
-                                Some(key) => aes_gcm_decrypt(&data, &iv, &tag, &key).context(
+                                Some(key) => aes_gcm_decrypt(&data, &iv, &tag, &(key.get_key()))
+                                    .context(
                                     "In load_by_uid_alias: while trying to decrypt legacy blob.",
                                 )?,
                                 None => {
