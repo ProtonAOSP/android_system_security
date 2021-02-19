@@ -45,7 +45,7 @@ use crate::error::{Error as KsError, ErrorCode, ResponseCode};
 use crate::impl_metadata; // This is in db_utils.rs
 use crate::key_parameter::{KeyParameter, Tag};
 use crate::permission::KeyPermSet;
-use crate::utils::get_current_time_in_seconds;
+use crate::utils::{get_current_time_in_seconds, AID_USER_OFFSET};
 use crate::{
     db_utils::{self, SqlField},
     gc::Gc,
@@ -1118,6 +1118,47 @@ impl KeystoreDB {
             .no_gc()
         })
         .context("In key_exists.")
+    }
+
+    /// Stores a super key in the database.
+    pub fn store_super_key(
+        &mut self,
+        user_id: i64,
+        blob_info: &(&[u8], &BlobMetaData),
+    ) -> Result<KeyEntry> {
+        self.with_transaction(TransactionBehavior::Immediate, |tx| {
+            let key_id = Self::insert_with_retry(|id| {
+                tx.execute(
+                    "INSERT into persistent.keyentry
+                            (id, key_type, domain, namespace, alias, state, km_uuid)
+                            VALUES(?, ?, NULL, ?, ?, ?, ?);",
+                    params![
+                        id,
+                        KeyType::Super,
+                        user_id,
+                        Self::USER_SUPER_KEY_ALIAS,
+                        KeyLifeCycle::Live,
+                        &KEYSTORE_UUID,
+                    ],
+                )
+            })
+            .context("Failed to insert into keyentry table.")?;
+
+            let (blob, blob_metadata) = *blob_info;
+            Self::set_blob_internal(
+                &tx,
+                key_id,
+                SubComponentType::KEY_BLOB,
+                Some(blob),
+                Some(blob_metadata),
+            )
+            .context("Failed to store key blob.")?;
+
+            Self::load_key_components(tx, KeyEntryLoadBits::KM, key_id)
+                .context("Trying to load key components.")
+                .no_gc()
+        })
+        .context("In store_super_key.")
     }
 
     /// Atomically loads a key entry and associated metadata or creates it using the
@@ -2419,6 +2460,82 @@ impl KeystoreDB {
         .context("In get_key_km_uuid.")
     }
 
+    /// Delete the keys created on behalf of the user, denoted by the user id.
+    /// Delete all the keys unless 'keep_non_super_encrypted_keys' set to true.
+    /// Returned boolean is to hint the garbage collector to delete the unbound keys.
+    /// The caller of this function should notify the gc if the returned value is true.
+    pub fn unbind_keys_for_user(
+        &mut self,
+        user_id: u32,
+        keep_non_super_encrypted_keys: bool,
+    ) -> Result<()> {
+        self.with_transaction(TransactionBehavior::Immediate, |tx| {
+            let mut stmt = tx
+                .prepare(&format!(
+                    "SELECT id from persistent.keyentry
+                     WHERE (
+                         key_type = ?
+                         AND domain = ?
+                         AND cast ( (namespace/{aid_user_offset}) as int) = ?
+                         AND state = ?
+                     ) OR (
+                         key_type = ?
+                         AND namespace = ?
+                         AND alias = ?
+                         AND state = ?
+                     );",
+                    aid_user_offset = AID_USER_OFFSET
+                ))
+                .context(concat!(
+                    "In unbind_keys_for_user. ",
+                    "Failed to prepare the query to find the keys created by apps."
+                ))?;
+
+            let mut rows = stmt
+                .query(params![
+                    // WHERE client key:
+                    KeyType::Client,
+                    Domain::APP.0 as u32,
+                    user_id,
+                    KeyLifeCycle::Live,
+                    // OR super key:
+                    KeyType::Super,
+                    user_id,
+                    Self::USER_SUPER_KEY_ALIAS,
+                    KeyLifeCycle::Live
+                ])
+                .context("In unbind_keys_for_user. Failed to query the keys created by apps.")?;
+
+            let mut key_ids: Vec<i64> = Vec::new();
+            db_utils::with_rows_extract_all(&mut rows, |row| {
+                key_ids
+                    .push(row.get(0).context("Failed to read key id of a key created by an app.")?);
+                Ok(())
+            })
+            .context("In unbind_keys_for_user.")?;
+
+            let mut notify_gc = false;
+            for key_id in key_ids {
+                if keep_non_super_encrypted_keys {
+                    // Load metadata and filter out non-super-encrypted keys.
+                    if let (_, Some((_, blob_metadata)), _, _) =
+                        Self::load_blob_components(key_id, KeyEntryLoadBits::KM, tx)
+                            .context("In unbind_keys_for_user: Trying to load blob info.")?
+                    {
+                        if blob_metadata.encrypted_by().is_none() {
+                            continue;
+                        }
+                    }
+                }
+                notify_gc = Self::mark_unreferenced(&tx, key_id as u64 as i64)
+                    .context("In unbind_keys_for_user.")?
+                    || notify_gc;
+            }
+            Ok(()).do_gc(notify_gc)
+        })
+        .context("In unbind_keys_for_user.")
+    }
+
     fn load_key_components(
         tx: &Transaction,
         load_bits: KeyEntryLoadBits,
@@ -2711,6 +2828,7 @@ mod tests {
     };
     use crate::key_perm_set;
     use crate::permission::{KeyPerm, KeyPermSet};
+    use crate::super_key::SuperKeyManager;
     use keystore2_test_utils::TempDir;
     use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
         HardwareAuthToken::HardwareAuthToken,
@@ -4566,6 +4684,61 @@ mod tests {
         let last_off_body_2 = KeystoreDB::get_last_off_body(&tx2)?;
         tx2.commit()?;
         assert!(last_off_body_1.seconds() < last_off_body_2.seconds());
+        Ok(())
+    }
+
+    #[test]
+    fn test_unbind_keys_for_user() -> Result<()> {
+        let mut db = new_test_db()?;
+        db.unbind_keys_for_user(1, false)?;
+
+        make_test_key_entry(&mut db, Domain::APP, 210000, TEST_ALIAS, None)?;
+        make_test_key_entry(&mut db, Domain::APP, 110000, TEST_ALIAS, None)?;
+        db.unbind_keys_for_user(2, false)?;
+
+        assert_eq!(1, db.list(Domain::APP, 110000)?.len());
+        assert_eq!(0, db.list(Domain::APP, 210000)?.len());
+
+        db.unbind_keys_for_user(1, true)?;
+        assert_eq!(0, db.list(Domain::APP, 110000)?.len());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_store_super_key() -> Result<()> {
+        let mut db = new_test_db()?;
+        let pw = "xyzabc".as_bytes();
+        let super_key = keystore2_crypto::generate_aes256_key()?;
+        let secret = String::from("keystore2 is great.");
+        let secret_bytes = secret.into_bytes();
+        let (encrypted_secret, iv, tag) =
+            keystore2_crypto::aes_gcm_encrypt(&secret_bytes, &super_key)?;
+
+        let (encrypted_super_key, metadata) =
+            SuperKeyManager::encrypt_with_password(&super_key, &pw)?;
+        db.store_super_key(1, &(&encrypted_super_key, &metadata))?;
+
+        //load the super key from the database
+        let tx = db.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let key_descriptor = KeyDescriptor {
+            domain: Domain::APP,
+            nspace: 1,
+            alias: Some(String::from("USER_SUPER_KEY")),
+            blob: None,
+        };
+        let id = KeystoreDB::load_key_entry_id(&tx, &key_descriptor, KeyType::Super)?;
+        let key_entry = KeystoreDB::load_key_components(&tx, KeyEntryLoadBits::KM, id)?;
+        let loaded_super_key = SuperKeyManager::extract_super_key_from_key_entry(key_entry, &pw)?;
+
+        let decrypted_secret_bytes = keystore2_crypto::aes_gcm_decrypt(
+            &encrypted_secret,
+            &iv,
+            &tag,
+            &loaded_super_key.get_key(),
+        )?;
+        let decrypted_secret = String::from_utf8((&decrypted_secret_bytes).to_vec())?;
+        assert_eq!(String::from("keystore2 is great."), decrypted_secret);
         Ok(())
     }
 }

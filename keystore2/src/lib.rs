@@ -29,6 +29,7 @@ pub mod permission;
 pub mod remote_provisioning;
 pub mod security_level;
 pub mod service;
+pub mod user_manager;
 pub mod utils;
 
 mod async_task;
