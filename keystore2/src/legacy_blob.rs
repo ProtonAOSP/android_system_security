@@ -27,6 +27,7 @@ use android_hardware_security_keymint::aidl::android::hardware::security::keymin
 };
 use anyhow::{Context, Result};
 use keystore2_crypto::{aes_gcm_decrypt, derive_key_from_password, ZVec};
+use std::collections::{HashMap, HashSet};
 use std::{convert::TryInto, fs::File, path::Path, path::PathBuf};
 use std::{
     fs,
@@ -721,6 +722,31 @@ impl LegacyBlobLoader {
                 result.push(f.to_string())
             }
         }
+        Ok(result)
+    }
+
+    /// List all keystore entries belonging to the given user. Returns a map of UIDs
+    /// to sets of decoded aliases.
+    pub fn list_keystore_entries_for_user(
+        &self,
+        user_id: u32,
+    ) -> Result<HashMap<u32, HashSet<String>>> {
+        let user_entries = self
+            .list_user(user_id)
+            .context("In list_keystore_entries_for_user: Trying to list user.")?;
+
+        let result =
+            user_entries.into_iter().fold(HashMap::<u32, HashSet<String>>::new(), |mut acc, v| {
+                if let Some(sep_pos) = v.find('_') {
+                    if let Ok(uid) = v[0..sep_pos].parse::<u32>() {
+                        if let Some(alias) = Self::extract_alias(&v[sep_pos + 1..]) {
+                            let entry = acc.entry(uid).or_default();
+                            entry.insert(alias);
+                        }
+                    }
+                }
+                acc
+            });
         Ok(result)
     }
 

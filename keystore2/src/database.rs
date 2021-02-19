@@ -795,6 +795,7 @@ impl AuthTokenEntry {
 pub struct PerBootDbKeepAlive(Connection);
 
 impl KeystoreDB {
+    const UNASSIGNED_KEY_ID: i64 = -1i64;
     const PERBOOT_DB_FILE_NAME: &'static str = &"file:perboot.sqlite?mode=memory&cache=shared";
 
     /// The alias of the user super key.
@@ -1458,6 +1459,24 @@ impl KeystoreDB {
             Self::set_blob_internal(&tx, key_id.0, sc_type, blob, blob_metadata).need_gc()
         })
         .context("In set_blob.")
+    }
+
+    /// Why would we insert a deleted blob? This weird function is for the purpose of legacy
+    /// key migration in the case where we bulk delete all the keys of an app or even a user.
+    /// We use this to insert key blobs into the database which can then be garbage collected
+    /// lazily by the key garbage collector.
+    pub fn set_deleted_blob(&mut self, blob: &[u8], blob_metadata: &BlobMetaData) -> Result<()> {
+        self.with_transaction(TransactionBehavior::Immediate, |tx| {
+            Self::set_blob_internal(
+                &tx,
+                Self::UNASSIGNED_KEY_ID,
+                SubComponentType::KEY_BLOB,
+                Some(blob),
+                Some(blob_metadata),
+            )
+            .need_gc()
+        })
+        .context("In set_deleted_blob.")
     }
 
     fn set_blob_internal(
@@ -2746,7 +2765,10 @@ impl KeystoreDB {
     // otherwise return the id.
     fn insert_with_retry(inserter: impl Fn(i64) -> rusqlite::Result<usize>) -> Result<i64> {
         loop {
-            let newid: i64 = random();
+            let newid: i64 = match random() {
+                Self::UNASSIGNED_KEY_ID => continue, // UNASSIGNED_KEY_ID cannot be assigned.
+                i => i,
+            };
             match inserter(newid) {
                 // If the id already existed, try again.
                 Err(rusqlite::Error::SqliteFailure(
