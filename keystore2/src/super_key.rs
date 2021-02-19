@@ -18,6 +18,7 @@ use crate::{
     database::BlobMetaData, database::BlobMetaEntry, database::EncryptedBy, database::KeyEntry,
     database::KeyType, database::KeystoreDB, enforcements::Enforcements, error::Error,
     error::ResponseCode, key_parameter::KeyParameter, legacy_blob::LegacyBlobLoader,
+    legacy_migrator::LegacyMigrator,
 };
 use android_system_keystore2::aidl::android::system::keystore2::Domain::Domain;
 use anyhow::{Context, Result};
@@ -201,7 +202,11 @@ impl SuperKeyManager {
     }
 
     /// Checks if user has setup LSKF, even when super key cache is empty for the user.
-    pub fn super_key_exists_in_db_for_user(db: &mut KeystoreDB, user_id: u32) -> Result<bool> {
+    pub fn super_key_exists_in_db_for_user(
+        db: &mut KeystoreDB,
+        legacy_migrator: &LegacyMigrator,
+        user_id: u32,
+    ) -> Result<bool> {
         let key_in_db = db
             .key_exists(
                 Domain::APP,
@@ -214,9 +219,9 @@ impl SuperKeyManager {
         if key_in_db {
             Ok(key_in_db)
         } else {
-            //TODO (b/159371296): add a function to legacy blob loader to check if super key exists
-            //given user id
-            Ok(false)
+            legacy_migrator
+                .has_super_key(user_id)
+                .context("In super_key_exists_in_db_for_user: Trying to query legacy db.")
         }
     }
 
@@ -226,11 +231,12 @@ impl SuperKeyManager {
     pub fn check_and_unlock_super_key(
         &self,
         db: &mut KeystoreDB,
+        legacy_migrator: &LegacyMigrator,
         user_id: u32,
         pw: &[u8],
     ) -> Result<UserState> {
-        let result = db
-            .load_super_key(user_id)
+        let result = legacy_migrator
+            .with_try_migrate_super_key(user_id, pw, || db.load_super_key(user_id))
             .context("In check_and_unlock_super_key. Failed to load super key")?;
 
         match result {
@@ -240,11 +246,7 @@ impl SuperKeyManager {
                     .context("In check_and_unlock_super_key.")?;
                 Ok(UserState::LskfUnlocked(super_key))
             }
-            None =>
-            //TODO: 159371296. Try to load and populate super key from legacy key database.
-            {
-                Ok(UserState::Uninitialized)
-            }
+            None => Ok(UserState::Uninitialized),
         }
     }
 
@@ -257,38 +259,35 @@ impl SuperKeyManager {
     pub fn check_and_initialize_super_key(
         &self,
         db: &mut KeystoreDB,
+        legacy_migrator: &LegacyMigrator,
         user_id: u32,
         pw: Option<&[u8]>,
     ) -> Result<UserState> {
-        let super_key_exists_in_db = Self::super_key_exists_in_db_for_user(db, user_id)
-            .context("In check_and_initialize_super_key. Failed to check if super key exists.")?;
+        let super_key_exists_in_db =
+            Self::super_key_exists_in_db_for_user(db, legacy_migrator, user_id).context(
+                "In check_and_initialize_super_key. Failed to check if super key exists.",
+            )?;
         if super_key_exists_in_db {
             Ok(UserState::LskfLocked)
+        } else if let Some(pw) = pw {
+            //generate a new super key.
+            let super_key = generate_aes256_key()
+                .context("In check_and_initialize_super_key: Failed to generate AES 256 key.")?;
+            //derive an AES256 key from the password and re-encrypt the super key
+            //before we insert it in the database.
+            let (encrypted_super_key, blob_metadata) = Self::encrypt_with_password(&super_key, pw)
+                .context("In check_and_initialize_super_key.")?;
+
+            let key_entry = db
+                .store_super_key(user_id, &(&encrypted_super_key, &blob_metadata))
+                .context("In check_and_initialize_super_key. Failed to store super key.")?;
+
+            let super_key = self
+                .populate_cache_from_super_key_blob(user_id, key_entry, pw)
+                .context("In check_and_initialize_super_key.")?;
+            Ok(UserState::LskfUnlocked(super_key))
         } else {
-            //TODO: 159371296. check if super key exists in legacy key database. If so, return
-            //LskfLocked. Otherwise, if pw is provided, initialize the super key.
-            if let Some(pw) = pw {
-                //generate a new super key.
-                let super_key = generate_aes256_key().context(
-                    "In check_and_initialize_super_key: Failed to generate AES 256 key.",
-                )?;
-                //derive an AES256 key from the password and re-encrypt the super key
-                //before we insert it in the database.
-                let (encrypted_super_key, blob_metadata) =
-                    Self::encrypt_with_password(&super_key, pw)
-                        .context("In check_and_initialize_super_key.")?;
-
-                let key_entry = db
-                    .store_super_key(user_id as u64 as i64, &(&encrypted_super_key, &blob_metadata))
-                    .context("In check_and_initialize_super_key. Failed to store super key.")?;
-
-                let super_key = self
-                    .populate_cache_from_super_key_blob(user_id, key_entry, pw)
-                    .context("In check_and_initialize_super_key.")?;
-                Ok(UserState::LskfUnlocked(super_key))
-            } else {
-                Ok(UserState::Uninitialized)
-            }
+            Ok(UserState::Uninitialized)
         }
     }
 
@@ -364,12 +363,13 @@ impl SuperKeyManager {
     // return error. Note that it is out of the scope of this function to check if super encryption
     // is required. Such check should be performed before calling this function.
     fn super_encrypt_on_key_init(
+        &self,
         db: &mut KeystoreDB,
-        skm: &SuperKeyManager,
+        legacy_migrator: &LegacyMigrator,
         user_id: u32,
         key_blob: &[u8],
     ) -> Result<(Vec<u8>, BlobMetaData)> {
-        match UserState::get(db, skm, user_id)
+        match UserState::get(db, legacy_migrator, self, user_id)
             .context("In super_encrypt. Failed to get user state.")?
         {
             UserState::LskfUnlocked(super_key) => {
@@ -402,9 +402,11 @@ impl SuperKeyManager {
 
     /// Check if super encryption is required and if so, super-encrypt the key to be stored in
     /// the database.
+    #[allow(clippy::clippy::too_many_arguments)]
     pub fn handle_super_encryption_on_key_init(
+        &self,
         db: &mut KeystoreDB,
-        skm: &SuperKeyManager,
+        legacy_migrator: &LegacyMigrator,
         domain: &Domain,
         key_parameters: &[KeyParameter],
         flags: Option<i32>,
@@ -412,11 +414,12 @@ impl SuperKeyManager {
         key_blob: &[u8],
     ) -> Result<(Vec<u8>, BlobMetaData)> {
         match (*domain, Enforcements::super_encryption_required(key_parameters, flags)) {
-            (Domain::APP, true) => Self::super_encrypt_on_key_init(db, skm, user_id, &key_blob)
-                .context(
+            (Domain::APP, true) => {
+                self.super_encrypt_on_key_init(db, legacy_migrator, user_id, &key_blob).context(
                     "In handle_super_encryption_on_key_init.
                          Failed to super encrypt the key.",
-                ),
+                )
+            }
             _ => Ok((key_blob.to_vec(), BlobMetaData::new())),
         }
     }
@@ -482,13 +485,18 @@ pub enum UserState {
 }
 
 impl UserState {
-    pub fn get(db: &mut KeystoreDB, skm: &SuperKeyManager, user_id: u32) -> Result<UserState> {
+    pub fn get(
+        db: &mut KeystoreDB,
+        legacy_migrator: &LegacyMigrator,
+        skm: &SuperKeyManager,
+        user_id: u32,
+    ) -> Result<UserState> {
         match skm.get_per_boot_key_by_user_id(user_id) {
             Some(super_key) => Ok(UserState::LskfUnlocked(super_key)),
             None => {
                 //Check if a super key exists in the database or legacy database.
                 //If so, return locked user state.
-                if SuperKeyManager::super_key_exists_in_db_for_user(db, user_id)
+                if SuperKeyManager::super_key_exists_in_db_for_user(db, legacy_migrator, user_id)
                     .context("In get.")?
                 {
                     Ok(UserState::LskfLocked)
@@ -502,6 +510,7 @@ impl UserState {
     /// Queries user state when serving password change requests.
     pub fn get_with_password_changed(
         db: &mut KeystoreDB,
+        legacy_migrator: &LegacyMigrator,
         skm: &SuperKeyManager,
         user_id: u32,
         password: Option<&[u8]>,
@@ -526,7 +535,7 @@ impl UserState {
                 //If so, return LskfLocked state.
                 //Otherwise, i) if the password is provided, initialize the super key and return
                 //LskfUnlocked state ii) if password is not provided, return Uninitialized state.
-                skm.check_and_initialize_super_key(db, user_id, password)
+                skm.check_and_initialize_super_key(db, legacy_migrator, user_id, password)
             }
         }
     }
@@ -534,6 +543,7 @@ impl UserState {
     /// Queries user state when serving password unlock requests.
     pub fn get_with_password_unlock(
         db: &mut KeystoreDB,
+        legacy_migrator: &LegacyMigrator,
         skm: &SuperKeyManager,
         user_id: u32,
         password: &[u8],
@@ -548,7 +558,7 @@ impl UserState {
                 //If not, return Uninitialized state.
                 //Otherwise, try to unlock the super key and if successful,
                 //return LskfUnlocked state
-                skm.check_and_unlock_super_key(db, user_id, password)
+                skm.check_and_unlock_super_key(db, legacy_migrator, user_id, password)
                     .context("In get_with_password_unlock. Failed to unlock super key.")
             }
         }

@@ -17,7 +17,6 @@
 //! This module implements methods to load legacy keystore key blob files.
 
 use crate::{
-    database::KeyMetaData,
     error::{Error as KsError, ResponseCode},
     key_parameter::{KeyParameter, KeyParameterValue},
     super_key::SuperKeyManager,
@@ -28,8 +27,11 @@ use android_hardware_security_keymint::aidl::android::hardware::security::keymin
 };
 use anyhow::{Context, Result};
 use keystore2_crypto::{aes_gcm_decrypt, derive_key_from_password, ZVec};
-use std::io::{ErrorKind, Read};
 use std::{convert::TryInto, fs::File, path::Path, path::PathBuf};
+use std::{
+    fs,
+    io::{ErrorKind, Read, Result as IoResult},
+};
 
 const SUPPORTED_LEGACY_BLOB_VERSION: u8 = 3;
 
@@ -231,6 +233,7 @@ impl LegacyBlobLoader {
     pub fn new(path: &Path) -> Self {
         Self { path: path.to_owned() }
     }
+
     /// Encodes an alias string as ascii character sequence in the range
     /// ['+' .. '.'] and ['0' .. '~'].
     /// Bytes with values in the range ['0' .. '~'] are represented as they are.
@@ -587,7 +590,7 @@ impl LegacyBlobLoader {
         let sw_list = Self::read_key_parameters(&mut stream)
             .context("In read_characteristics_file.")?
             .into_iter()
-            .map(|value| KeyParameter::new(value, SecurityLevel::SOFTWARE));
+            .map(|value| KeyParameter::new(value, SecurityLevel::KEYSTORE));
 
         Ok(hw_list.into_iter().flatten().chain(sw_list).collect())
     }
@@ -600,7 +603,7 @@ impl LegacyBlobLoader {
     //            used this for user installed certificates without private key material.
 
     fn read_km_blob_file(&self, uid: u32, alias: &str) -> Result<Option<(Blob, String)>> {
-        let mut iter = ["USRPKEY", "USERSKEY"].iter();
+        let mut iter = ["USRPKEY", "USRSKEY"].iter();
 
         let (blob, prefix) = loop {
             if let Some(prefix) = iter.next() {
@@ -619,7 +622,7 @@ impl LegacyBlobLoader {
     }
 
     fn read_generic_blob(path: &Path) -> Result<Option<Blob>> {
-        let mut file = match File::open(path) {
+        let mut file = match Self::with_retry_interrupted(|| File::open(path)) {
             Ok(file) => file,
             Err(e) => match e.kind() {
                 ErrorKind::NotFound => return Ok(None),
@@ -633,47 +636,214 @@ impl LegacyBlobLoader {
     /// This function constructs the blob file name which has the form:
     /// user_<android user id>/<uid>_<alias>.
     fn make_blob_filename(&self, uid: u32, alias: &str, prefix: &str) -> PathBuf {
-        let mut path = self.path.clone();
         let user_id = uid_to_android_user(uid);
         let encoded_alias = Self::encode_alias(&format!("{}_{}", prefix, alias));
-        path.push(format!("user_{}", user_id));
+        let mut path = self.make_user_path_name(user_id);
         path.push(format!("{}_{}", uid, encoded_alias));
         path
     }
 
     /// This function constructs the characteristics file name which has the form:
-    /// user_<android user id>/.<uid>_chr_<alias>.
+    /// user_<android user id>/.<uid>_chr_<prefix>_<alias>.
     fn make_chr_filename(&self, uid: u32, alias: &str, prefix: &str) -> PathBuf {
-        let mut path = self.path.clone();
         let user_id = uid_to_android_user(uid);
         let encoded_alias = Self::encode_alias(&format!("{}_{}", prefix, alias));
-        path.push(format!("user_{}", user_id));
+        let mut path = self.make_user_path_name(user_id);
         path.push(format!(".{}_chr_{}", uid, encoded_alias));
         path
     }
 
-    fn load_by_uid_alias(
+    fn make_super_key_filename(&self, user_id: u32) -> PathBuf {
+        let mut path = self.make_user_path_name(user_id);
+        path.push(".masterkey");
+        path
+    }
+
+    fn make_user_path_name(&self, user_id: u32) -> PathBuf {
+        let mut path = self.path.clone();
+        path.push(&format!("user_{}", user_id));
+        path
+    }
+
+    /// Returns if the legacy blob database is empty, i.e., there are no entries matching "user_*"
+    /// in the database dir.
+    pub fn is_empty(&self) -> Result<bool> {
+        let dir = Self::with_retry_interrupted(|| fs::read_dir(self.path.as_path()))
+            .context("In is_empty: Failed to open legacy blob database.")?;
+        for entry in dir {
+            if (*entry.context("In is_empty: Trying to access dir entry")?.file_name())
+                .to_str()
+                .map_or(false, |f| f.starts_with("user_"))
+            {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    /// Returns if the legacy blob database is empty for a given user, i.e., there are no entries
+    /// matching "user_*" in the database dir.
+    pub fn is_empty_user(&self, user_id: u32) -> Result<bool> {
+        let mut user_path = self.path.clone();
+        user_path.push(format!("user_{}", user_id));
+        if !user_path.as_path().is_dir() {
+            return Ok(true);
+        }
+        Ok(Self::with_retry_interrupted(|| user_path.read_dir())
+            .context("In is_empty_user: Failed to open legacy user dir.")?
+            .next()
+            .is_none())
+    }
+
+    fn extract_alias(encoded_alias: &str) -> Option<String> {
+        // We can check the encoded alias because the prefixes we are interested
+        // in are all in the printable range that don't get mangled.
+        for prefix in &["USRPKEY_", "USRSKEY_", "USRCERT_", "CACERT_"] {
+            if let Some(alias) = encoded_alias.strip_prefix(prefix) {
+                return Self::decode_alias(&alias).ok();
+            }
+        }
+        None
+    }
+
+    /// List all entries for a given user. The strings are unchanged file names, i.e.,
+    /// encoded with UID prefix.
+    fn list_user(&self, user_id: u32) -> Result<Vec<String>> {
+        let path = self.make_user_path_name(user_id);
+        let dir =
+            Self::with_retry_interrupted(|| fs::read_dir(path.as_path())).with_context(|| {
+                format!("In list_user: Failed to open legacy blob database. {:?}", path)
+            })?;
+        let mut result: Vec<String> = Vec::new();
+        for entry in dir {
+            let file_name = entry.context("In list_user: Trying to access dir entry")?.file_name();
+            if let Some(f) = file_name.to_str() {
+                result.push(f.to_string())
+            }
+        }
+        Ok(result)
+    }
+
+    /// List all keystore entries belonging to the given uid.
+    pub fn list_keystore_entries_for_uid(&self, uid: u32) -> Result<Vec<String>> {
+        let user_id = uid_to_android_user(uid);
+
+        let user_entries = self
+            .list_user(user_id)
+            .context("In list_keystore_entries_for_uid: Trying to list user.")?;
+
+        let uid_str = format!("{}_", uid);
+
+        let mut result: Vec<String> = user_entries
+            .into_iter()
+            .filter_map(|v| {
+                if !v.starts_with(&uid_str) {
+                    return None;
+                }
+                let encoded_alias = &v[uid_str.len()..];
+                Self::extract_alias(encoded_alias)
+            })
+            .collect();
+
+        result.sort_unstable();
+        result.dedup();
+        Ok(result)
+    }
+
+    fn with_retry_interrupted<F, T>(f: F) -> IoResult<T>
+    where
+        F: Fn() -> IoResult<T>,
+    {
+        loop {
+            match f() {
+                Ok(v) => return Ok(v),
+                Err(e) => match e.kind() {
+                    ErrorKind::Interrupted => continue,
+                    _ => return Err(e),
+                },
+            }
+        }
+    }
+
+    /// Deletes a keystore entry. Also removes the user_<uid> directory on the
+    /// last migration.
+    pub fn remove_keystore_entry(&self, uid: u32, alias: &str) -> Result<bool> {
+        let mut something_was_deleted = false;
+        let prefixes = ["USRPKEY", "USRSKEY"];
+        for prefix in &prefixes {
+            let path = self.make_blob_filename(uid, alias, prefix);
+            if let Err(e) = Self::with_retry_interrupted(|| fs::remove_file(path.as_path())) {
+                match e.kind() {
+                    // Only a subset of keys are expected.
+                    ErrorKind::NotFound => continue,
+                    // Log error but ignore.
+                    _ => log::error!("Error while deleting key blob entries. {:?}", e),
+                }
+            }
+            let path = self.make_chr_filename(uid, alias, prefix);
+            if let Err(e) = Self::with_retry_interrupted(|| fs::remove_file(path.as_path())) {
+                match e.kind() {
+                    ErrorKind::NotFound => {
+                        log::info!("No characteristics file found for legacy key blob.")
+                    }
+                    // Log error but ignore.
+                    _ => log::error!("Error while deleting key blob entries. {:?}", e),
+                }
+            }
+            something_was_deleted = true;
+            // Only one of USRPKEY and USRSKEY can be present. So we can end the loop
+            // if we reach this point.
+            break;
+        }
+
+        let prefixes = ["USRCERT", "CACERT"];
+        for prefix in &prefixes {
+            let path = self.make_blob_filename(uid, alias, prefix);
+            if let Err(e) = Self::with_retry_interrupted(|| fs::remove_file(path.as_path())) {
+                match e.kind() {
+                    // USRCERT and CACERT are optional either or both may or may not be present.
+                    ErrorKind::NotFound => continue,
+                    // Log error but ignore.
+                    _ => log::error!("Error while deleting key blob entries. {:?}", e),
+                }
+                something_was_deleted = true;
+            }
+        }
+
+        if something_was_deleted {
+            let user_id = uid_to_android_user(uid);
+            if self
+                .is_empty_user(user_id)
+                .context("In remove_keystore_entry: Trying to check for empty user dir.")?
+            {
+                let user_path = self.make_user_path_name(user_id);
+                Self::with_retry_interrupted(|| fs::remove_dir(user_path.as_path())).ok();
+            }
+        }
+
+        Ok(something_was_deleted)
+    }
+
+    /// Load a legacy key blob entry by uid and alias.
+    pub fn load_by_uid_alias(
         &self,
         uid: u32,
         alias: &str,
-        key_manager: &SuperKeyManager,
-    ) -> Result<(Option<(Blob, Vec<KeyParameter>)>, Option<Vec<u8>>, Option<Vec<u8>>, KeyMetaData)>
-    {
-        let metadata = KeyMetaData::new();
-
+        key_manager: Option<&SuperKeyManager>,
+    ) -> Result<(Option<(Blob, Vec<KeyParameter>)>, Option<Vec<u8>>, Option<Vec<u8>>)> {
         let km_blob = self.read_km_blob_file(uid, alias).context("In load_by_uid_alias.")?;
 
         let km_blob = match km_blob {
             Some((km_blob, prefix)) => {
-                let km_blob =
-                    match km_blob {
-                        Blob { flags: _, value: BlobValue::Decrypted(_) } => km_blob,
-                        // Unwrap the key blob if required.
-                        Blob { flags, value: BlobValue::Encrypted { iv, tag, data } } => {
+                let km_blob = match km_blob {
+                    Blob { flags: _, value: BlobValue::Decrypted(_) } => km_blob,
+                    // Unwrap the key blob if required and if we have key_manager.
+                    Blob { flags, value: BlobValue::Encrypted { ref iv, ref tag, ref data } } => {
+                        if let Some(key_manager) = key_manager {
                             let decrypted = match key_manager
                                 .get_per_boot_key_by_user_id(uid_to_android_user(uid))
                             {
-                                Some(key) => aes_gcm_decrypt(&data, &iv, &tag, &(key.get_key()))
+                                Some(key) => aes_gcm_decrypt(data, iv, tag, &(key.get_key()))
                                     .context(
                                     "In load_by_uid_alias: while trying to decrypt legacy blob.",
                                 )?,
@@ -688,11 +858,16 @@ impl LegacyBlobLoader {
                                 }
                             };
                             Blob { flags, value: BlobValue::Decrypted(decrypted) }
+                        } else {
+                            km_blob
                         }
-                        _ => return Err(KsError::Rc(ResponseCode::VALUE_CORRUPTED)).context(
+                    }
+                    _ => {
+                        return Err(KsError::Rc(ResponseCode::VALUE_CORRUPTED)).context(
                             "In load_by_uid_alias: Found wrong blob type in legacy key blob file.",
-                        ),
-                    };
+                        )
+                    }
+                };
 
                 let hw_sec_level = match km_blob.is_strongbox() {
                     true => SecurityLevel::STRONGBOX,
@@ -730,14 +905,17 @@ impl LegacyBlobLoader {
             }
         };
 
-        Ok((km_blob, user_cert, ca_cert, metadata))
+        Ok((km_blob, user_cert, ca_cert))
+    }
+
+    /// Returns true if the given user has a super key.
+    pub fn has_super_key(&self, user_id: u32) -> bool {
+        self.make_super_key_filename(user_id).is_file()
     }
 
     /// Load and decrypt legacy super key blob.
     pub fn load_super_key(&self, user_id: u32, pw: &[u8]) -> Result<Option<ZVec>> {
-        let mut path = self.path.clone();
-        path.push(&format!("user_{}", user_id));
-        path.push(".masterkey");
+        let path = self.make_super_key_filename(user_id);
         let blob = Self::read_generic_blob(&path)
             .context("In load_super_key: While loading super key.")?;
 
@@ -763,6 +941,18 @@ impl LegacyBlobLoader {
         };
 
         Ok(blob)
+    }
+
+    /// Removes the super key for the given user from the legacy database.
+    /// If this was the last entry in the user's database, this function removes
+    /// the user_<uid> directory as well.
+    pub fn remove_super_key(&self, user_id: u32) {
+        let path = self.make_super_key_filename(user_id);
+        Self::with_retry_interrupted(|| fs::remove_file(path.as_path())).ok();
+        if self.is_empty_user(user_id).ok().unwrap_or(false) {
+            let path = self.make_user_path_name(user_id);
+            Self::with_retry_interrupted(|| fs::remove_dir(path.as_path())).ok();
+        }
     }
 }
 
@@ -898,6 +1088,37 @@ mod test {
     }
 
     #[test]
+    fn test_is_empty() {
+        let temp_dir = TempDir::new("test_is_empty").expect("Failed to create temp dir.");
+        let legacy_blob_loader = LegacyBlobLoader::new(temp_dir.path());
+
+        assert!(legacy_blob_loader.is_empty().expect("Should succeed and be empty."));
+
+        let _db = crate::database::KeystoreDB::new(temp_dir.path(), None)
+            .expect("Failed to open database.");
+
+        assert!(legacy_blob_loader.is_empty().expect("Should succeed and still be empty."));
+
+        std::fs::create_dir(&*temp_dir.build().push("user_0")).expect("Failed to create user_0.");
+
+        assert!(!legacy_blob_loader.is_empty().expect("Should succeed but not be empty."));
+
+        std::fs::create_dir(&*temp_dir.build().push("user_10")).expect("Failed to create user_10.");
+
+        assert!(!legacy_blob_loader.is_empty().expect("Should succeed but still not be empty."));
+
+        std::fs::remove_dir_all(&*temp_dir.build().push("user_0"))
+            .expect("Failed to remove user_0.");
+
+        assert!(!legacy_blob_loader.is_empty().expect("Should succeed but still not be empty."));
+
+        std::fs::remove_dir_all(&*temp_dir.build().push("user_10"))
+            .expect("Failed to remove user_10.");
+
+        assert!(legacy_blob_loader.is_empty().expect("Should succeed and be empty again."));
+    }
+
+    #[test]
     fn test_legacy_blobs() -> anyhow::Result<()> {
         let temp_dir = TempDir::new("legacy_blob_test")?;
         std::fs::create_dir(&*temp_dir.build().push("user_0"))?;
@@ -944,7 +1165,7 @@ mod test {
 
         assert_eq!(
             legacy_blob_loader
-                .load_by_uid_alias(10223, "authbound", &key_manager)
+                .load_by_uid_alias(10223, "authbound", Some(&key_manager))
                 .unwrap_err()
                 .root_cause()
                 .downcast_ref::<error::Error>(),
@@ -953,18 +1174,18 @@ mod test {
 
         key_manager.unlock_user_key(&mut db, 0, PASSWORD, &legacy_blob_loader)?;
 
-        if let (Some((Blob { flags, value }, _params)), Some(cert), Some(chain), _kp) =
-            legacy_blob_loader.load_by_uid_alias(10223, "authbound", &key_manager)?
+        if let (Some((Blob { flags, value: _ }, _params)), Some(cert), Some(chain)) =
+            legacy_blob_loader.load_by_uid_alias(10223, "authbound", Some(&key_manager))?
         {
             assert_eq!(flags, 4);
-            assert_eq!(value, BlobValue::Decrypted(DECRYPTED_USRPKEY_AUTHBOUND.try_into()?));
+            //assert_eq!(value, BlobValue::Encrypted(..));
             assert_eq!(&cert[..], LOADED_CERT_AUTHBOUND);
             assert_eq!(&chain[..], LOADED_CACERT_AUTHBOUND);
         } else {
             panic!("");
         }
-        if let (Some((Blob { flags, value }, _params)), Some(cert), Some(chain), _kp) =
-            legacy_blob_loader.load_by_uid_alias(10223, "non_authbound", &key_manager)?
+        if let (Some((Blob { flags, value }, _params)), Some(cert), Some(chain)) =
+            legacy_blob_loader.load_by_uid_alias(10223, "non_authbound", Some(&key_manager))?
         {
             assert_eq!(flags, 0);
             assert_eq!(value, BlobValue::Decrypted(LOADED_USRPKEY_NON_AUTHBOUND.try_into()?));
@@ -973,6 +1194,33 @@ mod test {
         } else {
             panic!("");
         }
+
+        legacy_blob_loader.remove_keystore_entry(10223, "authbound").expect("This should succeed.");
+        legacy_blob_loader
+            .remove_keystore_entry(10223, "non_authbound")
+            .expect("This should succeed.");
+
+        assert_eq!(
+            (None, None, None),
+            legacy_blob_loader.load_by_uid_alias(10223, "authbound", Some(&key_manager))?
+        );
+        assert_eq!(
+            (None, None, None),
+            legacy_blob_loader.load_by_uid_alias(10223, "non_authbound", Some(&key_manager))?
+        );
+
+        // The database should not be empty due to the super key.
+        assert!(!legacy_blob_loader.is_empty()?);
+        assert!(!legacy_blob_loader.is_empty_user(0)?);
+
+        // The database should be considered empty for user 1.
+        assert!(legacy_blob_loader.is_empty_user(1)?);
+
+        legacy_blob_loader.remove_super_key(0);
+
+        // Now it should be empty.
+        assert!(legacy_blob_loader.is_empty_user(0)?);
+        assert!(legacy_blob_loader.is_empty()?);
 
         Ok(())
     }

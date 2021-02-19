@@ -33,7 +33,7 @@ use android_system_keystore2::aidl::android::system::keystore2::{
 };
 
 use crate::database::{CertificateInfo, KeyIdGuard};
-use crate::globals::{DB, ENFORCEMENTS, SUPER_KEY};
+use crate::globals::{DB, ENFORCEMENTS, LEGACY_MIGRATOR, SUPER_KEY};
 use crate::key_parameter::KeyParameter as KsKeyParam;
 use crate::key_parameter::KeyParameterValue as KsKeyParamValue;
 use crate::super_key::{KeyBlob, SuperKeyManager};
@@ -133,9 +133,9 @@ impl KeystoreSecurityLevel {
 
         let (key_blob, mut blob_metadata) = DB
             .with(|db| {
-                SuperKeyManager::handle_super_encryption_on_key_init(
+                SUPER_KEY.handle_super_encryption_on_key_init(
                     &mut db.borrow_mut(),
-                    &SUPER_KEY,
+                    &LEGACY_MIGRATOR,
                     &(key.domain),
                     &key_parameters,
                     flags,
@@ -220,13 +220,15 @@ impl KeystoreSecurityLevel {
             _ => {
                 let (key_id_guard, mut key_entry) = DB
                     .with::<_, Result<(KeyIdGuard, KeyEntry)>>(|db| {
-                        db.borrow_mut().load_key_entry(
-                            &key,
-                            KeyType::Client,
-                            KeyEntryLoadBits::KM,
-                            caller_uid,
-                            |k, av| check_key_permission(KeyPerm::use_(), k, &av),
-                        )
+                        LEGACY_MIGRATOR.with_try_migrate(&key, caller_uid, || {
+                            db.borrow_mut().load_key_entry(
+                                &key,
+                                KeyType::Client,
+                                KeyEntryLoadBits::KM,
+                                caller_uid,
+                                |k, av| check_key_permission(KeyPerm::use_(), k, &av),
+                            )
+                        })
                     })
                     .context("In create_operation: Failed to load key blob.")?;
 
@@ -585,13 +587,15 @@ impl KeystoreSecurityLevel {
 
         let (wrapping_key_id_guard, mut wrapping_key_entry) = DB
             .with(|db| {
-                db.borrow_mut().load_key_entry(
-                    &wrapping_key,
-                    KeyType::Client,
-                    KeyEntryLoadBits::KM,
-                    caller_uid,
-                    |k, av| check_key_permission(KeyPerm::use_(), k, &av),
-                )
+                LEGACY_MIGRATOR.with_try_migrate(&key, caller_uid, || {
+                    db.borrow_mut().load_key_entry(
+                        &wrapping_key,
+                        KeyType::Client,
+                        KeyEntryLoadBits::KM,
+                        caller_uid,
+                        |k, av| check_key_permission(KeyPerm::use_(), k, &av),
+                    )
+                })
             })
             .context("Failed to load wrapping key.")?;
 
