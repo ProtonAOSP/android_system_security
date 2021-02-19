@@ -15,14 +15,15 @@
 #![allow(dead_code)]
 
 use crate::{
-    database::BlobMetaData, database::BlobMetaEntry, database::EncryptedBy, database::KeyType,
-    database::KeystoreDB, error::Error, error::ResponseCode, legacy_blob::LegacyBlobLoader,
+    database::BlobMetaData, database::BlobMetaEntry, database::EncryptedBy, database::KeyEntry,
+    database::KeyType, database::KeystoreDB, error::Error, error::ResponseCode,
+    legacy_blob::LegacyBlobLoader,
 };
 use android_system_keystore2::aidl::android::system::keystore2::Domain::Domain;
 use anyhow::{Context, Result};
 use keystore2_crypto::{
-    aes_gcm_decrypt, aes_gcm_encrypt, derive_key_from_password, generate_salt, ZVec,
-    AES_256_KEY_LENGTH,
+    aes_gcm_decrypt, aes_gcm_encrypt, derive_key_from_password, generate_aes256_key, generate_salt,
+    ZVec, AES_256_KEY_LENGTH,
 };
 use std::{
     collections::HashMap,
@@ -104,11 +105,10 @@ impl SuperKeyManager {
         data.key_index.clear();
     }
 
-    fn install_per_boot_key_for_user(&self, user: UserId, id: i64, key: ZVec) {
+    fn install_per_boot_key_for_user(&self, user: UserId, super_key: SuperKey) {
         let mut data = self.data.lock().unwrap();
-        let key = Arc::new(key);
-        data.key_index.insert(id, Arc::downgrade(&key));
-        data.user_keys.entry(user).or_default().per_boot = Some(SuperKey { key, id });
+        data.key_index.insert(super_key.id, Arc::downgrade(&(super_key.key)));
+        data.user_keys.entry(user).or_default().per_boot = Some(super_key);
     }
 
     fn get_key(&self, key_id: &i64) -> Option<Arc<ZVec>> {
@@ -126,9 +126,9 @@ impl SuperKeyManager {
     /// a key derived from the given password and stored in the database.
     pub fn unlock_user_key(
         &self,
+        db: &mut KeystoreDB,
         user: UserId,
         pw: &[u8],
-        db: &mut KeystoreDB,
         legacy_blob_loader: &LegacyBlobLoader,
     ) -> Result<()> {
         let (_, entry) = db
@@ -145,64 +145,22 @@ impl SuperKeyManager {
                     let super_key = match super_key {
                         None => {
                             // No legacy file was found. So we generate a new key.
-                            keystore2_crypto::generate_aes256_key()
+                            generate_aes256_key()
                                 .context("In create_new_key: Failed to generate AES 256 key.")?
                         }
                         Some(key) => key,
                     };
-                    // Regardless of whether we loaded an old AES128 key or a new AES256 key,
-                    // we derive a AES256 key and re-encrypt the key before we insert it in the
-                    // database. The length of the key is preserved by the encryption so we don't
-                    // need any extra flags to inform us which algorithm to use it with.
-                    let salt =
-                        generate_salt().context("In create_new_key: Failed to generate salt.")?;
-                    let derived_key = derive_key_from_password(pw, Some(&salt), AES_256_KEY_LENGTH)
-                        .context("In create_new_key: Failed to derive password.")?;
-                    let mut metadata = BlobMetaData::new();
-                    metadata.add(BlobMetaEntry::EncryptedBy(EncryptedBy::Password));
-                    metadata.add(BlobMetaEntry::Salt(salt));
-                    let (encrypted_key, iv, tag) = aes_gcm_encrypt(&super_key, &derived_key)
-                        .context("In create_new_key: Failed to encrypt new super key.")?;
-                    metadata.add(BlobMetaEntry::Iv(iv));
-                    metadata.add(BlobMetaEntry::AeadTag(tag));
-                    Ok((encrypted_key, metadata))
+                    // Regardless of whether we loaded an old AES128 key or generated a new AES256
+                    // key as the super key, we derive a AES256 key from the password and re-encrypt
+                    // the super key before we insert it in the database. The length of the key is
+                    // preserved by the encryption so we don't need any extra flags to inform us
+                    // which algorithm to use it with.
+                    Self::encrypt_with_password(&super_key, pw).context("In create_new_key.")
                 },
             )
             .context("In unlock_user_key: Failed to get key id.")?;
 
-        if let Some((ref blob, ref metadata)) = entry.key_blob_info() {
-            let super_key = match (
-                metadata.encrypted_by(),
-                metadata.salt(),
-                metadata.iv(),
-                metadata.aead_tag(),
-            ) {
-                (Some(&EncryptedBy::Password), Some(salt), Some(iv), Some(tag)) => {
-                    let key = derive_key_from_password(pw, Some(salt), AES_256_KEY_LENGTH)
-                        .context("In unlock_user_key: Failed to generate key from password.")?;
-
-                    aes_gcm_decrypt(blob, iv, tag, &key)
-                        .context("In unlock_user_key: Failed to decrypt key blob.")?
-                }
-                (enc_by, salt, iv, tag) => {
-                    return Err(Error::Rc(ResponseCode::VALUE_CORRUPTED)).context(format!(
-                        concat!(
-                            "In unlock_user_key: Super key has incomplete metadata.",
-                            "Present: encrypted_by: {}, salt: {}, iv: {}, aead_tag: {}."
-                        ),
-                        enc_by.is_some(),
-                        salt.is_some(),
-                        iv.is_some(),
-                        tag.is_some(),
-                    ));
-                }
-            };
-            self.install_per_boot_key_for_user(user, entry.id(), super_key);
-        } else {
-            return Err(Error::Rc(ResponseCode::VALUE_CORRUPTED))
-                .context("In unlock_user_key: Key entry has no key blob.");
-        }
-
+        self.populate_cache_from_super_key_blob(user, entry, pw).context("In unlock_user_key.")?;
         Ok(())
     }
 
@@ -259,6 +217,118 @@ impl SuperKeyManager {
             Ok(false)
         }
     }
+
+    /// Checks if user has already setup LSKF (i.e. a super key is persisted in the database or the
+    /// legacy database). If so, return LskfLocked state.
+    /// If the password is provided, generate a new super key, encrypt with the password,
+    /// store in the database and populate the super key cache for the new user
+    /// and return LskfUnlocked state.
+    /// If the password is not provided, return Uninitialized state.
+    pub fn check_and_initialize_super_key(
+        &self,
+        db: &mut KeystoreDB,
+        user_id: u32,
+        pw: Option<&[u8]>,
+    ) -> Result<UserState> {
+        let super_key_exists_in_db = Self::super_key_exists_in_db_for_user(db, user_id)
+            .context("In check_and_initialize_super_key. Failed to check if super key exists.")?;
+
+        if super_key_exists_in_db {
+            Ok(UserState::LskfLocked)
+        } else {
+            //TODO: 159371296. check if super key exists in legacy key database. If so, return
+            //LskfLocked. Otherwise, if pw is provided, initialize the super key.
+            if let Some(pw) = pw {
+                //generate a new super key.
+                let super_key = generate_aes256_key().context(
+                    "In check_and_initialize_super_key: Failed to generate AES 256 key.",
+                )?;
+                //derive an AES256 key from the password and re-encrypt the super key
+                //before we insert it in the database.
+                let (encrypted_super_key, blob_metadata) =
+                    Self::encrypt_with_password(&super_key, pw)
+                        .context("In check_and_initialize_super_key.")?;
+
+                let key_entry = db
+                    .store_super_key(user_id as u64 as i64, &(&encrypted_super_key, &blob_metadata))
+                    .context("In check_and_initialize_super_key. Failed to store super key.")?;
+
+                let super_key = self
+                    .populate_cache_from_super_key_blob(user_id, key_entry, pw)
+                    .context("In check_and_initialize_super_key.")?;
+                Ok(UserState::LskfUnlocked(super_key))
+            } else {
+                Ok(UserState::Uninitialized)
+            }
+        }
+    }
+
+    //helper function to populate super key cache from the super key blob loaded from the database
+    fn populate_cache_from_super_key_blob(
+        &self,
+        user_id: u32,
+        entry: KeyEntry,
+        pw: &[u8],
+    ) -> Result<SuperKey> {
+        let super_key = Self::extract_super_key_from_key_entry(entry, pw).context(
+            "In populate_cache_from_super_key_blob. Failed to extract super key from key entry",
+        )?;
+        self.install_per_boot_key_for_user(user_id, super_key.clone());
+        Ok(super_key)
+    }
+
+    /// Extracts super key from the entry loaded from the database
+    pub fn extract_super_key_from_key_entry(entry: KeyEntry, pw: &[u8]) -> Result<SuperKey> {
+        if let Some((blob, metadata)) = entry.key_blob_info() {
+            let key = match (
+                metadata.encrypted_by(),
+                metadata.salt(),
+                metadata.iv(),
+                metadata.aead_tag(),
+            ) {
+                (Some(&EncryptedBy::Password), Some(salt), Some(iv), Some(tag)) => {
+                    let key = derive_key_from_password(pw, Some(salt), AES_256_KEY_LENGTH).context(
+                    "In extract_super_key_from_key_entry: Failed to generate key from password.",
+                )?;
+
+                    aes_gcm_decrypt(blob, iv, tag, &key).context(
+                        "In extract_super_key_from_key_entry: Failed to decrypt key blob.",
+                    )?
+                }
+                (enc_by, salt, iv, tag) => {
+                    return Err(Error::Rc(ResponseCode::VALUE_CORRUPTED)).context(format!(
+                        concat!(
+                        "In extract_super_key_from_key_entry: Super key has incomplete metadata.",
+                        "Present: encrypted_by: {}, salt: {}, iv: {}, aead_tag: {}."
+                    ),
+                        enc_by.is_some(),
+                        salt.is_some(),
+                        iv.is_some(),
+                        tag.is_some()
+                    ));
+                }
+            };
+            Ok(SuperKey { key: Arc::new(key), id: entry.id() })
+        } else {
+            Err(Error::Rc(ResponseCode::VALUE_CORRUPTED))
+                .context("In extract_super_key_from_key_entry: No key blob info.")
+        }
+    }
+
+    /// Encrypts the super key from a key derived from the password, before storing in the database.
+    pub fn encrypt_with_password(super_key: &[u8], pw: &[u8]) -> Result<(Vec<u8>, BlobMetaData)> {
+        let salt = generate_salt().context("In encrypt_with_password: Failed to generate salt.")?;
+        let derived_key = derive_key_from_password(pw, Some(&salt), AES_256_KEY_LENGTH)
+            .context("In encrypt_with_password: Failed to derive password.")?;
+        let mut metadata = BlobMetaData::new();
+        metadata.add(BlobMetaEntry::EncryptedBy(EncryptedBy::Password));
+        metadata.add(BlobMetaEntry::Salt(salt));
+        let (encrypted_key, iv, tag) = aes_gcm_encrypt(super_key, &derived_key)
+            .context("In encrypt_with_password: Failed to encrypt new super key.")?;
+        metadata.add(BlobMetaEntry::Iv(iv));
+        metadata.add(BlobMetaEntry::AeadTag(tag));
+        Ok((encrypted_key, metadata))
+    }
 }
 
 /// This enum represents different states of the user's life cycle in the device.
@@ -277,18 +347,14 @@ pub enum UserState {
 }
 
 impl UserState {
-    pub fn get_user_state(
-        db: &mut KeystoreDB,
-        skm: &SuperKeyManager,
-        user_id: u32,
-    ) -> Result<UserState> {
+    pub fn get(db: &mut KeystoreDB, skm: &SuperKeyManager, user_id: u32) -> Result<UserState> {
         match skm.get_per_boot_key_by_user_id(user_id) {
             Some(super_key) => Ok(UserState::LskfUnlocked(super_key)),
             None => {
                 //Check if a super key exists in the database or legacy database.
                 //If so, return locked user state.
                 if SuperKeyManager::super_key_exists_in_db_for_user(db, user_id)
-                    .context("In get_user_state.")?
+                    .context("In get.")?
                 {
                     Ok(UserState::LskfLocked)
                 } else {
@@ -296,5 +362,55 @@ impl UserState {
                 }
             }
         }
+    }
+
+    /// Queries user state when serving password change requests.
+    pub fn get_with_password_changed(
+        db: &mut KeystoreDB,
+        skm: &SuperKeyManager,
+        user_id: u32,
+        password: Option<&[u8]>,
+    ) -> Result<UserState> {
+        match skm.get_per_boot_key_by_user_id(user_id) {
+            Some(super_key) => {
+                if password.is_none() {
+                    //transitioning to swiping, delete only the super key in database and cache, and
+                    //super-encrypted keys in database (and in KM)
+                    Self::reset_user(db, skm, user_id, true)
+                        .context("In get_with_password_changed.")?;
+                    //Lskf is now removed in Keystore
+                    Ok(UserState::Uninitialized)
+                } else {
+                    //Keystore won't be notified when changing to a new password when LSKF is
+                    //already setup. Therefore, ideally this path wouldn't be reached.
+                    Ok(UserState::LskfUnlocked(super_key))
+                }
+            }
+            None => {
+                //Check if a super key exists in the database or legacy database.
+                //If so, return LskfLocked state.
+                //Otherwise, i) if the password is provided, initialize the super key and return
+                //LskfUnlocked state ii) if password is not provided, return Uninitialized state.
+                skm.check_and_initialize_super_key(db, user_id, password)
+            }
+        }
+    }
+
+    /// Delete all the keys created on behalf of the user.
+    /// If 'keep_non_super_encrypted_keys' is set to true, delete only the super key and super
+    /// encrypted keys.
+    pub fn reset_user(
+        db: &mut KeystoreDB,
+        skm: &SuperKeyManager,
+        user_id: u32,
+        keep_non_super_encrypted_keys: bool,
+    ) -> Result<()> {
+        // mark keys created on behalf of the user as unreferenced.
+        db.unbind_keys_for_user(user_id as u32, keep_non_super_encrypted_keys)
+            .context("In reset user. Error in unbinding keys.")?;
+
+        //delete super key in cache, if exists
+        skm.forget_all_keys_for_user(user_id as u32);
+        Ok(())
     }
 }
