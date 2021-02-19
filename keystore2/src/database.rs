@@ -144,7 +144,7 @@ impl KeyMetaData {
     fn store_in_db(&self, key_id: i64, tx: &Transaction) -> Result<()> {
         let mut stmt = tx
             .prepare(
-                "INSERT into persistent.keymetadata (keyentryid, tag, data)
+                "INSERT or REPLACE INTO persistent.keymetadata (keyentryid, tag, data)
                     VALUES (?, ?, ?);",
             )
             .context("In KeyMetaData::store_in_db: Failed to prepare statement.")?;
@@ -653,6 +653,10 @@ impl KeyEntry {
     pub fn pure_cert(&self) -> bool {
         self.pure_cert
     }
+    /// Consumes this key entry and extracts the keyparameters and metadata from it.
+    pub fn into_key_parameters_and_metadata(self) -> (Vec<KeyParameter>, KeyMetaData) {
+        (self.parameters, self.metadata)
+    }
 }
 
 /// Indicates the sub component of a key entry for persistent storage.
@@ -915,7 +919,8 @@ impl KeystoreDB {
             "CREATE TABLE IF NOT EXISTS persistent.keymetadata (
                      keyentryid INTEGER,
                      tag INTEGER,
-                     data ANY);",
+                     data ANY,
+                     UNIQUE (keyentryid, tag));",
             NO_PARAMS,
         )
         .context("Failed to initialize \"keymetadata\" table.")?;
@@ -1131,10 +1136,11 @@ impl KeystoreDB {
                 tx.execute(
                     "INSERT into persistent.keyentry
                             (id, key_type, domain, namespace, alias, state, km_uuid)
-                            VALUES(?, ?, NULL, ?, ?, ?, ?);",
+                            VALUES(?, ?, ?, ?, ?, ?, ?);",
                     params![
                         id,
                         KeyType::Super,
+                        Domain::APP.0,
                         user_id,
                         Self::USER_SUPER_KEY_ALIAS,
                         KeyLifeCycle::Live,
@@ -2033,7 +2039,7 @@ impl KeystoreDB {
             .prepare(
                 "SELECT id FROM persistent.keyentry
                     WHERE
-                    key_type =  ?
+                    key_type = ?
                     AND domain = ?
                     AND namespace = ?
                     AND alias = ?
@@ -2861,8 +2867,10 @@ mod tests {
     where
         F: Fn(&Uuid, &[u8]) -> Result<()> + Send + 'static,
     {
+        let super_key = Arc::new(SuperKeyManager::new());
+
         let gc_db = KeystoreDB::new(path, None).expect("Failed to open test gc db_connection.");
-        let gc = Gc::new_init_with(Default::default(), move || (Box::new(cb), gc_db));
+        let gc = Gc::new_init_with(Default::default(), move || (Box::new(cb), gc_db, super_key));
 
         KeystoreDB::new(path, Some(gc))
     }
@@ -4718,6 +4726,9 @@ mod tests {
         let (encrypted_super_key, metadata) =
             SuperKeyManager::encrypt_with_password(&super_key, &pw)?;
         db.store_super_key(1, &(&encrypted_super_key, &metadata))?;
+
+        //check if super key exists
+        assert!(db.key_exists(Domain::APP, 1, "USER_SUPER_KEY", KeyType::Super)?);
 
         //load the super key from the database
         let tx = db.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;

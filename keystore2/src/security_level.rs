@@ -32,9 +32,11 @@ use android_system_keystore2::aidl::android::system::keystore2::{
     KeyMetadata::KeyMetadata, KeyParameters::KeyParameters,
 };
 
-use crate::globals::ENFORCEMENTS;
+use crate::database::{CertificateInfo, KeyIdGuard};
+use crate::globals::{DB, ENFORCEMENTS, SUPER_KEY};
 use crate::key_parameter::KeyParameter as KsKeyParam;
 use crate::key_parameter::KeyParameterValue as KsKeyParamValue;
+use crate::super_key::{KeyBlob, SuperKeyManager};
 use crate::utils::{check_key_permission, uid_to_android_user, Asp};
 use crate::{
     database::{
@@ -44,10 +46,6 @@ use crate::{
     operation::KeystoreOperation,
     operation::OperationDb,
     permission::KeyPerm,
-};
-use crate::{
-    database::{CertificateInfo, KeyIdGuard},
-    globals::DB,
 };
 use crate::{
     error::{self, map_km_error, map_or_log_err, Error, ErrorCode},
@@ -100,6 +98,7 @@ impl KeystoreSecurityLevel {
         key: KeyDescriptor,
         creation_result: KeyCreationResult,
         user_id: u32,
+        flags: Option<i32>,
     ) -> Result<KeyMetadata> {
         let KeyCreationResult {
             keyBlob: key_blob,
@@ -132,6 +131,20 @@ impl KeystoreSecurityLevel {
             SecurityLevel::SOFTWARE,
         ));
 
+        let (key_blob, mut blob_metadata) = DB
+            .with(|db| {
+                SuperKeyManager::handle_super_encryption_on_key_init(
+                    &mut db.borrow_mut(),
+                    &SUPER_KEY,
+                    &(key.domain),
+                    &key_parameters,
+                    flags,
+                    user_id,
+                    &key_blob,
+                )
+            })
+            .context("In store_new_key. Failed to handle super encryption.")?;
+
         let creation_date = DateTime::now().context("Trying to make creation time.")?;
 
         let key = match key.domain {
@@ -142,7 +155,6 @@ impl KeystoreSecurityLevel {
                 .with::<_, Result<KeyDescriptor>>(|db| {
                     let mut key_metadata = KeyMetaData::new();
                     key_metadata.add(KeyMetaEntry::CreationDate(creation_date));
-                    let mut blob_metadata = BlobMetaData::new();
                     blob_metadata.add(BlobMetaEntry::KmUuid(self.km_uuid));
 
                     let mut db = db.borrow_mut();
@@ -202,7 +214,7 @@ impl KeystoreSecurityLevel {
                     },
                     None,
                     None,
-                    None,
+                    BlobMetaData::new(),
                 )
             }
             _ => {
@@ -229,7 +241,7 @@ impl KeystoreSecurityLevel {
                     &scoping_blob,
                     Some((key_id_guard.id(), key_entry.into_key_parameters())),
                     Some(key_id_guard),
-                    Some(blob_metadata),
+                    blob_metadata,
                 )
             }
         };
@@ -258,6 +270,12 @@ impl KeystoreSecurityLevel {
 
         let immediate_hat = immediate_hat.unwrap_or_default();
 
+        let user_id = uid_to_android_user(caller_uid);
+
+        let km_blob = SUPER_KEY
+            .unwrap_key_if_required(&blob_metadata, km_blob)
+            .context("In create_operation. Failed to handle super encryption.")?;
+
         let km_dev: Strong<dyn IKeyMintDevice> = self
             .keymint
             .get_interface()
@@ -267,7 +285,7 @@ impl KeystoreSecurityLevel {
             .upgrade_keyblob_if_required_with(
                 &*km_dev,
                 key_id_guard,
-                &(km_blob, blob_metadata.as_ref()),
+                &(&km_blob, &blob_metadata),
                 &operation_parameters,
                 |blob| loop {
                     match map_km_error(km_dev.begin(
@@ -403,7 +421,7 @@ impl KeystoreSecurityLevel {
             .context("In generate_key: While generating Key")?;
 
         let user_id = uid_to_android_user(caller_uid);
-        self.store_new_key(key, creation_result, user_id).context("In generate_key.")
+        self.store_new_key(key, creation_result, user_id, Some(flags)).context("In generate_key.")
     }
 
     fn get_attest_key(&self, key: &KeyDescriptor, caller_uid: u32) -> Result<AttestationKey> {
@@ -510,7 +528,7 @@ impl KeystoreSecurityLevel {
                 .context("In import_key: Trying to call importKey")?;
 
         let user_id = uid_to_android_user(caller_uid);
-        self.store_new_key(key, creation_result, user_id).context("In import_key.")
+        self.store_new_key(key, creation_result, user_id, Some(flags)).context("In import_key.")
     }
 
     fn import_wrapped_key(
@@ -544,6 +562,8 @@ impl KeystoreSecurityLevel {
         }
 
         let caller_uid = ThreadState::get_calling_uid();
+        let user_id = uid_to_android_user(caller_uid);
+
         let key = match key.domain {
             Domain::APP => KeyDescriptor {
                 domain: key.domain,
@@ -563,7 +583,7 @@ impl KeystoreSecurityLevel {
         // Import_wrapped_key requires the rebind permission for the new key.
         check_key_permission(KeyPerm::rebind(), &key, &None).context("In import_wrapped_key.")?;
 
-        let (wrapping_key_id_guard, wrapping_key_entry) = DB
+        let (wrapping_key_id_guard, mut wrapping_key_entry) = DB
             .with(|db| {
                 db.borrow_mut().load_key_entry(
                     &wrapping_key,
@@ -574,15 +594,16 @@ impl KeystoreSecurityLevel {
                 )
             })
             .context("Failed to load wrapping key.")?;
-        let (wrapping_key_blob, wrapping_blob_metadata) = match wrapping_key_entry.key_blob_info() {
-            Some((blob, metadata)) => (blob, metadata),
-            None => {
-                return Err(error::Error::sys()).context(concat!(
-                    "No km_blob after successfully loading key.",
-                    " This should never happen."
-                ))
-            }
-        };
+
+        let (wrapping_key_blob, wrapping_blob_metadata) = wrapping_key_entry
+            .take_key_blob_info()
+            .ok_or_else(error::Error::sys)
+            .context("No km_blob after successfully loading key. This should never happen.")?;
+
+        let wrapping_key_blob =
+            SUPER_KEY.unwrap_key_if_required(&wrapping_blob_metadata, &wrapping_key_blob).context(
+                "In import_wrapped_key. Failed to handle super encryption for wrapping key.",
+            )?;
 
         // km_dev.importWrappedKey does not return a certificate chain.
         // TODO Do we assume that all wrapped keys are symmetric?
@@ -611,7 +632,7 @@ impl KeystoreSecurityLevel {
             .upgrade_keyblob_if_required_with(
                 &*km_dev,
                 Some(wrapping_key_id_guard),
-                &(&wrapping_key_blob, Some(&wrapping_blob_metadata)),
+                &(&wrapping_key_blob, &wrapping_blob_metadata),
                 &[],
                 |wrapping_blob| {
                     let creation_result = map_km_error(km_dev.importWrappedKey(
@@ -627,8 +648,7 @@ impl KeystoreSecurityLevel {
             )
             .context("In import_wrapped_key.")?;
 
-        let user_id = uid_to_android_user(caller_uid);
-        self.store_new_key(key, creation_result, user_id)
+        self.store_new_key(key, creation_result, user_id, None)
             .context("In import_wrapped_key: Trying to store the new key.")
     }
 
@@ -636,7 +656,7 @@ impl KeystoreSecurityLevel {
         &self,
         km_dev: &dyn IKeyMintDevice,
         key_id_guard: Option<KeyIdGuard>,
-        blob_info: &(&[u8], Option<&BlobMetaData>),
+        blob_info: &(&KeyBlob, &BlobMetaData),
         params: &[KeyParameter],
         f: F,
     ) -> Result<(T, Option<Vec<u8>>)>
@@ -647,13 +667,26 @@ impl KeystoreSecurityLevel {
             Err(Error::Km(ErrorCode::KEY_REQUIRES_UPGRADE)) => {
                 let upgraded_blob = map_km_error(km_dev.upgradeKey(blob_info.0, params))
                     .context("In upgrade_keyblob_if_required_with: Upgrade failed.")?;
+
+                let (upgraded_blob_to_be_stored, blob_metadata) =
+                    SuperKeyManager::reencrypt_on_upgrade_if_required(blob_info.0, &upgraded_blob)
+                        .context(
+                        "In upgrade_keyblob_if_required_with: Failed to handle super encryption.",
+                    )?;
+
+                let mut blob_metadata = blob_metadata.unwrap_or_else(BlobMetaData::new);
+                if let Some(uuid) = blob_info.1.km_uuid() {
+                    blob_metadata.add(BlobMetaEntry::KmUuid(*uuid));
+                }
+
                 key_id_guard.map_or(Ok(()), |key_id_guard| {
                     DB.with(|db| {
-                        db.borrow_mut().set_blob(
+                        let mut db = db.borrow_mut();
+                        db.set_blob(
                             &key_id_guard,
                             SubComponentType::KEY_BLOB,
-                            Some(&upgraded_blob),
-                            blob_info.1,
+                            Some(&upgraded_blob_to_be_stored),
+                            Some(&blob_metadata),
                         )
                     })
                     .context(concat!(
