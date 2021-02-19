@@ -15,8 +15,8 @@
 #![allow(dead_code)]
 
 use crate::{
-    database::BlobMetaData, database::BlobMetaEntry, database::EncryptedBy, database::KeystoreDB,
-    error::Error, error::ResponseCode, legacy_blob::LegacyBlobLoader,
+    database::BlobMetaData, database::BlobMetaEntry, database::EncryptedBy, database::KeyType,
+    database::KeystoreDB, error::Error, error::ResponseCode, legacy_blob::LegacyBlobLoader,
 };
 use android_system_keystore2::aidl::android::system::keystore2::Domain::Domain;
 use anyhow::{Context, Result};
@@ -39,11 +39,28 @@ struct UserSuperKeys {
     /// secret, that is itself derived from the user's lock screen knowledge factor (LSKF).
     /// When the user unlocks the device for the first time, this key is unlocked, i.e., decrypted,
     /// and stays memory resident until the device reboots.
-    per_boot: Option<Arc<ZVec>>,
+    per_boot: Option<SuperKey>,
     /// The screen lock key works like the per boot key with the distinction that it is cleared
     /// from memory when the screen lock is engaged.
     /// TODO the life cycle is not fully implemented at this time.
     screen_lock: Option<Arc<ZVec>>,
+}
+
+#[derive(Default, Clone)]
+pub struct SuperKey {
+    key: Arc<ZVec>,
+    // id of the super key in the database.
+    id: i64,
+}
+
+impl SuperKey {
+    pub fn get_key(&self) -> &Arc<ZVec> {
+        &self.key
+    }
+
+    pub fn get_id(&self) -> i64 {
+        self.id
+    }
 }
 
 #[derive(Default)]
@@ -87,18 +104,18 @@ impl SuperKeyManager {
         data.key_index.clear();
     }
 
-    fn install_per_boot_key_for_user(&self, user: UserId, key_id: i64, key: ZVec) {
+    fn install_per_boot_key_for_user(&self, user: UserId, id: i64, key: ZVec) {
         let mut data = self.data.lock().unwrap();
         let key = Arc::new(key);
-        data.key_index.insert(key_id, Arc::downgrade(&key));
-        data.user_keys.entry(user).or_default().per_boot = Some(key);
+        data.key_index.insert(id, Arc::downgrade(&key));
+        data.user_keys.entry(user).or_default().per_boot = Some(SuperKey { key, id });
     }
 
     fn get_key(&self, key_id: &i64) -> Option<Arc<ZVec>> {
         self.data.lock().unwrap().key_index.get(key_id).and_then(|k| k.upgrade())
     }
 
-    pub fn get_per_boot_key_by_user_id(&self, user_id: u32) -> Option<Arc<ZVec>> {
+    pub fn get_per_boot_key_by_user_id(&self, user_id: u32) -> Option<SuperKey> {
         let data = self.data.lock().unwrap();
         data.user_keys.get(&user_id).map(|e| e.per_boot.clone()).flatten()
     }
@@ -118,7 +135,7 @@ impl SuperKeyManager {
             .get_or_create_key_with(
                 Domain::APP,
                 user as u64 as i64,
-                &"USER_SUPER_KEY",
+                KeystoreDB::USER_SUPER_KEY_ALIAS,
                 crate::database::KEYSTORE_UUID,
                 || {
                     // For backward compatibility we need to check if there is a super key present.
@@ -220,6 +237,64 @@ impl SuperKeyManager {
                 iv.is_some(),
                 tag.is_some(),
             )),
+        }
+    }
+
+    /// Checks if user has setup LSKF, even when super key cache is empty for the user.
+    pub fn super_key_exists_in_db_for_user(db: &mut KeystoreDB, user_id: u32) -> Result<bool> {
+        let key_in_db = db
+            .key_exists(
+                Domain::APP,
+                user_id as u64 as i64,
+                KeystoreDB::USER_SUPER_KEY_ALIAS,
+                KeyType::Super,
+            )
+            .context("In super_key_exists_in_db_for_user.")?;
+
+        if key_in_db {
+            Ok(key_in_db)
+        } else {
+            //TODO (b/159371296): add a function to legacy blob loader to check if super key exists
+            //given user id
+            Ok(false)
+        }
+    }
+}
+
+/// This enum represents different states of the user's life cycle in the device.
+/// For now, only three states are defined. More states may be added later.
+pub enum UserState {
+    // The user has registered LSKF and has unlocked the device by entering PIN/Password,
+    // and hence the per-boot super key is available in the cache.
+    LskfUnlocked(SuperKey),
+    // The user has registered LSKF, but has not unlocked the device using password, after reboot.
+    // Hence the per-boot super-key(s) is not available in the cache.
+    // However, the encrypted super key is available in the database.
+    LskfLocked,
+    // There's no user in the device for the given user id, or the user with the user id has not
+    // setup LSKF.
+    Uninitialized,
+}
+
+impl UserState {
+    pub fn get_user_state(
+        db: &mut KeystoreDB,
+        skm: &SuperKeyManager,
+        user_id: u32,
+    ) -> Result<UserState> {
+        match skm.get_per_boot_key_by_user_id(user_id) {
+            Some(super_key) => Ok(UserState::LskfUnlocked(super_key)),
+            None => {
+                //Check if a super key exists in the database or legacy database.
+                //If so, return locked user state.
+                if SuperKeyManager::super_key_exists_in_db_for_user(db, user_id)
+                    .context("In get_user_state.")?
+                {
+                    Ok(UserState::LskfLocked)
+                } else {
+                    Ok(UserState::Uninitialized)
+                }
+            }
         }
     }
 }

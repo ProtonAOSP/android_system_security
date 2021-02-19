@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! This module implements IKeyAuthorization AIDL interface.
+//! This module implements IKeystoreAuthorization AIDL interface.
 
 use crate::error::Error as KeystoreError;
 use crate::error::map_or_log_err;
