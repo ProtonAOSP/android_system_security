@@ -221,6 +221,34 @@ impl SuperKeyManager {
     }
 
     /// Checks if user has already setup LSKF (i.e. a super key is persisted in the database or the
+    /// legacy database). If not, return Uninitialized state.
+    /// Otherwise, decrypt the super key from the password and return LskfUnlocked state.
+    pub fn check_and_unlock_super_key(
+        &self,
+        db: &mut KeystoreDB,
+        user_id: u32,
+        pw: &[u8],
+    ) -> Result<UserState> {
+        let result = db
+            .load_super_key(user_id)
+            .context("In check_and_unlock_super_key. Failed to load super key")?;
+
+        match result {
+            Some((_, entry)) => {
+                let super_key = self
+                    .populate_cache_from_super_key_blob(user_id, entry, pw)
+                    .context("In check_and_unlock_super_key.")?;
+                Ok(UserState::LskfUnlocked(super_key))
+            }
+            None =>
+            //TODO: 159371296. Try to load and populate super key from legacy key database.
+            {
+                Ok(UserState::Uninitialized)
+            }
+        }
+    }
+
+    /// Checks if user has already setup LSKF (i.e. a super key is persisted in the database or the
     /// legacy database). If so, return LskfLocked state.
     /// If the password is provided, generate a new super key, encrypt with the password,
     /// store in the database and populate the super key cache for the new user
@@ -234,7 +262,6 @@ impl SuperKeyManager {
     ) -> Result<UserState> {
         let super_key_exists_in_db = Self::super_key_exists_in_db_for_user(db, user_id)
             .context("In check_and_initialize_super_key. Failed to check if super key exists.")?;
-
         if super_key_exists_in_db {
             Ok(UserState::LskfLocked)
         } else {
@@ -500,6 +527,29 @@ impl UserState {
                 //Otherwise, i) if the password is provided, initialize the super key and return
                 //LskfUnlocked state ii) if password is not provided, return Uninitialized state.
                 skm.check_and_initialize_super_key(db, user_id, password)
+            }
+        }
+    }
+
+    /// Queries user state when serving password unlock requests.
+    pub fn get_with_password_unlock(
+        db: &mut KeystoreDB,
+        skm: &SuperKeyManager,
+        user_id: u32,
+        password: &[u8],
+    ) -> Result<UserState> {
+        match skm.get_per_boot_key_by_user_id(user_id) {
+            Some(super_key) => {
+                log::info!("In get_with_password_unlock. Trying to unlock when already unlocked.");
+                Ok(UserState::LskfUnlocked(super_key))
+            }
+            None => {
+                //Check if a super key exists in the database or legacy database.
+                //If not, return Uninitialized state.
+                //Otherwise, try to unlock the super key and if successful,
+                //return LskfUnlocked state
+                skm.check_and_unlock_super_key(db, user_id, password)
+                    .context("In get_with_password_unlock. Failed to unlock super key.")
             }
         }
     }
