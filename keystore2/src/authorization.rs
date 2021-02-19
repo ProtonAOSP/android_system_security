@@ -16,8 +16,9 @@
 
 use crate::error::Error as KeystoreError;
 use crate::error::map_or_log_err;
-use crate::globals::{DB, ENFORCEMENTS, LEGACY_BLOB_LOADER, SUPER_KEY};
+use crate::globals::{ENFORCEMENTS, SUPER_KEY, DB};
 use crate::permission::KeystorePerm;
+use crate::super_key::UserState;
 use crate::utils::check_keystore_permission;
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
     HardwareAuthToken::HardwareAuthToken,
@@ -65,22 +66,21 @@ impl AuthorizationManager {
                     .context("In on_lock_screen_event: Unlock with password.")?;
                 ENFORCEMENTS.set_device_locked(user_id, false);
                 // Unlock super key.
-                DB.with::<_, Result<()>>(|db| {
-                    let mut db = db.borrow_mut();
-                    //TODO - b/176123105 - Once the user management API is implemented, unlock is
-                    //allowed only if the user is added. Then the two tasks handled by the
-                    //unlock_user_key will be split into two methods. For now, unlock_user_key
-                    //method is used as it is, which created a super key for the user if one does
-                    //not exists, in addition to unlocking the existing super key of the user/
-                    SUPER_KEY.unlock_user_key(
-                        &mut db,
-                        user_id as u32,
-                        user_password,
-                        &LEGACY_BLOB_LOADER,
-                    )?;
-                    Ok(())
-                })
-                .context("In on_lock_screen_event.")?;
+                if let UserState::Uninitialized = DB
+                    .with(|db| {
+                        UserState::get_with_password_unlock(
+                            &mut db.borrow_mut(),
+                            &SUPER_KEY,
+                            user_id as u32,
+                            user_password,
+                        )
+                    })
+                    .context("In on_lock_screen_event: Unlock with password.")?
+                {
+                    log::info!(
+                        "In on_lock_screen_event. Trying to unlock when LSKF is uninitialized."
+                    );
+                }
 
                 Ok(())
             }
