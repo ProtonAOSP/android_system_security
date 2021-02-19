@@ -19,11 +19,12 @@ mod error;
 mod zvec;
 pub use error::Error;
 use keystore2_crypto_bindgen::{
-    generateKeyFromPassword, randomBytes, AES_gcm_decrypt, AES_gcm_encrypt, ECDHComputeKey,
-    ECKEYDeriveFromSecret, ECKEYGenerateKey, ECPOINTOct2Point, ECPOINTPoint2Oct, EC_KEY_free,
-    EC_KEY_get0_public_key, EC_POINT_free, HKDFExpand, HKDFExtract, EC_KEY, EC_MAX_BYTES, EC_POINT,
-    EVP_MAX_MD_SIZE,
+    extractSubjectFromCertificate, generateKeyFromPassword, randomBytes, AES_gcm_decrypt,
+    AES_gcm_encrypt, ECDHComputeKey, ECKEYDeriveFromSecret, ECKEYGenerateKey, ECPOINTOct2Point,
+    ECPOINTPoint2Oct, EC_KEY_free, EC_KEY_get0_public_key, EC_POINT_free, HKDFExpand, HKDFExtract,
+    EC_KEY, EC_MAX_BYTES, EC_POINT, EVP_MAX_MD_SIZE,
 };
+use std::convert::TryFrom;
 use std::convert::TryInto;
 use std::marker::PhantomData;
 pub use zvec::ZVec;
@@ -351,6 +352,59 @@ pub fn ec_point_oct_to_point(buf: &[u8]) -> Result<OwnedECPoint, Error> {
     // Our C wrapper creates a new EC_POINT, so we mark this mutable and free
     // it on drop.
     Ok(OwnedECPoint(result))
+}
+
+/// Uses BoringSSL to extract the DER-encoded issuer subject from a
+/// DER-encoded X.509 certificate.
+pub fn parse_issuer_subject_from_certificate(cert_buf: &[u8]) -> Result<Vec<u8>, Error> {
+    // Try with a 200-byte output buffer, should be enough in all but bizarre cases.
+    let mut retval = vec![0; 200];
+    let mut size = unsafe {
+        extractSubjectFromCertificate(
+            cert_buf.as_ptr(),
+            cert_buf.len(),
+            retval.as_mut_ptr(),
+            retval.len(),
+        )
+    };
+
+    if size == 0 {
+        return Err(Error::ExtractSubjectFailed);
+    }
+
+    if size < 0 {
+        // Our buffer wasn't big enough.  Make one that is just the right size and try again.
+        let negated_size = usize::try_from(-size);
+        retval = match negated_size.ok() {
+            None => return Err(Error::ExtractSubjectFailed),
+            Some(size) => vec![0; size],
+        };
+
+        size = unsafe {
+            extractSubjectFromCertificate(
+                cert_buf.as_ptr(),
+                cert_buf.len(),
+                retval.as_mut_ptr(),
+                retval.len(),
+            )
+        };
+
+        if size <= 0 {
+            return Err(Error::ExtractSubjectFailed);
+        }
+    }
+
+    // Reduce buffer size to the amount written.
+    let safe_size = usize::try_from(size);
+    retval.resize(
+        match safe_size.ok() {
+            None => return Err(Error::ExtractSubjectFailed),
+            Some(size) => size,
+        },
+        0,
+    );
+
+    Ok(retval)
 }
 
 #[cfg(test)]
