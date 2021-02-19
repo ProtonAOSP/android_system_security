@@ -16,8 +16,8 @@
 
 use crate::{
     database::BlobMetaData, database::BlobMetaEntry, database::EncryptedBy, database::KeyEntry,
-    database::KeyType, database::KeystoreDB, error::Error, error::ResponseCode,
-    legacy_blob::LegacyBlobLoader,
+    database::KeyType, database::KeystoreDB, enforcements::Enforcements, error::Error,
+    error::ResponseCode, key_parameter::KeyParameter, legacy_blob::LegacyBlobLoader,
 };
 use android_system_keystore2::aidl::android::system::keystore2::Domain::Domain;
 use anyhow::{Context, Result};
@@ -25,6 +25,7 @@ use keystore2_crypto::{
     aes_gcm_decrypt, aes_gcm_encrypt, derive_key_from_password, generate_aes256_key, generate_salt,
     ZVec, AES_256_KEY_LENGTH,
 };
+use std::ops::Deref;
 use std::{
     collections::HashMap,
     sync::Arc,
@@ -168,12 +169,13 @@ impl SuperKeyManager {
     /// The function queries `metadata.encrypted_by()` to determine the encryption key.
     /// It then check if the required key is memory resident, and if so decrypts the
     /// blob.
-    pub fn unwrap_key(&self, blob: &[u8], metadata: &BlobMetaData) -> Result<ZVec> {
+    pub fn unwrap_key<'a>(&self, blob: &'a [u8], metadata: &BlobMetaData) -> Result<KeyBlob<'a>> {
         match metadata.encrypted_by() {
             Some(EncryptedBy::KeyId(key_id)) => match self.get_key(key_id) {
-                Some(key) => {
-                    Self::unwrap_key_with_key(blob, metadata, &key).context("In unwrap_key.")
-                }
+                Some(key) => Ok(KeyBlob::Sensitive(
+                    Self::unwrap_key_with_key(blob, metadata, &key).context("In unwrap_key.")?,
+                    SuperKey { key: key.clone(), id: *key_id },
+                )),
                 None => Err(Error::Rc(ResponseCode::LOCKED))
                     .context("In unwrap_key: Key is not usable until the user entered their LSKF."),
             },
@@ -329,6 +331,112 @@ impl SuperKeyManager {
         metadata.add(BlobMetaEntry::AeadTag(tag));
         Ok((encrypted_key, metadata))
     }
+
+    // Encrypt the given key blob with the user's super key, if the super key exists and the device
+    // is unlocked. If the super key exists and the device is locked, or LSKF is not setup,
+    // return error. Note that it is out of the scope of this function to check if super encryption
+    // is required. Such check should be performed before calling this function.
+    fn super_encrypt_on_key_init(
+        db: &mut KeystoreDB,
+        skm: &SuperKeyManager,
+        user_id: u32,
+        key_blob: &[u8],
+    ) -> Result<(Vec<u8>, BlobMetaData)> {
+        match UserState::get(db, skm, user_id)
+            .context("In super_encrypt. Failed to get user state.")?
+        {
+            UserState::LskfUnlocked(super_key) => {
+                Self::encrypt_with_super_key(key_blob, &super_key)
+                    .context("In super_encrypt_on_key_init. Failed to encrypt the key.")
+            }
+            UserState::LskfLocked => {
+                Err(Error::Rc(ResponseCode::LOCKED)).context("In super_encrypt. Device is locked.")
+            }
+            UserState::Uninitialized => Err(Error::Rc(ResponseCode::UNINITIALIZED))
+                .context("In super_encrypt. LSKF is not setup for the user."),
+        }
+    }
+
+    //Helper function to encrypt a key with the given super key. Callers should select which super
+    //key to be used. This is called when a key is super encrypted at its creation as well as at its
+    //upgrade.
+    fn encrypt_with_super_key(
+        key_blob: &[u8],
+        super_key: &SuperKey,
+    ) -> Result<(Vec<u8>, BlobMetaData)> {
+        let mut metadata = BlobMetaData::new();
+        let (encrypted_key, iv, tag) = aes_gcm_encrypt(key_blob, &(super_key.key))
+            .context("In encrypt_with_super_key: Failed to encrypt new super key.")?;
+        metadata.add(BlobMetaEntry::Iv(iv));
+        metadata.add(BlobMetaEntry::AeadTag(tag));
+        metadata.add(BlobMetaEntry::EncryptedBy(EncryptedBy::KeyId(super_key.id)));
+        Ok((encrypted_key, metadata))
+    }
+
+    /// Check if super encryption is required and if so, super-encrypt the key to be stored in
+    /// the database.
+    pub fn handle_super_encryption_on_key_init(
+        db: &mut KeystoreDB,
+        skm: &SuperKeyManager,
+        domain: &Domain,
+        key_parameters: &[KeyParameter],
+        flags: Option<i32>,
+        user_id: u32,
+        key_blob: &[u8],
+    ) -> Result<(Vec<u8>, BlobMetaData)> {
+        match (*domain, Enforcements::super_encryption_required(key_parameters, flags)) {
+            (Domain::APP, true) => Self::super_encrypt_on_key_init(db, skm, user_id, &key_blob)
+                .context(
+                    "In handle_super_encryption_on_key_init.
+                         Failed to super encrypt the key.",
+                ),
+            _ => Ok((key_blob.to_vec(), BlobMetaData::new())),
+        }
+    }
+
+    /// Check if a given key is super-encrypted, from its metadata. If so, unwrap the key using
+    /// the relevant super key.
+    pub fn unwrap_key_if_required<'a>(
+        &self,
+        metadata: &BlobMetaData,
+        key_blob: &'a [u8],
+    ) -> Result<KeyBlob<'a>> {
+        if Self::key_super_encrypted(&metadata) {
+            let unwrapped_key = self
+                .unwrap_key(key_blob, metadata)
+                .context("In unwrap_key_if_required. Error in unwrapping the key.")?;
+            Ok(unwrapped_key)
+        } else {
+            Ok(KeyBlob::Ref(key_blob))
+        }
+    }
+
+    /// Check if a given key needs re-super-encryption, from its KeyBlob type.
+    /// If so, re-super-encrypt the key and return a new set of metadata,
+    /// containing the new super encryption information.
+    pub fn reencrypt_on_upgrade_if_required<'a>(
+        key_blob_before_upgrade: &KeyBlob,
+        key_after_upgrade: &'a [u8],
+    ) -> Result<(KeyBlob<'a>, Option<BlobMetaData>)> {
+        match key_blob_before_upgrade {
+            KeyBlob::Sensitive(_, super_key) => {
+                let (key, metadata) = Self::encrypt_with_super_key(key_after_upgrade, super_key)
+                .context(
+                "In reencrypt_on_upgrade_if_required. Failed to re-super-encrypt key on key upgrade.",
+                )?;
+                Ok((KeyBlob::NonSensitive(key), Some(metadata)))
+            }
+            _ => Ok((KeyBlob::Ref(key_after_upgrade), None)),
+        }
+    }
+
+    // Helper function to decide if a key is super encrypted, given metadata.
+    fn key_super_encrypted(metadata: &BlobMetaData) -> bool {
+        if let Some(&EncryptedBy::KeyId(_)) = metadata.encrypted_by() {
+            return true;
+        }
+        false
+    }
 }
 
 /// This enum represents different states of the user's life cycle in the device.
@@ -412,5 +520,29 @@ impl UserState {
         //delete super key in cache, if exists
         skm.forget_all_keys_for_user(user_id as u32);
         Ok(())
+    }
+}
+
+/// This enum represents two states a Keymint Blob can be in, w.r.t super encryption.
+/// Sensitive variant represents a Keymint blob that is supposed to be super encrypted,
+/// but unwrapped during usage. Therefore, it has the super key along with the unwrapped key.
+/// Ref variant represents a Keymint blob that is not required to super encrypt or that is
+/// already super encrypted.
+pub enum KeyBlob<'a> {
+    Sensitive(ZVec, SuperKey),
+    NonSensitive(Vec<u8>),
+    Ref(&'a [u8]),
+}
+
+/// Deref returns a reference to the key material in both variants.
+impl<'a> Deref for KeyBlob<'a> {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Sensitive(key, _) => &key,
+            Self::NonSensitive(key) => &key,
+            Self::Ref(key) => key,
+        }
     }
 }
