@@ -792,6 +792,9 @@ pub struct PerBootDbKeepAlive(Connection);
 impl KeystoreDB {
     const PERBOOT_DB_FILE_NAME: &'static str = &"file:perboot.sqlite?mode=memory&cache=shared";
 
+    /// The alias of the user super key.
+    pub const USER_SUPER_KEY_ALIAS: &'static str = &"USER_SUPER_KEY";
+
     /// This creates a PerBootDbKeepAlive object to keep the per boot database alive.
     pub fn keep_perboot_db_alive() -> Result<PerBootDbKeepAlive> {
         let conn = Connection::open_in_memory()
@@ -1091,6 +1094,30 @@ impl KeystoreDB {
             .need_gc()
         })
         .context("In cleanup_leftovers.")
+    }
+
+    /// Checks if a key exists with given key type and key descriptor properties.
+    pub fn key_exists(
+        &mut self,
+        domain: Domain,
+        nspace: i64,
+        alias: &str,
+        key_type: KeyType,
+    ) -> Result<bool> {
+        self.with_transaction(TransactionBehavior::Immediate, |tx| {
+            let key_descriptor =
+                KeyDescriptor { domain, nspace, alias: Some(alias.to_string()), blob: None };
+            let result = Self::load_key_entry_id(&tx, &key_descriptor, key_type);
+            match result {
+                Ok(_) => Ok(true),
+                Err(error) => match error.root_cause().downcast_ref::<KsError>() {
+                    Some(KsError::Rc(ResponseCode::KEY_NOT_FOUND)) => Ok(false),
+                    _ => Err(error).context("In key_exists: Failed to find if the key exists."),
+                },
+            }
+            .no_gc()
+        })
+        .context("In key_exists.")
     }
 
     /// Atomically loads a key entry and associated metadata or creates it using the
