@@ -39,7 +39,7 @@ using android::base::Result;
 const std::string kSigningKeyBlob = "/data/misc/odsign/key.blob";
 const std::string kSigningKeyCert = "/data/misc/odsign/key.cert";
 
-const std::string kArtArtifactsDir = "/data/misc/apexdata/com.android.art/system";
+const std::string kArtArtifactsDir = "/data/misc/apexdata/com.android.art/dalvik-cache";
 
 static const char* kOdrefreshPath = "/apex/com.android.art/bin/odrefresh";
 
