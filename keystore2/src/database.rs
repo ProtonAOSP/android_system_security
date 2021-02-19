@@ -1128,7 +1128,7 @@ impl KeystoreDB {
     /// Stores a super key in the database.
     pub fn store_super_key(
         &mut self,
-        user_id: i64,
+        user_id: u32,
         blob_info: &(&[u8], &BlobMetaData),
     ) -> Result<KeyEntry> {
         self.with_transaction(TransactionBehavior::Immediate, |tx| {
@@ -1141,7 +1141,7 @@ impl KeystoreDB {
                         id,
                         KeyType::Super,
                         Domain::APP.0,
-                        user_id,
+                        user_id as i64,
                         Self::USER_SUPER_KEY_ALIAS,
                         KeyLifeCycle::Live,
                         &KEYSTORE_UUID,
@@ -1172,7 +1172,7 @@ impl KeystoreDB {
         self.with_transaction(TransactionBehavior::Immediate, |tx| {
             let key_descriptor = KeyDescriptor {
                 domain: Domain::APP,
-                nspace: user_id as u64 as i64,
+                nspace: user_id as i64,
                 alias: Some(String::from("USER_SUPER_KEY")),
                 blob: None,
             };
@@ -2559,7 +2559,7 @@ impl KeystoreDB {
                         }
                     }
                 }
-                notify_gc = Self::mark_unreferenced(&tx, key_id as u64 as i64)
+                notify_gc = Self::mark_unreferenced(&tx, key_id)
                     .context("In unbind_keys_for_user.")?
                     || notify_gc;
             }

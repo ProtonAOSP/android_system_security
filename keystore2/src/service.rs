@@ -27,7 +27,10 @@ use crate::utils::{
     check_grant_permission, check_key_permission, check_keystore_permission,
     key_parameters_to_authorizations, Asp,
 };
-use crate::{database::Uuid, globals::DB};
+use crate::{
+    database::Uuid,
+    globals::{create_thread_local_db, DB, LEGACY_BLOB_LOADER, LEGACY_MIGRATOR},
+};
 use crate::{database::KEYSTORE_UUID, permission};
 use crate::{
     database::{KeyEntryLoadBits, KeyType, SubComponentType},
@@ -73,6 +76,15 @@ impl KeystoreService {
             result.uuid_by_sec_level.insert(SecurityLevel::STRONGBOX, uuid);
         }
 
+        let uuid_by_sec_level = result.uuid_by_sec_level.clone();
+        LEGACY_MIGRATOR
+            .set_init(move || {
+                (create_thread_local_db(), uuid_by_sec_level, LEGACY_BLOB_LOADER.clone())
+            })
+            .context(
+                "In KeystoreService::new_native_binder: Trying to initialize the legacy migrator.",
+            )?;
+
         let result = BnKeystoreService::new_binder(result);
         result.as_binder().set_requesting_sid(true);
         Ok(result)
@@ -112,15 +124,18 @@ impl KeystoreService {
     }
 
     fn get_key_entry(&self, key: &KeyDescriptor) -> Result<KeyEntryResponse> {
+        let caller_uid = ThreadState::get_calling_uid();
         let (key_id_guard, mut key_entry) = DB
             .with(|db| {
-                db.borrow_mut().load_key_entry(
-                    &key,
-                    KeyType::Client,
-                    KeyEntryLoadBits::PUBLIC,
-                    ThreadState::get_calling_uid(),
-                    |k, av| check_key_permission(KeyPerm::get_info(), k, &av),
-                )
+                LEGACY_MIGRATOR.with_try_migrate(&key, caller_uid, || {
+                    db.borrow_mut().load_key_entry(
+                        &key,
+                        KeyType::Client,
+                        KeyEntryLoadBits::PUBLIC,
+                        caller_uid,
+                        |k, av| check_key_permission(KeyPerm::get_info(), k, &av),
+                    )
+                })
             })
             .context("In get_key_entry, while trying to load key info.")?;
 
@@ -161,18 +176,20 @@ impl KeystoreService {
         public_cert: Option<&[u8]>,
         certificate_chain: Option<&[u8]>,
     ) -> Result<()> {
+        let caller_uid = ThreadState::get_calling_uid();
         DB.with::<_, Result<()>>(|db| {
-            let mut db = db.borrow_mut();
-            let entry = match db.load_key_entry(
-                &key,
-                KeyType::Client,
-                KeyEntryLoadBits::NONE,
-                ThreadState::get_calling_uid(),
-                |k, av| {
-                    check_key_permission(KeyPerm::update(), k, &av)
-                        .context("In update_subcomponent.")
-                },
-            ) {
+            let entry = match LEGACY_MIGRATOR.with_try_migrate(&key, caller_uid, || {
+                db.borrow_mut().load_key_entry(
+                    &key,
+                    KeyType::Client,
+                    KeyEntryLoadBits::NONE,
+                    caller_uid,
+                    |k, av| {
+                        check_key_permission(KeyPerm::update(), k, &av)
+                            .context("In update_subcomponent.")
+                    },
+                )
+            }) {
                 Err(e) => match e.root_cause().downcast_ref::<Error>() {
                     Some(Error::Rc(ResponseCode::KEY_NOT_FOUND)) => Ok(None),
                     _ => Err(e),
@@ -181,6 +198,7 @@ impl KeystoreService {
             }
             .context("Failed to load key entry.")?;
 
+            let mut db = db.borrow_mut();
             if let Some((key_id_guard, key_entry)) = entry {
                 db.set_blob(&key_id_guard, SubComponentType::CERT, public_cert, None)
                     .context("Failed to update cert subcomponent.")?;
@@ -258,17 +276,31 @@ impl KeystoreService {
             Ok(()) => {}
         };
 
-        DB.with(|db| {
-            let mut db = db.borrow_mut();
-            db.list(k.domain, k.nspace)
-        })
+        let mut result = LEGACY_MIGRATOR
+            .list_uid(k.domain, k.nspace)
+            .context("In list_entries: Trying to list legacy keys.")?;
+
+        result.append(
+            &mut DB
+                .with(|db| {
+                    let mut db = db.borrow_mut();
+                    db.list(k.domain, k.nspace)
+                })
+                .context("In list_entries: Trying to list keystore database.")?,
+        );
+
+        result.sort_unstable();
+        result.dedup();
+        Ok(result)
     }
 
     fn delete_key(&self, key: &KeyDescriptor) -> Result<()> {
         let caller_uid = ThreadState::get_calling_uid();
         DB.with(|db| {
-            db.borrow_mut().unbind_key(&key, KeyType::Client, caller_uid, |k, av| {
-                check_key_permission(KeyPerm::delete(), k, &av).context("During delete_key.")
+            LEGACY_MIGRATOR.with_try_migrate(&key, caller_uid, || {
+                db.borrow_mut().unbind_key(&key, KeyType::Client, caller_uid, |k, av| {
+                    check_key_permission(KeyPerm::delete(), k, &av).context("During delete_key.")
+                })
             })
         })
         .context("In delete_key: Trying to unbind the key.")?;
@@ -281,14 +313,17 @@ impl KeystoreService {
         grantee_uid: i32,
         access_vector: permission::KeyPermSet,
     ) -> Result<KeyDescriptor> {
+        let caller_uid = ThreadState::get_calling_uid();
         DB.with(|db| {
-            db.borrow_mut().grant(
-                &key,
-                ThreadState::get_calling_uid(),
-                grantee_uid as u32,
-                access_vector,
-                |k, av| check_grant_permission(*av, k).context("During grant."),
-            )
+            LEGACY_MIGRATOR.with_try_migrate(&key, caller_uid, || {
+                db.borrow_mut().grant(
+                    &key,
+                    caller_uid,
+                    grantee_uid as u32,
+                    access_vector,
+                    |k, av| check_grant_permission(*av, k).context("During grant."),
+                )
+            })
         })
         .context("In KeystoreService::grant.")
     }
