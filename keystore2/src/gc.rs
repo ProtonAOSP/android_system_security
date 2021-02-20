@@ -21,6 +21,7 @@
 use crate::{
     async_task,
     database::{KeystoreDB, Uuid},
+    super_key::SuperKeyManager,
 };
 use anyhow::{Context, Result};
 use async_task::AsyncTask;
@@ -37,19 +38,23 @@ impl Gc {
     /// time a garbage collector was initialized with the given AsyncTask instance.
     pub fn new_init_with<F>(async_task: Arc<AsyncTask>, init: F) -> Self
     where
-        F: FnOnce() -> (Box<dyn Fn(&Uuid, &[u8]) -> Result<()> + Send + 'static>, KeystoreDB)
-            + Send
+        F: FnOnce() -> (
+                Box<dyn Fn(&Uuid, &[u8]) -> Result<()> + Send + 'static>,
+                KeystoreDB,
+                Arc<SuperKeyManager>,
+            ) + Send
             + 'static,
     {
         let weak_at = Arc::downgrade(&async_task);
         // Initialize the task's shelf.
         async_task.queue_hi(move |shelf| {
-            let (invalidate_key, db) = init();
+            let (invalidate_key, db, super_key) = init();
             shelf.get_or_put_with(|| GcInternal {
                 blob_id_to_delete: None,
                 invalidate_key,
                 db,
                 async_task: weak_at,
+                super_key,
             });
         });
         Self { async_task }
@@ -68,6 +73,7 @@ struct GcInternal {
     invalidate_key: Box<dyn Fn(&Uuid, &[u8]) -> Result<()> + Send + 'static>,
     db: KeystoreDB,
     async_task: std::sync::Weak<AsyncTask>,
+    super_key: Arc<SuperKeyManager>,
 }
 
 impl GcInternal {
@@ -91,6 +97,10 @@ impl GcInternal {
             // (At this time keys may get deleted without having the super encryption
             // key in this case we can only delete the key from the database.)
             if let Some(uuid) = blob_metadata.km_uuid() {
+                let blob = self
+                    .super_key
+                    .unwrap_key_if_required(&blob_metadata, &blob)
+                    .context("In process_one_key: Trying to unwrap to-be-deleted blob.")?;
                 (self.invalidate_key)(&uuid, &*blob)
                     .context("In process_one_key: Trying to invalidate key.")?;
             }

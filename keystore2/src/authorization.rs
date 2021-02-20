@@ -12,18 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! This module implements IKeyAuthorization AIDL interface.
+//! This module implements IKeystoreAuthorization AIDL interface.
 
 use crate::error::Error as KeystoreError;
 use crate::error::map_or_log_err;
-use crate::globals::{DB, ENFORCEMENTS, LEGACY_BLOB_LOADER, SUPER_KEY};
+use crate::globals::{ENFORCEMENTS, SUPER_KEY, DB, LEGACY_MIGRATOR};
 use crate::permission::KeystorePerm;
+use crate::super_key::UserState;
 use crate::utils::check_keystore_permission;
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
-    HardwareAuthToken::HardwareAuthToken, HardwareAuthenticatorType::HardwareAuthenticatorType,
-};
-use android_hardware_security_secureclock::aidl::android::hardware::security::secureclock::{
-    Timestamp::Timestamp,
+    HardwareAuthToken::HardwareAuthToken,
 };
 use android_security_authorization::binder::{Interface, Result as BinderResult, Strong};
 use android_security_authorization::aidl::android::security::authorization::IKeystoreAuthorization::{
@@ -50,16 +48,7 @@ impl AuthorizationManager {
         //check keystore permission
         check_keystore_permission(KeystorePerm::add_auth()).context("In add_auth_token.")?;
 
-        //TODO: Keymint's HardwareAuthToken aidl needs to implement Copy/Clone
-        let auth_token_copy = HardwareAuthToken {
-            challenge: auth_token.challenge,
-            userId: auth_token.userId,
-            authenticatorId: auth_token.authenticatorId,
-            authenticatorType: HardwareAuthenticatorType(auth_token.authenticatorType.0),
-            timestamp: Timestamp { milliSeconds: auth_token.timestamp.milliSeconds },
-            mac: auth_token.mac.clone(),
-        };
-        ENFORCEMENTS.add_auth_token(auth_token_copy)?;
+        ENFORCEMENTS.add_auth_token(auth_token.clone())?;
         Ok(())
     }
 
@@ -77,22 +66,22 @@ impl AuthorizationManager {
                     .context("In on_lock_screen_event: Unlock with password.")?;
                 ENFORCEMENTS.set_device_locked(user_id, false);
                 // Unlock super key.
-                DB.with::<_, Result<()>>(|db| {
-                    let mut db = db.borrow_mut();
-                    //TODO - b/176123105 - Once the user management API is implemented, unlock is
-                    //allowed only if the user is added. Then the two tasks handled by the
-                    //unlock_user_key will be split into two methods. For now, unlock_user_key
-                    //method is used as it is, which created a super key for the user if one does
-                    //not exists, in addition to unlocking the existing super key of the user/
-                    SUPER_KEY.unlock_user_key(
-                        user_id as u32,
-                        user_password,
-                        &mut db,
-                        &LEGACY_BLOB_LOADER,
-                    )?;
-                    Ok(())
-                })
-                .context("In on_lock_screen_event.")?;
+                if let UserState::Uninitialized = DB
+                    .with(|db| {
+                        UserState::get_with_password_unlock(
+                            &mut db.borrow_mut(),
+                            &LEGACY_MIGRATOR,
+                            &SUPER_KEY,
+                            user_id as u32,
+                            user_password,
+                        )
+                    })
+                    .context("In on_lock_screen_event: Unlock with password.")?
+                {
+                    log::info!(
+                        "In on_lock_screen_event. Trying to unlock when LSKF is uninitialized."
+                    );
+                }
 
                 Ok(())
             }

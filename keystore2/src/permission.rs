@@ -299,9 +299,15 @@ implement_permission!(
         /// Checked when Keystore 2.0 gets locked.
         Lock = 0x10,       selinux name: lock;
         /// Checked when Keystore 2.0 shall be reset.
-        Reset = 0x20,   selinux name: reset;
+        Reset = 0x20,    selinux name: reset;
         /// Checked when Keystore 2.0 shall be unlocked.
-        Unlock = 0x40,  selinux name: unlock;
+        Unlock = 0x40,    selinux name: unlock;
+        /// Checked when user is added or removed.
+        ChangeUser = 0x80,    selinux name: change_user;
+        /// Checked when password of the user is changed.
+        ChangePassword = 0x100,    selinux name: change_password;
+        /// Checked when a UID is cleared.
+        ClearUID = 0x200,    selinux name: clear_uid;
     }
 );
 
@@ -659,6 +665,11 @@ mod tests {
         assert!(check_keystore_permission(&system_server_ctx, KeystorePerm::lock()).is_ok());
         assert!(check_keystore_permission(&system_server_ctx, KeystorePerm::reset()).is_ok());
         assert!(check_keystore_permission(&system_server_ctx, KeystorePerm::unlock()).is_ok());
+        assert!(check_keystore_permission(&system_server_ctx, KeystorePerm::change_user()).is_ok());
+        assert!(
+            check_keystore_permission(&system_server_ctx, KeystorePerm::change_password()).is_ok()
+        );
+        assert!(check_keystore_permission(&system_server_ctx, KeystorePerm::clear_uid()).is_ok());
         let shell_ctx = Context::new("u:r:shell:s0")?;
         assert_perm_failed!(check_keystore_permission(&shell_ctx, KeystorePerm::add_auth()));
         assert_perm_failed!(check_keystore_permission(&shell_ctx, KeystorePerm::clear_ns()));
@@ -667,6 +678,9 @@ mod tests {
         assert_perm_failed!(check_keystore_permission(&shell_ctx, KeystorePerm::lock()));
         assert_perm_failed!(check_keystore_permission(&shell_ctx, KeystorePerm::reset()));
         assert_perm_failed!(check_keystore_permission(&shell_ctx, KeystorePerm::unlock()));
+        assert_perm_failed!(check_keystore_permission(&shell_ctx, KeystorePerm::change_user()));
+        assert_perm_failed!(check_keystore_permission(&shell_ctx, KeystorePerm::change_password()));
+        assert_perm_failed!(check_keystore_permission(&shell_ctx, KeystorePerm::clear_uid()));
         Ok(())
     }
 
