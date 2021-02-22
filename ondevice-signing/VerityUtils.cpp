@@ -76,9 +76,10 @@ static Result<std::vector<uint8_t>> createDigest(const std::string& path) {
 
 static Result<std::vector<uint8_t>> signDigest(const KeymasterSigningKey& key,
                                                const std::vector<uint8_t>& digest) {
-    struct fsverity_signed_digest* d = NULL;
+    fsverity_signed_digest* d;
     size_t signed_digest_size = sizeof(*d) + digest.size();
-    d = (struct fsverity_signed_digest*)malloc(signed_digest_size);
+    std::unique_ptr<uint8_t[]> digest_buffer{new uint8_t[signed_digest_size]};
+    d = (fsverity_signed_digest*)digest_buffer.get();
 
     memcpy(d->magic, "FSVerity", 8);
     d->digest_algorithm = cpu_to_le16(FS_VERITY_HASH_ALG_SHA256);
