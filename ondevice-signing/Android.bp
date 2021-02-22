@@ -71,7 +71,7 @@ cc_defaults {
   tidy_checks: tidy_errors,
   tidy_checks_as_errors: tidy_errors,
   tidy_flags: [
-    "-format-style='file'",
+    "-format-style=file",
   ],
 }
 
