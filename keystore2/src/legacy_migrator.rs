@@ -362,11 +362,18 @@ impl LegacyMigrator {
         }
     }
 
-    /// Deletes all keys belonging to the given uid, migrating them into the database
+    /// Deletes all keys belonging to the given namespace, migrating them into the database
     /// for subsequent garbage collection if necessary.
-    pub fn bulk_delete_uid(&self, uid: u32, keep_non_super_encrypted_keys: bool) -> Result<()> {
+    pub fn bulk_delete_uid(&self, domain: Domain, nspace: i64) -> Result<()> {
+        let uid = match (domain, nspace) {
+            (Domain::APP, nspace) => nspace as u32,
+            (Domain::SELINUX, Self::WIFI_NAMESPACE) => Self::AID_WIFI,
+            // Nothing to do.
+            _ => return Ok(()),
+        };
+
         let result = self.do_serialized(move |migrator_state| {
-            migrator_state.bulk_delete(BulkDeleteRequest::Uid(uid), keep_non_super_encrypted_keys)
+            migrator_state.bulk_delete(BulkDeleteRequest::Uid(uid), false)
         });
 
         result.unwrap_or(Ok(()))
