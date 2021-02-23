@@ -211,7 +211,8 @@ impl AsyncTask {
 
 #[cfg(test)]
 mod tests {
-    use super::Shelf;
+    use super::{AsyncTask, Shelf};
+    use std::sync::mpsc::channel;
 
     #[test]
     fn test_shelf() {
@@ -261,5 +262,61 @@ mod tests {
         assert_eq!(shelf.get_downcast_ref::<i32>(), None);
         assert_eq!(shelf.get_downcast_mut::<i32>(), None);
         assert_eq!(shelf.remove_downcast_ref::<i32>(), None);
+    }
+
+    #[test]
+    fn test_async_task() {
+        let at = AsyncTask::default();
+
+        // First queue up a job that blocks until we release it, to avoid
+        // unpredictable synchronization.
+        let (start_sender, start_receiver) = channel();
+        at.queue_hi(move |shelf| {
+            start_receiver.recv().unwrap();
+            // Put a trace vector on the shelf
+            shelf.put(Vec::<String>::new());
+        });
+
+        // Queue up some high-priority and low-priority jobs.
+        for i in 0..3 {
+            let j = i;
+            at.queue_lo(move |shelf| {
+                let trace = shelf.get_mut::<Vec<String>>();
+                trace.push(format!("L{}", j));
+            });
+            let j = i;
+            at.queue_hi(move |shelf| {
+                let trace = shelf.get_mut::<Vec<String>>();
+                trace.push(format!("H{}", j));
+            });
+        }
+
+        // Finally queue up a low priority job that emits the trace.
+        let (trace_sender, trace_receiver) = channel();
+        at.queue_lo(move |shelf| {
+            let trace = shelf.get_downcast_ref::<Vec<String>>().unwrap();
+            trace_sender.send(trace.clone()).unwrap();
+        });
+
+        // Ready, set, go.
+        start_sender.send(()).unwrap();
+        let trace = trace_receiver.recv().unwrap();
+
+        assert_eq!(trace, vec!["H0", "H1", "H2", "L0", "L1", "L2"]);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_async_task_panic() {
+        let at = AsyncTask::default();
+        at.queue_hi(|_shelf| {
+            panic!("Panic from queued job");
+        });
+        // Queue another job afterwards to ensure that the async thread gets joined.
+        let (done_sender, done_receiver) = channel();
+        at.queue_hi(move |_shelf| {
+            done_sender.send(()).unwrap();
+        });
+        done_receiver.recv().unwrap();
     }
 }
