@@ -208,3 +208,58 @@ impl AsyncTask {
         state.state = State::Running;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Shelf;
+
+    #[test]
+    fn test_shelf() {
+        let mut shelf = Shelf::default();
+
+        let s = "A string".to_string();
+        assert_eq!(shelf.put(s), None);
+
+        let s2 = "Another string".to_string();
+        assert_eq!(shelf.put(s2), Some("A string".to_string()));
+
+        // Put something of a different type on the shelf.
+        #[derive(Debug, PartialEq, Eq)]
+        struct Elf {
+            pub name: String,
+        }
+        let e1 = Elf { name: "Glorfindel".to_string() };
+        assert_eq!(shelf.put(e1), None);
+
+        // The String value is still on the shelf.
+        let s3 = shelf.get_downcast_ref::<String>().unwrap();
+        assert_eq!(s3, "Another string");
+
+        // As is the Elf.
+        {
+            let e2 = shelf.get_downcast_mut::<Elf>().unwrap();
+            assert_eq!(e2.name, "Glorfindel");
+            e2.name = "Celeborn".to_string();
+        }
+
+        // Take the Elf off the shelf.
+        let e3 = shelf.remove_downcast_ref::<Elf>().unwrap();
+        assert_eq!(e3.name, "Celeborn");
+
+        assert_eq!(shelf.remove_downcast_ref::<Elf>(), None);
+
+        // No u64 value has been put on the shelf, so getting one gives the default value.
+        {
+            let i = shelf.get_mut::<u64>();
+            assert_eq!(*i, 0);
+            *i = 42;
+        }
+        let i2 = shelf.get_downcast_ref::<u64>().unwrap();
+        assert_eq!(*i2, 42);
+
+        // No i32 value has ever been seen near the shelf.
+        assert_eq!(shelf.get_downcast_ref::<i32>(), None);
+        assert_eq!(shelf.get_downcast_mut::<i32>(), None);
+        assert_eq!(shelf.remove_downcast_ref::<i32>(), None);
+    }
+}
