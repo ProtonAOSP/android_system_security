@@ -29,8 +29,8 @@ use crate::{
 };
 use crate::{enforcements::Enforcements, error::map_km_error};
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
-    IKeyMintDevice::IKeyMintDevice, KeyMintHardwareInfo::KeyMintHardwareInfo,
-    SecurityLevel::SecurityLevel,
+    IKeyMintDevice::IKeyMintDevice, IRemotelyProvisionedComponent::IRemotelyProvisionedComponent,
+    KeyMintHardwareInfo::KeyMintHardwareInfo, SecurityLevel::SecurityLevel,
 };
 use android_hardware_security_keymint::binder::{StatusCode, Strong};
 use android_security_compat::aidl::android::security::compat::IKeystoreCompatService::IKeystoreCompatService;
@@ -128,6 +128,21 @@ impl DevicesMap {
     }
 }
 
+#[derive(Default)]
+struct RemotelyProvisionedDevicesMap {
+    devices_by_sec_level: HashMap<SecurityLevel, Asp>,
+}
+
+impl RemotelyProvisionedDevicesMap {
+    fn dev_by_sec_level(&self, sec_level: &SecurityLevel) -> Option<Asp> {
+        self.devices_by_sec_level.get(sec_level).map(|dev| (*dev).clone())
+    }
+
+    fn insert(&mut self, sec_level: SecurityLevel, dev: Asp) {
+        self.devices_by_sec_level.insert(sec_level, dev);
+    }
+}
+
 lazy_static! {
     /// The path where keystore stores all its keys.
     pub static ref DB_PATH: Mutex<PathBuf> = Mutex::new(
@@ -138,6 +153,8 @@ lazy_static! {
     static ref KEY_MINT_DEVICES: Mutex<DevicesMap> = Default::default();
     /// Timestamp service.
     static ref TIME_STAMP_DEVICE: Mutex<Option<Asp>> = Default::default();
+    /// RemotelyProvisionedComponent HAL devices.
+    static ref REMOTELY_PROVISIONED_COMPONENT_DEVICES: Mutex<RemotelyProvisionedDevicesMap> = Default::default();
     /// A single on-demand worker thread that handles deferred tasks with two different
     /// priorities.
     pub static ref ASYNC_TASK: Arc<AsyncTask> = Default::default();
@@ -274,5 +291,47 @@ pub fn get_timestamp_service() -> Result<Asp> {
         let dev = connect_secureclock().context("In get_timestamp_service.")?;
         *ts_device = Some(dev.clone());
         Ok(dev)
+    }
+}
+
+static REMOTE_PROVISIONING_HAL_SERVICE_NAME: &str =
+    "android.hardware.security.keymint.IRemotelyProvisionedComponent";
+
+fn connect_remotely_provisioned_component(security_level: &SecurityLevel) -> Result<Asp> {
+    let service_name = match *security_level {
+        SecurityLevel::TRUSTED_ENVIRONMENT => {
+            format!("{}/default", REMOTE_PROVISIONING_HAL_SERVICE_NAME)
+        }
+        SecurityLevel::STRONGBOX => format!("{}/strongbox", REMOTE_PROVISIONING_HAL_SERVICE_NAME),
+        _ => {
+            // Given the integration of IRemotelyProvisionedComponent with KeyMint, it is reasonable
+            // to return HARDWARE_TYPE_UNAVAILABLE as a Km error if it cannot be found.
+            return Err(Error::Km(ErrorCode::HARDWARE_TYPE_UNAVAILABLE))
+                .context("In connect_remotely_provisioned_component.");
+        }
+    };
+
+    let rem_prov_hal: Strong<dyn IRemotelyProvisionedComponent> =
+        map_binder_status_code(binder::get_interface(&service_name))
+            .context(concat!(
+                "In connect_remotely_provisioned_component: Trying to connect to",
+                " RemotelyProvisionedComponent service."
+            ))
+            .map_err(|e| e)?;
+    Ok(Asp::new(rem_prov_hal.as_binder()))
+}
+
+/// Get a remote provisiong component device for the given security level either from the cache or
+/// by making a new connection. Returns the device.
+pub fn get_remotely_provisioned_component(security_level: &SecurityLevel) -> Result<Asp> {
+    let mut devices_map = REMOTELY_PROVISIONED_COMPONENT_DEVICES.lock().unwrap();
+    if let Some(dev) = devices_map.dev_by_sec_level(&security_level) {
+        Ok(dev)
+    } else {
+        let dev = connect_remotely_provisioned_component(security_level)
+            .context("In get_remotely_provisioned_component.")?;
+        devices_map.insert(*security_level, dev);
+        // Unwrap must succeed because we just inserted it.
+        Ok(devices_map.dev_by_sec_level(security_level).unwrap())
     }
 }
