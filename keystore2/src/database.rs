@@ -584,6 +584,7 @@ impl CertificateInfo {
 #[allow(dead_code)]
 pub struct CertificateChain {
     private_key: ZVec,
+    batch_cert: ZVec,
     cert_chain: ZVec,
 }
 
@@ -1551,6 +1552,7 @@ impl KeystoreDB {
     pub fn store_signed_attestation_certificate_chain(
         &mut self,
         raw_public_key: &[u8],
+        batch_cert: &[u8],
         cert_chain: &[u8],
         expiration_date: i64,
         km_uuid: &Uuid,
@@ -1609,6 +1611,8 @@ impl KeystoreDB {
                 None,
             )
             .context("Failed to insert cert chain")?;
+            Self::set_blob_internal(&tx, key_id, SubComponentType::CERT, Some(batch_cert), None)
+                .context("Failed to insert cert")?;
             Ok(()).no_gc()
         })
         .context("In store_signed_attestation_certificate_chain: ")
@@ -1859,19 +1863,21 @@ impl KeystoreDB {
                     |row| Ok((row.get(0)?, row.get(1)?)),
                 )?
                 .collect::<rusqlite::Result<Vec<(SubComponentType, Vec<u8>)>>>()
-                .context("In retrieve_attestation_key_and_cert_chain: query failed.")?;
+                .context("query failed.")?;
             if rows.is_empty() {
                 return Ok(None).no_gc();
-            } else if rows.len() != 2 {
+            } else if rows.len() != 3 {
                 return Err(KsError::sys()).context(format!(
                     concat!(
-                "In retrieve_attestation_key_and_cert_chain: Expected to get a single attestation",
-                "key chain but instead got {}."),
+                        "Expected to get a single attestation",
+                        "key, cert, and cert chain for a total of 3 entries, but instead got {}."
+                    ),
                     rows.len()
                 ));
             }
             let mut km_blob: Vec<u8> = Vec::new();
             let mut cert_chain_blob: Vec<u8> = Vec::new();
+            let mut batch_cert_blob: Vec<u8> = Vec::new();
             for row in rows {
                 let sub_type: SubComponentType = row.0;
                 match sub_type {
@@ -1881,15 +1887,20 @@ impl KeystoreDB {
                     SubComponentType::CERT_CHAIN => {
                         cert_chain_blob = row.1;
                     }
+                    SubComponentType::CERT => {
+                        batch_cert_blob = row.1;
+                    }
                     _ => Err(KsError::sys()).context("Unknown or incorrect subcomponent type.")?,
                 }
             }
             Ok(Some(CertificateChain {
                 private_key: ZVec::try_from(km_blob)?,
+                batch_cert: ZVec::try_from(batch_cert_blob)?,
                 cert_chain: ZVec::try_from(cert_chain_blob)?,
             }))
             .no_gc()
         })
+        .context("In retrieve_attestation_key_and_cert_chain:")
     }
 
     /// Updates the alias column of the given key id `newid` with the given alias,
@@ -3133,8 +3144,9 @@ mod tests {
             db.retrieve_attestation_key_and_cert_chain(Domain::APP, namespace, &KEYSTORE_UUID)?;
         assert_eq!(true, chain.is_some());
         let cert_chain = chain.unwrap();
-        assert_eq!(cert_chain.private_key.to_vec(), loaded_values[2]);
-        assert_eq!(cert_chain.cert_chain.to_vec(), loaded_values[1]);
+        assert_eq!(cert_chain.private_key.to_vec(), loaded_values.priv_key);
+        assert_eq!(cert_chain.batch_cert.to_vec(), loaded_values.batch_cert);
+        assert_eq!(cert_chain.cert_chain.to_vec(), loaded_values.cert_chain);
         Ok(())
     }
 
@@ -3169,6 +3181,7 @@ mod tests {
         let private_key: Vec<u8> = vec![0x04, 0x05, 0x06];
         let raw_public_key: Vec<u8> = vec![0x07, 0x08, 0x09];
         let cert_chain: Vec<u8> = vec![0x0a, 0x0b, 0x0c];
+        let batch_cert: Vec<u8> = vec![0x0d, 0x0e, 0x0f];
         db.create_attestation_key_entry(
             &public_key,
             &raw_public_key,
@@ -3181,6 +3194,7 @@ mod tests {
         assert_eq!(status.total, 4);
         db.store_signed_attestation_certificate_chain(
             &raw_public_key,
+            &batch_cert,
             &cert_chain,
             20,
             &KEYSTORE_UUID,
@@ -3215,9 +3229,9 @@ mod tests {
             .conn
             .query_row("SELECT COUNT(id) FROM persistent.blobentry;", NO_PARAMS, |row| row.get(0))
             .expect("Failed to get blob entry row count.");
-        // We expect 6 rows here because there are two blobs per attestation key, i.e.,
-        // One key and one certificate.
-        assert_eq!(blob_entry_row_count, 6);
+        // We expect 9 rows here because there are three blobs per attestation key, i.e.,
+        // one key, one certificate chain, and one certificate.
+        assert_eq!(blob_entry_row_count, 9);
 
         assert_eq!(db.delete_expired_attestation_keys()?, 2);
 
@@ -3225,8 +3239,9 @@ mod tests {
             db.retrieve_attestation_key_and_cert_chain(Domain::APP, namespace, &KEYSTORE_UUID)?;
         assert!(cert_chain.is_some());
         let value = cert_chain.unwrap();
-        assert_eq!(entry_values[1], value.cert_chain.to_vec());
-        assert_eq!(entry_values[2], value.private_key.to_vec());
+        assert_eq!(entry_values.batch_cert, value.batch_cert.to_vec());
+        assert_eq!(entry_values.cert_chain, value.cert_chain.to_vec());
+        assert_eq!(entry_values.priv_key, value.private_key.to_vec());
 
         cert_chain = db.retrieve_attestation_key_and_cert_chain(
             Domain::APP,
@@ -3248,9 +3263,9 @@ mod tests {
             .conn
             .query_row("SELECT COUNT(id) FROM persistent.blobentry;", NO_PARAMS, |row| row.get(0))
             .expect("Failed to get blob entry row count.");
-        // There shound be 2 blob entries left, because we deleted two of the attestation
-        // key entries with two blobs each.
-        assert_eq!(blob_entry_row_count, 2);
+        // There shound be 3 blob entries left, because we deleted two of the attestation
+        // key entries with three blobs each.
+        assert_eq!(blob_entry_row_count, 3);
 
         Ok(())
     }
@@ -4323,30 +4338,33 @@ mod tests {
             .collect::<Result<Vec<_>>>()
     }
 
+    struct RemoteProvValues {
+        cert_chain: Vec<u8>,
+        priv_key: Vec<u8>,
+        batch_cert: Vec<u8>,
+    }
+
     fn load_attestation_key_pool(
         db: &mut KeystoreDB,
         expiration_date: i64,
         namespace: i64,
         base_byte: u8,
-    ) -> Result<Vec<Vec<u8>>> {
-        let mut chain: Vec<Vec<u8>> = Vec::new();
+    ) -> Result<RemoteProvValues> {
         let public_key: Vec<u8> = vec![base_byte, 0x02 * base_byte];
         let cert_chain: Vec<u8> = vec![0x03 * base_byte, 0x04 * base_byte];
         let priv_key: Vec<u8> = vec![0x05 * base_byte, 0x06 * base_byte];
         let raw_public_key: Vec<u8> = vec![0x0b * base_byte, 0x0c * base_byte];
+        let batch_cert: Vec<u8> = vec![base_byte * 0x0d, base_byte * 0x0e];
         db.create_attestation_key_entry(&public_key, &raw_public_key, &priv_key, &KEYSTORE_UUID)?;
         db.store_signed_attestation_certificate_chain(
             &raw_public_key,
+            &batch_cert,
             &cert_chain,
             expiration_date,
             &KEYSTORE_UUID,
         )?;
         db.assign_attestation_key(Domain::APP, namespace, &KEYSTORE_UUID)?;
-        chain.push(public_key);
-        chain.push(cert_chain);
-        chain.push(priv_key);
-        chain.push(raw_public_key);
-        Ok(chain)
+        Ok(RemoteProvValues { cert_chain, priv_key, batch_cert })
     }
 
     // Note: The parameters and SecurityLevel associations are nonsensical. This
