@@ -59,12 +59,12 @@ impl UserManager {
             .context("In on_user_password_changed.")?
         {
             UserState::LskfLocked => {
-                //error - password can not be changed when the device is locked
+                // Error - password can not be changed when the device is locked
                 Err(KeystoreError::Rc(ResponseCode::LOCKED))
                     .context("In on_user_password_changed. Device is locked.")
             }
             _ => {
-                //LskfLocked is the only error case for password change
+                // LskfLocked is the only error case for password change
                 Ok(())
             }
         }
@@ -74,7 +74,16 @@ impl UserManager {
         // Check permission. Function should return if this failed. Therefore having '?' at the end
         // is very important.
         check_keystore_permission(KeystorePerm::change_user()).context("In add_or_remove_user.")?;
-        DB.with(|db| UserState::reset_user(&mut db.borrow_mut(), &SUPER_KEY, user_id as u32, false))
+        DB.with(|db| {
+            UserState::reset_user(
+                &mut db.borrow_mut(),
+                &SUPER_KEY,
+                &LEGACY_MIGRATOR,
+                user_id as u32,
+                false,
+            )
+        })
+        .context("In add_or_remove_user: Trying to delete keys from db.")
     }
 }
 
