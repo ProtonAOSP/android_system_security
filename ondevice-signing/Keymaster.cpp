@@ -68,7 +68,7 @@ bool Keymaster::initialize() {
 
     mDevice = devToUse;
 
-    return true;
+    return mDevice != nullptr;
 }
 
 std::optional<Keymaster> Keymaster::getInstance() {
