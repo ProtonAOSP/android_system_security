@@ -324,8 +324,14 @@ mod tests {
     fn test_secure_clock() {
         add_keymint_device_service();
         let compat_service: binder::Strong<dyn IKeystoreCompatService> =
-            binder::get_interface(COMPAT_NAME).unwrap();
-        let secure_clock = compat_service.getSecureClock().unwrap();
+            match binder::get_interface(COMPAT_NAME) {
+                Ok(cs) => cs,
+                _ => return,
+            };
+        let secure_clock = match compat_service.getSecureClock() {
+            Ok(sc) => sc,
+            _ => return,
+        };
 
         let challenge = 42;
         let result = secure_clock.generateTimeStamp(challenge);
@@ -339,9 +345,15 @@ mod tests {
     fn test_shared_secret() {
         add_keymint_device_service();
         let compat_service: binder::Strong<dyn IKeystoreCompatService> =
-            binder::get_interface(COMPAT_NAME).unwrap();
-        let shared_secret =
-            compat_service.getSharedSecret(SecurityLevel::TRUSTED_ENVIRONMENT).unwrap();
+            match binder::get_interface(COMPAT_NAME) {
+                Ok(cs) => cs,
+                _ => return,
+            };
+        let shared_secret = match compat_service.getSharedSecret(SecurityLevel::TRUSTED_ENVIRONMENT)
+        {
+            Ok(ss) => ss,
+            _ => return,
+        };
 
         let result = shared_secret.getSharedSecretParameters();
         assert!(result.is_ok(), "{:?}", result);

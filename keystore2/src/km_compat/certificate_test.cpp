@@ -23,6 +23,7 @@
 #include <aidl/android/hardware/security/keymint/BlockMode.h>
 #include <aidl/android/hardware/security/keymint/Digest.h>
 #include <aidl/android/hardware/security/keymint/PaddingMode.h>
+#include <android/binder_manager.h>
 
 #include <openssl/evp.h>
 #include <openssl/x509.h>
@@ -39,16 +40,29 @@ using ::aidl::android::hardware::security::keymint::Digest;
 using ::aidl::android::hardware::security::keymint::PaddingMode;
 using ::aidl::android::hardware::security::keymint::SecurityLevel;
 using ::aidl::android::hardware::security::keymint::Tag;
+using ::aidl::android::security::compat::IKeystoreCompatService;
 
 namespace KMV1 = ::aidl::android::hardware::security::keymint;
 
-static std::variant<std::vector<Certificate>, ScopedAStatus>
-getCertificate(const std::vector<KeyParameter>& keyParams) {
-    static std::shared_ptr<KeyMintDevice> device =
-        KeyMintDevice::createKeyMintDevice(SecurityLevel::TRUSTED_ENVIRONMENT);
+extern "C" int32_t addKeyMintDeviceService();
+
+static std::variant<std::shared_ptr<IKeyMintDevice>, ScopedAStatus> getDevice() {
+    addKeyMintDeviceService();
+    std::shared_ptr<IKeyMintDevice> device;
+    auto service = IKeystoreCompatService::fromBinder(
+        ndk::SpAIBinder(AServiceManager_getService("android.security.compat")));
+    if (!service) {
+        return ScopedAStatus::fromStatus(STATUS_NAME_NOT_FOUND);
+    }
+    service->getKeyMintDevice(SecurityLevel::TRUSTED_ENVIRONMENT, &device);
     if (!device) {
         return ScopedAStatus::fromStatus(STATUS_NAME_NOT_FOUND);
     }
+    return device;
+}
+
+static std::variant<std::vector<Certificate>, ScopedAStatus>
+getCertificate(std::shared_ptr<IKeyMintDevice> device, const std::vector<KeyParameter>& keyParams) {
     KeyCreationResult creationResult;
     auto status = device->generateKey(keyParams, std::nullopt /* attest_key */, &creationResult);
     if (!status.isOk()) {
@@ -76,6 +90,8 @@ static std::vector<KeyParameter> getRSAKeyParams(const std::vector<KeyParameter>
         KMV1::makeKeyParameter(KMV1::TAG_ALGORITHM, Algorithm::RSA),
         KMV1::makeKeyParameter(KMV1::TAG_KEY_SIZE, 2048),
         KMV1::makeKeyParameter(KMV1::TAG_RSA_PUBLIC_EXPONENT, 65537),
+        KMV1::makeKeyParameter(KMV1::TAG_CERTIFICATE_NOT_BEFORE, 0),
+        KMV1::makeKeyParameter(KMV1::TAG_CERTIFICATE_NOT_AFTER, 253402300799000),
     });
     keyParams.insert(keyParams.end(), extraParams.begin(), extraParams.end());
     return keyParams;
@@ -87,10 +103,12 @@ TEST(CertificateTest, TestRSAKeygen) {
         KMV1::makeKeyParameter(KMV1::TAG_PADDING, PaddingMode::RSA_PSS),
         KMV1::makeKeyParameter(KMV1::TAG_NO_AUTH_REQUIRED),
         KMV1::makeKeyParameter(KMV1::TAG_PURPOSE, KeyPurpose::SIGN),
-        KMV1::makeKeyParameter(KMV1::TAG_PURPOSE, KeyPurpose::ENCRYPT),
     });
-    auto result = getCertificate(keyParams);
-    ensureCertChainSize(result, 1);
+    auto device = getDevice();
+    if (std::holds_alternative<std::shared_ptr<IKeyMintDevice>>(device)) {
+        auto result = getCertificate(std::get<std::shared_ptr<IKeyMintDevice>>(device), keyParams);
+        ensureCertChainSize(result, 1);
+    }
 }
 
 TEST(CertificateTest, TestAES) {
@@ -101,8 +119,11 @@ TEST(CertificateTest, TestAES) {
         KMV1::makeKeyParameter(KMV1::TAG_PADDING, PaddingMode::NONE),
         KMV1::makeKeyParameter(KMV1::TAG_PURPOSE, KeyPurpose::ENCRYPT),
     };
-    auto result = getCertificate(keyParams);
-    ensureCertChainSize(result, 0);
+    auto device = getDevice();
+    if (std::holds_alternative<std::shared_ptr<IKeyMintDevice>>(device)) {
+        auto result = getCertificate(std::get<std::shared_ptr<IKeyMintDevice>>(device), keyParams);
+        ensureCertChainSize(result, 0);
+    }
 }
 
 TEST(CertificateTest, TestAttestation) {
@@ -111,9 +132,12 @@ TEST(CertificateTest, TestAttestation) {
         KMV1::makeKeyParameter(KMV1::TAG_ATTESTATION_CHALLENGE, 42),
         KMV1::makeKeyParameter(KMV1::TAG_ATTESTATION_APPLICATION_ID, 42),
     });
-    auto result = getCertificate(keyParams);
-    ensureCertChainSize(result, 3);
-    verify(std::get<std::vector<Certificate>>(result).back());
+    auto device = getDevice();
+    if (std::holds_alternative<std::shared_ptr<IKeyMintDevice>>(device)) {
+        auto result = getCertificate(std::get<std::shared_ptr<IKeyMintDevice>>(device), keyParams);
+        ensureCertChainSize(result, 3);
+        verify(std::get<std::vector<Certificate>>(result).back());
+    }
 }
 
 TEST(CertificateTest, TestRSAKeygenNoEncryptNoAuthRequired) {
@@ -123,9 +147,12 @@ TEST(CertificateTest, TestRSAKeygenNoEncryptNoAuthRequired) {
         KMV1::makeKeyParameter(KMV1::TAG_NO_AUTH_REQUIRED, true),
         KMV1::makeKeyParameter(KMV1::TAG_PURPOSE, KeyPurpose::SIGN),
     });
-    auto result = getCertificate(keyParams);
-    ensureCertChainSize(result, 1);
-    verify(std::get<std::vector<Certificate>>(result)[0]);
+    auto device = getDevice();
+    if (std::holds_alternative<std::shared_ptr<IKeyMintDevice>>(device)) {
+        auto result = getCertificate(std::get<std::shared_ptr<IKeyMintDevice>>(device), keyParams);
+        ensureCertChainSize(result, 1);
+        verify(std::get<std::vector<Certificate>>(result)[0]);
+    }
 }
 
 TEST(CertificateTest, TestRSAKeygenNoEncryptAuthRequired) {
@@ -134,6 +161,9 @@ TEST(CertificateTest, TestRSAKeygenNoEncryptAuthRequired) {
         KMV1::makeKeyParameter(KMV1::TAG_PADDING, PaddingMode::RSA_PSS),
         KMV1::makeKeyParameter(KMV1::TAG_PURPOSE, KeyPurpose::SIGN),
     });
-    auto result = getCertificate(keyParams);
-    ensureCertChainSize(result, 1);
+    auto device = getDevice();
+    if (std::holds_alternative<std::shared_ptr<IKeyMintDevice>>(device)) {
+        auto result = getCertificate(std::get<std::shared_ptr<IKeyMintDevice>>(device), keyParams);
+        ensureCertChainSize(result, 1);
+    }
 }

@@ -140,20 +140,20 @@ TEST(SlotTest, TestSlots) {
     ASSERT_EQ(std::get<ScopedAStatus>(result).getServiceSpecificError(),
               static_cast<int32_t>(ErrorCode::TOO_MANY_OPERATIONS));
 
-    // Generating a certificate with signWith also uses a slot.
+    // Generating a certificate with signWith uses a slot but falls back to not using one.
     auto kps = std::vector<KeyParameter>({
         KMV1::makeKeyParameter(KMV1::TAG_ALGORITHM, Algorithm::RSA),
         KMV1::makeKeyParameter(KMV1::TAG_KEY_SIZE, 2048),
         KMV1::makeKeyParameter(KMV1::TAG_RSA_PUBLIC_EXPONENT, 65537),
         KMV1::makeKeyParameter(KMV1::TAG_DIGEST, Digest::SHA_2_256),
         KMV1::makeKeyParameter(KMV1::TAG_PURPOSE, KeyPurpose::SIGN),
+        KMV1::makeKeyParameter(KMV1::TAG_CERTIFICATE_NOT_BEFORE, 0),
+        KMV1::makeKeyParameter(KMV1::TAG_CERTIFICATE_NOT_AFTER, 253402300799000),
         KMV1::makeKeyParameter(KMV1::TAG_NO_AUTH_REQUIRED, true),
     });
     KeyCreationResult creationResult;
     status = device->generateKey(kps, std::nullopt /* attest_key */, &creationResult);
-    ASSERT_TRUE(!status.isOk());
-    ASSERT_EQ(status.getServiceSpecificError(),
-              static_cast<int32_t>(ErrorCode::TOO_MANY_OPERATIONS));
+    ASSERT_TRUE(status.isOk());
     // But generating a certificate with signCert does not use a slot.
     kps.pop_back();
     status = device->generateKey(kps, std::nullopt /* attest_key */, &creationResult);
