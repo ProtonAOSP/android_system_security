@@ -226,7 +226,9 @@ processLegacyCharacteristics(KeyMintSecurityLevel securityLevel,
     if (securityLevel == KeyMintSecurityLevel::SOFTWARE) {
         // If the security level of the backend is `software` we expect the hardware enforced list
         // to be empty. Log a warning otherwise.
-        CHECK(legacyKc.hardwareEnforced.size() == 0);
+        if (legacyKc.hardwareEnforced.size() != 0) {
+            LOG(WARNING) << "Unexpected hardware enforced parameters.";
+        }
         return {keystoreEnforced};
     }
 
@@ -1118,11 +1120,11 @@ void KeyMintDevice::setNumFreeSlots(uint8_t numFreeSlots) {
 // Constructors and helpers.
 
 KeyMintDevice::KeyMintDevice(sp<Keymaster> device, KeyMintSecurityLevel securityLevel)
-    : mDevice(device) {
+    : mDevice(device), securityLevel_(securityLevel) {
     if (securityLevel == KeyMintSecurityLevel::STRONGBOX) {
-        mOperationSlots.setNumFreeSlots(3);
+        setNumFreeSlots(3);
     } else {
-        mOperationSlots.setNumFreeSlots(15);
+        setNumFreeSlots(15);
     }
 }
 
