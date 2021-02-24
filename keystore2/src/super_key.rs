@@ -451,9 +451,10 @@ impl SuperKeyManager {
         match key_blob_before_upgrade {
             KeyBlob::Sensitive(_, super_key) => {
                 let (key, metadata) = Self::encrypt_with_super_key(key_after_upgrade, super_key)
-                .context(
-                "In reencrypt_on_upgrade_if_required. Failed to re-super-encrypt key on key upgrade.",
-                )?;
+                    .context(concat!(
+                        "In reencrypt_on_upgrade_if_required. ",
+                        "Failed to re-super-encrypt key on key upgrade."
+                    ))?;
                 Ok((KeyBlob::NonSensitive(key), Some(metadata)))
             }
             _ => Ok((KeyBlob::Ref(key_after_upgrade), None)),
@@ -520,8 +521,9 @@ impl UserState {
                 if password.is_none() {
                     //transitioning to swiping, delete only the super key in database and cache, and
                     //super-encrypted keys in database (and in KM)
-                    Self::reset_user(db, skm, user_id, true)
-                        .context("In get_with_password_changed.")?;
+                    Self::reset_user(db, skm, legacy_migrator, user_id, true).context(
+                        "In get_with_password_changed: Trying to delete keys from the db.",
+                    )?;
                     //Lskf is now removed in Keystore
                     Ok(UserState::Uninitialized)
                 } else {
@@ -570,10 +572,14 @@ impl UserState {
     pub fn reset_user(
         db: &mut KeystoreDB,
         skm: &SuperKeyManager,
+        legacy_migrator: &LegacyMigrator,
         user_id: u32,
         keep_non_super_encrypted_keys: bool,
     ) -> Result<()> {
         // mark keys created on behalf of the user as unreferenced.
+        legacy_migrator
+            .bulk_delete_user(user_id, keep_non_super_encrypted_keys)
+            .context("In reset_user: Trying to delete legacy keys.")?;
         db.unbind_keys_for_user(user_id as u32, keep_non_super_encrypted_keys)
             .context("In reset user. Error in unbinding keys.")?;
 
@@ -583,18 +589,18 @@ impl UserState {
     }
 }
 
-/// This enum represents two states a Keymint Blob can be in, w.r.t super encryption.
-/// Sensitive variant represents a Keymint blob that is supposed to be super encrypted,
-/// but unwrapped during usage. Therefore, it has the super key along with the unwrapped key.
-/// Ref variant represents a Keymint blob that is not required to super encrypt or that is
-/// already super encrypted.
+/// This enum represents three states a KeyMint Blob can be in, w.r.t super encryption.
+/// `Sensitive` holds the non encrypted key and a reference to its super key.
+/// `NonSensitive` holds a non encrypted key that is never supposed to be encrypted.
+/// `Ref` holds a reference to a key blob when it does not need to be modified if its
+/// life time allows it.
 pub enum KeyBlob<'a> {
     Sensitive(ZVec, SuperKey),
     NonSensitive(Vec<u8>),
     Ref(&'a [u8]),
 }
 
-/// Deref returns a reference to the key material in both variants.
+/// Deref returns a reference to the key material in any variant.
 impl<'a> Deref for KeyBlob<'a> {
     type Target = [u8];
 

@@ -19,6 +19,7 @@ use crate::database::{
     KeystoreDB, Uuid, KEYSTORE_UUID,
 };
 use crate::error::Error;
+use crate::key_parameter::KeyParameterValue;
 use crate::legacy_blob::BlobValue;
 use crate::utils::uid_to_android_user;
 use crate::{async_task::AsyncTask, legacy_blob::LegacyBlobLoader};
@@ -64,6 +65,11 @@ impl RecentMigration {
     fn new(uid: u32, alias: String) -> Self {
         Self { uid, alias }
     }
+}
+
+enum BulkDeleteRequest {
+    Uid(u32),
+    User(u32),
 }
 
 struct LegacyMigratorState {
@@ -356,6 +362,31 @@ impl LegacyMigrator {
         }
     }
 
+    /// Deletes all keys belonging to the given uid, migrating them into the database
+    /// for subsequent garbage collection if necessary.
+    pub fn bulk_delete_uid(&self, uid: u32, keep_non_super_encrypted_keys: bool) -> Result<()> {
+        let result = self.do_serialized(move |migrator_state| {
+            migrator_state.bulk_delete(BulkDeleteRequest::Uid(uid), keep_non_super_encrypted_keys)
+        });
+
+        result.unwrap_or(Ok(()))
+    }
+
+    /// Deletes all keys belonging to the given android user, migrating them into the database
+    /// for subsequent garbage collection if necessary.
+    pub fn bulk_delete_user(
+        &self,
+        user_id: u32,
+        keep_non_super_encrypted_keys: bool,
+    ) -> Result<()> {
+        let result = self.do_serialized(move |migrator_state| {
+            migrator_state
+                .bulk_delete(BulkDeleteRequest::User(user_id), keep_non_super_encrypted_keys)
+        });
+
+        result.unwrap_or(Ok(()))
+    }
+
     /// Queries the legacy database for the presence of a super key for the given user.
     pub fn has_super_key(&self, user_id: u32) -> Result<bool> {
         let result =
@@ -537,6 +568,111 @@ impl LegacyMigratorState {
             Err(Error::Rc(ResponseCode::KEY_NOT_FOUND))
                 .context("In check_and_migrate_super_key: No key found do migrate.")
         }
+    }
+
+    /// Key migrator request to be run by do_serialized.
+    /// See LegacyMigrator::bulk_delete_uid and LegacyMigrator::bulk_delete_user.
+    fn bulk_delete(
+        &mut self,
+        bulk_delete_request: BulkDeleteRequest,
+        keep_non_super_encrypted_keys: bool,
+    ) -> Result<()> {
+        let (aliases, user_id) = match bulk_delete_request {
+            BulkDeleteRequest::Uid(uid) => (
+                self.legacy_loader
+                    .list_keystore_entries_for_uid(uid)
+                    .context("In bulk_delete: Trying to get aliases for uid.")
+                    .map(|aliases| {
+                        let mut h = HashMap::<u32, HashSet<String>>::new();
+                        h.insert(uid, aliases.into_iter().collect());
+                        h
+                    })?,
+                uid_to_android_user(uid),
+            ),
+            BulkDeleteRequest::User(user_id) => (
+                self.legacy_loader
+                    .list_keystore_entries_for_user(user_id)
+                    .context("In bulk_delete: Trying to get aliases for user_id.")?,
+                user_id,
+            ),
+        };
+
+        let super_key_id = self
+            .db
+            .load_super_key(user_id)
+            .context("In bulk_delete: Failed to load super key")?
+            .map(|(_, entry)| entry.id());
+
+        for (uid, alias) in aliases
+            .into_iter()
+            .map(|(uid, aliases)| aliases.into_iter().map(move |alias| (uid, alias)))
+            .flatten()
+        {
+            let (km_blob_params, _, _) = self
+                .legacy_loader
+                .load_by_uid_alias(uid, &alias, None)
+                .context("In bulk_delete: Trying to load legacy blob.")?;
+
+            // Determine if the key needs special handling to be deleted.
+            let (need_gc, is_super_encrypted) = km_blob_params
+                .as_ref()
+                .map(|(blob, params)| {
+                    (
+                        params.iter().any(|kp| {
+                            KeyParameterValue::RollbackResistance == *kp.key_parameter_value()
+                        }),
+                        blob.is_encrypted(),
+                    )
+                })
+                .unwrap_or((false, false));
+
+            if keep_non_super_encrypted_keys && !is_super_encrypted {
+                continue;
+            }
+
+            if need_gc {
+                let mark_deleted = match km_blob_params
+                    .map(|(blob, _)| (blob.is_strongbox(), blob.take_value()))
+                {
+                    Some((is_strongbox, BlobValue::Encrypted { iv, tag, data })) => {
+                        let mut blob_metadata = BlobMetaData::new();
+                        if let (Ok(km_uuid), Some(super_key_id)) =
+                            (self.get_km_uuid(is_strongbox), super_key_id)
+                        {
+                            blob_metadata.add(BlobMetaEntry::KmUuid(km_uuid));
+                            blob_metadata.add(BlobMetaEntry::Iv(iv.to_vec()));
+                            blob_metadata.add(BlobMetaEntry::AeadTag(tag.to_vec()));
+                            blob_metadata
+                                .add(BlobMetaEntry::EncryptedBy(EncryptedBy::KeyId(super_key_id)));
+                            Some((LegacyBlob::Vec(data), blob_metadata))
+                        } else {
+                            // Oh well - we tried our best, but if we cannot determine which
+                            // KeyMint instance we have to send this blob to, we cannot
+                            // do more than delete the key from the file system.
+                            // And if we don't know which key wraps this key we cannot
+                            // unwrap it for KeyMint either.
+                            None
+                        }
+                    }
+                    Some((_, BlobValue::Decrypted(data))) => {
+                        Some((LegacyBlob::ZVec(data), BlobMetaData::new()))
+                    }
+                    _ => None,
+                };
+
+                if let Some((blob, blob_metadata)) = mark_deleted {
+                    self.db.set_deleted_blob(&blob, &blob_metadata).context(concat!(
+                        "In bulk_delete: Trying to insert deleted ",
+                        "blob into the database for garbage collection."
+                    ))?;
+                }
+            }
+
+            self.legacy_loader
+                .remove_keystore_entry(uid, &alias)
+                .context("In bulk_delete: Trying to remove migrated key.")?;
+        }
+        Ok(())
     }
 
     fn has_super_key(&mut self, user_id: u32) -> Result<bool> {
