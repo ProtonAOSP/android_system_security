@@ -27,6 +27,7 @@ cc_library_shared {
     srcs: [
         "android_engine.cpp",
         "keystore_backend_binder.cpp",
+        "keystore2_engine.cpp",
     ],
 
     cflags: [
@@ -36,7 +37,9 @@ cc_library_shared {
     ],
 
     shared_libs: [
+        "android.system.keystore2-V1-ndk_platform",
         "libbinder",
+        "libbinder_ndk",
         "libcrypto",
         "libcutils",
         "libhidlbase",
@@ -58,6 +61,7 @@ cc_library_shared {
     srcs: [
         "android_engine.cpp",
         "keystore_backend_hidl.cpp",
+        "keystore2_engine.cpp",
     ],
 
     cflags: [
@@ -68,7 +72,10 @@ cc_library_shared {
     ],
 
     shared_libs: [
+        "android.system.keystore2-V1-ndk_platform",
         "android.system.wifi.keystore@1.0",
+        "libbase",
+        "libbinder_ndk",
         "libcrypto",
         "liblog",
         "libhidlbase",

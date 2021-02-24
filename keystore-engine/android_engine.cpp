@@ -23,10 +23,7 @@
 #define LOG_TAG "keystore-engine"
 
 #include <pthread.h>
-#include <sys/socket.h>
-#include <stdarg.h>
 #include <string.h>
-#include <unistd.h>
 
 #include <log/log.h>
 
@@ -40,6 +37,8 @@
 #include <openssl/x509.h>
 
 #include <memory>
+
+#include "keystore2_engine.h"
 
 #ifndef BACKEND_WIFI_HIDL
 #include "keystore_backend_binder.h"
@@ -334,6 +333,10 @@ EVP_PKEY* EVP_PKEY_from_keystore(const char* key_id) __attribute__((visibility("
  * KeyStore. */
 EVP_PKEY* EVP_PKEY_from_keystore(const char* key_id) {
     ALOGV("EVP_PKEY_from_keystore(\"%s\")", key_id);
+
+    if (auto ks2_key = EVP_PKEY_from_keystore2(key_id)) {
+        return ks2_key;
+    }
 
     ensure_keystore_engine();
 
