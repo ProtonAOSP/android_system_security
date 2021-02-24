@@ -14,11 +14,14 @@
 
 package android.security.usermanager;
 
+import android.system.keystore2.Domain;
+
 // TODO: mark the interface with @SensitiveData when the annotation is ready (b/176110256).
 
 /**
  * IKeystoreUserManager interface exposes the methods for adding/removing users and changing the
  * user's password.
+ * @hide
  */
 interface IKeystoreUserManager {
 
@@ -31,6 +34,7 @@ interface IKeystoreUserManager {
      * user id.
      *
      * @param userId - Android user id
+     * @hide
      */
     void onUserAdded(in int userId);
 
@@ -42,6 +46,7 @@ interface IKeystoreUserManager {
      * `ResponseCode::SYSTEM_ERROR` - if failed to delete the keys of the user being deleted.
      *
      * @param userId - Android user id
+     * @hide
      */
     void onUserRemoved(in int userId);
 
@@ -56,6 +61,18 @@ interface IKeystoreUserManager {
      *
      * @param userId - Android user id
      * @param password - a secret derived from the synthetic password of the user
+     * @hide
      */
     void onUserPasswordChanged(in int userId, in @nullable byte[] password);
+
+    /**
+     * This function deletes all keys within a namespace. It mainly gets called when an app gets
+     * removed and all resources of this app need to be cleaned up.
+     *
+     * @param domain - One of Domain.APP or Domain.SELINUX.
+     * @param nspace - The UID of the app that is to be cleared if domain is Domain.APP or
+     *                 the SEPolicy namespace if domain is Domain.SELINUX.
+     * @hide
+     */
+     void clearNamespace(Domain domain, long nspace);
 }

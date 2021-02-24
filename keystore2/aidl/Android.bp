@@ -118,6 +118,9 @@ aidl_interface {
 aidl_interface {
     name: "android.security.usermanager",
     srcs: [ "android/security/usermanager/*.aidl" ],
+    imports: [
+        "android.system.keystore2",
+    ],
     unstable: true,
     backend: {
         java: {
