@@ -50,6 +50,7 @@ static const bool kForceCompilation = false;
 Result<void> addCertToFsVerityKeyring(const std::string& path) {
     const char* const argv[] = {kFsVerityInitPath, "--load-extra-key", "fsv_ods"};
 
+    // NOLINTNEXTLINE(android-cloexec-open): Deliberately not O_CLOEXEC
     int fd = open(path.c_str(), O_RDONLY);
     pid_t pid = fork();
     if (pid == 0) {
