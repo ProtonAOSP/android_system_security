@@ -57,6 +57,10 @@ pub enum Error {
     /// Wraps a Binder status code.
     #[error("Binder transaction error {0:?}")]
     BinderTransaction(StatusCode),
+    /// Wraps a Remote Provisioning ErrorCode as defined by the IRemotelyProvisionedComponent
+    /// AIDL interface spec.
+    #[error("Error::Rp({0:?})")]
+    Rp(ErrorCode),
 }
 
 impl Error {
@@ -98,6 +102,16 @@ pub fn map_km_error<T>(r: BinderResult<T>) -> Result<T, Error> {
             // `map_or_log_err` will map this on a system error.
             e_code => Error::Binder(e_code, 0),
         }
+    })
+}
+
+/// Helper function to map the binder status we get from calls into a RemotelyProvisionedComponent
+/// to a Keystore Error. We don't create an anyhow error here to make
+/// it easier to evaluate service specific errors.
+pub fn map_rem_prov_error<T>(r: BinderResult<T>) -> Result<T, Error> {
+    r.map_err(|s| match s.exception_code() {
+        ExceptionCode::SERVICE_SPECIFIC => Error::Rp(ErrorCode(s.service_specific_error())),
+        e_code => Error::Binder(e_code, 0),
     })
 }
 
@@ -164,6 +178,7 @@ where
             let rc = match root_cause.downcast_ref::<Error>() {
                 Some(Error::Rc(rcode)) => rcode.0,
                 Some(Error::Km(ec)) => ec.0,
+                Some(Error::Rp(_)) => ResponseCode::SYSTEM_ERROR.0,
                 // If an Error::Binder reaches this stage we report a system error.
                 // The exception code and possible service specific error will be
                 // printed in the error log above.
