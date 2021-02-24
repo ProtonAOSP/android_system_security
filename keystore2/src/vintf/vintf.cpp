@@ -43,6 +43,14 @@ char** getHalNamesAndVersions(size_t* len) {
     return convert(names);
 }
 
+char** getAidlInstances(size_t* len, const char* package, size_t version,
+                        const char* interfaceName) {
+    auto manifest = android::vintf::VintfObject::GetDeviceHalManifest();
+    const auto names = manifest->getAidlInstances(package, version, interfaceName);
+    *len = names.size();
+    return convert(names);
+}
+
 void freeNames(char** names, size_t len) {
     for (int i = 0; i < len; i++) {
         free(names[i]);

@@ -14,8 +14,8 @@
 
 //! Bindings for getting the list of HALs.
 
-use keystore2_vintf_bindgen::{freeNames, getHalNames, getHalNamesAndVersions};
-use std::ffi::CStr;
+use keystore2_vintf_bindgen::{freeNames, getAidlInstances, getHalNames, getHalNamesAndVersions};
+use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::str::Utf8Error;
 
@@ -60,6 +60,20 @@ pub fn get_hal_names_and_versions() -> HalNames {
     // Safety: We'll wrap this in HalNames to free the memory it allocates.
     // It stores the size of the array it returns in len.
     let raw_strs = unsafe { getHalNamesAndVersions(&mut len) };
+    HalNames { data: raw_strs, len }
+}
+
+/// Gets the instances of the given package, version, and interface tuple.
+/// Note that this is not a zero-cost shim: it will make copies of the strings.
+pub fn get_aidl_instances(package: &str, version: usize, interface_name: &str) -> HalNames {
+    let mut len: usize = 0;
+    let packages = CString::new(package).expect("Failed to make CString from package.");
+    let interface_name =
+        CString::new(interface_name).expect("Failed to make CString from interface_name.");
+    // Safety: We'll wrap this in HalNames to free the memory it allocates.
+    // It stores the size of the array it returns in len.
+    let raw_strs =
+        unsafe { getAidlInstances(&mut len, packages.as_ptr(), version, interface_name.as_ptr()) };
     HalNames { data: raw_strs, len }
 }
 

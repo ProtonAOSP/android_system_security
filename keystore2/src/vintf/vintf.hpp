@@ -23,8 +23,9 @@ extern "C" {
 
 char** getHalNames(size_t* len);
 char** getHalNamesAndVersions(size_t* len);
+char** getAidlInstances(size_t* len, const char* package, size_t version,
+                        const char* interfaceName);
 void freeNames(char** names, size_t len);
-
 }
 
 #endif  //  __VINTF_H__
