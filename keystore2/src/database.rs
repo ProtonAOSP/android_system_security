@@ -2522,6 +2522,51 @@ impl KeystoreDB {
         .context("In get_key_km_uuid.")
     }
 
+    /// Delete all artifacts belonging to the namespace given by the domain-namespace tuple.
+    /// This leaves all of the blob entries orphaned for subsequent garbage collection.
+    pub fn unbind_keys_for_namespace(&mut self, domain: Domain, namespace: i64) -> Result<()> {
+        if !(domain == Domain::APP || domain == Domain::SELINUX) {
+            return Err(KsError::Rc(ResponseCode::INVALID_ARGUMENT))
+                .context("In unbind_keys_for_namespace.");
+        }
+        self.with_transaction(TransactionBehavior::Immediate, |tx| {
+            tx.execute(
+                "DELETE FROM persistent.keymetadata
+                WHERE keyentryid IN (
+                    SELECT id FROM persistent.keyentry
+                    WHERE domain = ? AND namespace = ?
+                );",
+                params![domain.0, namespace],
+            )
+            .context("Trying to delete keymetadata.")?;
+            tx.execute(
+                "DELETE FROM persistent.keyparameter
+                WHERE keyentryid IN (
+                    SELECT id FROM persistent.keyentry
+                    WHERE domain = ? AND namespace = ?
+                );",
+                params![domain.0, namespace],
+            )
+            .context("Trying to delete keyparameters.")?;
+            tx.execute(
+                "DELETE FROM persistent.grant
+                WHERE keyentryid IN (
+                    SELECT id FROM persistent.keyentry
+                    WHERE domain = ? AND namespace = ?
+                );",
+                params![domain.0, namespace],
+            )
+            .context("Trying to delete grants.")?;
+            tx.execute(
+                "DELETE FROM persistent.keyentry WHERE domain = ? AND namespace = ?;",
+                params![domain.0, namespace],
+            )
+            .context("Trying to delete keyentry.")?;
+            Ok(()).need_gc()
+        })
+        .context("In unbind_keys_for_namespace")
+    }
+
     /// Delete the keys created on behalf of the user, denoted by the user id.
     /// Delete all the keys unless 'keep_non_super_encrypted_keys' set to true.
     /// Returned boolean is to hint the garbage collector to delete the unbound keys.
