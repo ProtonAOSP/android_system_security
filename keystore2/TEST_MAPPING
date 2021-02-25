@@ -1,7 +1,10 @@
 {
   "presubmit": [
     {
-      "name": "keystore2_certificate_test"
+      "name": "keystore2_crypto_test"
+    },
+    {
+      "name": "keystore2_crypto_test_rust"
     },
     {
       "name": "keystore2_test"

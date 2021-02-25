@@ -119,6 +119,7 @@ cc_test {
         "libkeymint_support",
         "libkeystore2_crypto",
         "libkm_compat",
+        "libkm_compat_service",
         "libutils",
     ],
 }
