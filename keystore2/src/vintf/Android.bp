@@ -1,0 +1,70 @@
+// Copyright 2021, The Android Open Source Project
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+rust_library {
+    name: "libkeystore2_vintf_rust",
+    crate_name: "keystore2_vintf",
+    srcs: ["lib.rs"],
+    rustlibs: [
+        "libkeystore2_vintf_bindgen",
+    ],
+    shared_libs: [
+        "libkeystore2_vintf_cpp",
+        "libvintf",
+    ],
+}
+
+cc_library {
+    name: "libkeystore2_vintf_cpp",
+    srcs: [
+        "vintf.cpp",
+    ],
+    shared_libs: [
+        "libvintf",
+    ],
+}
+
+rust_bindgen {
+    name: "libkeystore2_vintf_bindgen",
+    wrapper_src: "vintf.hpp",
+    crate_name: "keystore2_vintf_bindgen",
+    source_stem: "bindings",
+    host_supported: true,
+    shared_libs: ["libvintf"],
+    bindgen_flags: [
+        "--size_t-is-usize",
+        "--whitelist-function", "getHalNames",
+        "--whitelist-function", "getHalNamesAndVersions",
+        "--whitelist-function", "getAidlInstances",
+        "--whitelist-function", "freeNames",
+    ],
+}
+
+rust_test {
+    name: "keystore2_vintf_test",
+    crate_name: "keystore2_vintf_test",
+    srcs: ["lib.rs"],
+    test_suites: ["general-tests"],
+    auto_gen_config: true,
+    rustlibs: [
+        "libkeystore2_vintf_bindgen",
+    ],
+    static_libs: [
+        "libkeystore2_vintf_cpp",
+    ],
+    shared_libs: [
+        "libc++",
+        "libvintf",
+    ],
+}
