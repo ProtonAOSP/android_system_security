@@ -16,8 +16,10 @@
 
 #include <fcntl.h>
 #include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <iterator>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -32,18 +34,25 @@
 #include "KeymasterSigningKey.h"
 #include "VerityUtils.h"
 
+#include "odsign_info.pb.h"
+
 using android::base::ErrnoError;
 using android::base::Error;
 using android::base::Result;
 
+using OdsignInfo = ::odsign::proto::OdsignInfo;
+
 const std::string kSigningKeyBlob = "/data/misc/odsign/key.blob";
 const std::string kSigningKeyCert = "/data/misc/odsign/key.cert";
+const std::string kOdsignInfo = "/data/misc/odsign/odsign.info";
+const std::string kOdsignInfoSignature = "/data/misc/odsign/odsign.info.signature";
 
 const std::string kArtArtifactsDir = "/data/misc/apexdata/com.android.art/dalvik-cache";
 
 static const char* kOdrefreshPath = "/apex/com.android.art/bin/odrefresh";
 
 static const char* kFsVerityInitPath = "/system/bin/fsverity_init";
+static const char* kFsVerityProcPath = "/proc/sys/fs/verity";
 
 static const bool kForceCompilation = false;
 
@@ -143,15 +152,153 @@ bool validateArtifacts() {
            0;
 }
 
+static std::string toHex(const std::vector<uint8_t>& digest) {
+    std::stringstream ss;
+    for (auto it = digest.begin(); it != digest.end(); ++it) {
+        ss << std::setfill('0') << std::setw(2) << std::hex << static_cast<unsigned>(*it);
+    }
+    return ss.str();
+}
+
+Result<std::map<std::string, std::string>> computeDigests(const std::string& path) {
+    std::error_code ec;
+    std::map<std::string, std::string> digests;
+
+    auto it = std::filesystem::recursive_directory_iterator(path, ec);
+    auto end = std::filesystem::recursive_directory_iterator();
+
+    while (!ec && it != end) {
+        if (it->is_regular_file()) {
+            auto digest = createDigest(it->path());
+            if (!digest.ok()) {
+                return Error() << "Failed to compute digest for " << it->path();
+            }
+            digests[it->path()] = toHex(*digest);
+        }
+        ++it;
+    }
+    if (ec) {
+        return Error() << "Failed to iterate " << path << ": " << ec;
+    }
+
+    return digests;
+}
+
+Result<void> verifyDigests(const std::map<std::string, std::string>& digests,
+                           const std::map<std::string, std::string>& trusted_digests) {
+    for (const auto& path_digest : digests) {
+        auto path = path_digest.first;
+        auto digest = path_digest.second;
+        if ((trusted_digests.count(path) == 0)) {
+            return Error() << "Couldn't find digest for " << path;
+        }
+        if (trusted_digests.at(path) != digest) {
+            return Error() << "Digest mismatch for " << path;
+        }
+    }
+
+    // All digests matched!
+    if (digests.size() > 0) {
+        LOG(INFO) << "All root hashes match.";
+    }
+    return {};
+}
+
+Result<void> verifyIntegrityFsVerity(const std::map<std::string, std::string>& trusted_digests) {
+    // Just verify that the files are in verity, and get their digests
+    auto result = verifyAllFilesInVerity(kArtArtifactsDir);
+    if (!result.ok()) {
+        return result.error();
+    }
+
+    return verifyDigests(*result, trusted_digests);
+}
+
+Result<void> verifyIntegrityNoFsVerity(const std::map<std::string, std::string>& trusted_digests) {
+    // On these devices, just compute the digests, and verify they match the ones we trust
+    auto result = computeDigests(kArtArtifactsDir);
+    if (!result.ok()) {
+        return result.error();
+    }
+
+    return verifyDigests(*result, trusted_digests);
+}
+
+Result<OdsignInfo> getOdsignInfo(const KeymasterSigningKey& /* key */) {
+    std::string persistedSignature;
+    OdsignInfo odsignInfo;
+
+    if (!android::base::ReadFileToString(kOdsignInfoSignature, &persistedSignature)) {
+        return ErrnoError() << "Failed to read " << kOdsignInfoSignature;
+    }
+
+    std::fstream odsign_info(kOdsignInfo, std::ios::in | std::ios::binary);
+    if (!odsign_info) {
+        return Error() << "Failed to open " << kOdsignInfo;
+    }
+    // Verify the hash
+    std::string odsign_info_str((std::istreambuf_iterator<char>(odsign_info)),
+                                std::istreambuf_iterator<char>());
+
+    // TODO: this is way too slow - replace with a local RSA_verify implementation.
+    /*
+    auto verifiedSignature = key.sign(odsign_info_str);
+    if (!verifiedSignature.ok()) {
+        return Error() << "Failed to sign " << kOdsignInfo;
+    }
+
+    if (*verifiedSignature != persistedSignature) {
+        return Error() << kOdsignInfoSignature << " does not match.";
+    } else {
+        LOG(INFO) << kOdsignInfoSignature << " matches.";
+    }
+    */
+
+    if (!odsignInfo.ParseFromIstream(&odsign_info)) {
+        return Error() << "Failed to parse " << kOdsignInfo;
+    }
+
+    LOG(INFO) << "Loaded " << kOdsignInfo;
+    return odsignInfo;
+}
+
+Result<void> persistDigests(const std::map<std::string, std::string>& digests,
+                            const KeymasterSigningKey& key) {
+    OdsignInfo signInfo;
+    google::protobuf::Map<std::string, std::string> proto_hashes(digests.begin(), digests.end());
+    auto map = signInfo.mutable_file_hashes();
+    *map = proto_hashes;
+
+    std::fstream odsign_info(kOdsignInfo, std::ios::out | std::ios::trunc | std::ios::binary);
+    if (!signInfo.SerializeToOstream(&odsign_info)) {
+        return Error() << "Failed to persist root hashes in " << kOdsignInfo;
+    }
+
+    odsign_info.seekg(0);
+    std::string odsign_info_str((std::istreambuf_iterator<char>(odsign_info)),
+                                std::istreambuf_iterator<char>());
+    auto signResult = key.sign(odsign_info_str);
+    if (!signResult.ok()) {
+        return Error() << "Failed to sign " << kOdsignInfo;
+    }
+    // Sign the files with our key itself, and write that to storage
+    android::base::WriteStringToFile(*signResult, kOdsignInfoSignature);
+    return {};
+}
+
 int main(int /* argc */, char** /* argv */) {
-    auto removeArtifacts = []() {
+    auto removeArtifacts = []() -> std::uintmax_t {
         std::error_code ec;
         auto num_removed = std::filesystem::remove_all(kArtArtifactsDir, ec);
         if (ec) {
             // TODO can't remove artifacts, signal Zygote shouldn't use them
             LOG(ERROR) << "Can't remove " << kArtArtifactsDir << ": " << ec.message();
+            return 0;
         } else {
-            LOG(INFO) << "Removed " << num_removed << " entries from " << kArtArtifactsDir;
+            if (num_removed > 0) {
+                LOG(INFO) << "Removed " << num_removed << " entries from " << kArtArtifactsDir;
+            }
+            return num_removed;
         }
     };
     // Make sure we delete the artifacts in all early (error) exit paths
@@ -170,46 +317,84 @@ int main(int /* argc */, char** /* argv */) {
         LOG(INFO) << "Found and verified existing key: " << kSigningKeyBlob;
     }
 
-    auto existing_cert = verifyExistingCert(key.value());
-    if (!existing_cert.ok()) {
-        LOG(WARNING) << existing_cert.error().message();
+    bool supportsFsVerity = access(kFsVerityProcPath, F_OK) == 0;
+    if (!supportsFsVerity) {
+        LOG(INFO) << "Device doesn't support fsverity. Falling back to full verification.";
+    }
 
-        // Try to create a new cert
-        auto new_cert = key->createX509Cert(kSigningKeyCert);
-        if (!new_cert.ok()) {
-            LOG(ERROR) << "Failed to create X509 certificate: " << new_cert.error().message();
-            // TODO apparently the key become invalid - delete the blob / cert
+    if (supportsFsVerity) {
+        auto existing_cert = verifyExistingCert(key.value());
+        if (!existing_cert.ok()) {
+            LOG(WARNING) << existing_cert.error().message();
+
+            // Try to create a new cert
+            auto new_cert = key->createX509Cert(kSigningKeyCert);
+            if (!new_cert.ok()) {
+                LOG(ERROR) << "Failed to create X509 certificate: " << new_cert.error().message();
+                // TODO apparently the key become invalid - delete the blob / cert
+                return -1;
+            }
+        } else {
+            LOG(INFO) << "Found and verified existing public key certificate: " << kSigningKeyCert;
+        }
+        auto cert_add_result = addCertToFsVerityKeyring(kSigningKeyCert);
+        if (!cert_add_result.ok()) {
+            LOG(ERROR) << "Failed to add certificate to fs-verity keyring: "
+                       << cert_add_result.error().message();
             return -1;
         }
+    }
+
+    auto signInfo = getOdsignInfo(key.value());
+    if (!signInfo.ok()) {
+        int num_removed = removeArtifacts();
+        // Only a warning if there were artifacts to begin with, which suggests tampering or
+        // corruption
+        if (num_removed > 0) {
+            LOG(WARNING) << signInfo.error().message();
+        }
     } else {
-        LOG(INFO) << "Found and verified existing public key certificate: " << kSigningKeyCert;
-    }
-    auto cert_add_result = addCertToFsVerityKeyring(kSigningKeyCert);
-    if (!cert_add_result.ok()) {
-        LOG(ERROR) << "Failed to add certificate to fs-verity keyring: "
-                   << cert_add_result.error().message();
-        return -1;
+        std::map<std::string, std::string> trusted_digests(signInfo->file_hashes().begin(),
+                                                           signInfo->file_hashes().end());
+        Result<void> integrityStatus;
+
+        if (supportsFsVerity) {
+            integrityStatus = verifyIntegrityFsVerity(trusted_digests);
+        } else {
+            integrityStatus = verifyIntegrityNoFsVerity(trusted_digests);
+        }
+        if (!integrityStatus.ok()) {
+            LOG(WARNING) << integrityStatus.error().message() << ", removing " << kArtArtifactsDir;
+            removeArtifacts();
+        }
     }
 
-    auto verityStatus = verifyAllFilesInVerity(kArtArtifactsDir);
-    if (!verityStatus.ok()) {
-        LOG(WARNING) << verityStatus.error().message() << ", removing " << kArtArtifactsDir;
-        removeArtifacts();
-    }
-
+    // Ask ART whether it considers the artifacts valid
+    LOG(INFO) << "Asking odrefresh to verify artifacts (if present)...";
     bool artifactsValid = validateArtifacts();
+    LOG(INFO) << "odrefresh said they are " << (artifactsValid ? "VALID" : "INVALID");
 
     if (!artifactsValid || kForceCompilation) {
-        removeArtifacts();
-
         LOG(INFO) << "Starting compilation... ";
         bool ret = compileArtifacts(kForceCompilation);
         LOG(INFO) << "Compilation done, returned " << ret;
 
-        verityStatus = addFilesToVerityRecursive(kArtArtifactsDir, key.value());
+        Result<std::map<std::string, std::string>> digests;
+        if (supportsFsVerity) {
+            digests = addFilesToVerityRecursive(kArtArtifactsDir, key.value());
+        } else {
+            // If we can't use verity, just compute the root hashes and store
+            // those, so we can reverify them at the next boot.
+            digests = computeDigests(kArtArtifactsDir);
+        }
+        if (!digests.ok()) {
+            LOG(ERROR) << digests.error().message();
+            return -1;
+        }
 
-        if (!verityStatus.ok()) {
-            LOG(ERROR) << "Failed to add " << verityStatus.error().message();
+        auto persistStatus = persistDigests(*digests, key.value());
+        if (!persistStatus.ok()) {
+            LOG(ERROR) << persistStatus.error().message();
             return -1;
         }
     }

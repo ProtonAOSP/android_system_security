@@ -26,7 +26,6 @@ package {
 tidy_errors = [
   "cert-err34-c",
   "google-default-arguments",
-  "google-explicit-constructor",
   "google-runtime-int",
   "google-runtime-member-string-references",
   "misc-move-const-arg",
@@ -93,6 +92,7 @@ cc_binary {
   static_libs: [
     "libmini_keyctl_static", // TODO need static?
     "libc++fs",
+    "lib_odsign_proto",
   ],
 
   shared_libs: [
@@ -106,6 +106,7 @@ cc_binary {
     "libkeymaster4support", // For authorization_set
     "libkeymaster4_1support",
     "libkeyutils",
+    "libprotobuf-cpp-full",
     "libutils",
   ],
 }
