@@ -53,7 +53,7 @@ use crate::{
 };
 use anyhow::{anyhow, Context, Result};
 use binder::{IBinder, Strong, ThreadState};
-use keystore2_crypto::parse_issuer_subject_from_certificate;
+use keystore2_crypto::parse_subject_from_certificate;
 
 /// Implementation of the IKeystoreSecurityLevel Interface.
 pub struct KeystoreSecurityLevel {
@@ -431,7 +431,7 @@ impl KeystoreSecurityLevel {
             .load_attest_key_blob_and_cert(&key, caller_uid)
             .context("In get_attest_key: Failed to load blob and cert")?;
 
-        let issuer_subject: Vec<u8> = parse_issuer_subject_from_certificate(&cert)
+        let issuer_subject: Vec<u8> = parse_subject_from_certificate(&cert)
             .context("In get_attest_key: Failed to parse subject from certificate.")?;
 
         Ok(AttestationKey {

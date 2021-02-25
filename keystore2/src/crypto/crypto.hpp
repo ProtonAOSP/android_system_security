@@ -67,7 +67,7 @@ extern "C" {
 // cert_len, extract the subject, DER-encode it and write the result to
 // subject_buf, which has subject_buf_len capacity.
 //
-// Because the length of the issuer is unknown, and becaue we'd like to (a) be
+// Because the length of the subject is unknown, and because we'd like to (a) be
 // able to handle subjects of any size and (b) avoid parsing the certificate
 // twice most of the time, once to discover the length and once to parse it, the
 // return value is overloaded.
