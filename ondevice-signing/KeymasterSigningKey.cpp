@@ -61,7 +61,11 @@ Result<KeymasterSigningKey> KeymasterSigningKey::createNewKey() {
 
 Result<void> KeymasterSigningKey::createSigningKey() {
     KeymasterSigningKey signingKey;
-    mKeymaster = Keymaster::getInstance();
+    auto keymaster = Keymaster::getInstance();
+    if (!keymaster.has_value()) {
+        return Error() << "Failed to initialize keymaster.";
+    }
+    mKeymaster = keymaster;
 
     auto keyBlob = mKeymaster->createKey();
 
@@ -112,8 +116,12 @@ Result<void> KeymasterSigningKey::createX509Cert(const std::string& outPath) con
 }
 
 Result<void> KeymasterSigningKey::initializeFromKeyblob(const std::string& path) {
-    mKeymaster = Keymaster::getInstance();
     std::string keyBlobData;
+    auto keymaster = Keymaster::getInstance();
+    if (!keymaster.has_value()) {
+        return Error() << "Failed to initialize keymaster.";
+    }
+    mKeymaster = keymaster;
 
     bool result = ReadFileToString(path, &keyBlobData);
     if (!result) {
