@@ -66,6 +66,9 @@ bool Keymaster::initialize() {
         }
     }
 
+    if (devToUse == nullptr) {
+        LOG(WARNING) << "Didn't find a keymaster to use.";
+    }
     mDevice = devToUse;
 
     return mDevice != nullptr;
