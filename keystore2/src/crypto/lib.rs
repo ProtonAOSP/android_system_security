@@ -58,10 +58,15 @@ pub fn generate_aes256_key() -> Result<ZVec, Error> {
 
 /// Generate a salt.
 pub fn generate_salt() -> Result<Vec<u8>, Error> {
-    // Safety: salt has the same length as the requested number of random bytes.
-    let mut salt = vec![0; SALT_LENGTH];
-    if unsafe { randomBytes(salt.as_mut_ptr(), SALT_LENGTH) } {
-        Ok(salt)
+    generate_random_data(SALT_LENGTH)
+}
+
+/// Generate random data of the given size.
+pub fn generate_random_data(size: usize) -> Result<Vec<u8>, Error> {
+    // Safety: data has the same length as the requested number of random bytes.
+    let mut data = vec![0; size];
+    if unsafe { randomBytes(data.as_mut_ptr(), size) } {
+        Ok(data)
     } else {
         Err(Error::RandomNumberGenerationFailed)
     }
