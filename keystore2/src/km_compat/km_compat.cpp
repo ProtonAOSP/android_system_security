@@ -241,26 +241,31 @@ static V4_0_KeyFormat convertKeyFormatToLegacy(const KeyFormat& kf) {
     return static_cast<V4_0_KeyFormat>(kf);
 }
 
-static V4_0_HardwareAuthToken convertAuthTokenToLegacy(const HardwareAuthToken& at) {
+static V4_0_HardwareAuthToken convertAuthTokenToLegacy(const std::optional<HardwareAuthToken>& at) {
+    if (!at) return {};
+
     V4_0_HardwareAuthToken legacyAt;
-    legacyAt.challenge = at.challenge;
-    legacyAt.userId = at.userId;
-    legacyAt.authenticatorId = at.authenticatorId;
+    legacyAt.challenge = at->challenge;
+    legacyAt.userId = at->userId;
+    legacyAt.authenticatorId = at->authenticatorId;
     legacyAt.authenticatorType =
         static_cast<::android::hardware::keymaster::V4_0::HardwareAuthenticatorType>(
-            at.authenticatorType);
-    legacyAt.timestamp = at.timestamp.milliSeconds;
-    legacyAt.mac = at.mac;
+            at->authenticatorType);
+    legacyAt.timestamp = at->timestamp.milliSeconds;
+    legacyAt.mac = at->mac;
     return legacyAt;
 }
 
-static V4_0_VerificationToken convertTimestampTokenToLegacy(const TimeStampToken& tst) {
+static V4_0_VerificationToken
+convertTimestampTokenToLegacy(const std::optional<TimeStampToken>& tst) {
+    if (!tst) return {};
+
     V4_0_VerificationToken legacyVt;
-    legacyVt.challenge = tst.challenge;
-    legacyVt.timestamp = tst.timestamp.milliSeconds;
+    legacyVt.challenge = tst->challenge;
+    legacyVt.timestamp = tst->timestamp.milliSeconds;
     // Legacy verification tokens were always minted by TEE.
     legacyVt.securityLevel = V4_0::SecurityLevel::TRUSTED_ENVIRONMENT;
-    legacyVt.mac = tst.mac;
+    legacyVt.mac = tst->mac;
     return legacyVt;
 }
 
@@ -530,81 +535,85 @@ ScopedAStatus KeyMintDevice::earlyBootEnded() {
     }
 }
 
-ScopedAStatus KeyMintOperation::update(const std::optional<KeyParameterArray>& in_inParams,
-                                       const std::optional<std::vector<uint8_t>>& in_input,
-                                       const std::optional<HardwareAuthToken>& in_inAuthToken,
-                                       const std::optional<TimeStampToken>& in_inTimeStampToken,
-                                       std::optional<KeyParameterArray>* out_outParams,
-                                       std::optional<ByteArray>* out_output,
-                                       int32_t* _aidl_return) {
-    std::vector<V4_0_KeyParameter> legacyParams;
-    if (in_inParams.has_value()) {
-        legacyParams = convertKeyParametersToLegacy(in_inParams.value().params);
-    }
-    auto input = in_input.value_or(std::vector<uint8_t>());
-    V4_0_HardwareAuthToken authToken;
-    if (in_inAuthToken.has_value()) {
-        authToken = convertAuthTokenToLegacy(in_inAuthToken.value());
-    }
-    V4_0_VerificationToken verificationToken;
-    if (in_inTimeStampToken.has_value()) {
-        verificationToken = convertTimestampTokenToLegacy(in_inTimeStampToken.value());
-    }
+ScopedAStatus KeyMintOperation::updateAad(const std::vector<uint8_t>& input,
+                                          const std::optional<HardwareAuthToken>& optAuthToken,
+                                          const std::optional<TimeStampToken>& optTimeStampToken) {
+    V4_0_HardwareAuthToken authToken = convertAuthTokenToLegacy(optAuthToken);
+    V4_0_VerificationToken verificationToken = convertTimestampTokenToLegacy(optTimeStampToken);
 
     KMV1::ErrorCode errorCode;
     auto result = mDevice->update(
-        mOperationHandle, legacyParams, input, authToken, verificationToken,
-        [&](V4_0_ErrorCode error, uint32_t inputConsumed,
-            const hidl_vec<V4_0_KeyParameter>& outParams, const hidl_vec<uint8_t>& output) {
-            errorCode = convert(error);
-            out_outParams->emplace();
-            out_outParams->value().params = convertKeyParametersFromLegacy(outParams);
-            out_output->emplace();
-            out_output->value().data = output;
-            *_aidl_return = inputConsumed;
-        });
+        mOperationHandle, {V4_0::makeKeyParameter(V4_0::TAG_ASSOCIATED_DATA, input)}, input,
+        authToken, verificationToken,
+        [&](V4_0_ErrorCode error, auto, auto, auto) { errorCode = convert(error); });
 
     if (!result.isOk()) {
         LOG(ERROR) << __func__ << " transaction failed. " << result.description();
         errorCode = KMV1::ErrorCode::UNKNOWN_ERROR;
     }
-    if (errorCode != KMV1::ErrorCode::OK) {
-        mOperationSlot.freeSlot();
-    }
+    if (errorCode != KMV1::ErrorCode::OK) mOperationSlot.freeSlot();
+
     return convertErrorCode(errorCode);
 }
 
-ScopedAStatus KeyMintOperation::finish(const std::optional<KeyParameterArray>& in_inParams,
-                                       const std::optional<std::vector<uint8_t>>& in_input,
-                                       const std::optional<std::vector<uint8_t>>& in_inSignature,
-                                       const std::optional<HardwareAuthToken>& in_authToken,
-                                       const std::optional<TimeStampToken>& in_inTimeStampToken,
-                                       std::optional<KeyParameterArray>* out_outParams,
-                                       std::vector<uint8_t>* _aidl_return) {
-    KMV1::ErrorCode errorCode;
-    std::vector<V4_0_KeyParameter> legacyParams;
-    if (in_inParams.has_value()) {
-        legacyParams = convertKeyParametersToLegacy(in_inParams.value().params);
+ScopedAStatus KeyMintOperation::update(const std::vector<uint8_t>& input,
+                                       const std::optional<HardwareAuthToken>& optAuthToken,
+                                       const std::optional<TimeStampToken>& optTimeStampToken,
+                                       std::vector<uint8_t>* out_output) {
+    V4_0_HardwareAuthToken authToken = convertAuthTokenToLegacy(optAuthToken);
+    V4_0_VerificationToken verificationToken = convertTimestampTokenToLegacy(optTimeStampToken);
+
+    size_t inputPos = 0;
+    *out_output = {};
+    KMV1::ErrorCode errorCode = KMV1::ErrorCode::OK;
+
+    while (inputPos < input.size() && errorCode == KMV1::ErrorCode::OK) {
+        auto result =
+            mDevice->update(mOperationHandle, {} /* inParams */,
+                            {input.begin() + inputPos, input.end()}, authToken, verificationToken,
+                            [&](V4_0_ErrorCode error, uint32_t inputConsumed, auto /* outParams */,
+                                const hidl_vec<uint8_t>& output) {
+                                errorCode = convert(error);
+                                out_output->insert(out_output->end(), output.begin(), output.end());
+                                inputPos += inputConsumed;
+                            });
+
+        if (!result.isOk()) {
+            LOG(ERROR) << __func__ << " transaction failed. " << result.description();
+            errorCode = KMV1::ErrorCode::UNKNOWN_ERROR;
+        }
     }
+
+    if (errorCode != KMV1::ErrorCode::OK) mOperationSlot.freeSlot();
+
+    return convertErrorCode(errorCode);
+}
+
+ScopedAStatus
+KeyMintOperation::finish(const std::optional<std::vector<uint8_t>>& in_input,
+                         const std::optional<std::vector<uint8_t>>& in_signature,
+                         const std::optional<HardwareAuthToken>& in_authToken,
+                         const std::optional<TimeStampToken>& in_timeStampToken,
+                         const std::optional<std::vector<uint8_t>>& in_confirmationToken,
+                         std::vector<uint8_t>* out_output) {
     auto input = in_input.value_or(std::vector<uint8_t>());
-    auto signature = in_inSignature.value_or(std::vector<uint8_t>());
-    V4_0_HardwareAuthToken authToken;
-    if (in_authToken.has_value()) {
-        authToken = convertAuthTokenToLegacy(in_authToken.value());
+    auto signature = in_signature.value_or(std::vector<uint8_t>());
+    V4_0_HardwareAuthToken authToken = convertAuthTokenToLegacy(in_authToken);
+    V4_0_VerificationToken verificationToken = convertTimestampTokenToLegacy(in_timeStampToken);
+
+    std::vector<V4_0_KeyParameter> inParams;
+    if (in_confirmationToken) {
+        inParams.push_back(makeKeyParameter(V4_0::TAG_CONFIRMATION_TOKEN, *in_confirmationToken));
     }
-    V4_0_VerificationToken verificationToken;
-    if (in_inTimeStampToken.has_value()) {
-        verificationToken = convertTimestampTokenToLegacy(in_inTimeStampToken.value());
-    }
+
+    KMV1::ErrorCode errorCode;
     auto result = mDevice->finish(
-        mOperationHandle, legacyParams, input, signature, authToken, verificationToken,
-        [&](V4_0_ErrorCode error, const hidl_vec<V4_0_KeyParameter>& outParams,
-            const hidl_vec<uint8_t>& output) {
+        mOperationHandle, {} /* inParams */, input, signature, authToken, verificationToken,
+        [&](V4_0_ErrorCode error, auto /* outParams */, const hidl_vec<uint8_t>& output) {
             errorCode = convert(error);
-            out_outParams->emplace();
-            out_outParams->value().params = convertKeyParametersFromLegacy(outParams);
-            *_aidl_return = output;
+            *out_output = output;
         });
+
     mOperationSlot.freeSlot();
     if (!result.isOk()) {
         LOG(ERROR) << __func__ << " transaction failed. " << result.description();
@@ -881,18 +890,14 @@ KeyMintDevice::signCertificate(const std::vector<KeyParameter>& keyParams,
                 errorCode = toErrorCode(error);
                 return std::vector<uint8_t>();
             }
-            std::optional<KeyParameterArray> outParams;
-            std::optional<ByteArray> outByte;
-            int32_t status;
-            error = beginResult.operation->update(std::nullopt, dataVec, std::nullopt, std::nullopt,
-                                                  &outParams, &outByte, &status);
-            if (!error.isOk()) {
-                errorCode = toErrorCode(error);
-                return std::vector<uint8_t>();
-            }
+
             std::vector<uint8_t> result;
-            error = beginResult.operation->finish(std::nullopt, std::nullopt, std::nullopt,
-                                                  std::nullopt, std::nullopt, &outParams, &result);
+            error = beginResult.operation->finish(dataVec,                     //
+                                                  {} /* signature */,          //
+                                                  {} /* authToken */,          //
+                                                  {} /* timestampToken */,     //
+                                                  {} /* confirmationToken */,  //
+                                                  &result);
             if (!error.isOk()) {
                 errorCode = toErrorCode(error);
                 return std::vector<uint8_t>();

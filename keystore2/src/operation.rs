@@ -129,9 +129,7 @@ use crate::enforcements::AuthInfo;
 use crate::error::{map_km_error, map_or_log_err, Error, ErrorCode, ResponseCode};
 use crate::utils::Asp;
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
-    ByteArray::ByteArray, IKeyMintOperation::IKeyMintOperation,
-    KeyParameter::KeyParameter as KmParam, KeyParameterArray::KeyParameterArray,
-    KeyParameterValue::KeyParameterValue as KmParamValue, Tag::Tag,
+    IKeyMintOperation::IKeyMintOperation,
 };
 use android_system_keystore2::aidl::android::system::keystore2::{
     IKeystoreOperation::BnKeystoreOperation, IKeystoreOperation::IKeystoreOperation,
@@ -325,16 +323,6 @@ impl Operation {
         Self::check_input_length(aad_input).context("In update_aad")?;
         self.touch();
 
-        let params = KeyParameterArray {
-            params: vec![KmParam {
-                tag: Tag::ASSOCIATED_DATA,
-                value: KmParamValue::Blob(aad_input.into()),
-            }],
-        };
-
-        let mut out_params: Option<KeyParameterArray> = None;
-        let mut output: Option<ByteArray> = None;
-
         let km_op: binder::public_api::Strong<dyn IKeyMintOperation> =
             self.km_op.get_interface().context("In update: Failed to get KeyMintOperation.")?;
 
@@ -347,14 +335,7 @@ impl Operation {
 
         self.update_outcome(
             &mut *outcome,
-            map_km_error(km_op.update(
-                Some(&params),
-                None,
-                hat.as_ref(),
-                tst.as_ref(),
-                &mut out_params,
-                &mut output,
-            )),
+            map_km_error(km_op.updateAad(aad_input, hat.as_ref(), tst.as_ref())),
         )
         .context("In update_aad: KeyMint::update failed.")?;
 
@@ -368,8 +349,6 @@ impl Operation {
         Self::check_input_length(input).context("In update")?;
         self.touch();
 
-        let mut out_params: Option<KeyParameterArray> = None;
-
         let km_op: binder::public_api::Strong<dyn IKeyMintOperation> =
             self.km_op.get_interface().context("In update: Failed to get KeyMintOperation.")?;
 
@@ -380,39 +359,17 @@ impl Operation {
             .before_update()
             .context("In update: Trying to get auth tokens.")?;
 
-        let mut result: Option<Vec<u8>> = None;
-        let mut consumed = 0usize;
-        loop {
-            let mut output: Option<ByteArray> = None;
-            consumed += self
-                .update_outcome(
-                    &mut *outcome,
-                    map_km_error(km_op.update(
-                        None,
-                        Some(&input[consumed..]),
-                        hat.as_ref(),
-                        tst.as_ref(),
-                        &mut out_params,
-                        &mut output,
-                    )),
-                )
-                .context("In update: KeyMint::update failed.")? as usize;
+        let output = self
+            .update_outcome(
+                &mut *outcome,
+                map_km_error(km_op.update(input, hat.as_ref(), tst.as_ref())),
+            )
+            .context("In update: KeyMint::update failed.")?;
 
-            match (output, &mut result) {
-                (Some(blob), None) => {
-                    if !blob.data.is_empty() {
-                        result = Some(blob.data)
-                    }
-                }
-                (Some(mut blob), Some(ref mut result)) => {
-                    result.append(&mut blob.data);
-                }
-                (None, _) => {}
-            }
-
-            if consumed == input.len() {
-                return Ok(result);
-            }
+        if output.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(output))
         }
     }
 
@@ -425,8 +382,6 @@ impl Operation {
         }
         self.touch();
 
-        let mut out_params: Option<KeyParameterArray> = None;
-
         let km_op: binder::public_api::Strong<dyn IKeyMintOperation> =
             self.km_op.get_interface().context("In finish: Failed to get KeyMintOperation.")?;
 
@@ -437,23 +392,15 @@ impl Operation {
             .before_finish()
             .context("In finish: Trying to get auth tokens.")?;
 
-        let in_params = confirmation_token.map(|token| KeyParameterArray {
-            params: vec![KmParam {
-                tag: Tag::CONFIRMATION_TOKEN,
-                value: KmParamValue::Blob(token),
-            }],
-        });
-
         let output = self
             .update_outcome(
                 &mut *outcome,
                 map_km_error(km_op.finish(
-                    in_params.as_ref(),
                     input,
                     signature,
                     hat.as_ref(),
                     tst.as_ref(),
-                    &mut out_params,
+                    confirmation_token.as_deref(),
                 )),
             )
             .context("In finish: KeyMint::finish failed.")?;
