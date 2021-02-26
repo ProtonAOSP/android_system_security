@@ -107,6 +107,7 @@ rust_binary {
         "libbinder_rs",
         "libkeystore2",
         "liblog_rust",
+        "libvpnprofilestore-rust",
     ],
     init_rc: ["keystore2.rc"],
 }
