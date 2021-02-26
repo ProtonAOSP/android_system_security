@@ -24,7 +24,6 @@
 
 using ::aidl::android::hardware::security::keymint::Algorithm;
 using ::aidl::android::hardware::security::keymint::BlockMode;
-using ::aidl::android::hardware::security::keymint::ByteArray;
 using ::aidl::android::hardware::security::keymint::Certificate;
 using ::aidl::android::hardware::security::keymint::Digest;
 using ::aidl::android::hardware::security::keymint::ErrorCode;
@@ -100,18 +99,19 @@ TEST(SlotTest, TestSlots) {
     // Calling finish should free up a slot.
     auto last = operations.back();
     operations.pop_back();
-    std::optional<KeyParameterArray> kpa;
     std::vector<uint8_t> byteVec;
-    auto status = last->finish(std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt,
-                               &kpa, &byteVec);
+    auto status = last->finish(std::nullopt /* input */, std::nullopt /* signature */,
+                               std::nullopt /* authToken */, std::nullopt /* timestampToken */,
+                               std::nullopt /* confirmationToken */, &byteVec);
     ASSERT_TRUE(status.isOk());
     result = begin(device, true);
     ASSERT_TRUE(std::holds_alternative<BeginResult>(result));
     operations.push_back(std::get<BeginResult>(result).operation);
 
     // Calling finish and abort on an already-finished operation should not free up another slot.
-    status = last->finish(std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt,
-                          &kpa, &byteVec);
+    status = last->finish(std::nullopt /* input */, std::nullopt /* signature */,
+                          std::nullopt /* authToken */, std::nullopt /* timestampToken */,
+                          std::nullopt /* confirmationToken */, &byteVec);
     ASSERT_TRUE(!status.isOk());
     status = last->abort();
     ASSERT_TRUE(!status.isOk());
@@ -130,8 +130,9 @@ TEST(SlotTest, TestSlots) {
     operations.push_back(std::get<BeginResult>(result).operation);
 
     // Calling finish and abort on an already-aborted operation should not free up another slot.
-    status = last->finish(std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt,
-                          &kpa, &byteVec);
+    status = last->finish(std::nullopt /* input */, std::nullopt /* signature */,
+                          std::nullopt /* authToken */, std::nullopt /* timestampToken */,
+                          std::nullopt /* confirmationToken */, &byteVec);
     ASSERT_TRUE(!status.isOk());
     status = last->abort();
     ASSERT_TRUE(!status.isOk());
