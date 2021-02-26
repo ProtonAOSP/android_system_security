@@ -24,6 +24,7 @@ use android_security_usermanager::aidl::android::security::usermanager::IKeystor
     BnKeystoreUserManager, IKeystoreUserManager,
 };
 use android_security_usermanager::binder::{Interface, Result as BinderResult};
+use android_system_keystore2::aidl::android::system::keystore2::Domain::Domain;
 use android_system_keystore2::aidl::android::system::keystore2::ResponseCode::ResponseCode;
 use anyhow::{Context, Result};
 use binder::{IBinder, Strong};
@@ -85,6 +86,17 @@ impl UserManager {
         })
         .context("In add_or_remove_user: Trying to delete keys from db.")
     }
+
+    fn clear_namespace(domain: Domain, nspace: i64) -> Result<()> {
+        // Permission check. Must return on error. Do not touch the '?'.
+        check_keystore_permission(KeystorePerm::clear_uid()).context("In clear_namespace.")?;
+
+        LEGACY_MIGRATOR
+            .bulk_delete_uid(domain, nspace)
+            .context("In clear_namespace: Trying to delete legacy keys.")?;
+        DB.with(|db| db.borrow_mut().unbind_keys_for_namespace(domain, nspace))
+            .context("In clear_namespace: Trying to delete keys from db.")
+    }
 }
 
 impl Interface for UserManager {}
@@ -100,5 +112,9 @@ impl IKeystoreUserManager for UserManager {
 
     fn onUserRemoved(&self, user_id: i32) -> BinderResult<()> {
         map_or_log_err(Self::add_or_remove_user(user_id), Ok)
+    }
+
+    fn clearNamespace(&self, domain: Domain, nspace: i64) -> BinderResult<()> {
+        map_or_log_err(Self::clear_namespace(domain, nspace), Ok)
     }
 }
