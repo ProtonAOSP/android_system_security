@@ -208,3 +208,115 @@ impl AsyncTask {
         state.state = State::Running;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{AsyncTask, Shelf};
+    use std::sync::mpsc::channel;
+
+    #[test]
+    fn test_shelf() {
+        let mut shelf = Shelf::default();
+
+        let s = "A string".to_string();
+        assert_eq!(shelf.put(s), None);
+
+        let s2 = "Another string".to_string();
+        assert_eq!(shelf.put(s2), Some("A string".to_string()));
+
+        // Put something of a different type on the shelf.
+        #[derive(Debug, PartialEq, Eq)]
+        struct Elf {
+            pub name: String,
+        }
+        let e1 = Elf { name: "Glorfindel".to_string() };
+        assert_eq!(shelf.put(e1), None);
+
+        // The String value is still on the shelf.
+        let s3 = shelf.get_downcast_ref::<String>().unwrap();
+        assert_eq!(s3, "Another string");
+
+        // As is the Elf.
+        {
+            let e2 = shelf.get_downcast_mut::<Elf>().unwrap();
+            assert_eq!(e2.name, "Glorfindel");
+            e2.name = "Celeborn".to_string();
+        }
+
+        // Take the Elf off the shelf.
+        let e3 = shelf.remove_downcast_ref::<Elf>().unwrap();
+        assert_eq!(e3.name, "Celeborn");
+
+        assert_eq!(shelf.remove_downcast_ref::<Elf>(), None);
+
+        // No u64 value has been put on the shelf, so getting one gives the default value.
+        {
+            let i = shelf.get_mut::<u64>();
+            assert_eq!(*i, 0);
+            *i = 42;
+        }
+        let i2 = shelf.get_downcast_ref::<u64>().unwrap();
+        assert_eq!(*i2, 42);
+
+        // No i32 value has ever been seen near the shelf.
+        assert_eq!(shelf.get_downcast_ref::<i32>(), None);
+        assert_eq!(shelf.get_downcast_mut::<i32>(), None);
+        assert_eq!(shelf.remove_downcast_ref::<i32>(), None);
+    }
+
+    #[test]
+    fn test_async_task() {
+        let at = AsyncTask::default();
+
+        // First queue up a job that blocks until we release it, to avoid
+        // unpredictable synchronization.
+        let (start_sender, start_receiver) = channel();
+        at.queue_hi(move |shelf| {
+            start_receiver.recv().unwrap();
+            // Put a trace vector on the shelf
+            shelf.put(Vec::<String>::new());
+        });
+
+        // Queue up some high-priority and low-priority jobs.
+        for i in 0..3 {
+            let j = i;
+            at.queue_lo(move |shelf| {
+                let trace = shelf.get_mut::<Vec<String>>();
+                trace.push(format!("L{}", j));
+            });
+            let j = i;
+            at.queue_hi(move |shelf| {
+                let trace = shelf.get_mut::<Vec<String>>();
+                trace.push(format!("H{}", j));
+            });
+        }
+
+        // Finally queue up a low priority job that emits the trace.
+        let (trace_sender, trace_receiver) = channel();
+        at.queue_lo(move |shelf| {
+            let trace = shelf.get_downcast_ref::<Vec<String>>().unwrap();
+            trace_sender.send(trace.clone()).unwrap();
+        });
+
+        // Ready, set, go.
+        start_sender.send(()).unwrap();
+        let trace = trace_receiver.recv().unwrap();
+
+        assert_eq!(trace, vec!["H0", "H1", "H2", "L0", "L1", "L2"]);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_async_task_panic() {
+        let at = AsyncTask::default();
+        at.queue_hi(|_shelf| {
+            panic!("Panic from queued job");
+        });
+        // Queue another job afterwards to ensure that the async thread gets joined.
+        let (done_sender, done_receiver) = channel();
+        at.queue_hi(move |_shelf| {
+            done_sender.send(()).unwrap();
+        });
+        done_receiver.recv().unwrap();
+    }
+}
