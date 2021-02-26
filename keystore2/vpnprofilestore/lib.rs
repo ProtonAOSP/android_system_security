@@ -21,10 +21,14 @@ use android_security_vpnprofilestore::aidl::android::security::vpnprofilestore::
 use android_security_vpnprofilestore::binder::{Result as BinderResult, Status as BinderStatus};
 use anyhow::{Context, Result};
 use binder::{ExceptionCode, Strong, ThreadState};
+use keystore2::{async_task::AsyncTask, legacy_blob::LegacyBlobLoader};
 use rusqlite::{
     params, Connection, OptionalExtension, Transaction, TransactionBehavior, NO_PARAMS,
 };
-use std::path::{Path, PathBuf};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+};
 
 struct DB {
     conn: Connection,
@@ -196,20 +200,27 @@ where
     )
 }
 
-// TODO make sure that ALIASES have a prefix of VPN_ PLATFORM_VPN_ or
-// is equal to LOCKDOWN_VPN.
-
 /// Implements IVpnProfileStore AIDL interface.
 pub struct VpnProfileStore {
+    db_path: PathBuf,
+    async_task: AsyncTask,
+}
+
+struct AsyncState {
+    recently_imported: HashSet<(u32, String)>,
+    legacy_loader: LegacyBlobLoader,
     db_path: PathBuf,
 }
 
 impl VpnProfileStore {
     /// Creates a new VpnProfileStore instance.
-    pub fn new_native_binder(db_path: &Path) -> Strong<dyn IVpnProfileStore> {
+    pub fn new_native_binder(path: &Path) -> Strong<dyn IVpnProfileStore> {
         let mut db_path = path.to_path_buf();
         db_path.push("vpnprofilestore.sqlite");
-        BnVpnProfileStore::new_binder(Self { db_path })
+
+        let result = Self { db_path, async_task: Default::default() };
+        result.init_shelf(path);
+        BnVpnProfileStore::new_binder(result)
     }
 
     fn open_db(&self) -> Result<DB> {
@@ -219,21 +230,38 @@ impl VpnProfileStore {
     fn get(&self, alias: &str) -> Result<Vec<u8>> {
         let mut db = self.open_db().context("In get.")?;
         let calling_uid = ThreadState::get_calling_uid();
-        db.get(calling_uid, alias)
-            .context("In get: Trying to load profile from DB.")?
-            .ok_or_else(Error::not_found)
-            .context("In get: No such profile.")
+
+        if let Some(profile) =
+            db.get(calling_uid, alias).context("In get: Trying to load profile from DB.")?
+        {
+            return Ok(profile);
+        }
+        if self.get_legacy(calling_uid, alias).context("In get: Trying to migrate legacy blob.")? {
+            // If we were able to migrate a legacy blob try again.
+            if let Some(profile) =
+                db.get(calling_uid, alias).context("In get: Trying to load profile from DB.")?
+            {
+                return Ok(profile);
+            }
+        }
+        Err(Error::not_found()).context("In get: No such profile.")
     }
 
     fn put(&self, alias: &str, profile: &[u8]) -> Result<()> {
-        let mut db = self.open_db().context("In put.")?;
         let calling_uid = ThreadState::get_calling_uid();
+        // In order to make sure that we don't have stale legacy profiles, make sure they are
+        // migrated before replacing them.
+        let _ = self.get_legacy(calling_uid, alias);
+        let mut db = self.open_db().context("In put.")?;
         db.put(calling_uid, alias, profile).context("In put: Trying to insert profile into DB.")
     }
 
     fn remove(&self, alias: &str) -> Result<()> {
-        let mut db = self.open_db().context("In remove.")?;
         let calling_uid = ThreadState::get_calling_uid();
+        let mut db = self.open_db().context("In remove.")?;
+        // In order to make sure that we don't have stale legacy profiles, make sure they are
+        // migrated before removing them.
+        let _ = self.get_legacy(calling_uid, alias);
         let removed = db
             .remove(calling_uid, alias)
             .context("In remove: Trying to remove profile from DB.")?;
@@ -247,12 +275,84 @@ impl VpnProfileStore {
     fn list(&self, prefix: &str) -> Result<Vec<String>> {
         let mut db = self.open_db().context("In list.")?;
         let calling_uid = ThreadState::get_calling_uid();
-        Ok(db
-            .list(calling_uid)
-            .context("In list: Trying to get list of profiles.")?
-            .into_iter()
-            .filter(|s| s.starts_with(prefix))
-            .collect())
+        let mut result = self.list_legacy(calling_uid).context("In list.")?;
+        result
+            .append(&mut db.list(calling_uid).context("In list: Trying to get list of profiles.")?);
+        result = result.into_iter().filter(|s| s.starts_with(prefix)).collect();
+        result.sort_unstable();
+        result.dedup();
+        Ok(result)
+    }
+
+    fn init_shelf(&self, path: &Path) {
+        let mut db_path = path.to_path_buf();
+        self.async_task.queue_hi(move |shelf| {
+            let legacy_loader = LegacyBlobLoader::new(&db_path);
+            db_path.push("vpnprofilestore.sqlite");
+
+            shelf.put(AsyncState { legacy_loader, db_path, recently_imported: Default::default() });
+        })
+    }
+
+    fn do_serialized<F, T: Send + 'static>(&self, f: F) -> Result<T>
+    where
+        F: FnOnce(&mut AsyncState) -> Result<T> + Send + 'static,
+    {
+        let (sender, receiver) = std::sync::mpsc::channel::<Result<T>>();
+        self.async_task.queue_hi(move |shelf| {
+            let state = shelf.get_downcast_mut::<AsyncState>().expect("Failed to get shelf.");
+            sender.send(f(state)).expect("Failed to send result.");
+        });
+        receiver.recv().context("In do_serialized: Failed to receive result.")?
+    }
+
+    fn list_legacy(&self, uid: u32) -> Result<Vec<String>> {
+        self.do_serialized(move |state| {
+            state
+                .legacy_loader
+                .list_vpn_profiles(uid)
+                .context("Trying to list legacy vnp profiles.")
+        })
+        .context("In list_legacy.")
+    }
+
+    fn get_legacy(&self, uid: u32, alias: &str) -> Result<bool> {
+        let alias = alias.to_string();
+        self.do_serialized(move |state| {
+            if state.recently_imported.contains(&(uid, alias.clone())) {
+                return Ok(true);
+            }
+            let mut db = DB::new(&state.db_path).context("In open_db: Failed to open db.")?;
+            let migrated =
+                Self::migrate_one_legacy_profile(uid, &alias, &state.legacy_loader, &mut db)
+                    .context("Trying to migrate legacy vpn profile.")?;
+            if migrated {
+                state.recently_imported.insert((uid, alias));
+            }
+            Ok(migrated)
+        })
+        .context("In get_legacy.")
+    }
+
+    fn migrate_one_legacy_profile(
+        uid: u32,
+        alias: &str,
+        legacy_loader: &LegacyBlobLoader,
+        db: &mut DB,
+    ) -> Result<bool> {
+        let blob = legacy_loader
+            .read_vpn_profile(uid, alias)
+            .context("In migrate_one_legacy_profile: Trying to read legacy vpn profile.")?;
+        if let Some(profile) = blob {
+            db.put(uid, alias, &profile)
+                .context("In migrate_one_legacy_profile: Trying to insert profile into DB.")?;
+            legacy_loader
+                .remove_vpn_profile(uid, alias)
+                .context("In migrate_one_legacy_profile: Trying to delete legacy profile.")?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 }
 
