@@ -126,6 +126,9 @@ class KeyMintDevice : public aidl::android::hardware::security::keymint::BnKeyMi
     std::optional<KMV1_ErrorCode> signCertificate(const std::vector<KeyParameter>& keyParams,
                                                   const std::vector<uint8_t>& keyBlob, X509* cert);
     KeyMintSecurityLevel securityLevel_;
+
+    // Software-based KeyMint device used to implement ECDH.
+    std::shared_ptr<IKeyMintDevice> softKeyMintDevice_;
 };
 
 class KeyMintOperation : public aidl::android::hardware::security::keymint::BnKeyMintOperation {
