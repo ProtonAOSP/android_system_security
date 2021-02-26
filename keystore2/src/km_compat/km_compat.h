@@ -30,7 +30,6 @@
 
 using ::aidl::android::hardware::security::keymint::AttestationKey;
 using ::aidl::android::hardware::security::keymint::BeginResult;
-using ::aidl::android::hardware::security::keymint::ByteArray;
 using ::aidl::android::hardware::security::keymint::Certificate;
 using ::aidl::android::hardware::security::keymint::HardwareAuthToken;
 using ::aidl::android::hardware::security::keymint::KeyCharacteristics;
@@ -38,7 +37,6 @@ using ::aidl::android::hardware::security::keymint::KeyCreationResult;
 using ::aidl::android::hardware::security::keymint::KeyFormat;
 using ::aidl::android::hardware::security::keymint::KeyMintHardwareInfo;
 using ::aidl::android::hardware::security::keymint::KeyParameter;
-using ::aidl::android::hardware::security::keymint::KeyParameterArray;
 using ::aidl::android::hardware::security::keymint::KeyPurpose;
 using KeyMintSecurityLevel = ::aidl::android::hardware::security::keymint::SecurityLevel;
 using V4_0_ErrorCode = ::android::hardware::keymaster::V4_0::ErrorCode;
@@ -142,19 +140,22 @@ class KeyMintOperation : public aidl::android::hardware::security::keymint::BnKe
         : mDevice(device), mOperationHandle(operationHandle), mOperationSlot(slots, isActive) {}
     ~KeyMintOperation();
 
-    ScopedAStatus update(const std::optional<KeyParameterArray>& in_inParams,
-                         const std::optional<std::vector<uint8_t>>& in_input,
-                         const std::optional<HardwareAuthToken>& in_inAuthToken,
-                         const std::optional<TimeStampToken>& in_inTimestampToken,
-                         std::optional<KeyParameterArray>* out_outParams,
-                         std::optional<ByteArray>* out_output, int32_t* _aidl_return);
-    ScopedAStatus finish(const std::optional<KeyParameterArray>& in_inParams,
-                         const std::optional<std::vector<uint8_t>>& in_input,
-                         const std::optional<std::vector<uint8_t>>& in_inSignature,
-                         const std::optional<HardwareAuthToken>& in_authToken,
-                         const std::optional<TimeStampToken>& in_inTimestampToken,
-                         std::optional<KeyParameterArray>* out_outParams,
-                         std::vector<uint8_t>* _aidl_return);
+    ScopedAStatus updateAad(const std::vector<uint8_t>& input,
+                            const std::optional<HardwareAuthToken>& authToken,
+                            const std::optional<TimeStampToken>& timestampToken) override;
+
+    ScopedAStatus update(const std::vector<uint8_t>& input,
+                         const std::optional<HardwareAuthToken>& authToken,
+                         const std::optional<TimeStampToken>& timestampToken,
+                         std::vector<uint8_t>* output) override;
+
+    ScopedAStatus finish(const std::optional<std::vector<uint8_t>>& input,
+                         const std::optional<std::vector<uint8_t>>& signature,
+                         const std::optional<HardwareAuthToken>& authToken,
+                         const std::optional<TimeStampToken>& timeStampToken,
+                         const std::optional<std::vector<uint8_t>>& confirmationToken,
+                         std::vector<uint8_t>* output) override;
+
     ScopedAStatus abort();
 };
 
