@@ -965,6 +965,9 @@ pub enum KeyParameterValue {
     /// Used to deliver the not after date in milliseconds to KeyMint during key generation/import.
     #[key_param(tag = CERTIFICATE_NOT_AFTER, field = DateTime)]
     CertificateNotAfter(i64),
+    /// Specifies a maximum boot level at which a key should function
+    #[key_param(tag = MAX_BOOT_LEVEL, field = Integer)]
+    MaxBootLevel(i32),
 }
 }
 
