@@ -67,6 +67,13 @@ fn main() {
 
     ENFORCEMENTS.install_confirmation_token_receiver(confirmation_token_receiver);
 
+    info!("Starting boot level watcher.");
+    std::thread::spawn(|| {
+        keystore2::globals::ENFORCEMENTS
+            .watch_boot_level()
+            .unwrap_or_else(|e| error!("watch_boot_level failed: {}", e));
+    });
+
     info!("Starting thread pool now.");
     binder::ProcessState::start_thread_pool();
 
