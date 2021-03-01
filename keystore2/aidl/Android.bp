@@ -134,3 +134,18 @@ aidl_interface {
         }
     },
 }
+
+aidl_interface {
+    name: "android.security.vpnprofilestore",
+    srcs: [ "android/security/vpnprofilestore/*.aidl" ],
+    unstable: true,
+    backend: {
+        java: {
+            sdk_version: "module_current",
+        },
+        rust: {
+            enabled: true,
+        },
+    },
+}
+
