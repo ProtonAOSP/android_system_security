@@ -40,7 +40,7 @@ using ::android::base::StderrLogger;
 using ::android::security::identity::CredentialStoreFactory;
 
 int main(int argc, char* argv[]) {
-    InitLogging(argv, StderrLogger);
+    InitLogging(argv);
 
     CHECK(argc == 2) << "A directory must be specified";
     string data_dir = string(argv[1]);
