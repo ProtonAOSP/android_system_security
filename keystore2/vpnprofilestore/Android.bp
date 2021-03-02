@@ -22,58 +22,36 @@ package {
 }
 
 rust_library {
-    name: "libkeystore2_vintf_rust",
-    crate_name: "keystore2_vintf",
-    srcs: ["lib.rs"],
-    rustlibs: [
-        "libkeystore2_vintf_bindgen",
-    ],
-    shared_libs: [
-        "libkeystore2_vintf_cpp",
-        "libvintf",
-    ],
-}
-
-cc_library {
-    name: "libkeystore2_vintf_cpp",
+    name: "libvpnprofilestore-rust",
+    crate_name: "vpnprofilestore",
     srcs: [
-        "vintf.cpp",
+        "lib.rs",
     ],
-    shared_libs: [
-        "libvintf",
-    ],
-}
-
-rust_bindgen {
-    name: "libkeystore2_vintf_bindgen",
-    wrapper_src: "vintf.hpp",
-    crate_name: "keystore2_vintf_bindgen",
-    source_stem: "bindings",
-    host_supported: true,
-    shared_libs: ["libvintf"],
-    bindgen_flags: [
-        "--size_t-is-usize",
-        "--whitelist-function", "getHalNames",
-        "--whitelist-function", "getHalNamesAndVersions",
-        "--whitelist-function", "getAidlInstances",
-        "--whitelist-function", "freeNames",
+    rustlibs: [
+        "android.security.vpnprofilestore-rust",
+        "libanyhow",
+        "libbinder_rs",
+        "libkeystore2",
+        "liblog_rust",
+        "librusqlite",
+        "libthiserror",
     ],
 }
 
 rust_test {
-    name: "keystore2_vintf_test",
-    crate_name: "keystore2_vintf_test",
+    name: "vpnprofilestore_test",
+    crate_name: "vpnprofilestore",
     srcs: ["lib.rs"],
     test_suites: ["general-tests"],
     auto_gen_config: true,
     rustlibs: [
-        "libkeystore2_vintf_bindgen",
-    ],
-    static_libs: [
-        "libkeystore2_vintf_cpp",
-    ],
-    shared_libs: [
-        "libc++",
-        "libvintf",
+        "android.security.vpnprofilestore-rust",
+        "libanyhow",
+        "libbinder_rs",
+        "libkeystore2",
+        "libkeystore2_test_utils",
+        "liblog_rust",
+        "librusqlite",
+        "libthiserror",
     ],
 }

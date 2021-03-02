@@ -17,9 +17,11 @@
 #include "km_compat.h"
 
 #include "km_compat_type_conversion.h"
+#include <AndroidKeyMintDevice.h>
 #include <aidl/android/hardware/security/keymint/Algorithm.h>
 #include <aidl/android/hardware/security/keymint/Digest.h>
 #include <aidl/android/hardware/security/keymint/ErrorCode.h>
+#include <aidl/android/hardware/security/keymint/KeyParameterValue.h>
 #include <aidl/android/hardware/security/keymint/PaddingMode.h>
 #include <aidl/android/system/keystore2/ResponseCode.h>
 #include <android-base/logging.h>
@@ -35,7 +37,9 @@
 #include "certificate_utils.h"
 
 using ::aidl::android::hardware::security::keymint::Algorithm;
+using ::aidl::android::hardware::security::keymint::CreateKeyMintDevice;
 using ::aidl::android::hardware::security::keymint::Digest;
+using ::aidl::android::hardware::security::keymint::KeyParameterValue;
 using ::aidl::android::hardware::security::keymint::PaddingMode;
 using ::aidl::android::hardware::security::keymint::Tag;
 using ::aidl::android::system::keystore2::ResponseCode;
@@ -132,6 +136,77 @@ bool isKeyCreationParameter(const KMV1::KeyParameter& param) {
     default:
         return false;
     }
+}
+
+// Size of prefix for blobs, see keyBlobPrefix().
+//
+const size_t kKeyBlobPrefixSize = 8;
+
+// Magic used in blob prefix, see keyBlobPrefix().
+//
+const uint8_t kKeyBlobMagic[7] = {'p', 'K', 'M', 'b', 'l', 'o', 'b'};
+
+// Prefixes a keyblob returned by e.g. generateKey() with information on whether it
+// originated from the real underlying KeyMaster HAL or from soft-KeyMint.
+//
+// When dealing with a keyblob, use prefixedKeyBlobRemovePrefix() to remove the
+// prefix and prefixedKeyBlobIsSoftKeyMint() to determine its origin.
+//
+// Note how the prefix itself has a magic marker ("pKMblob") which can be used
+// to identify if a blob has a prefix at all (it's assumed that any valid blob
+// from KeyMint or KeyMaster HALs never starts with the magic). This is needed
+// because blobs persisted to disk prior to using this code will not have the
+// prefix and in that case we want prefixedKeyBlobRemovePrefix() to still work.
+//
+std::vector<uint8_t> keyBlobPrefix(const std::vector<uint8_t>& blob, bool isSoftKeyMint) {
+    std::vector<uint8_t> result;
+    result.reserve(blob.size() + kKeyBlobPrefixSize);
+    result.insert(result.begin(), kKeyBlobMagic, kKeyBlobMagic + sizeof kKeyBlobMagic);
+    result.push_back(isSoftKeyMint ? 1 : 0);
+    std::copy(blob.begin(), blob.end(), std::back_inserter(result));
+    return result;
+}
+
+// Helper for prefixedKeyBlobRemovePrefix() and prefixedKeyBlobIsSoftKeyMint().
+//
+// First bool is whether there's a valid prefix. If there is, the second bool is
+// the |isSoftKeyMint| value of the prefix
+//
+std::pair<bool, bool> prefixedKeyBlobParsePrefix(const std::vector<uint8_t>& prefixedBlob) {
+    // Having a unprefixed blob is not that uncommon, for example all devices
+    // upgrading to keystore2 (so e.g. upgrading to Android 12) will have
+    // unprefixed blobs. So don't spew warnings/errors in this case...
+    if (prefixedBlob.size() < kKeyBlobPrefixSize) {
+        return std::make_pair(false, false);
+    }
+    if (std::memcmp(prefixedBlob.data(), kKeyBlobMagic, sizeof kKeyBlobMagic) != 0) {
+        return std::make_pair(false, false);
+    }
+    if (prefixedBlob[kKeyBlobPrefixSize - 1] != 0 && prefixedBlob[kKeyBlobPrefixSize - 1] != 1) {
+        return std::make_pair(false, false);
+    }
+    bool isSoftKeyMint = (prefixedBlob[kKeyBlobPrefixSize - 1] == 1);
+    return std::make_pair(true, isSoftKeyMint);
+}
+
+// Returns the prefix from a blob. If there's no prefix, returns the passed-in blob.
+//
+std::vector<uint8_t> prefixedKeyBlobRemovePrefix(const std::vector<uint8_t>& prefixedBlob) {
+    auto parsed = prefixedKeyBlobParsePrefix(prefixedBlob);
+    if (!parsed.first) {
+        // Not actually prefixed, blob was probably persisted to disk prior to the
+        // prefixing code being introduced.
+        return prefixedBlob;
+    }
+    return std::vector<uint8_t>(prefixedBlob.begin() + kKeyBlobPrefixSize, prefixedBlob.end());
+}
+
+// Returns true if the blob's origin is soft-KeyMint, false otherwise or if there
+// is no prefix on the passed-in blob.
+//
+bool prefixedKeyBlobIsSoftKeyMint(const std::vector<uint8_t>& prefixedBlob) {
+    auto parsed = prefixedKeyBlobParsePrefix(prefixedBlob);
+    return parsed.second;
 }
 
 /*
@@ -241,26 +316,31 @@ static V4_0_KeyFormat convertKeyFormatToLegacy(const KeyFormat& kf) {
     return static_cast<V4_0_KeyFormat>(kf);
 }
 
-static V4_0_HardwareAuthToken convertAuthTokenToLegacy(const HardwareAuthToken& at) {
+static V4_0_HardwareAuthToken convertAuthTokenToLegacy(const std::optional<HardwareAuthToken>& at) {
+    if (!at) return {};
+
     V4_0_HardwareAuthToken legacyAt;
-    legacyAt.challenge = at.challenge;
-    legacyAt.userId = at.userId;
-    legacyAt.authenticatorId = at.authenticatorId;
+    legacyAt.challenge = at->challenge;
+    legacyAt.userId = at->userId;
+    legacyAt.authenticatorId = at->authenticatorId;
     legacyAt.authenticatorType =
         static_cast<::android::hardware::keymaster::V4_0::HardwareAuthenticatorType>(
-            at.authenticatorType);
-    legacyAt.timestamp = at.timestamp.milliSeconds;
-    legacyAt.mac = at.mac;
+            at->authenticatorType);
+    legacyAt.timestamp = at->timestamp.milliSeconds;
+    legacyAt.mac = at->mac;
     return legacyAt;
 }
 
-static V4_0_VerificationToken convertTimestampTokenToLegacy(const TimeStampToken& tst) {
+static V4_0_VerificationToken
+convertTimestampTokenToLegacy(const std::optional<TimeStampToken>& tst) {
+    if (!tst) return {};
+
     V4_0_VerificationToken legacyVt;
-    legacyVt.challenge = tst.challenge;
-    legacyVt.timestamp = tst.timestamp.milliSeconds;
+    legacyVt.challenge = tst->challenge;
+    legacyVt.timestamp = tst->timestamp.milliSeconds;
     // Legacy verification tokens were always minted by TEE.
     legacyVt.securityLevel = V4_0::SecurityLevel::TRUSTED_ENVIRONMENT;
-    legacyVt.mac = tst.mac;
+    legacyVt.mac = tst->mac;
     return legacyVt;
 }
 
@@ -335,17 +415,39 @@ ScopedAStatus KeyMintDevice::addRngEntropy(const std::vector<uint8_t>& in_data) 
     return convertErrorCode(result);
 }
 
-ScopedAStatus
-KeyMintDevice::generateKey(const std::vector<KeyParameter>& inKeyParams,
-                           const std::optional<AttestationKey>& /* in_attestationKey */,
-                           KeyCreationResult* out_creationResult) {
+ScopedAStatus KeyMintDevice::generateKey(const std::vector<KeyParameter>& inKeyParams,
+                                         const std::optional<AttestationKey>& in_attestationKey,
+                                         KeyCreationResult* out_creationResult) {
+
+    // Since KeyMaster doesn't support ECDH, route all key creation requests to
+    // soft-KeyMint if and only an ECDH key is requested.
+    //
+    // For this to work we'll need to also route begin() and deleteKey() calls to
+    // soft-KM. In order to do that, we'll prefix all keyblobs with whether it was
+    // created by the real underlying KeyMaster HAL or whether it was created by
+    // soft-KeyMint.
+    //
+    // See keyBlobPrefix() for more discussion.
+    //
+    for (const auto& keyParam : inKeyParams) {
+        if (keyParam.tag == Tag::PURPOSE &&
+            keyParam.value.get<KeyParameterValue::Tag::keyPurpose>() == KeyPurpose::AGREE_KEY) {
+            auto ret =
+                softKeyMintDevice_->generateKey(inKeyParams, in_attestationKey, out_creationResult);
+            if (ret.isOk()) {
+                out_creationResult->keyBlob = keyBlobPrefix(out_creationResult->keyBlob, true);
+            }
+            return ret;
+        }
+    }
+
     auto legacyKeyGenParams = convertKeyParametersToLegacy(extractGenerationParams(inKeyParams));
     KMV1::ErrorCode errorCode;
     auto result = mDevice->generateKey(
         legacyKeyGenParams, [&](V4_0_ErrorCode error, const hidl_vec<uint8_t>& keyBlob,
                                 const V4_0_KeyCharacteristics& keyCharacteristics) {
             errorCode = convert(error);
-            out_creationResult->keyBlob = keyBlob;
+            out_creationResult->keyBlob = keyBlobPrefix(keyBlob, false);
             out_creationResult->keyCharacteristics =
                 processLegacyCharacteristics(securityLevel_, inKeyParams, keyCharacteristics);
         });
@@ -381,7 +483,8 @@ ScopedAStatus KeyMintDevice::importKey(const std::vector<KeyParameter>& inKeyPar
                                      [&](V4_0_ErrorCode error, const hidl_vec<uint8_t>& keyBlob,
                                          const V4_0_KeyCharacteristics& keyCharacteristics) {
                                          errorCode = convert(error);
-                                         out_creationResult->keyBlob = keyBlob;
+                                         out_creationResult->keyBlob =
+                                             keyBlobPrefix(keyBlob, false);
                                          out_creationResult->keyCharacteristics =
                                              processLegacyCharacteristics(
                                                  securityLevel_, inKeyParams, keyCharacteristics);
@@ -421,7 +524,7 @@ KeyMintDevice::importWrappedKey(const std::vector<uint8_t>& in_inWrappedKeyData,
         [&](V4_0_ErrorCode error, const hidl_vec<uint8_t>& keyBlob,
             const V4_0_KeyCharacteristics& keyCharacteristics) {
             errorCode = convert(error);
-            out_creationResult->keyBlob = keyBlob;
+            out_creationResult->keyBlob = keyBlobPrefix(keyBlob, false);
             out_creationResult->keyCharacteristics =
                 processLegacyCharacteristics(securityLevel_, {}, keyCharacteristics);
         });
@@ -450,8 +553,13 @@ ScopedAStatus KeyMintDevice::upgradeKey(const std::vector<uint8_t>& in_inKeyBlob
     return convertErrorCode(errorCode);
 }
 
-ScopedAStatus KeyMintDevice::deleteKey(const std::vector<uint8_t>& in_inKeyBlob) {
-    auto result = mDevice->deleteKey(in_inKeyBlob);
+ScopedAStatus KeyMintDevice::deleteKey(const std::vector<uint8_t>& prefixedKeyBlob) {
+    const std::vector<uint8_t>& keyBlob = prefixedKeyBlobRemovePrefix(prefixedKeyBlob);
+    if (prefixedKeyBlobIsSoftKeyMint(prefixedKeyBlob)) {
+        return softKeyMintDevice_->deleteKey(prefixedKeyBlob);
+    }
+
+    auto result = mDevice->deleteKey(keyBlob);
     if (!result.isOk()) {
         LOG(ERROR) << __func__ << " transaction failed. " << result.description();
         return convertErrorCode(KMV1::ErrorCode::UNKNOWN_ERROR);
@@ -475,13 +583,20 @@ ScopedAStatus KeyMintDevice::destroyAttestationIds() {
 }
 
 ScopedAStatus KeyMintDevice::begin(KeyPurpose in_inPurpose,
-                                   const std::vector<uint8_t>& in_inKeyBlob,
+                                   const std::vector<uint8_t>& prefixedKeyBlob,
                                    const std::vector<KeyParameter>& in_inParams,
                                    const HardwareAuthToken& in_inAuthToken,
                                    BeginResult* _aidl_return) {
     if (!mOperationSlots.claimSlot()) {
         return convertErrorCode(V4_0_ErrorCode::TOO_MANY_OPERATIONS);
     }
+
+    const std::vector<uint8_t>& in_inKeyBlob = prefixedKeyBlobRemovePrefix(prefixedKeyBlob);
+    if (prefixedKeyBlobIsSoftKeyMint(prefixedKeyBlob)) {
+        return softKeyMintDevice_->begin(in_inPurpose, in_inKeyBlob, in_inParams, in_inAuthToken,
+                                         _aidl_return);
+    }
+
     auto legacyPurpose =
         static_cast<::android::hardware::keymaster::V4_0::KeyPurpose>(in_inPurpose);
     auto legacyParams = convertKeyParametersToLegacy(in_inParams);
@@ -530,81 +645,85 @@ ScopedAStatus KeyMintDevice::earlyBootEnded() {
     }
 }
 
-ScopedAStatus KeyMintOperation::update(const std::optional<KeyParameterArray>& in_inParams,
-                                       const std::optional<std::vector<uint8_t>>& in_input,
-                                       const std::optional<HardwareAuthToken>& in_inAuthToken,
-                                       const std::optional<TimeStampToken>& in_inTimeStampToken,
-                                       std::optional<KeyParameterArray>* out_outParams,
-                                       std::optional<ByteArray>* out_output,
-                                       int32_t* _aidl_return) {
-    std::vector<V4_0_KeyParameter> legacyParams;
-    if (in_inParams.has_value()) {
-        legacyParams = convertKeyParametersToLegacy(in_inParams.value().params);
-    }
-    auto input = in_input.value_or(std::vector<uint8_t>());
-    V4_0_HardwareAuthToken authToken;
-    if (in_inAuthToken.has_value()) {
-        authToken = convertAuthTokenToLegacy(in_inAuthToken.value());
-    }
-    V4_0_VerificationToken verificationToken;
-    if (in_inTimeStampToken.has_value()) {
-        verificationToken = convertTimestampTokenToLegacy(in_inTimeStampToken.value());
-    }
+ScopedAStatus KeyMintOperation::updateAad(const std::vector<uint8_t>& input,
+                                          const std::optional<HardwareAuthToken>& optAuthToken,
+                                          const std::optional<TimeStampToken>& optTimeStampToken) {
+    V4_0_HardwareAuthToken authToken = convertAuthTokenToLegacy(optAuthToken);
+    V4_0_VerificationToken verificationToken = convertTimestampTokenToLegacy(optTimeStampToken);
 
     KMV1::ErrorCode errorCode;
     auto result = mDevice->update(
-        mOperationHandle, legacyParams, input, authToken, verificationToken,
-        [&](V4_0_ErrorCode error, uint32_t inputConsumed,
-            const hidl_vec<V4_0_KeyParameter>& outParams, const hidl_vec<uint8_t>& output) {
-            errorCode = convert(error);
-            out_outParams->emplace();
-            out_outParams->value().params = convertKeyParametersFromLegacy(outParams);
-            out_output->emplace();
-            out_output->value().data = output;
-            *_aidl_return = inputConsumed;
-        });
+        mOperationHandle, {V4_0::makeKeyParameter(V4_0::TAG_ASSOCIATED_DATA, input)}, input,
+        authToken, verificationToken,
+        [&](V4_0_ErrorCode error, auto, auto, auto) { errorCode = convert(error); });
 
     if (!result.isOk()) {
         LOG(ERROR) << __func__ << " transaction failed. " << result.description();
         errorCode = KMV1::ErrorCode::UNKNOWN_ERROR;
     }
-    if (errorCode != KMV1::ErrorCode::OK) {
-        mOperationSlot.freeSlot();
-    }
+    if (errorCode != KMV1::ErrorCode::OK) mOperationSlot.freeSlot();
+
     return convertErrorCode(errorCode);
 }
 
-ScopedAStatus KeyMintOperation::finish(const std::optional<KeyParameterArray>& in_inParams,
-                                       const std::optional<std::vector<uint8_t>>& in_input,
-                                       const std::optional<std::vector<uint8_t>>& in_inSignature,
-                                       const std::optional<HardwareAuthToken>& in_authToken,
-                                       const std::optional<TimeStampToken>& in_inTimeStampToken,
-                                       std::optional<KeyParameterArray>* out_outParams,
-                                       std::vector<uint8_t>* _aidl_return) {
-    KMV1::ErrorCode errorCode;
-    std::vector<V4_0_KeyParameter> legacyParams;
-    if (in_inParams.has_value()) {
-        legacyParams = convertKeyParametersToLegacy(in_inParams.value().params);
+ScopedAStatus KeyMintOperation::update(const std::vector<uint8_t>& input,
+                                       const std::optional<HardwareAuthToken>& optAuthToken,
+                                       const std::optional<TimeStampToken>& optTimeStampToken,
+                                       std::vector<uint8_t>* out_output) {
+    V4_0_HardwareAuthToken authToken = convertAuthTokenToLegacy(optAuthToken);
+    V4_0_VerificationToken verificationToken = convertTimestampTokenToLegacy(optTimeStampToken);
+
+    size_t inputPos = 0;
+    *out_output = {};
+    KMV1::ErrorCode errorCode = KMV1::ErrorCode::OK;
+
+    while (inputPos < input.size() && errorCode == KMV1::ErrorCode::OK) {
+        auto result =
+            mDevice->update(mOperationHandle, {} /* inParams */,
+                            {input.begin() + inputPos, input.end()}, authToken, verificationToken,
+                            [&](V4_0_ErrorCode error, uint32_t inputConsumed, auto /* outParams */,
+                                const hidl_vec<uint8_t>& output) {
+                                errorCode = convert(error);
+                                out_output->insert(out_output->end(), output.begin(), output.end());
+                                inputPos += inputConsumed;
+                            });
+
+        if (!result.isOk()) {
+            LOG(ERROR) << __func__ << " transaction failed. " << result.description();
+            errorCode = KMV1::ErrorCode::UNKNOWN_ERROR;
+        }
     }
+
+    if (errorCode != KMV1::ErrorCode::OK) mOperationSlot.freeSlot();
+
+    return convertErrorCode(errorCode);
+}
+
+ScopedAStatus
+KeyMintOperation::finish(const std::optional<std::vector<uint8_t>>& in_input,
+                         const std::optional<std::vector<uint8_t>>& in_signature,
+                         const std::optional<HardwareAuthToken>& in_authToken,
+                         const std::optional<TimeStampToken>& in_timeStampToken,
+                         const std::optional<std::vector<uint8_t>>& in_confirmationToken,
+                         std::vector<uint8_t>* out_output) {
     auto input = in_input.value_or(std::vector<uint8_t>());
-    auto signature = in_inSignature.value_or(std::vector<uint8_t>());
-    V4_0_HardwareAuthToken authToken;
-    if (in_authToken.has_value()) {
-        authToken = convertAuthTokenToLegacy(in_authToken.value());
+    auto signature = in_signature.value_or(std::vector<uint8_t>());
+    V4_0_HardwareAuthToken authToken = convertAuthTokenToLegacy(in_authToken);
+    V4_0_VerificationToken verificationToken = convertTimestampTokenToLegacy(in_timeStampToken);
+
+    std::vector<V4_0_KeyParameter> inParams;
+    if (in_confirmationToken) {
+        inParams.push_back(makeKeyParameter(V4_0::TAG_CONFIRMATION_TOKEN, *in_confirmationToken));
     }
-    V4_0_VerificationToken verificationToken;
-    if (in_inTimeStampToken.has_value()) {
-        verificationToken = convertTimestampTokenToLegacy(in_inTimeStampToken.value());
-    }
+
+    KMV1::ErrorCode errorCode;
     auto result = mDevice->finish(
-        mOperationHandle, legacyParams, input, signature, authToken, verificationToken,
-        [&](V4_0_ErrorCode error, const hidl_vec<V4_0_KeyParameter>& outParams,
-            const hidl_vec<uint8_t>& output) {
+        mOperationHandle, {} /* inParams */, input, signature, authToken, verificationToken,
+        [&](V4_0_ErrorCode error, auto /* outParams */, const hidl_vec<uint8_t>& output) {
             errorCode = convert(error);
-            out_outParams->emplace();
-            out_outParams->value().params = convertKeyParametersFromLegacy(outParams);
-            *_aidl_return = output;
+            *out_output = output;
         });
+
     mOperationSlot.freeSlot();
     if (!result.isOk()) {
         LOG(ERROR) << __func__ << " transaction failed. " << result.description();
@@ -841,7 +960,8 @@ static std::variant<keystore::Digest, KMV1::ErrorCode> getKeystoreDigest(Digest 
 
 std::optional<KMV1::ErrorCode>
 KeyMintDevice::signCertificate(const std::vector<KeyParameter>& keyParams,
-                               const std::vector<uint8_t>& keyBlob, X509* cert) {
+                               const std::vector<uint8_t>& prefixedKeyBlob, X509* cert) {
+
     auto algorithm = getParam(keyParams, KMV1::TAG_ALGORITHM);
     auto algoOrError = getKeystoreAlgorithm(*algorithm);
     if (std::holds_alternative<KMV1::ErrorCode>(algoOrError)) {
@@ -876,23 +996,20 @@ KeyMintDevice::signCertificate(const std::vector<KeyParameter>& keyParams,
                 kps.push_back(KMV1::makeKeyParameter(KMV1::TAG_PADDING, origPadding));
             }
             BeginResult beginResult;
-            auto error = begin(KeyPurpose::SIGN, keyBlob, kps, HardwareAuthToken(), &beginResult);
+            auto error =
+                begin(KeyPurpose::SIGN, prefixedKeyBlob, kps, HardwareAuthToken(), &beginResult);
             if (!error.isOk()) {
                 errorCode = toErrorCode(error);
                 return std::vector<uint8_t>();
             }
-            std::optional<KeyParameterArray> outParams;
-            std::optional<ByteArray> outByte;
-            int32_t status;
-            error = beginResult.operation->update(std::nullopt, dataVec, std::nullopt, std::nullopt,
-                                                  &outParams, &outByte, &status);
-            if (!error.isOk()) {
-                errorCode = toErrorCode(error);
-                return std::vector<uint8_t>();
-            }
+
             std::vector<uint8_t> result;
-            error = beginResult.operation->finish(std::nullopt, std::nullopt, std::nullopt,
-                                                  std::nullopt, std::nullopt, &outParams, &result);
+            error = beginResult.operation->finish(dataVec,                     //
+                                                  {} /* signature */,          //
+                                                  {} /* authToken */,          //
+                                                  {} /* timestampToken */,     //
+                                                  {} /* confirmationToken */,  //
+                                                  &result);
             if (!error.isOk()) {
                 errorCode = toErrorCode(error);
                 return std::vector<uint8_t>();
@@ -913,7 +1030,9 @@ KeyMintDevice::signCertificate(const std::vector<KeyParameter>& keyParams,
 
 std::variant<std::vector<Certificate>, KMV1::ErrorCode>
 KeyMintDevice::getCertificate(const std::vector<KeyParameter>& keyParams,
-                              const std::vector<uint8_t>& keyBlob) {
+                              const std::vector<uint8_t>& prefixedKeyBlob) {
+    const std::vector<uint8_t>& keyBlob = prefixedKeyBlobRemovePrefix(prefixedKeyBlob);
+
     // There are no certificates for symmetric keys.
     auto algorithm = getParam(keyParams, KMV1::TAG_ALGORITHM);
     if (!algorithm) {
@@ -1011,14 +1130,14 @@ KeyMintDevice::getCertificate(const std::vector<KeyParameter>& keyParams,
 // Copied from system/security/keystore/include/keystore/keymaster_types.h.
 
 // Changing this namespace alias will change the keymaster version.
-namespace keymaster = ::android::hardware::keymaster::V4_1;
+namespace keymasterNs = ::android::hardware::keymaster::V4_1;
 
-using keymaster::SecurityLevel;
+using keymasterNs::SecurityLevel;
 
 // Copied from system/security/keystore/KeyStore.h.
 
 using ::android::sp;
-using keymaster::support::Keymaster;
+using keymasterNs::support::Keymaster;
 
 template <typename T, size_t count> class Devices : public std::array<T, count> {
   public:
@@ -1043,8 +1162,8 @@ using KeymasterDevices = Devices<sp<Keymaster>, 3>;
 // Copied from system/security/keystore/keystore_main.cpp.
 
 using ::android::hardware::hidl_string;
-using keymaster::support::Keymaster3;
-using keymaster::support::Keymaster4;
+using keymasterNs::support::Keymaster3;
+using keymasterNs::support::Keymaster4;
 
 template <typename Wrapper>
 KeymasterDevices enumerateKeymasterDevices(IServiceManager* serviceManager) {
@@ -1126,6 +1245,8 @@ KeyMintDevice::KeyMintDevice(sp<Keymaster> device, KeyMintSecurityLevel security
     } else {
         setNumFreeSlots(15);
     }
+
+    softKeyMintDevice_.reset(CreateKeyMintDevice(KeyMintSecurityLevel::SOFTWARE));
 }
 
 sp<Keymaster> getDevice(KeyMintSecurityLevel securityLevel) {

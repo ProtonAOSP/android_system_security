@@ -21,59 +21,32 @@ package {
     default_applicable_licenses: ["system_security_license"],
 }
 
-rust_library {
-    name: "libkeystore2_vintf_rust",
-    crate_name: "keystore2_vintf",
-    srcs: ["lib.rs"],
-    rustlibs: [
-        "libkeystore2_vintf_bindgen",
-    ],
-    shared_libs: [
-        "libkeystore2_vintf_cpp",
-        "libvintf",
-    ],
-}
-
-cc_library {
-    name: "libkeystore2_vintf_cpp",
-    srcs: [
-        "vintf.cpp",
-    ],
-    shared_libs: [
-        "libvintf",
-    ],
-}
-
 rust_bindgen {
-    name: "libkeystore2_vintf_bindgen",
-    wrapper_src: "vintf.hpp",
-    crate_name: "keystore2_vintf_bindgen",
+    name: "libkeystore2_system_property_bindgen",
+    wrapper_src: "system_property_bindgen.hpp",
+    crate_name: "keystore2_system_property_bindgen",
     source_stem: "bindings",
-    host_supported: true,
-    shared_libs: ["libvintf"],
+
     bindgen_flags: [
         "--size_t-is-usize",
-        "--whitelist-function", "getHalNames",
-        "--whitelist-function", "getHalNamesAndVersions",
-        "--whitelist-function", "getAidlInstances",
-        "--whitelist-function", "freeNames",
+        "--whitelist-function=__system_property_find",
+        "--whitelist-function=__system_property_read_callback",
+        "--whitelist-function=__system_property_wait",
     ],
 }
 
-rust_test {
-    name: "keystore2_vintf_test",
-    crate_name: "keystore2_vintf_test",
-    srcs: ["lib.rs"],
-    test_suites: ["general-tests"],
-    auto_gen_config: true,
-    rustlibs: [
-        "libkeystore2_vintf_bindgen",
+rust_library {
+    name: "libkeystore2_system_property-rust",
+    crate_name: "keystore2_system_property",
+    srcs: [
+        "lib.rs",
     ],
-    static_libs: [
-        "libkeystore2_vintf_cpp",
+    rustlibs: [
+        "libanyhow",
+        "libkeystore2_system_property_bindgen",
+        "libthiserror",
     ],
     shared_libs: [
-        "libc++",
-        "libvintf",
+        "libbase",
     ],
 }

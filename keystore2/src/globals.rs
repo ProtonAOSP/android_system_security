@@ -160,7 +160,7 @@ lazy_static! {
     /// priorities.
     pub static ref ASYNC_TASK: Arc<AsyncTask> = Default::default();
     /// Singleton for enforcements.
-    pub static ref ENFORCEMENTS: Enforcements = Enforcements::new();
+    pub static ref ENFORCEMENTS: Enforcements = Default::default();
     /// LegacyBlobLoader is initialized and exists globally.
     /// The same directory used by the database is used by the LegacyBlobLoader as well.
     pub static ref LEGACY_BLOB_LOADER: Arc<LegacyBlobLoader> = Arc::new(LegacyBlobLoader::new(

@@ -32,14 +32,15 @@ use android_system_keystore2::aidl::android::system::keystore2::{
 };
 use android_system_keystore2::binder::Strong;
 use anyhow::{Context, Result};
-use std::sync::{
-    mpsc::{channel, Receiver, Sender},
-    Arc, Mutex, Weak,
-};
-use std::time::SystemTime;
+use keystore2_system_property::PropertyWatcher;
 use std::{
     collections::{HashMap, HashSet},
-    sync::mpsc::TryRecvError,
+    sync::{
+        atomic::{AtomicI32, Ordering},
+        mpsc::{channel, Receiver, Sender, TryRecvError},
+        Arc, Mutex, Weak,
+    },
+    time::SystemTime,
 };
 
 #[derive(Debug)]
@@ -352,6 +353,7 @@ impl AuthInfo {
 }
 
 /// Enforcements data structure
+#[derive(Default)]
 pub struct Enforcements {
     /// This hash set contains the user ids for whom the device is currently unlocked. If a user id
     /// is not in the set, it implies that the device is locked for the user.
@@ -365,18 +367,11 @@ pub struct Enforcements {
     /// The enforcement module will try to get a confirmation token from this channel whenever
     /// an operation that requires confirmation finishes.
     confirmation_token_receiver: Arc<Mutex<Option<Receiver<Vec<u8>>>>>,
+    /// Highest boot level seen in keystore.boot_level; used to enforce MAX_BOOT_LEVEL tag.
+    boot_level: AtomicI32,
 }
 
 impl Enforcements {
-    /// Creates an enforcement object with the two data structures it holds and the sender as None.
-    pub fn new() -> Self {
-        Enforcements {
-            device_unlocked_set: Mutex::new(HashSet::new()),
-            op_auth_map: Default::default(),
-            confirmation_token_receiver: Default::default(),
-        }
-    }
-
     /// Install the confirmation token receiver. The enforcement module will try to get a
     /// confirmation token from this channel whenever an operation that requires confirmation
     /// finishes.
@@ -475,6 +470,7 @@ impl Enforcements {
         let mut unlocked_device_required = false;
         let mut key_usage_limited: Option<i64> = None;
         let mut confirmation_token_receiver: Option<Arc<Mutex<Option<Receiver<Vec<u8>>>>>> = None;
+        let mut max_boot_level: Option<i32> = None;
 
         // iterate through key parameters, recording information we need for authorization
         // enforcements later, or enforcing authorizations in place, where applicable
@@ -541,6 +537,9 @@ impl Enforcements {
                 KeyParameterValue::TrustedConfirmationRequired => {
                     confirmation_token_receiver = Some(self.confirmation_token_receiver.clone());
                 }
+                KeyParameterValue::MaxBootLevel(level) => {
+                    max_boot_level = Some(*level);
+                }
                 // NOTE: as per offline discussion, sanitizing key parameters and rejecting
                 // create operation if any non-allowed tags are present, is not done in
                 // authorize_create (unlike in legacy keystore where AuthorizeBegin is rejected if
@@ -591,6 +590,13 @@ impl Enforcements {
             if self.is_device_locked(user_id) {
                 return Err(Error::Km(Ec::DEVICE_LOCKED))
                     .context("In authorize_create: device is locked.");
+            }
+        }
+
+        if let Some(level) = max_boot_level {
+            if level < self.boot_level.load(Ordering::SeqCst) {
+                return Err(Error::Km(Ec::BOOT_LEVEL_EXCEEDED))
+                    .context("In authorize_create: boot level is too late.");
             }
         }
 
@@ -760,11 +766,34 @@ impl Enforcements {
 
         auth_bound && !skip_lskf_binding
     }
-}
 
-impl Default for Enforcements {
-    fn default() -> Self {
-        Self::new()
+    /// Watch the `keystore.boot_level` system property, and keep self.boot_level up to date.
+    /// Blocks waiting for system property changes, so must be run in its own thread.
+    pub fn watch_boot_level(&self) -> Result<()> {
+        let mut w = PropertyWatcher::new("keystore.boot_level")?;
+        loop {
+            fn parse_value(_name: &str, value: &str) -> Result<Option<i32>> {
+                Ok(if value == "end" { None } else { Some(value.parse::<i32>()?) })
+            }
+            match w.read(parse_value)? {
+                Some(level) => {
+                    let old = self.boot_level.fetch_max(level, Ordering::SeqCst);
+                    log::info!(
+                        "Read keystore.boot_level: {}; boot level {} -> {}",
+                        level,
+                        old,
+                        std::cmp::max(old, level)
+                    );
+                }
+                None => {
+                    log::info!("keystore.boot_level is `end`, finishing.");
+                    self.boot_level.fetch_max(i32::MAX, Ordering::SeqCst);
+                    break;
+                }
+            }
+            w.wait()?;
+        }
+        Ok(())
     }
 }
 
