@@ -114,9 +114,12 @@ class KeyMintDevice : public aidl::android::hardware::security::keymint::BnKeyMi
     ScopedAStatus deviceLocked(bool passwordOnly,
                                const std::optional<TimeStampToken>& timestampToken) override;
     ScopedAStatus earlyBootEnded() override;
+
+    ScopedAStatus performOperation(const std::vector<uint8_t>& request,
+                                   std::vector<uint8_t>* response) override;
+
     // These are public to allow testing code to use them directly.
     // This class should not be used publicly anyway.
-
     std::variant<std::vector<Certificate>, KMV1_ErrorCode>
     getCertificate(const std::vector<KeyParameter>& keyParams, const std::vector<uint8_t>& keyBlob);
 
