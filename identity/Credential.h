@@ -50,6 +50,7 @@ class Credential : public BnCredential {
     ~Credential();
 
     Status ensureOrReplaceHalBinder();
+    void writableCredentialPersonalized();
 
     // ICredential overrides
     Status createEphemeralKeyPair(vector<uint8_t>* _aidl_return) override;
@@ -94,11 +95,12 @@ class Credential : public BnCredential {
     HardwareInformation hwInfo_;
     sp<IIdentityCredentialStore> halStoreBinder_;
 
-    const AuthKeyData* selectedAuthKey_ = nullptr;
     uint64_t selectedChallenge_ = 0;
 
     sp<IIdentityCredential> halBinder_;
     int halApiVersion_;
+
+    bool ensureChallenge();
 
     ssize_t
     calcExpectedDeviceNameSpacesSize(const vector<uint8_t>& requestMessage,
