@@ -126,7 +126,7 @@
 //! Either way, we have to revaluate the pruning scores.
 
 use crate::enforcements::AuthInfo;
-use crate::error::{map_km_error, map_or_log_err, Error, ErrorCode, ResponseCode};
+use crate::error::{map_err_with, map_km_error, map_or_log_err, Error, ErrorCode, ResponseCode};
 use crate::utils::Asp;
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
     IKeyMintOperation::IKeyMintOperation,
@@ -802,11 +802,21 @@ impl IKeystoreOperation for KeystoreOperation {
     }
 
     fn abort(&self) -> binder::public_api::Result<()> {
-        map_or_log_err(
+        map_err_with(
             self.with_locked_operation(
                 |op| op.abort(Outcome::Abort).context("In KeystoreOperation::abort"),
                 true,
             ),
+            |e| {
+                match e.root_cause().downcast_ref::<Error>() {
+                    // Calling abort on expired operations is something very common.
+                    // There is no reason to clutter the log with it. It is never the cause
+                    // for a true problem.
+                    Some(Error::Km(ErrorCode::INVALID_OPERATION_HANDLE)) => {}
+                    _ => log::error!("{:?}", e),
+                };
+                e
+            },
             Ok,
         )
     }
