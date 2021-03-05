@@ -354,11 +354,13 @@ pub fn ec_point_oct_to_point(buf: &[u8]) -> Result<OwnedECPoint, Error> {
     Ok(OwnedECPoint(result))
 }
 
-/// Uses BoringSSL to extract the DER-encoded issuer subject from a
-/// DER-encoded X.509 certificate.
-pub fn parse_issuer_subject_from_certificate(cert_buf: &[u8]) -> Result<Vec<u8>, Error> {
+/// Uses BoringSSL to extract the DER-encoded subject from a DER-encoded X.509 certificate.
+pub fn parse_subject_from_certificate(cert_buf: &[u8]) -> Result<Vec<u8>, Error> {
     // Try with a 200-byte output buffer, should be enough in all but bizarre cases.
     let mut retval = vec![0; 200];
+
+    // Safety: extractSubjectFromCertificate reads at most cert_buf.len() bytes from cert_buf and
+    // writes at most retval.len() bytes to retval.
     let mut size = unsafe {
         extractSubjectFromCertificate(
             cert_buf.as_ptr(),
@@ -374,12 +376,11 @@ pub fn parse_issuer_subject_from_certificate(cert_buf: &[u8]) -> Result<Vec<u8>,
 
     if size < 0 {
         // Our buffer wasn't big enough.  Make one that is just the right size and try again.
-        let negated_size = usize::try_from(-size);
-        retval = match negated_size.ok() {
-            None => return Err(Error::ExtractSubjectFailed),
-            Some(size) => vec![0; size],
-        };
+        let negated_size = usize::try_from(-size).map_err(|_e| Error::ExtractSubjectFailed)?;
+        retval = vec![0; negated_size];
 
+        // Safety: extractSubjectFromCertificate reads at most cert_buf.len() bytes from cert_buf
+        // and writes at most retval.len() bytes to retval.
         size = unsafe {
             extractSubjectFromCertificate(
                 cert_buf.as_ptr(),
@@ -395,14 +396,8 @@ pub fn parse_issuer_subject_from_certificate(cert_buf: &[u8]) -> Result<Vec<u8>,
     }
 
     // Reduce buffer size to the amount written.
-    let safe_size = usize::try_from(size);
-    retval.resize(
-        match safe_size.ok() {
-            None => return Err(Error::ExtractSubjectFailed),
-            Some(size) => size,
-        },
-        0,
-    );
+    let safe_size = usize::try_from(size).map_err(|_e| Error::ExtractSubjectFailed)?;
+    retval.truncate(safe_size);
 
     Ok(retval)
 }
