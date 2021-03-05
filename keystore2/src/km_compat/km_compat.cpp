@@ -511,15 +511,23 @@ ScopedAStatus KeyMintDevice::importKey(const std::vector<KeyParameter>& inKeyPar
 
 ScopedAStatus
 KeyMintDevice::importWrappedKey(const std::vector<uint8_t>& in_inWrappedKeyData,
-                                const std::vector<uint8_t>& in_inWrappingKeyBlob,  //
+                                const std::vector<uint8_t>& in_inPrefixedWrappingKeyBlob,
                                 const std::vector<uint8_t>& in_inMaskingKey,
                                 const std::vector<KeyParameter>& in_inUnwrappingParams,
                                 int64_t in_inPasswordSid, int64_t in_inBiometricSid,
                                 KeyCreationResult* out_creationResult) {
+    const std::vector<uint8_t>& wrappingKeyBlob =
+        prefixedKeyBlobRemovePrefix(in_inPrefixedWrappingKeyBlob);
+    if (prefixedKeyBlobIsSoftKeyMint(in_inPrefixedWrappingKeyBlob)) {
+        return softKeyMintDevice_->importWrappedKey(
+            in_inWrappedKeyData, wrappingKeyBlob, in_inMaskingKey, in_inUnwrappingParams,
+            in_inPasswordSid, in_inBiometricSid, out_creationResult);
+    }
+
     auto legacyUnwrappingParams = convertKeyParametersToLegacy(in_inUnwrappingParams);
     KMV1::ErrorCode errorCode;
     auto result = mDevice->importWrappedKey(
-        in_inWrappedKeyData, in_inWrappingKeyBlob, in_inMaskingKey, legacyUnwrappingParams,
+        in_inWrappedKeyData, wrappingKeyBlob, in_inMaskingKey, legacyUnwrappingParams,
         in_inPasswordSid, in_inBiometricSid,
         [&](V4_0_ErrorCode error, const hidl_vec<uint8_t>& keyBlob,
             const V4_0_KeyCharacteristics& keyCharacteristics) {
@@ -556,7 +564,7 @@ ScopedAStatus KeyMintDevice::upgradeKey(const std::vector<uint8_t>& in_inKeyBlob
 ScopedAStatus KeyMintDevice::deleteKey(const std::vector<uint8_t>& prefixedKeyBlob) {
     const std::vector<uint8_t>& keyBlob = prefixedKeyBlobRemovePrefix(prefixedKeyBlob);
     if (prefixedKeyBlobIsSoftKeyMint(prefixedKeyBlob)) {
-        return softKeyMintDevice_->deleteKey(prefixedKeyBlob);
+        return softKeyMintDevice_->deleteKey(keyBlob);
     }
 
     auto result = mDevice->deleteKey(keyBlob);
