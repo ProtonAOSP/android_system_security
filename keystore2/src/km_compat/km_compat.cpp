@@ -656,6 +656,45 @@ ScopedAStatus KeyMintDevice::earlyBootEnded() {
     }
 }
 
+ScopedAStatus
+KeyMintDevice::convertStorageKeyToEphemeral(const std::vector<uint8_t>& prefixedStorageKeyBlob,
+                                            std::vector<uint8_t>* ephemeralKeyBlob) {
+    KMV1::ErrorCode km_error;
+
+    /*
+     * Wrapped storage keys cannot be emulated (and they don't need to, because if a platform
+     * supports wrapped storage keys, then the legacy backend will support it too. So error out
+     * if the wrapped storage key given is a soft keymint key.
+     */
+    if (prefixedKeyBlobIsSoftKeyMint(prefixedStorageKeyBlob)) {
+        return convertErrorCode(KMV1::ErrorCode::UNIMPLEMENTED);
+    }
+
+    const std::vector<uint8_t>& storageKeyBlob =
+        prefixedKeyBlobRemovePrefix(prefixedStorageKeyBlob);
+
+    auto hidlCb = [&](V4_0_ErrorCode ret, const hidl_vec<uint8_t>& exportedKeyBlob) {
+        km_error = convert(ret);
+        if (km_error != KMV1::ErrorCode::OK) return;
+        /*
+         * This must return the blob without the prefix since it will be used directly
+         * as a storage encryption key. But this is alright, since this wrapped ephemeral
+         * key shouldn't/won't ever be used with keymint.
+         */
+        *ephemeralKeyBlob = exportedKeyBlob;
+    };
+
+    auto ret = mDevice->exportKey(V4_0_KeyFormat::RAW, storageKeyBlob, {}, {}, hidlCb);
+    if (!ret.isOk()) {
+        LOG(ERROR) << __func__ << " export_key failed: " << ret.description();
+        return convertErrorCode(KMV1::ErrorCode::UNKNOWN_ERROR);
+    }
+    if (km_error != KMV1::ErrorCode::OK)
+        LOG(ERROR) << __func__ << " export_key failed, code " << int32_t(km_error);
+
+    return convertErrorCode(km_error);
+}
+
 ScopedAStatus KeyMintDevice::performOperation(const std::vector<uint8_t>& /* request */,
                                               std::vector<uint8_t>* /* response */) {
     return convertErrorCode(KMV1::ErrorCode::UNIMPLEMENTED);
