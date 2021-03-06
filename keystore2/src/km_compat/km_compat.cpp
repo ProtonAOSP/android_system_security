@@ -658,8 +658,8 @@ ScopedAStatus KeyMintOperation::updateAad(const std::vector<uint8_t>& input,
 
     KMV1::ErrorCode errorCode;
     auto result = mDevice->update(
-        mOperationHandle, {V4_0::makeKeyParameter(V4_0::TAG_ASSOCIATED_DATA, input)}, input,
-        authToken, verificationToken,
+        mOperationHandle, {V4_0::makeKeyParameter(V4_0::TAG_ASSOCIATED_DATA, input)}, {}, authToken,
+        verificationToken,
         [&](V4_0_ErrorCode error, auto, auto, auto) { errorCode = convert(error); });
 
     if (!result.isOk()) {
