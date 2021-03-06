@@ -131,33 +131,34 @@ impl KeystoreSecurityLevel {
             SecurityLevel::SOFTWARE,
         ));
 
-        let (key_blob, mut blob_metadata) = DB
-            .with(|db| {
-                SUPER_KEY.handle_super_encryption_on_key_init(
-                    &mut db.borrow_mut(),
-                    &LEGACY_MIGRATOR,
-                    &(key.domain),
-                    &key_parameters,
-                    flags,
-                    user_id,
-                    &key_blob,
-                )
-            })
-            .context("In store_new_key. Failed to handle super encryption.")?;
-
         let creation_date = DateTime::now().context("Trying to make creation time.")?;
 
         let key = match key.domain {
-            Domain::BLOB => {
-                KeyDescriptor { domain: Domain::BLOB, blob: Some(key_blob), ..Default::default() }
-            }
+            Domain::BLOB => KeyDescriptor {
+                domain: Domain::BLOB,
+                blob: Some(key_blob.to_vec()),
+                ..Default::default()
+            },
             _ => DB
                 .with::<_, Result<KeyDescriptor>>(|db| {
+                    let mut db = db.borrow_mut();
+
+                    let (key_blob, mut blob_metadata) = SUPER_KEY
+                        .handle_super_encryption_on_key_init(
+                            &mut db,
+                            &LEGACY_MIGRATOR,
+                            &(key.domain),
+                            &key_parameters,
+                            flags,
+                            user_id,
+                            &key_blob,
+                        )
+                        .context("In store_new_key. Failed to handle super encryption.")?;
+
                     let mut key_metadata = KeyMetaData::new();
                     key_metadata.add(KeyMetaEntry::CreationDate(creation_date));
                     blob_metadata.add(BlobMetaEntry::KmUuid(self.km_uuid));
 
-                    let mut db = db.borrow_mut();
                     let key_id = db
                         .store_new_key(
                             &key,
