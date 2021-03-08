@@ -41,15 +41,14 @@ using ::android::hardware::identity::support::chunkVector;
 WritableCredential::WritableCredential(const string& dataPath, const string& credentialName,
                                        const string& docType, bool isUpdate,
                                        HardwareInformation hwInfo,
-                                       sp<IWritableIdentityCredential> halBinder, int halApiVersion)
+                                       sp<IWritableIdentityCredential> halBinder)
     : dataPath_(dataPath), credentialName_(credentialName), docType_(docType), isUpdate_(isUpdate),
-      hwInfo_(std::move(hwInfo)), halBinder_(halBinder), halApiVersion_(halApiVersion) {}
+      hwInfo_(std::move(hwInfo)), halBinder_(halBinder) {}
 
 WritableCredential::~WritableCredential() {}
 
-void WritableCredential::setCredentialUpdatedCallback(
-    std::function<void()>&& onCredentialUpdatedCallback) {
-    onCredentialUpdatedCallback_ = onCredentialUpdatedCallback;
+void WritableCredential::setCredentialToReloadWhenUpdated(sp<Credential> credential) {
+    credentialToReloadWhenUpdated_ = credential;
 }
 
 Status WritableCredential::ensureAttestationCertificateExists(const vector<uint8_t>& challenge) {
@@ -268,7 +267,10 @@ WritableCredential::personalize(const vector<AccessControlProfileParcel>& access
                                                 "Error saving credential data to disk");
     }
 
-    onCredentialUpdatedCallback_();
+    if (credentialToReloadWhenUpdated_) {
+        credentialToReloadWhenUpdated_->writableCredentialPersonalized();
+        credentialToReloadWhenUpdated_.clear();
+    }
 
     *_aidl_return = proofOfProvisioningSignature;
     return Status::ok();

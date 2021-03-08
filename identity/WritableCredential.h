@@ -24,6 +24,8 @@
 
 #include <android/hardware/identity/IIdentityCredentialStore.h>
 
+#include "Credential.h"
+
 namespace android {
 namespace security {
 namespace identity {
@@ -38,13 +40,15 @@ class WritableCredential : public BnWritableCredential {
   public:
     WritableCredential(const string& dataPath, const string& credentialName, const string& docType,
                        bool isUpdate, HardwareInformation hwInfo,
-                       sp<IWritableIdentityCredential> halBinder, int halApiVersion);
+                       sp<IWritableIdentityCredential> halBinder);
     ~WritableCredential();
 
     // Used when updating a credential
     void setAttestationCertificate(const vector<uint8_t>& attestationCertificate);
     void setAvailableAuthenticationKeys(int keyCount, int maxUsesPerKey);
-    void setCredentialUpdatedCallback(std::function<void()>&& onCredentialUpdatedCallback);
+
+    // Used by Credential::update()
+    void setCredentialToReloadWhenUpdated(sp<Credential> credential);
 
     // IWritableCredential overrides
     Status getCredentialKeyCertificateChain(const vector<uint8_t>& challenge,
@@ -61,13 +65,12 @@ class WritableCredential : public BnWritableCredential {
     bool isUpdate_;
     HardwareInformation hwInfo_;
     sp<IWritableIdentityCredential> halBinder_;
-    int halApiVersion_;
 
     vector<uint8_t> attestationCertificate_;
     int keyCount_ = 0;
     int maxUsesPerKey_ = 1;
 
-    std::function<void()> onCredentialUpdatedCallback_ = []() {};
+    sp<Credential> credentialToReloadWhenUpdated_;
 
     ssize_t calcExpectedProofOfProvisioningSize(
         const vector<AccessControlProfileParcel>& accessControlProfiles,
