@@ -29,3 +29,7 @@ extractPublicKeyFromX509(const std::vector<uint8_t>& x509);
 android::base::Result<std::vector<uint8_t>>
 extractPublicKeyFromSubjectPublicKeyInfo(const std::vector<uint8_t>& subjectKeyInfo);
 android::base::Result<std::vector<uint8_t>> extractPublicKeyFromX509(const std::string& path);
+
+android::base::Result<void> verifySignature(const std::string& message,
+                                            const std::string& signature,
+                                            const std::vector<uint8_t>& publicKey);

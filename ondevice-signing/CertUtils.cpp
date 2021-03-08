@@ -55,6 +55,33 @@ static bool add_ext(X509* cert, int nid, const char* value) {
     return true;
 }
 
+Result<bssl::UniquePtr<RSA>> getRsa(const std::vector<uint8_t>& publicKey) {
+    bssl::UniquePtr<RSA> rsaPubkey(RSA_new());
+    rsaPubkey->n = BN_new();
+    rsaPubkey->e = BN_new();
+
+    BN_bin2bn(publicKey.data(), publicKey.size(), rsaPubkey->n);
+    BN_set_word(rsaPubkey->e, kRsaKeyExponent);
+
+    return rsaPubkey;
+}
+
+Result<void> verifySignature(const std::string& message, const std::string& signature,
+                             const std::vector<uint8_t>& publicKey) {
+    auto rsaKey = getRsa(publicKey);
+    uint8_t hashBuf[SHA256_DIGEST_LENGTH];
+    SHA256(const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(message.c_str())),
+           message.length(), hashBuf);
+
+    bool success = RSA_verify(NID_sha256, hashBuf, sizeof(hashBuf),
+                              (const uint8_t*)signature.c_str(), signature.length(), rsaKey->get());
+
+    if (!success) {
+        return Error() << "Failed to verify signature.";
+    }
+    return {};
+}
+
 Result<void> createSelfSignedCertificate(
     const std::vector<uint8_t>& publicKey,
     const std::function<Result<std::string>(const std::string&)>& signFunction,
@@ -71,15 +98,10 @@ Result<void> createSelfSignedCertificate(
 
     // "publicKey" corresponds to the raw public key bytes - need to create
     // a new RSA key with the correct exponent.
-    RSA* rsaPubkey = RSA_new();
-    rsaPubkey->n = BN_new();
-    rsaPubkey->e = BN_new();
-
-    BN_bin2bn(publicKey.data(), publicKey.size(), rsaPubkey->n);
-    BN_set_word(rsaPubkey->e, kRsaKeyExponent);
+    auto rsaPubkey = getRsa(publicKey);
 
     EVP_PKEY* public_key = EVP_PKEY_new();
-    EVP_PKEY_assign_RSA(public_key, rsaPubkey);
+    EVP_PKEY_assign_RSA(public_key, rsaPubkey->release());
 
     if (!X509_set_pubkey(x509.get(), public_key)) {
         return Error() << "Unable to set x509 public key";

@@ -178,7 +178,7 @@ Result<void> verifyIntegrityNoFsVerity(const std::map<std::string, std::string>&
     return verifyDigests(*result, trusted_digests);
 }
 
-Result<OdsignInfo> getOdsignInfo(const SigningKey& /* key */) {
+Result<OdsignInfo> getOdsignInfo(const SigningKey& key) {
     std::string persistedSignature;
     OdsignInfo odsignInfo;
 
@@ -190,24 +190,20 @@ Result<OdsignInfo> getOdsignInfo(const SigningKey& /* key */) {
     if (!odsign_info) {
         return Error() << "Failed to open " << kOdsignInfo;
     }
+    odsign_info.seekg(0);
     // Verify the hash
     std::string odsign_info_str((std::istreambuf_iterator<char>(odsign_info)),
                                 std::istreambuf_iterator<char>());
 
-    // TODO: this is way too slow - replace with a local RSA_verify implementation.
-    /*
-    auto verifiedSignature = key.sign(odsign_info_str);
-    if (!verifiedSignature.ok()) {
-        return Error() << "Failed to sign " << kOdsignInfo;
-    }
-
-    if (*verifiedSignature != persistedSignature) {
+    auto publicKey = key.getPublicKey();
+    auto signResult = verifySignature(odsign_info_str, persistedSignature, *publicKey);
+    if (!signResult.ok()) {
         return Error() << kOdsignInfoSignature << " does not match.";
     } else {
         LOG(INFO) << kOdsignInfoSignature << " matches.";
     }
-    */
 
+    odsign_info.seekg(0);
     if (!odsignInfo.ParseFromIstream(&odsign_info)) {
         return Error() << "Failed to parse " << kOdsignInfo;
     }
@@ -223,19 +219,20 @@ Result<void> persistDigests(const std::map<std::string, std::string>& digests,
     auto map = signInfo.mutable_file_hashes();
     *map = proto_hashes;
 
-    std::fstream odsign_info(kOdsignInfo, std::ios::out | std::ios::trunc | std::ios::binary);
+    std::fstream odsign_info(kOdsignInfo,
+                             std::ios::in | std::ios::out | std::ios::trunc | std::ios::binary);
     if (!signInfo.SerializeToOstream(&odsign_info)) {
         return Error() << "Failed to persist root hashes in " << kOdsignInfo;
     }
 
-    odsign_info.seekg(0);
+    // Sign the signatures with our key itself, and write that to storage
+    odsign_info.seekg(0, std::ios::beg);
     std::string odsign_info_str((std::istreambuf_iterator<char>(odsign_info)),
                                 std::istreambuf_iterator<char>());
     auto signResult = key.sign(odsign_info_str);
     if (!signResult.ok()) {
         return Error() << "Failed to sign " << kOdsignInfo;
     }
-    // Sign the files with our key itself, and write that to storage
     android::base::WriteStringToFile(*signResult, kOdsignInfoSignature);
     return {};
 }
