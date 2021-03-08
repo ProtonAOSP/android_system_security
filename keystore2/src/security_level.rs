@@ -727,6 +727,33 @@ impl KeystoreSecurityLevel {
             Ok(v) => Ok((v, None)),
         }
     }
+
+    fn convert_storage_key_to_ephemeral(&self, storage_key: &KeyDescriptor) -> Result<Vec<u8>> {
+        if storage_key.domain != Domain::BLOB {
+            return Err(error::Error::Km(ErrorCode::INVALID_ARGUMENT)).context(concat!(
+                "In IKeystoreSecurityLevel convert_storage_key_to_ephemeral: ",
+                "Key must be of Domain::BLOB"
+            ));
+        }
+        let key_blob = storage_key
+            .blob
+            .as_ref()
+            .ok_or(error::Error::Km(ErrorCode::INVALID_ARGUMENT))
+            .context(
+                "In IKeystoreSecurityLevel convert_storage_key_to_ephemeral: No key blob specified",
+            )?;
+
+        // convert_storage_key_to_ephemeral requires the associated permission
+        check_key_permission(KeyPerm::convert_storage_key_to_ephemeral(), storage_key, &None)
+            .context("In convert_storage_key_to_ephemeral: Check permission")?;
+
+        let km_dev: Strong<dyn IKeyMintDevice> = self.keymint.get_interface().context(concat!(
+            "In IKeystoreSecurityLevel convert_storage_key_to_ephemeral: ",
+            "Getting keymint device interface"
+        ))?;
+        map_km_error(km_dev.convertStorageKeyToEphemeral(key_blob))
+            .context("In keymint device convertStorageKeyToEphemeral")
+    }
 }
 
 impl binder::Interface for KeystoreSecurityLevel {}
@@ -772,5 +799,11 @@ impl IKeystoreSecurityLevel for KeystoreSecurityLevel {
             self.import_wrapped_key(key, wrapping_key, masking_key, params, authenticators),
             Ok,
         )
+    }
+    fn convertStorageKeyToEphemeral(
+        &self,
+        storage_key: &KeyDescriptor,
+    ) -> binder::public_api::Result<Vec<u8>> {
+        map_or_log_err(self.convert_storage_key_to_ephemeral(storage_key), Ok)
     }
 }
