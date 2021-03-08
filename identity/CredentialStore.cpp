@@ -90,7 +90,7 @@ Status CredentialStore::createCredential(const std::string& credentialName,
     }
 
     sp<IWritableCredential> writableCredential = new WritableCredential(
-        dataPath_, credentialName, docType, false, hwInfo_, halWritableCredential, halApiVersion_);
+        dataPath_, credentialName, docType, false, hwInfo_, halWritableCredential);
     *_aidl_return = writableCredential;
     return Status::ok();
 }

@@ -55,7 +55,7 @@ struct AuthKeyData {
 
     vector<uint8_t> certificate;
     vector<uint8_t> keyBlob;
-    int64_t expirationDateMillisSinceEpoch;
+    int64_t expirationDateMillisSinceEpoch = 0;
     vector<uint8_t> staticAuthenticationData;
     vector<uint8_t> pendingCertificate;
     vector<uint8_t> pendingKeyBlob;
