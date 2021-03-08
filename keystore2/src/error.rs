@@ -171,9 +171,31 @@ pub fn map_or_log_err<T, U, F>(result: anyhow::Result<U>, handle_ok: F) -> Binde
 where
     F: FnOnce(U) -> BinderResult<T>,
 {
-    result.map_or_else(
+    map_err_with(
+        result,
         |e| {
             log::error!("{:?}", e);
+            e
+        },
+        handle_ok,
+    )
+}
+
+/// This function behaves similar to map_or_log_error, but it does not log the errors, instead
+/// it calls map_err on the error before mapping it to a binder result allowing callers to
+/// log or transform the error before mapping it.
+pub fn map_err_with<T, U, F1, F2>(
+    result: anyhow::Result<U>,
+    map_err: F1,
+    handle_ok: F2,
+) -> BinderResult<T>
+where
+    F1: FnOnce(anyhow::Error) -> anyhow::Error,
+    F2: FnOnce(U) -> BinderResult<T>,
+{
+    result.map_or_else(
+        |e| {
+            let e = map_err(e);
             let root_cause = e.root_cause();
             let rc = match root_cause.downcast_ref::<Error>() {
                 Some(Error::Rc(rcode)) => rcode.0,
