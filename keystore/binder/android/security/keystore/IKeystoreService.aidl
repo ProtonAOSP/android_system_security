@@ -87,7 +87,20 @@ interface IKeystoreService {
     int onKeyguardVisibilityChanged(in boolean isShowing, in int userId);
     int listUidsOfAuthBoundKeys(out @utf8InCpp List<String> uids);
 
-    // Called by credstore (and only credstore).
+    // This method looks through auth-tokens cached by keystore which match
+    // the passed-in |secureUserId|.
+    //
+    // If one or more of these tokens has a |challenge| field which matches
+    // the passed-in |challenge| parameter, the most recent is returned. In
+    // this case the |authTokenMaxAgeMillis| parameter is not used.
+    //
+    // Otherwise, the most recent auth-token of these tokens which is younger
+    // than |authTokenMaxAgeMillis| is returned.
+    //
+    // The passed in |challenge| parameter must always be non-zero.
+    //
+    // This method is called by credstore (and only credstore).
+    //
     void getTokensForCredstore(in long challenge, in long secureUserId, in int authTokenMaxAgeMillis,
                                in ICredstoreTokenCallback cb);
 }

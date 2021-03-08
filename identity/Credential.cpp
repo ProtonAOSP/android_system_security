@@ -117,26 +117,42 @@ Status Credential::selectAuthKey(bool allowUsingExhaustedKeys, bool allowUsingEx
                                                 "Error loading data for credential");
     }
 
-    selectedAuthKey_ = data->selectAuthKey(allowUsingExhaustedKeys, allowUsingExpiredKeys);
-    if (selectedAuthKey_ == nullptr) {
+    // We just check if a key is available, we actually don't store it since we
+    // don't keep CredentialData around between binder calls.
+    const AuthKeyData* authKey =
+        data->selectAuthKey(allowUsingExhaustedKeys, allowUsingExpiredKeys);
+    if (authKey == nullptr) {
         return Status::fromServiceSpecificError(
             ICredentialStore::ERROR_NO_AUTHENTICATION_KEY_AVAILABLE,
             "No suitable authentication key available");
     }
 
+    if (!ensureChallenge()) {
+        return Status::fromServiceSpecificError(ICredentialStore::ERROR_GENERIC,
+                                                "Error getting challenge (bug in HAL or TA)");
+    }
+    *_aidl_return = selectedChallenge_;
+    return Status::ok();
+}
+
+bool Credential::ensureChallenge() {
+    if (selectedChallenge_ != 0) {
+        return true;
+    }
+
     int64_t challenge;
     Status status = halBinder_->createAuthChallenge(&challenge);
     if (!status.isOk()) {
-        return halStatusToGenericError(status);
+        LOG(ERROR) << "Error getting challenge: " << status.exceptionMessage();
+        return false;
     }
     if (challenge == 0) {
-        return Status::fromServiceSpecificError(ICredentialStore::ERROR_GENERIC,
-                                                "Returned challenge is 0 (bug in HAL or TA)");
+        LOG(ERROR) << "Returned challenge is 0 (bug in HAL or TA)";
+        return false;
     }
 
     selectedChallenge_ = challenge;
-    *_aidl_return = challenge;
-    return Status::ok();
+    return true;
 }
 
 class CredstoreTokenCallback : public android::security::keystore::BnCredstoreTokenCallback,
@@ -279,13 +295,6 @@ Status Credential::getEntries(const vector<uint8_t>& requestMessage,
         }
     }
 
-    // If requesting a challenge-based authToken the idea is that authentication
-    // happens as part of the transaction. As such, authTokenMaxAgeMillis should
-    // be nearly zero. We'll use 10 seconds for this.
-    if (userAuthNeeded && selectedChallenge_ != 0) {
-        authTokenMaxAgeMillis = 10 * 1000;
-    }
-
     // Reset tokens and only get them if they're actually needed, e.g. if user authentication
     // is needed in any of the access control profiles for data items being requested.
     //
@@ -303,6 +312,28 @@ Status Credential::getEntries(const vector<uint8_t>& requestMessage,
     aidlVerificationToken.securityLevel = ::android::hardware::keymaster::SecurityLevel::SOFTWARE;
     aidlVerificationToken.mac.clear();
     if (userAuthNeeded) {
+        // If user authentication is needed, always get a challenge from the
+        // HAL/TA since it'll need it to check the returned VerificationToken
+        // for freshness.
+        if (!ensureChallenge()) {
+            return Status::fromServiceSpecificError(ICredentialStore::ERROR_GENERIC,
+                                                    "Error getting challenge (bug in HAL or TA)");
+        }
+
+        // Note: if all selected profiles require auth-on-every-presentation
+        // then authTokenMaxAgeMillis will be 0 (because timeoutMillis for each
+        // profile is 0). Which means that keystore will only return an
+        // AuthToken if its challenge matches what we pass, regardless of its
+        // age. This is intended b/c the HAL/TA will check not care about
+        // the age in this case, it only cares that the challenge matches.
+        //
+        // Otherwise, if one or more of the profiles is auth-with-a-timeout then
+        // authTokenMaxAgeMillis will be set to the largest of those
+        // timeouts. We'll get an AuthToken which satisfies this deadline if it
+        // exists. This authToken _may_ have the requested challenge but it's
+        // not a guarantee and it's also not required.
+        //
+
         vector<uint8_t> authTokenBytes;
         vector<uint8_t> verificationTokenBytes;
         if (!getTokensFromKeystore(selectedChallenge_, data->getSecureUserId(),
@@ -320,6 +351,7 @@ Status Credential::getEntries(const vector<uint8_t>& requestMessage,
         if (authTokenBytes.size() > 0) {
             HardwareAuthToken authToken =
                 android::hardware::keymaster::V4_0::support::hidlVec2AuthToken(authTokenBytes);
+
             // Convert from HIDL to AIDL...
             aidlAuthToken.challenge = int64_t(authToken.challenge);
             aidlAuthToken.userId = int64_t(authToken.userId);
@@ -351,15 +383,25 @@ Status Credential::getEntries(const vector<uint8_t>& requestMessage,
     // Note that the selectAuthKey() method is only called if a CryptoObject is involved at
     // the Java layer. So we could end up with no previously selected auth key and we may
     // need one.
-    const AuthKeyData* authKey = selectedAuthKey_;
-    if (sessionTranscript.size() > 0) {
-        if (authKey == nullptr) {
-            authKey = data->selectAuthKey(allowUsingExhaustedKeys, allowUsingExpiredKeys);
-            if (authKey == nullptr) {
-                return Status::fromServiceSpecificError(
-                    ICredentialStore::ERROR_NO_AUTHENTICATION_KEY_AVAILABLE,
-                    "No suitable authentication key available");
-            }
+    //
+    const AuthKeyData* authKey =
+        data->selectAuthKey(allowUsingExhaustedKeys, allowUsingExpiredKeys);
+    if (authKey == nullptr) {
+        // If no authKey is available, consider it an error only when a
+        // SessionTranscript was provided.
+        //
+        // We allow no SessionTranscript to be provided because it makes
+        // the API simpler to deal with insofar it can be used without having
+        // to generate any authentication keys.
+        //
+        // In this "no SessionTranscript is provided" mode we don't return
+        // DeviceNameSpaces nor a MAC over DeviceAuthentication so we don't
+        // need a device key.
+        //
+        if (sessionTranscript.size() > 0) {
+            return Status::fromServiceSpecificError(
+                ICredentialStore::ERROR_NO_AUTHENTICATION_KEY_AVAILABLE,
+                "No suitable authentication key available and one is needed");
         }
     }
     vector<uint8_t> signingKeyBlob;
@@ -750,29 +792,34 @@ Status Credential::update(sp<IWritableCredential>* _aidl_return) {
     //
     // It is because of this we need to set the CredentialKey certificate chain,
     // keyCount, and maxUsesPerKey below.
-    sp<WritableCredential> writableCredential =
-        new WritableCredential(dataPath_, credentialName_, docType.value(), true, hwInfo_,
-                               halWritableCredential, halApiVersion_);
+    sp<WritableCredential> writableCredential = new WritableCredential(
+        dataPath_, credentialName_, docType.value(), true, hwInfo_, halWritableCredential);
 
     writableCredential->setAttestationCertificate(data->getAttestationCertificate());
     auto [keyCount, maxUsesPerKey] = data->getAvailableAuthenticationKeys();
     writableCredential->setAvailableAuthenticationKeys(keyCount, maxUsesPerKey);
 
-    // Because its data has changed, we need to reconnect to the HAL when the
-    // credential has been updated... otherwise the remote object will have
-    // stale data for future calls (e.g. getAuthKeysNeedingCertification().
+    // Because its data has changed, we need to replace the binder for the
+    // IIdentityCredential when the credential has been updated... otherwise the
+    // remote object will have stale data for future calls, for example
+    // getAuthKeysNeedingCertification().
     //
-    // The joys and pitfalls of mutable objects...
+    // The way this is implemented is that setCredentialToReloadWhenUpdated()
+    // instructs the WritableCredential to call writableCredentialPersonalized()
+    // on |this|.
     //
-    writableCredential->setCredentialUpdatedCallback([this] {
-        Status status = this->ensureOrReplaceHalBinder();
-        if (!status.isOk()) {
-            LOG(ERROR) << "Error loading credential";
-        }
-    });
+    //
+    writableCredential->setCredentialToReloadWhenUpdated(this);
 
     *_aidl_return = writableCredential;
     return Status::ok();
+}
+
+void Credential::writableCredentialPersonalized() {
+    Status status = ensureOrReplaceHalBinder();
+    if (!status.isOk()) {
+        LOG(ERROR) << "Error reloading credential";
+    }
 }
 
 }  // namespace identity
