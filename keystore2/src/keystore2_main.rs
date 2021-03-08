@@ -19,7 +19,7 @@ use keystore2::authorization::AuthorizationManager;
 use keystore2::globals::ENFORCEMENTS;
 use keystore2::remote_provisioning::RemoteProvisioningService;
 use keystore2::service::KeystoreService;
-use keystore2::user_manager::UserManager;
+use keystore2::user_manager::Maintenance;
 use log::{error, info};
 use std::{panic, path::Path, sync::mpsc::channel};
 use vpnprofilestore::VpnProfileStore;
@@ -28,7 +28,7 @@ static KS2_SERVICE_NAME: &str = "android.system.keystore2";
 static APC_SERVICE_NAME: &str = "android.security.apc";
 static AUTHORIZATION_SERVICE_NAME: &str = "android.security.authorization";
 static REMOTE_PROVISIONING_SERVICE_NAME: &str = "android.security.remoteprovisioning";
-static USER_MANAGER_SERVICE_NAME: &str = "android.security.usermanager";
+static USER_MANAGER_SERVICE_NAME: &str = "android.security.maintenance";
 static VPNPROFILESTORE_SERVICE_NAME: &str = "android.security.vpnprofilestore";
 
 /// Keystore 2.0 takes one argument which is a path indicating its designated working directory.
@@ -100,10 +100,10 @@ fn main() {
             panic!("Failed to register service {} because of {:?}.", AUTHORIZATION_SERVICE_NAME, e);
         });
 
-    let usermanager_service = UserManager::new_native_binder().unwrap_or_else(|e| {
+    let maintenance_service = Maintenance::new_native_binder().unwrap_or_else(|e| {
         panic!("Failed to create service {} because of {:?}.", USER_MANAGER_SERVICE_NAME, e);
     });
-    binder::add_service(USER_MANAGER_SERVICE_NAME, usermanager_service.as_binder()).unwrap_or_else(
+    binder::add_service(USER_MANAGER_SERVICE_NAME, maintenance_service.as_binder()).unwrap_or_else(
         |e| {
             panic!("Failed to register service {} because of {:?}.", USER_MANAGER_SERVICE_NAME, e);
         },
