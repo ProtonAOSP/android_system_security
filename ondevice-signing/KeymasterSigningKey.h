@@ -23,30 +23,36 @@
 #include <utils/StrongPointer.h>
 
 #include "Keymaster.h"
+#include "SigningKey.h"
 
-class KeymasterSigningKey {
+class KeymasterSigningKey : public SigningKey {
     using KmDevice = ::android::hardware::keymaster::V4_1::IKeymasterDevice;
 
   public:
+    friend std::unique_ptr<KeymasterSigningKey> std::make_unique<KeymasterSigningKey>();
+    virtual ~KeymasterSigningKey(){};
+
     // Allow the key to be moved around
     KeymasterSigningKey& operator=(KeymasterSigningKey&& other) = default;
     KeymasterSigningKey(KeymasterSigningKey&& other) = default;
 
-    static android::base::Result<KeymasterSigningKey>
-    loadFromBlobAndVerify(const std::string& path);
-    static android::base::Result<KeymasterSigningKey> createNewKey();
+    static android::base::Result<SigningKey*> getInstance();
 
-    /* Sign a message with an initialized signing key */
-    android::base::Result<std::string> sign(const std::string& message) const;
-    android::base::Result<void> saveKeyblob(const std::string& path) const;
-    android::base::Result<std::vector<uint8_t>> getPublicKey() const;
-    android::base::Result<void> createX509Cert(const std::string& path) const;
+    virtual android::base::Result<std::string> sign(const std::string& message) const;
+    virtual android::base::Result<std::vector<uint8_t>> getPublicKey() const;
 
   private:
     KeymasterSigningKey();
 
+    static android::base::Result<std::unique_ptr<KeymasterSigningKey>> createAndPersistNewKey();
+    static android::base::Result<std::unique_ptr<KeymasterSigningKey>>
+    loadFromBlobAndVerify(const std::string& path);
+
     android::base::Result<void> createSigningKey();
     android::base::Result<void> initializeFromKeyblob(const std::string& path);
+    android::base::Result<void> saveKeyblob(const std::string& path) const;
+
+    static android::base::Result<KeymasterSigningKey> createNewKey();
 
     std::optional<Keymaster> mKeymaster;
     std::vector<uint8_t> mVerifiedKeyBlob;
