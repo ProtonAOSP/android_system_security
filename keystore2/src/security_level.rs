@@ -38,7 +38,10 @@ use crate::key_parameter::KeyParameter as KsKeyParam;
 use crate::key_parameter::KeyParameterValue as KsKeyParamValue;
 use crate::remote_provisioning::RemProvState;
 use crate::super_key::{KeyBlob, SuperKeyManager};
-use crate::utils::{check_key_permission, uid_to_android_user, Asp};
+use crate::utils::{
+    check_device_attestation_permissions, check_key_permission, is_device_id_attestation_tag,
+    uid_to_android_user, Asp,
+};
 use crate::{
     database::{
         BlobMetaData, BlobMetaEntry, DateTime, KeyEntry, KeyEntryLoadBits, KeyMetaData,
@@ -356,6 +359,15 @@ impl KeystoreSecurityLevel {
             check_key_permission(KeyPerm::gen_unique_id(), key, &None).context(concat!(
                 "In add_certificate_parameters: ",
                 "Caller does not have the permission for device unique attestation."
+            ))?;
+        }
+
+        // If the caller requests any device identifier attestation tag, check that they hold the
+        // correct Android permission.
+        if params.iter().any(|kp| is_device_id_attestation_tag(kp.tag)) {
+            check_device_attestation_permissions().context(concat!(
+                "In add_certificate_parameters: ",
+                "Caller does not have the permission to attest device identifiers."
             ))?;
         }
 
