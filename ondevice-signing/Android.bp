@@ -26,7 +26,6 @@ package {
 tidy_errors = [
   "cert-err34-c",
   "google-default-arguments",
-  "google-explicit-constructor",
   "google-runtime-int",
   "google-runtime-member-string-references",
   "misc-move-const-arg",
@@ -87,17 +86,22 @@ cc_binary {
     "CertUtils.cpp",
     "Keymaster.cpp",
     "KeymasterSigningKey.cpp",
+    "KeystoreKey.cpp",
     "VerityUtils.cpp",
   ],
 
   static_libs: [
     "libmini_keyctl_static", // TODO need static?
     "libc++fs",
+    "lib_odsign_proto",
   ],
 
   shared_libs: [
     "android.hardware.keymaster@4.1",
+    "android.system.keystore2-V1-cpp",
+    "android.hardware.security.keymint-V1-cpp",
     "libbase",
+    "libbinder",
     "libcrypto",
     "libcrypto_utils",
     "libfsverity",
@@ -106,6 +110,7 @@ cc_binary {
     "libkeymaster4support", // For authorization_set
     "libkeymaster4_1support",
     "libkeyutils",
+    "libprotobuf-cpp-full",
     "libutils",
   ],
 }
