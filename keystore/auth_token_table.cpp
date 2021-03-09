@@ -178,33 +178,39 @@ AuthTokenTable::FindAuthorizationForCredstore(uint64_t challenge, uint64_t secur
                                               int64_t authTokenMaxAgeMillis) {
     std::vector<uint64_t> sids = {secureUserId};
     HardwareAuthenticatorType auth_type = HardwareAuthenticatorType::ANY;
-
     time_t now = clock_function_();
+    int64_t nowMillis = now * 1000;
 
-    // challenge-based - the authToken has to contain the given challenge.
-    if (challenge != 0) {
-        auto matching_op = find_if(
-            entries_, [&](Entry& e) { return e.token().challenge == challenge && !e.completed(); });
-        if (matching_op == entries_.end()) {
-            return {AUTH_TOKEN_NOT_FOUND, {}};
-        }
-
-        if (!matching_op->SatisfiesAuth(sids, auth_type)) {
-            return {AUTH_TOKEN_WRONG_SID, {}};
-        }
-
-        if (authTokenMaxAgeMillis > 0) {
-            if (static_cast<int64_t>(matching_op->time_received()) + authTokenMaxAgeMillis <
-                static_cast<int64_t>(now)) {
-                return {AUTH_TOKEN_EXPIRED, {}};
-            }
-        }
-
-        return {OK, matching_op->token()};
+    // It's an error to call this without a non-zero challenge.
+    if (challenge == 0) {
+        return {OP_HANDLE_REQUIRED, {}};
     }
 
-    // Otherwise, no challenge - any authToken younger than the specified maximum
-    // age will do.
+    // First see if we can find a token which matches the given challenge. If we
+    // can, return the newest one. We specifically don't care about its age.
+    //
+    Entry* newest_match_for_challenge = nullptr;
+    for (auto& entry : entries_) {
+        if (entry.token().challenge == challenge && !entry.completed() &&
+            entry.SatisfiesAuth(sids, auth_type)) {
+            if (newest_match_for_challenge == nullptr ||
+                entry.is_newer_than(newest_match_for_challenge)) {
+                newest_match_for_challenge = &entry;
+            }
+        }
+    }
+    if (newest_match_for_challenge != nullptr) {
+        newest_match_for_challenge->UpdateLastUse(now);
+        return {OK, newest_match_for_challenge->token()};
+    }
+
+    // If that didn't work, we'll take the most recent token within the specified
+    // deadline, if any. Of course if the deadline is zero it doesn't make sense
+    // to look at all.
+    if (authTokenMaxAgeMillis == 0) {
+        return {AUTH_TOKEN_NOT_FOUND, {}};
+    }
+
     Entry* newest_match = nullptr;
     for (auto& entry : entries_) {
         if (entry.SatisfiesAuth(sids, auth_type) && entry.is_newer_than(newest_match)) {
@@ -216,11 +222,9 @@ AuthTokenTable::FindAuthorizationForCredstore(uint64_t challenge, uint64_t secur
         return {AUTH_TOKEN_NOT_FOUND, {}};
     }
 
-    if (authTokenMaxAgeMillis > 0) {
-        if (static_cast<int64_t>(newest_match->time_received()) + authTokenMaxAgeMillis <
-            static_cast<int64_t>(now)) {
-            return {AUTH_TOKEN_EXPIRED, {}};
-        }
+    int64_t tokenAgeMillis = nowMillis - newest_match->time_received() * 1000;
+    if (tokenAgeMillis >= authTokenMaxAgeMillis) {
+        return {AUTH_TOKEN_EXPIRED, {}};
     }
 
     newest_match->UpdateLastUse(now);
