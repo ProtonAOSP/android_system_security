@@ -25,6 +25,9 @@
 
 #include <fcntl.h>
 #include <vector>
+
+#include "KeyConstants.h"
+
 const char kBasicConstraints[] = "CA:TRUE";
 const char kKeyUsage[] = "critical,keyCertSign,cRLSign,digitalSignature";
 const char kSubjectKeyIdentifier[] = "hash";
@@ -52,6 +55,33 @@ static bool add_ext(X509* cert, int nid, const char* value) {
     return true;
 }
 
+Result<bssl::UniquePtr<RSA>> getRsa(const std::vector<uint8_t>& publicKey) {
+    bssl::UniquePtr<RSA> rsaPubkey(RSA_new());
+    rsaPubkey->n = BN_new();
+    rsaPubkey->e = BN_new();
+
+    BN_bin2bn(publicKey.data(), publicKey.size(), rsaPubkey->n);
+    BN_set_word(rsaPubkey->e, kRsaKeyExponent);
+
+    return rsaPubkey;
+}
+
+Result<void> verifySignature(const std::string& message, const std::string& signature,
+                             const std::vector<uint8_t>& publicKey) {
+    auto rsaKey = getRsa(publicKey);
+    uint8_t hashBuf[SHA256_DIGEST_LENGTH];
+    SHA256(const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(message.c_str())),
+           message.length(), hashBuf);
+
+    bool success = RSA_verify(NID_sha256, hashBuf, sizeof(hashBuf),
+                              (const uint8_t*)signature.c_str(), signature.length(), rsaKey->get());
+
+    if (!success) {
+        return Error() << "Failed to verify signature.";
+    }
+    return {};
+}
+
 Result<void> createSelfSignedCertificate(
     const std::vector<uint8_t>& publicKey,
     const std::function<Result<std::string>(const std::string&)>& signFunction,
@@ -66,8 +96,13 @@ Result<void> createSelfSignedCertificate(
     X509_gmtime_adj(X509_get_notBefore(x509.get()), 0);
     X509_gmtime_adj(X509_get_notAfter(x509.get()), kCertLifetimeSeconds);
 
-    auto pubKeyData = publicKey.data();
-    EVP_PKEY* public_key = d2i_PUBKEY(nullptr, &pubKeyData, publicKey.size());
+    // "publicKey" corresponds to the raw public key bytes - need to create
+    // a new RSA key with the correct exponent.
+    auto rsaPubkey = getRsa(publicKey);
+
+    EVP_PKEY* public_key = EVP_PKEY_new();
+    EVP_PKEY_assign_RSA(public_key, rsaPubkey->release());
+
     if (!X509_set_pubkey(x509.get(), public_key)) {
         return Error() << "Unable to set x509 public key";
     }
@@ -117,6 +152,7 @@ Result<void> createSelfSignedCertificate(
     i2d_X509_fp(f, x509.get());
     fclose(f);
 
+    EVP_PKEY_free(public_key);
     return {};
 }
 
@@ -142,11 +178,23 @@ Result<std::vector<uint8_t>> extractPublicKey(EVP_PKEY* pkey) {
     return pubKey;
 }
 
-Result<std::vector<uint8_t>> extractPublicKeyFromX509(const std::vector<uint8_t>& keyData) {
+Result<std::vector<uint8_t>>
+extractPublicKeyFromSubjectPublicKeyInfo(const std::vector<uint8_t>& keyData) {
     auto keyDataBytes = keyData.data();
     EVP_PKEY* public_key = d2i_PUBKEY(nullptr, &keyDataBytes, keyData.size());
 
     return extractPublicKey(public_key);
+}
+
+Result<std::vector<uint8_t>> extractPublicKeyFromX509(const std::vector<uint8_t>& keyData) {
+    auto keyDataBytes = keyData.data();
+    bssl::UniquePtr<X509> decoded_cert(d2i_X509(nullptr, &keyDataBytes, keyData.size()));
+    if (decoded_cert.get() == nullptr) {
+        return Error() << "Failed to decode X509 certificate.";
+    }
+    bssl::UniquePtr<EVP_PKEY> decoded_pkey(X509_get_pubkey(decoded_cert.get()));
+
+    return extractPublicKey(decoded_pkey.get());
 }
 
 Result<std::vector<uint8_t>> extractPublicKeyFromX509(const std::string& path) {

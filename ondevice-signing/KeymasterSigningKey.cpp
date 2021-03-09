@@ -33,30 +33,36 @@ using android::base::ReadFileToString;
 using android::base::Result;
 using android::base::unique_fd;
 
+const std::string kSigningKeyBlob = "/data/misc/odsign/key.blob";
+
 KeymasterSigningKey::KeymasterSigningKey() {}
 
-Result<KeymasterSigningKey> KeymasterSigningKey::loadFromBlobAndVerify(const std::string& path) {
-    KeymasterSigningKey signingKey;
+Result<std::unique_ptr<KeymasterSigningKey>>
+KeymasterSigningKey::loadFromBlobAndVerify(const std::string& path) {
+    auto signingKey = std::make_unique<KeymasterSigningKey>();
 
-    auto status = signingKey.initializeFromKeyblob(path);
+    auto status = signingKey->initializeFromKeyblob(path);
 
     if (!status.ok()) {
         return status.error();
     }
 
-    return std::move(signingKey);
+    return signingKey;
 }
 
-Result<KeymasterSigningKey> KeymasterSigningKey::createNewKey() {
-    KeymasterSigningKey signingKey;
+Result<void> KeymasterSigningKey::saveKeyblob(const std::string& path) const {
+    int flags = O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC;
 
-    auto status = signingKey.createSigningKey();
-
-    if (!status.ok()) {
-        return status.error();
+    unique_fd fd(TEMP_FAILURE_RETRY(open(path.c_str(), flags, 0600)));
+    if (fd == -1) {
+        return ErrnoError() << "Error creating key blob file " << path;
     }
 
-    return std::move(signingKey);
+    if (!android::base::WriteFully(fd, mVerifiedKeyBlob.data(), mVerifiedKeyBlob.size())) {
+        return ErrnoError() << "Error writing key blob file " << path;
+    } else {
+        return {};
+    }
 }
 
 Result<void> KeymasterSigningKey::createSigningKey() {
@@ -78,41 +84,45 @@ Result<void> KeymasterSigningKey::createSigningKey() {
     return {};
 }
 
-Result<void> KeymasterSigningKey::saveKeyblob(const std::string& path) const {
-    int flags = O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC;
+Result<std::unique_ptr<KeymasterSigningKey>> KeymasterSigningKey::createAndPersistNewKey() {
+    auto signingKey = std::make_unique<KeymasterSigningKey>();
 
-    unique_fd fd(TEMP_FAILURE_RETRY(open(path.c_str(), flags, 0600)));
-    if (fd == -1) {
-        return ErrnoError() << "Error creating key blob file " << path;
+    auto status = signingKey->createSigningKey();
+
+    if (!status.ok()) {
+        return status.error();
     }
 
-    if (!android::base::WriteFully(fd, mVerifiedKeyBlob.data(), mVerifiedKeyBlob.size())) {
-        return ErrnoError() << "Error writing key blob file " << path;
-    } else {
-        return {};
+    status = signingKey->saveKeyblob(kSigningKeyBlob);
+    if (!status.ok()) {
+        return status.error();
     }
+
+    return signingKey;
+}
+
+Result<SigningKey*> KeymasterSigningKey::getInstance() {
+    auto key = loadFromBlobAndVerify(kSigningKeyBlob);
+
+    if (!key.ok()) {
+        key = createAndPersistNewKey();
+        if (!key.ok()) {
+            return key.error();
+        }
+    }
+
+    return key->release();
 }
 
 Result<std::vector<uint8_t>> KeymasterSigningKey::getPublicKey() const {
-    auto publicKeyX509 = mKeymaster->extractPublicKey(mVerifiedKeyBlob);
-    if (!publicKeyX509.ok()) {
-        return publicKeyX509.error();
-    }
-    return extractPublicKeyFromX509(publicKeyX509.value());
-}
-
-Result<void> KeymasterSigningKey::createX509Cert(const std::string& outPath) const {
     auto publicKey = mKeymaster->extractPublicKey(mVerifiedKeyBlob);
-
     if (!publicKey.ok()) {
         return publicKey.error();
     }
 
-    auto keymasterSignFunction = [&](const std::string& to_be_signed) {
-        return this->sign(to_be_signed);
-    };
-    createSelfSignedCertificate(*publicKey, keymasterSignFunction, outPath);
-    return {};
+    // Keymaster returns the public key not in a full X509 cert, but just the
+    // "SubjectPublicKeyInfo"
+    return extractPublicKeyFromSubjectPublicKeyInfo(publicKey.value());
 }
 
 Result<void> KeymasterSigningKey::initializeFromKeyblob(const std::string& path) {
