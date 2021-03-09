@@ -581,11 +581,14 @@ impl CertificateInfo {
 
 /// This type represents a certificate chain with a private key corresponding to the leaf
 /// certificate. TODO(jbires): This will be used in a follow-on CL, for now it's used in the tests.
-#[allow(dead_code)]
 pub struct CertificateChain {
-    private_key: ZVec,
-    batch_cert: ZVec,
-    cert_chain: ZVec,
+    /// A KM key blob
+    pub private_key: ZVec,
+    /// A batch cert for private_key
+    pub batch_cert: Vec<u8>,
+    /// A full certificate chain from root signing authority to private_key, including batch_cert
+    /// for convenience.
+    pub cert_chain: Vec<u8>,
 }
 
 /// This type represents a Keystore 2.0 key entry.
@@ -1914,8 +1917,8 @@ impl KeystoreDB {
             }
             Ok(Some(CertificateChain {
                 private_key: ZVec::try_from(km_blob)?,
-                batch_cert: ZVec::try_from(batch_cert_blob)?,
-                cert_chain: ZVec::try_from(cert_chain_blob)?,
+                batch_cert: batch_cert_blob,
+                cert_chain: cert_chain_blob,
             }))
             .no_gc()
         })
@@ -3212,8 +3215,8 @@ mod tests {
         assert_eq!(true, chain.is_some());
         let cert_chain = chain.unwrap();
         assert_eq!(cert_chain.private_key.to_vec(), loaded_values.priv_key);
-        assert_eq!(cert_chain.batch_cert.to_vec(), loaded_values.batch_cert);
-        assert_eq!(cert_chain.cert_chain.to_vec(), loaded_values.cert_chain);
+        assert_eq!(cert_chain.batch_cert, loaded_values.batch_cert);
+        assert_eq!(cert_chain.cert_chain, loaded_values.cert_chain);
         Ok(())
     }
 
@@ -3306,8 +3309,8 @@ mod tests {
             db.retrieve_attestation_key_and_cert_chain(Domain::APP, namespace, &KEYSTORE_UUID)?;
         assert!(cert_chain.is_some());
         let value = cert_chain.unwrap();
-        assert_eq!(entry_values.batch_cert, value.batch_cert.to_vec());
-        assert_eq!(entry_values.cert_chain, value.cert_chain.to_vec());
+        assert_eq!(entry_values.batch_cert, value.batch_cert);
+        assert_eq!(entry_values.cert_chain, value.cert_chain);
         assert_eq!(entry_values.priv_key, value.private_key.to_vec());
 
         cert_chain = db.retrieve_attestation_key_and_cert_chain(
