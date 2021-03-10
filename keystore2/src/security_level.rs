@@ -420,17 +420,20 @@ impl KeystoreSecurityLevel {
 
         // generate_key requires the rebind permission.
         check_key_permission(KeyPerm::rebind(), &key, &None).context("In generate_key.")?;
-        let (attest_key, cert_chain) = DB
-            .with::<_, Result<(Option<AttestationKey>, Option<Certificate>)>>(|db| {
-                self.get_attest_key_and_cert_chain(
-                    &key,
-                    caller_uid,
-                    attest_key_descriptor,
-                    params,
-                    &mut db.borrow_mut(),
-                )
-            })
-            .context("In generate_key: Trying to get an attestation key")?;
+        let (attest_key, cert_chain) = match (key.domain, attest_key_descriptor) {
+            (Domain::BLOB, None) => (None, None),
+            _ => DB
+                .with::<_, Result<(Option<AttestationKey>, Option<Certificate>)>>(|db| {
+                    self.get_attest_key_and_cert_chain(
+                        &key,
+                        caller_uid,
+                        attest_key_descriptor,
+                        params,
+                        &mut db.borrow_mut(),
+                    )
+                })
+                .context("In generate_key: Trying to get an attestation key")?,
+        };
         let params = Self::add_certificate_parameters(caller_uid, params, &key)
             .context("In generate_key: Trying to get aaid.")?;
 
