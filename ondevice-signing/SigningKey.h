@@ -16,13 +16,14 @@
 
 #pragma once
 
+#include <android-base/macros.h>
 #include <android-base/result.h>
 
-#include "SigningKey.h"
-
-android::base::Result<void> addCertToFsVerityKeyring(const std::string& path);
-android::base::Result<std::vector<uint8_t>> createDigest(const std::string& path);
-android::base::Result<std::map<std::string, std::string>>
-verifyAllFilesInVerity(const std::string& path);
-android::base::Result<std::map<std::string, std::string>>
-addFilesToVerityRecursive(const std::string& path, const SigningKey& key);
+class SigningKey {
+  public:
+    virtual ~SigningKey(){};
+    /* Sign a message with an initialized signing key */
+    virtual android::base::Result<std::string> sign(const std::string& message) const = 0;
+    /* Retrieve the associated public key */
+    virtual android::base::Result<std::vector<uint8_t>> getPublicKey() const = 0;
+};

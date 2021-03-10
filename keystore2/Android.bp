@@ -29,6 +29,7 @@ rust_defaults {
     rustlibs: [
         "android.hardware.security.keymint-V1-rust",
         "android.hardware.security.secureclock-V1-rust",
+        "android.os.permissions_aidl-rust",
         "android.security.apc-rust",
         "android.security.authorization-rust",
         "android.security.compat-rust",

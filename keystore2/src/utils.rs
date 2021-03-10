@@ -15,12 +15,13 @@
 //! This module implements utility functions used by the Keystore 2.0 service
 //! implementation.
 
-use crate::error::Error;
+use crate::error::{map_binder_status, Error, ErrorCode};
 use crate::permission;
 use crate::permission::{KeyPerm, KeyPermSet, KeystorePerm};
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
-    KeyCharacteristics::KeyCharacteristics,
+    KeyCharacteristics::KeyCharacteristics, Tag::Tag,
 };
+use android_os_permissions_aidl::aidl::android::os::IPermissionController;
 use android_security_apc::aidl::android::security::apc::{
     IProtectedConfirmation::{FLAG_UI_OPTION_INVERTED, FLAG_UI_OPTION_MAGNIFIED},
     ResponseCode::ResponseCode as ApcResponseCode,
@@ -86,6 +87,34 @@ pub fn check_key_permission(
             access_vector,
         )
     })
+}
+
+/// This function checks whether a given tag corresponds to the access of device identifiers.
+pub fn is_device_id_attestation_tag(tag: Tag) -> bool {
+    matches!(tag, Tag::ATTESTATION_ID_IMEI | Tag::ATTESTATION_ID_MEID | Tag::ATTESTATION_ID_SERIAL)
+}
+
+/// This function checks whether the calling app has the Android permissions needed to attest device
+/// identifiers. It throws an error if the permissions cannot be verified, or if the caller doesn't
+/// have the right permissions, and returns silently otherwise.
+pub fn check_device_attestation_permissions() -> anyhow::Result<()> {
+    let permission_controller: binder::Strong<dyn IPermissionController::IPermissionController> =
+        binder::get_interface("permission")?;
+
+    let binder_result = permission_controller.checkPermission(
+        "android.permission.READ_PRIVILEGED_PHONE_STATE",
+        ThreadState::get_calling_pid(),
+        ThreadState::get_calling_uid() as i32,
+    );
+    let has_permissions = map_binder_status(binder_result)
+        .context("In check_device_attestation_permissions: checkPermission failed")?;
+    match has_permissions {
+        true => Ok(()),
+        false => Err(Error::Km(ErrorCode::CANNOT_ATTEST_IDS)).context(concat!(
+            "In check_device_attestation_permissions: ",
+            "caller does not have the permission to attest device IDs"
+        )),
+    }
 }
 
 /// Thread safe wrapper around SpIBinder. It is safe to have SpIBinder smart pointers to the
@@ -192,4 +221,22 @@ pub const AID_USER_OFFSET: u32 = 100000;
 /// Extracts the android user from the given uid.
 pub fn uid_to_android_user(uid: u32) -> u32 {
     uid / AID_USER_OFFSET
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::Result;
+
+    #[test]
+    fn check_device_attestation_permissions_test() -> Result<()> {
+        check_device_attestation_permissions().or_else(|error| {
+            match error.root_cause().downcast_ref::<Error>() {
+                // Expected: the context for this test might not be allowed to attest device IDs.
+                Some(Error::Km(ErrorCode::CANNOT_ATTEST_IDS)) => Ok(()),
+                // Other errors are unexpected
+                _ => Err(error),
+            }
+        })
+    }
 }
