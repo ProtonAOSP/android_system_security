@@ -140,8 +140,10 @@ bool KeystoreKey::initialize() {
 
     auto status = mService->getSecurityLevel(SecurityLevel::STRONGBOX, &mSecurityLevel);
     if (!status.isOk()) {
-        // TODO fallback to TEE
-        return false;
+        status = mService->getSecurityLevel(SecurityLevel::TRUSTED_ENVIRONMENT, &mSecurityLevel);
+        if (!status.isOk()) {
+            return false;
+        }
     }
 
     auto descriptor = getKeyDescriptor();
