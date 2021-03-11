@@ -273,7 +273,7 @@ bool CredentialData::loadFromDisk() {
     }
 
     for (size_t n = 0; n < map->size(); n++) {
-        auto [keyItem, valueItem] = (*map)[n];
+        auto& [keyItem, valueItem] = (*map)[n];
         const cppbor::Tstr* tstr = keyItem->asTstr();
         if (tstr == nullptr) {
             LOG(ERROR) << "Key item in top-level map is not a tstr";
@@ -325,7 +325,7 @@ bool CredentialData::loadFromDisk() {
                 return false;
             }
             for (size_t m = 0; m < map->size(); m++) {
-                auto [ecKeyItem, ecValueItem] = (*map)[m];
+                auto& [ecKeyItem, ecValueItem] = (*map)[m];
                 const cppbor::Tstr* ecTstr = ecKeyItem->asTstr();
                 if (ecTstr == nullptr) {
                     LOG(ERROR) << "Key item in encryptedChunks map is not a tstr";
