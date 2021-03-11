@@ -12,18 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package android.security.usermanager;
+package android.security.maintenance;
 
 import android.system.keystore2.Domain;
 
 // TODO: mark the interface with @SensitiveData when the annotation is ready (b/176110256).
 
 /**
- * IKeystoreUserManager interface exposes the methods for adding/removing users and changing the
+ * IKeystoreMaintenance interface exposes the methods for adding/removing users and changing the
  * user's password.
  * @hide
  */
-interface IKeystoreUserManager {
+interface IKeystoreMaintenance {
 
     /**
      * Allows LockSettingsService to inform keystore about adding a new user.
