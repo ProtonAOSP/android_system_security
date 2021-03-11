@@ -16,6 +16,7 @@
 
 #include <filesystem>
 #include <map>
+#include <span>
 #include <string>
 
 #include <fcntl.h>
@@ -56,7 +57,7 @@ struct fsverity_signed_digest {
     __u8 digest[];
 };
 
-static std::string toHex(const std::vector<uint8_t>& data) {
+static std::string toHex(std::span<uint8_t> data) {
     std::stringstream ss;
     for (auto it = data.begin(); it != data.end(); ++it) {
         ss << std::setfill('0') << std::setw(2) << std::hex << static_cast<unsigned>(*it);
@@ -204,9 +205,7 @@ Result<std::string> isFileInVerity(const std::string& path) {
     if (ret < 0) {
         return ErrnoError() << "Failed to FS_IOC_MEASURE_VERITY for " << path;
     }
-    std::vector<uint8_t> digest_vector(&d->digest[0], &d->digest[d->digest_size]);
-
-    return toHex(digest_vector);
+    return toHex({&d->digest[0], &d->digest[d->digest_size]});
 }
 
 Result<std::map<std::string, std::string>> verifyAllFilesInVerity(const std::string& path) {
