@@ -53,6 +53,9 @@ using android::base::Result;
 
 using android::base::unique_fd;
 
+// Keystore boot level that the odsign key uses
+static const int kOdsignBootLevel = 30;
+
 static KeyDescriptor getKeyDescriptor() {
     // AIDL parcelable objects don't have constructor
     static KeyDescriptor descriptor;
@@ -106,6 +109,11 @@ Result<KeyMetadata> KeystoreKey::createNewKey(const KeyDescriptor& descriptor) {
     auth.tag = Tag::NO_AUTH_REQUIRED;
     auth.value = KeyParameterValue::make<KeyParameterValue::boolValue>(true);
     params.push_back(auth);
+
+    KeyParameter boot_level;
+    boot_level.tag = Tag::MAX_BOOT_LEVEL;
+    boot_level.value = KeyParameterValue::make<KeyParameterValue::integer>(kOdsignBootLevel);
+    params.push_back(boot_level);
 
     KeyMetadata metadata;
     auto status = mSecurityLevel->generateKey(descriptor, {}, params, 0, {}, &metadata);
