@@ -15,6 +15,7 @@
 package android.security.maintenance;
 
 import android.system.keystore2.Domain;
+import android.security.maintenance.UserState;
 
 // TODO: mark the interface with @SensitiveData when the annotation is ready (b/176110256).
 
@@ -75,4 +76,17 @@ interface IKeystoreMaintenance {
      * @hide
      */
      void clearNamespace(Domain domain, long nspace);
+
+    /**
+     * Allows querying user state, given user id.
+     * Callers require 'GetState' permission.
+     * ## Error conditions:
+     * `ResponseCode::PERMISSION_DENIED` - if the callers do not have the 'GetState'
+     *                                     permission.
+     * `ResponseCode::SYSTEM_ERROR` - if an error occurred when querying the user state.
+     *
+     * @param userId - Android user id
+     * @hide
+     */
+    UserState getState(in int userId);
 }
