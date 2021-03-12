@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! This module implements IKeystoreUserManager AIDL interface.
+//! This module implements IKeystoreMaintenance AIDL interface.
 
 use crate::error::map_or_log_err;
 use crate::error::Error as KeystoreError;
@@ -20,10 +20,10 @@ use crate::globals::{DB, LEGACY_MIGRATOR, SUPER_KEY};
 use crate::permission::KeystorePerm;
 use crate::super_key::UserState;
 use crate::utils::check_keystore_permission;
-use android_security_usermanager::aidl::android::security::usermanager::IKeystoreUserManager::{
-    BnKeystoreUserManager, IKeystoreUserManager,
+use android_security_maintenance::aidl::android::security::maintenance::IKeystoreMaintenance::{
+    BnKeystoreMaintenance, IKeystoreMaintenance,
 };
-use android_security_usermanager::binder::{Interface, Result as BinderResult};
+use android_security_maintenance::binder::{Interface, Result as BinderResult};
 use android_system_keystore2::aidl::android::system::keystore2::Domain::Domain;
 use android_system_keystore2::aidl::android::system::keystore2::ResponseCode::ResponseCode;
 use anyhow::{Context, Result};
@@ -31,12 +31,12 @@ use binder::{IBinder, Strong};
 
 /// This struct is defined to implement the aforementioned AIDL interface.
 /// As of now, it is an empty struct.
-pub struct UserManager;
+pub struct Maintenance;
 
-impl UserManager {
+impl Maintenance {
     /// Create a new instance of Keystore User Manager service.
-    pub fn new_native_binder() -> Result<Strong<dyn IKeystoreUserManager>> {
-        let result = BnKeystoreUserManager::new_binder(Self);
+    pub fn new_native_binder() -> Result<Strong<dyn IKeystoreMaintenance>> {
+        let result = BnKeystoreMaintenance::new_binder(Self);
         result.as_binder().set_requesting_sid(true);
         Ok(result)
     }
@@ -99,9 +99,9 @@ impl UserManager {
     }
 }
 
-impl Interface for UserManager {}
+impl Interface for Maintenance {}
 
-impl IKeystoreUserManager for UserManager {
+impl IKeystoreMaintenance for Maintenance {
     fn onUserPasswordChanged(&self, user_id: i32, password: Option<&[u8]>) -> BinderResult<()> {
         map_or_log_err(Self::on_user_password_changed(user_id, password), Ok)
     }
