@@ -20,8 +20,9 @@ use crate::globals::{DB, LEGACY_MIGRATOR, SUPER_KEY};
 use crate::permission::KeystorePerm;
 use crate::super_key::UserState;
 use crate::utils::check_keystore_permission;
-use android_security_maintenance::aidl::android::security::maintenance::IKeystoreMaintenance::{
-    BnKeystoreMaintenance, IKeystoreMaintenance,
+use android_security_maintenance::aidl::android::security::maintenance::{
+    IKeystoreMaintenance::{BnKeystoreMaintenance, IKeystoreMaintenance},
+    UserState::UserState as AidlUserState,
 };
 use android_security_maintenance::binder::{Interface, Result as BinderResult};
 use android_system_keystore2::aidl::android::system::keystore2::Domain::Domain;
@@ -97,6 +98,23 @@ impl Maintenance {
         DB.with(|db| db.borrow_mut().unbind_keys_for_namespace(domain, nspace))
             .context("In clear_namespace: Trying to delete keys from db.")
     }
+
+    fn get_state(user_id: i32) -> Result<AidlUserState> {
+        // Check permission. Function should return if this failed. Therefore having '?' at the end
+        // is very important.
+        check_keystore_permission(KeystorePerm::get_state()).context("In get_state.")?;
+        let state = DB
+            .with(|db| {
+                UserState::get(&mut db.borrow_mut(), &LEGACY_MIGRATOR, &SUPER_KEY, user_id as u32)
+            })
+            .context("In get_state. Trying to get UserState.")?;
+
+        match state {
+            UserState::Uninitialized => Ok(AidlUserState::UNINITIALIZED),
+            UserState::LskfUnlocked(_) => Ok(AidlUserState::LSKF_UNLOCKED),
+            UserState::LskfLocked => Ok(AidlUserState::LSKF_LOCKED),
+        }
+    }
 }
 
 impl Interface for Maintenance {}
@@ -116,5 +134,9 @@ impl IKeystoreMaintenance for Maintenance {
 
     fn clearNamespace(&self, domain: Domain, nspace: i64) -> BinderResult<()> {
         map_or_log_err(Self::clear_namespace(domain, nspace), Ok)
+    }
+
+    fn getState(&self, user_id: i32) -> binder::public_api::Result<AidlUserState> {
+        map_or_log_err(Self::get_state(user_id), Ok)
     }
 }
