@@ -17,7 +17,7 @@
 #define LOG_TAG "Credential"
 
 #include <android-base/logging.h>
-
+#include <android/binder_manager.h>
 #include <android/hardware/identity/support/IdentityCredentialSupport.h>
 
 #include <android/security/identity/ICredentialStore.h>
@@ -33,6 +33,12 @@
 #include <future>
 #include <tuple>
 
+#include <aidl/android/hardware/security/keymint/HardwareAuthToken.h>
+#include <aidl/android/hardware/security/secureclock/TimeStampToken.h>
+#include <aidl/android/security/authorization/AuthorizationTokens.h>
+#include <aidl/android/security/authorization/IKeystoreAuthorization.h>
+#include <android/sysprop/Keystore2Properties.sysprop.h>
+
 #include "Credential.h"
 #include "CredentialData.h"
 #include "Util.h"
@@ -47,6 +53,7 @@ using std::promise;
 using std::tuple;
 
 using android::security::keystore::IKeystoreService;
+using namespace android::sysprop;
 
 using ::android::hardware::identity::IWritableIdentityCredential;
 
@@ -55,10 +62,16 @@ using ::android::hardware::identity::support::ecKeyPairGetPrivateKey;
 using ::android::hardware::identity::support::ecKeyPairGetPublicKey;
 using ::android::hardware::identity::support::sha256;
 
+using android::hardware::keymaster::SecurityLevel;
 using android::hardware::keymaster::V4_0::HardwareAuthToken;
 using android::hardware::keymaster::V4_0::VerificationToken;
 using AidlHardwareAuthToken = android::hardware::keymaster::HardwareAuthToken;
 using AidlVerificationToken = android::hardware::keymaster::VerificationToken;
+
+using KeyMintAuthToken = ::aidl::android::hardware::security::keymint::HardwareAuthToken;
+using ::aidl::android::hardware::security::secureclock::TimeStampToken;
+using ::aidl::android::security::authorization::AuthorizationTokens;
+using ::aidl::android::security::authorization::IKeystoreAuthorization;
 
 Credential::Credential(CipherSuite cipherSuite, const std::string& dataPath,
                        const std::string& credentialName, uid_t callingUid,
@@ -168,9 +181,10 @@ class CredstoreTokenCallback : public android::security::keystore::BnCredstoreTo
 
 // Returns false if an error occurred communicating with keystore.
 //
-bool getTokensFromKeystore(uint64_t challenge, uint64_t secureUserId,
-                           unsigned int authTokenMaxAgeMillis, vector<uint8_t>& authToken,
-                           vector<uint8_t>& verificationToken) {
+bool getTokensFromKeystore1(uint64_t challenge, uint64_t secureUserId,
+                            unsigned int authTokenMaxAgeMillis,
+                            AidlHardwareAuthToken& aidlAuthToken,
+                            AidlVerificationToken& aidlVerificationToken) {
     sp<IServiceManager> sm = defaultServiceManager();
     sp<IBinder> binder = sm->getService(String16("android.security.keystore"));
     sp<IKeystoreService> keystore = interface_cast<IKeystoreService>(binder);
@@ -189,17 +203,98 @@ bool getTokensFromKeystore(uint64_t challenge, uint64_t secureUserId,
 
     auto fstatus = future.wait_for(std::chrono::milliseconds(5000));
     if (fstatus != std::future_status::ready) {
-        LOG(ERROR) << "Waited 5 seconds from tokens for credstore, aborting";
+        LOG(ERROR) << "Waited 5 seconds for tokens from keystore, aborting";
         return false;
     }
     auto [success, returnedAuthToken, returnedVerificationToken] = future.get();
     if (!success) {
-        LOG(ERROR) << "Error getting tokens from credstore";
+        LOG(ERROR) << "Error getting tokens from keystore1";
         return false;
     }
-    authToken = returnedAuthToken;
-    verificationToken = returnedVerificationToken;
+    // It's entirely possible getTokensFromKeystore() succeeded but didn't
+    // return any tokens (in which case the returned byte-vectors are
+    // empty). For example, this can happen if no auth token is available
+    // which satifies e.g. |authTokenMaxAgeMillis|.
+    //
+    if (returnedAuthToken.size() > 0) {
+        HardwareAuthToken authToken =
+            android::hardware::keymaster::V4_0::support::hidlVec2AuthToken(returnedAuthToken);
+        // Convert from HIDL to AIDL...
+        aidlAuthToken.challenge = int64_t(authToken.challenge);
+        aidlAuthToken.userId = int64_t(authToken.userId);
+        aidlAuthToken.authenticatorId = int64_t(authToken.authenticatorId);
+        aidlAuthToken.authenticatorType = ::android::hardware::keymaster::HardwareAuthenticatorType(
+            int32_t(authToken.authenticatorType));
+        aidlAuthToken.timestamp.milliSeconds = int64_t(authToken.timestamp);
+        aidlAuthToken.mac = authToken.mac;
+    }
+
+    if (returnedVerificationToken.size() > 0) {
+        optional<VerificationToken> token =
+            android::hardware::keymaster::V4_0::support::deserializeVerificationToken(
+                returnedVerificationToken);
+        if (!token) {
+            LOG(ERROR) << "Error deserializing verification token";
+        }
+        aidlVerificationToken.challenge = token->challenge;
+        aidlVerificationToken.timestamp.milliSeconds = token->timestamp;
+        aidlVerificationToken.securityLevel =
+            ::android::hardware::keymaster::SecurityLevel(token->securityLevel);
+        aidlVerificationToken.mac = token->mac;
+    }
     return true;
+}
+
+// Returns false if an error occurred communicating with keystore.
+//
+bool getTokensFromKeystore2(uint64_t challenge, uint64_t secureUserId,
+                            unsigned int authTokenMaxAgeMillis,
+                            AidlHardwareAuthToken& aidlAuthToken,
+                            AidlVerificationToken& aidlVerificationToken) {
+    // try to connect to IKeystoreAuthorization AIDL service first.
+    AIBinder* authzAIBinder = AServiceManager_checkService("android.security.authorization");
+    ::ndk::SpAIBinder authzBinder(authzAIBinder);
+    auto authzService = IKeystoreAuthorization::fromBinder(authzBinder);
+    if (authzService) {
+        AuthorizationTokens authzTokens;
+        auto result = authzService->getAuthTokensForCredStore(challenge, secureUserId,
+                                                              authTokenMaxAgeMillis, &authzTokens);
+        // Convert KeyMint auth token to KeyMaster authtoken, only if tokens are
+        // returned
+        if (result.isOk()) {
+            KeyMintAuthToken keymintAuthToken = authzTokens.authToken;
+            aidlAuthToken.challenge = keymintAuthToken.challenge;
+            aidlAuthToken.userId = keymintAuthToken.userId;
+            aidlAuthToken.authenticatorId = keymintAuthToken.authenticatorId;
+            aidlAuthToken.authenticatorType =
+                ::android::hardware::keymaster::HardwareAuthenticatorType(
+                    int32_t(keymintAuthToken.authenticatorType));
+            aidlAuthToken.timestamp.milliSeconds = keymintAuthToken.timestamp.milliSeconds;
+            aidlAuthToken.mac = keymintAuthToken.mac;
+
+            // Convert timestamp token to KeyMaster verification token
+            TimeStampToken timestampToken = authzTokens.timestampToken;
+            aidlVerificationToken.challenge = timestampToken.challenge;
+            aidlVerificationToken.timestamp.milliSeconds = timestampToken.timestamp.milliSeconds;
+            // Legacy verification tokens were always minted by TEE.
+            aidlVerificationToken.securityLevel = SecurityLevel::TRUSTED_ENVIRONMENT;
+            aidlVerificationToken.mac = timestampToken.mac;
+        } else {
+            if (result.getServiceSpecificError() == 0) {
+                // Here we differentiate the errors occurred during communication
+                // from the service specific errors.
+                LOG(ERROR) << "Error getting tokens from keystore2: " << result.getDescription();
+                return false;
+            } else {
+                // Log the reason for not finding auth tokens.
+                LOG(INFO) << "Auth tokens not found: " << result.getDescription();
+            }
+        }
+        return true;
+    } else {
+        LOG(ERROR) << "Error connecting to IKeystoreAuthorization service";
+        return false;
+    }
 }
 
 Status Credential::getEntries(const vector<uint8_t>& requestMessage,
@@ -334,49 +429,23 @@ Status Credential::getEntries(const vector<uint8_t>& requestMessage,
         // not a guarantee and it's also not required.
         //
 
-        vector<uint8_t> authTokenBytes;
-        vector<uint8_t> verificationTokenBytes;
-        if (!getTokensFromKeystore(selectedChallenge_, data->getSecureUserId(),
-                                   authTokenMaxAgeMillis, authTokenBytes, verificationTokenBytes)) {
-            LOG(ERROR) << "Error getting tokens from keystore";
-            return Status::fromServiceSpecificError(ICredentialStore::ERROR_GENERIC,
-                                                    "Error getting tokens from keystore");
-        }
-
-        // It's entirely possible getTokensFromKeystore() succeeded but didn't
-        // return any tokens (in which case the returned byte-vectors are
-        // empty). For example, this can happen if no auth token is available
-        // which satifies e.g. |authTokenMaxAgeMillis|.
-        //
-        if (authTokenBytes.size() > 0) {
-            HardwareAuthToken authToken =
-                android::hardware::keymaster::V4_0::support::hidlVec2AuthToken(authTokenBytes);
-
-            // Convert from HIDL to AIDL...
-            aidlAuthToken.challenge = int64_t(authToken.challenge);
-            aidlAuthToken.userId = int64_t(authToken.userId);
-            aidlAuthToken.authenticatorId = int64_t(authToken.authenticatorId);
-            aidlAuthToken.authenticatorType =
-                ::android::hardware::keymaster::HardwareAuthenticatorType(
-                    int32_t(authToken.authenticatorType));
-            aidlAuthToken.timestamp.milliSeconds = int64_t(authToken.timestamp);
-            aidlAuthToken.mac = authToken.mac;
-        }
-
-        if (verificationTokenBytes.size() > 0) {
-            optional<VerificationToken> token =
-                android::hardware::keymaster::V4_0::support::deserializeVerificationToken(
-                    verificationTokenBytes);
-            if (!token) {
-                LOG(ERROR) << "Error deserializing verification token";
+        auto keystore2_status = Keystore2Properties::keystore2_enabled();
+        if (keystore2_status.has_value() && keystore2_status.value()) {
+            if (!getTokensFromKeystore2(selectedChallenge_, data->getSecureUserId(),
+                                        authTokenMaxAgeMillis, aidlAuthToken,
+                                        aidlVerificationToken)) {
+                LOG(ERROR) << "Error getting tokens from keystore2";
                 return Status::fromServiceSpecificError(ICredentialStore::ERROR_GENERIC,
-                                                        "Error deserializing verification token");
+                                                        "Error getting tokens from keystore2");
             }
-            aidlVerificationToken.challenge = token->challenge;
-            aidlVerificationToken.timestamp.milliSeconds = token->timestamp;
-            aidlVerificationToken.securityLevel =
-                ::android::hardware::keymaster::SecurityLevel(token->securityLevel);
-            aidlVerificationToken.mac = token->mac;
+        } else {
+            if (!getTokensFromKeystore1(selectedChallenge_, data->getSecureUserId(),
+                                        authTokenMaxAgeMillis, aidlAuthToken,
+                                        aidlVerificationToken)) {
+                LOG(ERROR) << "Error getting tokens from keystore";
+                return Status::fromServiceSpecificError(ICredentialStore::ERROR_GENERIC,
+                                                        "Error getting tokens from keystore");
+            }
         }
     }
 
