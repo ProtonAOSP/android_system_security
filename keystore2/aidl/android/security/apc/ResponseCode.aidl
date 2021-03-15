@@ -19,6 +19,7 @@ package android.security.apc;
 /**
  * Used as service specific exception code by IProtectedConfirmation and as result
  * code by IConfirmationCallback
+ * @hide
  */
 @Backing(type="int")
 enum ResponseCode {

@@ -23,6 +23,7 @@ import android.security.authorization.AuthorizationTokens;
 /**
  * IKeystoreAuthorization interface exposes the methods for other system components to
  * provide keystore with the information required to enforce authorizations on key usage.
+ * @hide
  */
 interface IKeystoreAuthorization {
 

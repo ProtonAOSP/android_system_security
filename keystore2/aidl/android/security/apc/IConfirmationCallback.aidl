@@ -21,6 +21,7 @@ import android.security.apc.ResponseCode;
 /**
  * This callback interface must be implemented by the client to receive the result of the user
  * confirmation.
+ * @hide
  */
 interface IConfirmationCallback {
     /**

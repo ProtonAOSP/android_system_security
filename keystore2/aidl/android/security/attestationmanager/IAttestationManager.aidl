@@ -21,7 +21,6 @@ import android.hardware.security.keymint.KeyParameter;
 
 /**
  * Internal interface for performing device attestation.
- *
  * @hide
  */
 interface IAttestationManager {
