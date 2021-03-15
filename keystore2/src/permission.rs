@@ -308,6 +308,8 @@ implement_permission!(
         ChangePassword = 0x100,    selinux name: change_password;
         /// Checked when a UID is cleared.
         ClearUID = 0x200,    selinux name: clear_uid;
+        /// Checked when Credstore calls IKeystoreAuthorization to obtain auth tokens.
+        GetAuthToken = 0x400,  selinux name: get_auth_token;
     }
 );
 
