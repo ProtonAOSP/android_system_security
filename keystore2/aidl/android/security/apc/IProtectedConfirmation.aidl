@@ -18,6 +18,7 @@ package android.security.apc;
 
 import android.security.apc.IConfirmationCallback;
 
+/** @hide */
 interface IProtectedConfirmation {
 
     /**

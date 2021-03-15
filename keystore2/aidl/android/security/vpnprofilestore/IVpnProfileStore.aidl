@@ -18,7 +18,6 @@ package android.security.vpnprofilestore;
 
 /**
  * Internal interface for accessing and storing VPN profiles.
- *
  * @hide
  */
 interface IVpnProfileStore {
