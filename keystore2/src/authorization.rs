@@ -15,7 +15,6 @@
 //! This module implements IKeystoreAuthorization AIDL interface.
 
 use crate::error::Error as KeystoreError;
-use crate::error::map_or_log_err;
 use crate::globals::{ENFORCEMENTS, SUPER_KEY, DB, LEGACY_MIGRATOR};
 use crate::permission::KeystorePerm;
 use crate::super_key::UserState;
@@ -23,14 +22,87 @@ use crate::utils::check_keystore_permission;
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
     HardwareAuthToken::HardwareAuthToken,
 };
-use android_security_authorization::binder::{Interface, Result as BinderResult, Strong};
-use android_security_authorization::aidl::android::security::authorization::IKeystoreAuthorization::{
-        BnKeystoreAuthorization, IKeystoreAuthorization,
+use android_security_authorization::binder::{ExceptionCode, Interface, Result as BinderResult,
+     Strong, Status as BinderStatus};
+use android_security_authorization::aidl::android::security::authorization::{
+    IKeystoreAuthorization::BnKeystoreAuthorization, IKeystoreAuthorization::IKeystoreAuthorization,
+    LockScreenEvent::LockScreenEvent, AuthorizationTokens::AuthorizationTokens,
+    ResponseCode::ResponseCode,
 };
-use android_security_authorization:: aidl::android::security::authorization::LockScreenEvent::LockScreenEvent;
-use android_system_keystore2::aidl::android::system::keystore2::ResponseCode::ResponseCode;
+use android_system_keystore2::aidl::android::system::keystore2::{
+    ResponseCode::ResponseCode as KsResponseCode };
 use anyhow::{Context, Result};
 use binder::IBinder;
+use keystore2_selinux as selinux;
+
+/// This is the Authorization error type, it wraps binder exceptions and the
+/// Authorization ResponseCode
+#[derive(Debug, thiserror::Error, PartialEq)]
+pub enum Error {
+    /// Wraps an IKeystoreAuthorization response code as defined by
+    /// android.security.authorization AIDL interface specification.
+    #[error("Error::Rc({0:?})")]
+    Rc(ResponseCode),
+    /// Wraps a Binder exception code other than a service specific exception.
+    #[error("Binder exception code {0:?}, {1:?}")]
+    Binder(ExceptionCode, i32),
+}
+
+/// This function should be used by authorization service calls to translate error conditions
+/// into service specific exceptions.
+///
+/// All error conditions get logged by this function.
+///
+/// `Error::Rc(x)` variants get mapped onto a service specific error code of `x`.
+/// Certain response codes may be returned from keystore/ResponseCode.aidl by the keystore2 modules,
+/// which are then converted to the corresponding response codes of android.security.authorization
+/// AIDL interface specification.
+///
+/// `selinux::Error::perm()` is mapped on `ResponseCode::PERMISSION_DENIED`.
+///
+/// All non `Error` error conditions get mapped onto ResponseCode::SYSTEM_ERROR`.
+///
+/// `handle_ok` will be called if `result` is `Ok(value)` where `value` will be passed
+/// as argument to `handle_ok`. `handle_ok` must generate a `BinderResult<T>`, but it
+/// typically returns Ok(value).
+pub fn map_or_log_err<T, U, F>(result: Result<U>, handle_ok: F) -> BinderResult<T>
+where
+    F: FnOnce(U) -> BinderResult<T>,
+{
+    result.map_or_else(
+        |e| {
+            log::error!("{:#?}", e);
+            let root_cause = e.root_cause();
+            if let Some(KeystoreError::Rc(ks_rcode)) = root_cause.downcast_ref::<KeystoreError>() {
+                let rc = match *ks_rcode {
+                    // Although currently keystore2/ResponseCode.aidl and
+                    // authorization/ResponseCode.aidl share the same integer values for the
+                    // common response codes, this may deviate in the future, hence the
+                    // conversion here.
+                    KsResponseCode::SYSTEM_ERROR => ResponseCode::SYSTEM_ERROR.0,
+                    KsResponseCode::KEY_NOT_FOUND => ResponseCode::KEY_NOT_FOUND.0,
+                    KsResponseCode::VALUE_CORRUPTED => ResponseCode::VALUE_CORRUPTED.0,
+                    KsResponseCode::INVALID_ARGUMENT => ResponseCode::INVALID_ARGUMENT.0,
+                    // If the code paths of IKeystoreAuthorization aidl's methods happen to return
+                    // other error codes from KsResponseCode in the future, they should be converted
+                    // as well.
+                    _ => ResponseCode::SYSTEM_ERROR.0,
+                };
+                return Err(BinderStatus::new_service_specific_error(rc, None));
+            }
+            let rc = match root_cause.downcast_ref::<Error>() {
+                Some(Error::Rc(rcode)) => rcode.0,
+                Some(Error::Binder(_, _)) => ResponseCode::SYSTEM_ERROR.0,
+                None => match root_cause.downcast_ref::<selinux::Error>() {
+                    Some(selinux::Error::PermissionDenied) => ResponseCode::PERMISSION_DENIED.0,
+                    _ => ResponseCode::SYSTEM_ERROR.0,
+                },
+            };
+            Err(BinderStatus::new_service_specific_error(rc, None))
+        },
+        handle_ok,
+    )
+}
 
 /// This struct is defined to implement the aforementioned AIDL interface.
 /// As of now, it is an empty struct.
@@ -99,10 +171,32 @@ impl AuthorizationManager {
             }
             _ => {
                 // Any other combination is not supported.
-                Err(KeystoreError::Rc(ResponseCode::INVALID_ARGUMENT))
+                Err(Error::Rc(ResponseCode::INVALID_ARGUMENT))
                     .context("In on_lock_screen_event: Unknown event.")
             }
         }
+    }
+
+    fn get_auth_tokens_for_credstore(
+        &self,
+        challenge: i64,
+        secure_user_id: i64,
+        auth_token_max_age_millis: i64,
+    ) -> Result<AuthorizationTokens> {
+        // Check permission. Function should return if this failed. Therefore having '?' at the end
+        // is very important.
+        check_keystore_permission(KeystorePerm::get_auth_token())
+            .context("In get_auth_tokens_for_credstore.")?;
+
+        // if the challenge is zero, return error
+        if challenge == 0 {
+            return Err(Error::Rc(ResponseCode::INVALID_ARGUMENT))
+                .context("In get_auth_tokens_for_credstore. Challenge can not be zero.");
+        }
+        // Obtain the auth token and the timestamp token from the enforcement module.
+        let (auth_token, ts_token) =
+            ENFORCEMENTS.get_auth_tokens(challenge, secure_user_id, auth_token_max_age_millis)?;
+        Ok(AuthorizationTokens { authToken: auth_token, timestampToken: ts_token })
     }
 }
 
@@ -120,5 +214,21 @@ impl IKeystoreAuthorization for AuthorizationManager {
         password: Option<&[u8]>,
     ) -> BinderResult<()> {
         map_or_log_err(self.on_lock_screen_event(lock_screen_event, user_id, password), Ok)
+    }
+
+    fn getAuthTokensForCredStore(
+        &self,
+        challenge: i64,
+        secure_user_id: i64,
+        auth_token_max_age_millis: i64,
+    ) -> binder::public_api::Result<AuthorizationTokens> {
+        map_or_log_err(
+            self.get_auth_tokens_for_credstore(
+                challenge,
+                secure_user_id,
+                auth_token_max_age_millis,
+            ),
+            Ok,
+        )
     }
 }
