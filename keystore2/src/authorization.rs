@@ -32,7 +32,7 @@ use android_security_authorization::aidl::android::security::authorization::{
 use android_system_keystore2::aidl::android::system::keystore2::{
     ResponseCode::ResponseCode as KsResponseCode };
 use anyhow::{Context, Result};
-use binder::IBinder;
+use binder::IBinderInternal;
 use keystore2_selinux as selinux;
 
 /// This is the Authorization error type, it wraps binder exceptions and the
