@@ -16,6 +16,7 @@ package android.security.authorization;
 
 import android.hardware.security.keymint.HardwareAuthToken;
 import android.security.authorization.LockScreenEvent;
+import android.security.authorization.AuthorizationTokens;
 
 // TODO: mark the interface with @SensitiveData when the annotation is ready (b/176110256).
 
@@ -45,6 +46,8 @@ interface IKeystoreAuthorization {
      * ## Error conditions:
      * `ResponseCode::PERMISSION_DENIED` - if the callers do not have the 'Unlock' permission.
      * `ResponseCode::SYSTEM_ERROR` - if failed to perform lock/unlock operations due to various
+     * `ResponseCode::VALUE_CORRUPTED` - if the super key can not be decrypted.
+     * `ResponseCode::KEY_NOT_FOUND` - if the super key is not found.
      *
      * @lockScreenEvent - Indicates what happened.
      *                    * LockScreenEvent.UNLOCK if the screen was unlocked.
@@ -56,4 +59,37 @@ interface IKeystoreAuthorization {
      */
     void onLockScreenEvent(in LockScreenEvent lockScreenEvent, in int userId,
                            in @nullable byte[] password);
+
+    /**
+     * Allows Credstore to retrieve a HardwareAuthToken and a TimestampToken.
+     * Identity Credential Trusted App can run either in the TEE or in other secure Hardware.
+     * So, credstore always need to retrieve a TimestampToken along with a HardwareAuthToken.
+     *
+     * The passed in |challenge| parameter must always be non-zero.
+     *
+     * The returned TimestampToken will always have its |challenge| field set to
+     * the |challenge| parameter.
+     *
+     * This method looks through auth-tokens cached by keystore which match
+     * the passed-in |secureUserId|.
+     * The most recent matching auth token which has a |challenge| field which matches
+     * the passed-in |challenge| parameter is returned.
+     * In this case the |authTokenMaxAgeMillis| parameter is not used.
+     *
+     * Otherwise, the most recent matching auth token which is younger
+     * than |authTokenMaxAgeMillis| is returned.
+     *
+     * This method is called by credstore (and only credstore).
+     *
+     * The caller requires 'get_auth_token' permission.
+     *
+     * ## Error conditions:
+     * `ResponseCode::PERMISSION_DENIED` - if the caller does not have the 'get_auth_token'
+     *                                     permission.
+     * `ResponseCode::SYSTEM_ERROR` - if failed to obtain an authtoken from the database.
+     * `ResponseCode::NO_AUTH_TOKEN_FOUND` - a matching auth token is not found.
+     * `ResponseCode::INVALID_ARGUMENT` - if the passed-in |challenge| parameter is zero.
+     */
+    AuthorizationTokens getAuthTokensForCredStore(in long challenge, in long secureUserId,
+     in long authTokenMaxAgeMillis);
 }

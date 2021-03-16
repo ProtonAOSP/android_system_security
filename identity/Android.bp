@@ -39,6 +39,7 @@ cc_binary {
     shared_libs: [
         "libbase",
         "libbinder",
+        "libbinder_ndk",
         "libkeystore_aidl",
         "libcredstore_aidl",
         "libutils",
@@ -46,6 +47,9 @@ cc_binary {
         "android.hardware.identity-support-lib",
         "libkeymaster4support",
         "libkeystore-attestation-application-id",
+        "android.hardware.security.keymint-V1-ndk_platform",
+        "android.security.authorization-ndk_platform",
+        "PlatformProperties",
     ],
     static_libs: [
         "android.hardware.identity-V3-cpp",

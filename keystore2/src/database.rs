@@ -738,6 +738,11 @@ impl MonotonicRawTime {
         self.0
     }
 
+    /// Returns the value of MonotonicRawTime in milli seconds as i64
+    pub fn milli_seconds(&self) -> i64 {
+        self.0 * 1000
+    }
+
     /// Like i64::checked_sub.
     pub fn checked_sub(&self, other: &Self) -> Option<Self> {
         self.0.checked_sub(other.0).map(Self)
@@ -789,6 +794,11 @@ impl AuthTokenEntry {
     /// Returns the time that this auth token was received.
     pub fn time_received(&self) -> MonotonicRawTime {
         self.time_received
+    }
+
+    /// Returns the challenge value of the auth token.
+    pub fn challenge(&self) -> i64 {
+        self.auth_token.challenge
     }
 }
 
