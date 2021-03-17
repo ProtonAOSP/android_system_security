@@ -455,7 +455,6 @@ mod tests {
 
         check_keystore_perm!(add_auth);
         check_keystore_perm!(clear_ns);
-        check_keystore_perm!(get_state);
         check_keystore_perm!(lock);
         check_keystore_perm!(reset);
         check_keystore_perm!(unlock);
