@@ -286,8 +286,8 @@ bool getTokensFromKeystore2(uint64_t challenge, uint64_t secureUserId,
                 LOG(ERROR) << "Error getting tokens from keystore2: " << result.getDescription();
                 return false;
             } else {
-                // Log the reason for not finding auth tokens.
-                LOG(INFO) << "Auth tokens not found: " << result.getDescription();
+                // Log the reason for not receiving auth tokens from keystore2.
+                LOG(INFO) << "Auth tokens were not received due to: " << result.getDescription();
             }
         }
         return true;
