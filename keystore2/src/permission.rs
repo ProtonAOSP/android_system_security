@@ -675,7 +675,7 @@ mod tests {
         let shell_ctx = Context::new("u:r:shell:s0")?;
         assert_perm_failed!(check_keystore_permission(&shell_ctx, KeystorePerm::add_auth()));
         assert_perm_failed!(check_keystore_permission(&shell_ctx, KeystorePerm::clear_ns()));
-        assert_perm_failed!(check_keystore_permission(&shell_ctx, KeystorePerm::get_state()));
+        assert!(check_keystore_permission(&shell_ctx, KeystorePerm::get_state()).is_ok());
         assert_perm_failed!(check_keystore_permission(&shell_ctx, KeystorePerm::list()));
         assert_perm_failed!(check_keystore_permission(&shell_ctx, KeystorePerm::lock()));
         assert_perm_failed!(check_keystore_permission(&shell_ctx, KeystorePerm::reset()));
