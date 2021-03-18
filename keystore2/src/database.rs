@@ -1789,6 +1789,33 @@ impl KeystoreDB {
         .context("In delete_expired_attestation_keys: ")
     }
 
+    /// Deletes all remotely provisioned attestation keys in the system, regardless of the state
+    /// they are in. This is useful primarily as a testing mechanism.
+    pub fn delete_all_attestation_keys(&mut self) -> Result<i64> {
+        self.with_transaction(TransactionBehavior::Immediate, |tx| {
+            let mut stmt = tx
+                .prepare(
+                    "SELECT id FROM persistent.keyentry
+                    WHERE key_type IS ?;",
+                )
+                .context("Failed to prepare statement")?;
+            let keys_to_delete = stmt
+                .query_map(params![KeyType::Attestation], |row| Ok(row.get(0)?))?
+                .collect::<rusqlite::Result<Vec<i64>>>()
+                .context("Failed to execute statement")?;
+            let num_deleted = keys_to_delete
+                .iter()
+                .map(|id| Self::mark_unreferenced(&tx, *id))
+                .collect::<Result<Vec<bool>>>()
+                .context("Failed to execute mark_unreferenced on a keyid")?
+                .into_iter()
+                .filter(|result| *result)
+                .count() as i64;
+            Ok(num_deleted).do_gc(num_deleted != 0)
+        })
+        .context("In delete_all_attestation_keys: ")
+    }
+
     /// Counts the number of keys that will expire by the provided epoch date and the number of
     /// keys not currently assigned to a domain.
     pub fn get_attestation_pool_status(
@@ -3346,6 +3373,23 @@ mod tests {
         // There shound be 3 blob entries left, because we deleted two of the attestation
         // key entries with three blobs each.
         assert_eq!(blob_entry_row_count, 3);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_delete_all_attestation_keys() -> Result<()> {
+        let mut db = new_test_db()?;
+        load_attestation_key_pool(&mut db, 45 /* expiration */, 1 /* namespace */, 0x02)?;
+        load_attestation_key_pool(&mut db, 80 /* expiration */, 2 /* namespace */, 0x03)?;
+        db.create_key_entry(&Domain::APP, &42, &KEYSTORE_UUID)?;
+        let result = db.delete_all_attestation_keys()?;
+
+        // Give the garbage collector half a second to catch up.
+        std::thread::sleep(Duration::from_millis(500));
+
+        // Attestation keys should be deleted, and the regular key should remain.
+        assert_eq!(result, 2);
 
         Ok(())
     }

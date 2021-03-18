@@ -133,4 +133,13 @@ interface IRemoteProvisioning {
      * @return The array of security levels.
      */
      SecurityLevel[] getSecurityLevels();
+
+    /**
+     * This method deletes all remotely provisioned attestation keys in the database, regardless
+     * of what state in their life cycle they are in. This is primarily useful to facilitate
+     * testing.
+     *
+     * @return Number of keys deleted
+     */
+    long deleteAllKeys();
 }
