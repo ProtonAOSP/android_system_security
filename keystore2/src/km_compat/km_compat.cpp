@@ -216,6 +216,8 @@ bool prefixedKeyBlobIsSoftKeyMint(const std::vector<uint8_t>& prefixedBlob) {
  */
 bool isNewAndKeystoreEnforceable(const KMV1::KeyParameter& param) {
     switch (param.tag) {
+    case KMV1::Tag::MAX_BOOT_LEVEL:
+        return true;
     case KMV1::Tag::USAGE_COUNT_LIMIT:
         return true;
     default:
