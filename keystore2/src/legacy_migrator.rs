@@ -563,12 +563,18 @@ impl LegacyMigratorState {
                 crate::super_key::SuperKeyManager::encrypt_with_password(&super_key, pw)
                     .context("In check_and_migrate_super_key: Trying to encrypt super key.")?;
 
-            self.db.store_super_key(user_id, &USER_SUPER_KEY, &blob, &blob_metadata).context(
-                concat!(
+            self.db
+                .store_super_key(
+                    user_id,
+                    &USER_SUPER_KEY,
+                    &blob,
+                    &blob_metadata,
+                    &KeyMetaData::new(),
+                )
+                .context(concat!(
                     "In check_and_migrate_super_key: ",
                     "Trying to insert legacy super_key into the database."
-                ),
-            )?;
+                ))?;
             self.legacy_loader.remove_super_key(user_id);
             self.recently_migrated_super_key.insert(user_id);
             Ok(())

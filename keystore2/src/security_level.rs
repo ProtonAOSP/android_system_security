@@ -738,9 +738,25 @@ impl KeystoreSecurityLevel {
                     )),
                 }
             }
-            result => result
-                .map(|v| (v, None))
-                .context("In upgrade_keyblob_if_required_with: Called closure failed."),
+            result => {
+                if let Some(kid) = key_id_guard {
+                    if key_blob.force_reencrypt() {
+                        Self::store_upgraded_keyblob(
+                            kid,
+                            blob_metadata.km_uuid(),
+                            key_blob,
+                            key_blob,
+                        )
+                        .context(concat!(
+                            "In upgrade_keyblob_if_required_with: ",
+                            "store_upgraded_keyblob failed in forced reencrypt"
+                        ))?;
+                    }
+                }
+                result
+                    .map(|v| (v, None))
+                    .context("In upgrade_keyblob_if_required_with: Called closure failed.")
+            }
         }
     }
 

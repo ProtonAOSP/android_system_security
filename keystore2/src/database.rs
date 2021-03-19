@@ -112,6 +112,8 @@ impl_metadata!(
         /// Vector representing the raw public key so results from the server can be matched
         /// to the right entry
         AttestationRawPubKey(Vec<u8>) with accessor attestation_raw_pub_key,
+        /// SEC1 public key for ECDH encryption
+        Sec1PublicKey(Vec<u8>) with accessor sec1_public_key,
         //  --- ADD NEW META DATA FIELDS HERE ---
         // For backwards compatibility add new entries only to
         // end of this list and above this comment.
@@ -182,6 +184,8 @@ impl_metadata!(
         AeadTag(Vec<u8>) with accessor aead_tag,
         /// The uuid of the owning KeyMint instance.
         KmUuid(Uuid) with accessor km_uuid,
+        /// If the key is ECDH encrypted, this is the ephemeral public key
+        PublicKey(Vec<u8>) with accessor public_key,
         //  --- ADD NEW META DATA FIELDS HERE ---
         // For backwards compatibility add new entries only to
         // end of this list and above this comment.
@@ -1153,6 +1157,7 @@ impl KeystoreDB {
         key_type: &SuperKeyType,
         blob: &[u8],
         blob_metadata: &BlobMetaData,
+        key_metadata: &KeyMetaData,
     ) -> Result<KeyEntry> {
         self.with_transaction(TransactionBehavior::Immediate, |tx| {
             let key_id = Self::insert_with_retry(|id| {
@@ -1172,6 +1177,8 @@ impl KeystoreDB {
                 )
             })
             .context("Failed to insert into keyentry table.")?;
+
+            key_metadata.store_in_db(key_id, tx).context("KeyMetaData::store_in_db failed")?;
 
             Self::set_blob_internal(
                 &tx,
@@ -4899,13 +4906,24 @@ mod tests {
 
         let (encrypted_super_key, metadata) =
             SuperKeyManager::encrypt_with_password(&super_key, &pw)?;
-        db.store_super_key(1, &USER_SUPER_KEY, &encrypted_super_key, &metadata)?;
+        db.store_super_key(
+            1,
+            &USER_SUPER_KEY,
+            &encrypted_super_key,
+            &metadata,
+            &KeyMetaData::new(),
+        )?;
 
         //check if super key exists
         assert!(db.key_exists(Domain::APP, 1, &USER_SUPER_KEY.alias, KeyType::Super)?);
 
         let (_, key_entry) = db.load_super_key(&USER_SUPER_KEY, 1)?.unwrap();
-        let loaded_super_key = SuperKeyManager::extract_super_key_from_key_entry(key_entry, &pw)?;
+        let loaded_super_key = SuperKeyManager::extract_super_key_from_key_entry(
+            USER_SUPER_KEY.algorithm,
+            key_entry,
+            &pw,
+            None,
+        )?;
 
         let decrypted_secret_bytes =
             loaded_super_key.aes_gcm_decrypt(&encrypted_secret, &iv, &tag)?;

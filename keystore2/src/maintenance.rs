@@ -55,9 +55,9 @@ impl Maintenance {
 
         if let Some(pw) = password.as_ref() {
             DB.with(|db| {
-                SUPER_KEY.ensure_super_key_created(&mut db.borrow_mut(), user_id as u32, pw)
+                SUPER_KEY.unlock_screen_lock_bound_key(&mut db.borrow_mut(), user_id as u32, pw)
             })
-            .context("In on_user_password_changed: ensure_super_key_created failed")?;
+            .context("In on_user_password_changed: unlock_screen_lock_bound_key failed")?;
         }
 
         match DB
