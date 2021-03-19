@@ -41,7 +41,6 @@
 //! from the database module these functions take permission check
 //! callbacks.
 
-use crate::error::{Error as KsError, ErrorCode, ResponseCode};
 use crate::impl_metadata; // This is in db_utils.rs
 use crate::key_parameter::{KeyParameter, Tag};
 use crate::permission::KeyPermSet;
@@ -49,6 +48,11 @@ use crate::utils::{get_current_time_in_seconds, AID_USER_OFFSET};
 use crate::{
     db_utils::{self, SqlField},
     gc::Gc,
+    super_key::USER_SUPER_KEY,
+};
+use crate::{
+    error::{Error as KsError, ErrorCode, ResponseCode},
+    super_key::SuperKeyType,
 };
 use anyhow::{anyhow, Context, Result};
 use std::{convert::TryFrom, convert::TryInto, ops::Deref, time::SystemTimeError};
@@ -816,9 +820,6 @@ impl KeystoreDB {
     const UNASSIGNED_KEY_ID: i64 = -1i64;
     const PERBOOT_DB_FILE_NAME: &'static str = &"file:perboot.sqlite?mode=memory&cache=shared";
 
-    /// The alias of the user super key.
-    pub const USER_SUPER_KEY_ALIAS: &'static str = &"USER_SUPER_KEY";
-
     /// This creates a PerBootDbKeepAlive object to keep the per boot database alive.
     pub fn keep_perboot_db_alive() -> Result<PerBootDbKeepAlive> {
         let conn = Connection::open_in_memory()
@@ -1149,7 +1150,9 @@ impl KeystoreDB {
     pub fn store_super_key(
         &mut self,
         user_id: u32,
-        blob_info: &(&[u8], &BlobMetaData),
+        key_type: &SuperKeyType,
+        blob: &[u8],
+        blob_metadata: &BlobMetaData,
     ) -> Result<KeyEntry> {
         self.with_transaction(TransactionBehavior::Immediate, |tx| {
             let key_id = Self::insert_with_retry(|id| {
@@ -1162,7 +1165,7 @@ impl KeystoreDB {
                         KeyType::Super,
                         Domain::APP.0,
                         user_id as i64,
-                        Self::USER_SUPER_KEY_ALIAS,
+                        key_type.alias,
                         KeyLifeCycle::Live,
                         &KEYSTORE_UUID,
                     ],
@@ -1170,7 +1173,6 @@ impl KeystoreDB {
             })
             .context("Failed to insert into keyentry table.")?;
 
-            let (blob, blob_metadata) = *blob_info;
             Self::set_blob_internal(
                 &tx,
                 key_id,
@@ -1188,12 +1190,16 @@ impl KeystoreDB {
     }
 
     /// Loads super key of a given user, if exists
-    pub fn load_super_key(&mut self, user_id: u32) -> Result<Option<(KeyIdGuard, KeyEntry)>> {
+    pub fn load_super_key(
+        &mut self,
+        key_type: &SuperKeyType,
+        user_id: u32,
+    ) -> Result<Option<(KeyIdGuard, KeyEntry)>> {
         self.with_transaction(TransactionBehavior::Immediate, |tx| {
             let key_descriptor = KeyDescriptor {
                 domain: Domain::APP,
                 nspace: user_id as i64,
-                alias: Some(String::from("USER_SUPER_KEY")),
+                alias: Some(key_type.alias.into()),
                 blob: None,
             };
             let id = Self::load_key_entry_id(&tx, &key_descriptor, KeyType::Super);
@@ -1289,7 +1295,7 @@ impl KeystoreDB {
                         Some(&blob),
                         Some(&metadata),
                     )
-                    .context("In get_of_create_key_with.")?;
+                    .context("In get_or_create_key_with.")?;
                     (
                         id,
                         KeyEntry {
@@ -2649,7 +2655,7 @@ impl KeystoreDB {
                     // OR super key:
                     KeyType::Super,
                     user_id,
-                    Self::USER_SUPER_KEY_ALIAS,
+                    USER_SUPER_KEY.alias,
                     KeyLifeCycle::Live
                 ])
                 .context("In unbind_keys_for_user. Failed to query the keys created by apps.")?;
@@ -4887,29 +4893,23 @@ mod tests {
         let mut db = new_test_db()?;
         let pw: keystore2_crypto::Password = (&b"xyzabc"[..]).into();
         let super_key = keystore2_crypto::generate_aes256_key()?;
-        let secret = String::from("keystore2 is great.");
-        let secret_bytes = secret.into_bytes();
+        let secret_bytes = b"keystore2 is great.";
         let (encrypted_secret, iv, tag) =
-            keystore2_crypto::aes_gcm_encrypt(&secret_bytes, &super_key)?;
+            keystore2_crypto::aes_gcm_encrypt(secret_bytes, &super_key)?;
 
         let (encrypted_super_key, metadata) =
             SuperKeyManager::encrypt_with_password(&super_key, &pw)?;
-        db.store_super_key(1, &(&encrypted_super_key, &metadata))?;
+        db.store_super_key(1, &USER_SUPER_KEY, &encrypted_super_key, &metadata)?;
 
         //check if super key exists
-        assert!(db.key_exists(Domain::APP, 1, "USER_SUPER_KEY", KeyType::Super)?);
+        assert!(db.key_exists(Domain::APP, 1, &USER_SUPER_KEY.alias, KeyType::Super)?);
 
-        let (_, key_entry) = db.load_super_key(1)?.unwrap();
+        let (_, key_entry) = db.load_super_key(&USER_SUPER_KEY, 1)?.unwrap();
         let loaded_super_key = SuperKeyManager::extract_super_key_from_key_entry(key_entry, &pw)?;
 
-        let decrypted_secret_bytes = keystore2_crypto::aes_gcm_decrypt(
-            &encrypted_secret,
-            &iv,
-            &tag,
-            &loaded_super_key.get_key(),
-        )?;
-        let decrypted_secret = String::from_utf8((&decrypted_secret_bytes).to_vec())?;
-        assert_eq!(String::from("keystore2 is great."), decrypted_secret);
+        let decrypted_secret_bytes =
+            loaded_super_key.aes_gcm_decrypt(&encrypted_secret, &iv, &tag)?;
+        assert_eq!(secret_bytes, &*decrypted_secret_bytes);
         Ok(())
     }
 }
