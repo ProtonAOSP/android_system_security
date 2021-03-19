@@ -37,7 +37,6 @@
 #include <aidl/android/hardware/security/secureclock/TimeStampToken.h>
 #include <aidl/android/security/authorization/AuthorizationTokens.h>
 #include <aidl/android/security/authorization/IKeystoreAuthorization.h>
-#include <android/sysprop/Keystore2Properties.sysprop.h>
 
 #include "Credential.h"
 #include "CredentialData.h"
@@ -53,7 +52,6 @@ using std::promise;
 using std::tuple;
 
 using android::security::keystore::IKeystoreService;
-using namespace android::sysprop;
 
 using ::android::hardware::identity::IWritableIdentityCredential;
 
@@ -429,7 +427,7 @@ Status Credential::getEntries(const vector<uint8_t>& requestMessage,
         // not a guarantee and it's also not required.
         //
 
-        auto keystore2_status = Keystore2Properties::keystore2_enabled();
+        std::optional<bool> keystore2_status = {true};
         if (keystore2_status.has_value() && keystore2_status.value()) {
             if (!getTokensFromKeystore2(selectedChallenge_, data->getSecureUserId(),
                                         authTokenMaxAgeMillis, aidlAuthToken,
