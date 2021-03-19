@@ -733,6 +733,11 @@ impl MonotonicRawTime {
         Self(get_current_time_in_seconds())
     }
 
+    /// Constructs a new MonotonicRawTime from a given number of seconds.
+    pub fn from_secs(val: i64) -> Self {
+        Self(val)
+    }
+
     /// Returns the integer value of MonotonicRawTime as i64
     pub fn seconds(&self) -> i64 {
         self.0
