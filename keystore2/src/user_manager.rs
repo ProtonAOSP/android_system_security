@@ -28,7 +28,7 @@ use android_security_maintenance::binder::{Interface, Result as BinderResult};
 use android_system_keystore2::aidl::android::system::keystore2::Domain::Domain;
 use android_system_keystore2::aidl::android::system::keystore2::ResponseCode::ResponseCode;
 use anyhow::{Context, Result};
-use binder::{IBinder, Strong};
+use binder::{IBinderInternal, Strong};
 
 /// This struct is defined to implement the aforementioned AIDL interface.
 /// As of now, it is an empty struct.

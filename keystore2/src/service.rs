@@ -43,7 +43,7 @@ use android_system_keystore2::aidl::android::system::keystore2::{
     KeyDescriptor::KeyDescriptor, KeyEntryResponse::KeyEntryResponse, KeyMetadata::KeyMetadata,
 };
 use anyhow::{Context, Result};
-use binder::{IBinder, Strong, ThreadState};
+use binder::{IBinderInternal, Strong, ThreadState};
 use error::Error;
 use keystore2_selinux as selinux;
 

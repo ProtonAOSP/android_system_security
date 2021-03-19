@@ -135,7 +135,7 @@ use android_system_keystore2::aidl::android::system::keystore2::{
     IKeystoreOperation::BnKeystoreOperation, IKeystoreOperation::IKeystoreOperation,
 };
 use anyhow::{anyhow, Context, Result};
-use binder::IBinder;
+use binder::IBinderInternal;
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex, MutexGuard, Weak},
@@ -716,7 +716,7 @@ pub struct KeystoreOperation {
 impl KeystoreOperation {
     /// Creates a new operation instance wrapped in a
     /// BnKeystoreOperation proxy object. It also
-    /// calls `IBinder::set_requesting_sid` on the new interface, because
+    /// calls `IBinderInternal::set_requesting_sid` on the new interface, because
     /// we need it for checking Keystore permissions.
     pub fn new_native_binder(
         operation: Arc<Operation>,
