@@ -74,8 +74,14 @@ static int read_callback(void* file, void* buf, size_t count) {
 Result<std::vector<uint8_t>> createDigest(const std::string& path) {
     struct stat filestat;
     unique_fd fd(TEMP_FAILURE_RETRY(open(path.c_str(), O_RDONLY | O_CLOEXEC)));
+    if (fd < 0) {
+        return ErrnoError() << "Failed to open " << path;
+    }
 
-    stat(path.c_str(), &filestat);
+    int ret = stat(path.c_str(), &filestat);
+    if (ret < 0) {
+        return ErrnoError() << "Failed to stat " << path;
+    }
     struct libfsverity_merkle_tree_params params = {
         .version = 1,
         .hash_algorithm = FS_VERITY_HASH_ALG_SHA256,
@@ -84,9 +90,13 @@ Result<std::vector<uint8_t>> createDigest(const std::string& path) {
     };
 
     struct libfsverity_digest* digest;
-    libfsverity_compute_digest(&fd, &read_callback, &params, &digest);
-
-    return std::vector<uint8_t>(&digest->digest[0], &digest->digest[32]);
+    ret = libfsverity_compute_digest(&fd, &read_callback, &params, &digest);
+    if (ret < 0) {
+        return ErrnoError() << "Failed to compute fs-verity digest for " << path;
+    }
+    std::vector<uint8_t> digestVector(&digest->digest[0], &digest->digest[32]);
+    free(digest);
+    return digestVector;
 }
 
 namespace {
