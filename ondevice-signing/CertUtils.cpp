@@ -147,8 +147,10 @@ Result<void> createSelfSignedCertificate(
 
     x509->signature->flags &= ~(ASN1_STRING_FLAG_BITS_LEFT | 0x07);
     x509->signature->flags |= ASN1_STRING_FLAG_BITS_LEFT;
-    auto f = fopen(path.c_str(), "wb");
-    // TODO error checking
+    auto f = fopen(path.c_str(), "wbe");
+    if (f == nullptr) {
+        return Error() << "Failed to open " << path;
+    }
     i2d_X509_fp(f, x509.get());
     fclose(f);
 
@@ -199,8 +201,12 @@ Result<std::vector<uint8_t>> extractPublicKeyFromX509(const std::vector<uint8_t>
 
 Result<std::vector<uint8_t>> extractPublicKeyFromX509(const std::string& path) {
     X509* cert;
-    auto f = fopen(path.c_str(), "r");
+    auto f = fopen(path.c_str(), "re");
+    if (f == nullptr) {
+        return Error() << "Failed to open " << path;
+    }
     if (!d2i_X509_fp(f, &cert)) {
+        fclose(f);
         return Error() << "Unable to decode x509 cert at " << path;
     }
 
