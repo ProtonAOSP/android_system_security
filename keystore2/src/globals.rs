@@ -35,6 +35,7 @@ use android_hardware_security_keymint::aidl::android::hardware::security::keymin
 use android_hardware_security_keymint::binder::{StatusCode, Strong};
 use android_security_compat::aidl::android::security::compat::IKeystoreCompatService::IKeystoreCompatService;
 use anyhow::{Context, Result};
+use binder::FromIBinder;
 use keystore2_vintf::get_aidl_instances;
 use lazy_static::lazy_static;
 use std::sync::{Arc, Mutex};
@@ -115,6 +116,10 @@ impl DevicesMap {
         self.devices_by_uuid
             .get(uuid)
             .map(|(dev, hw_info)| ((*dev).clone(), (*hw_info).clone(), *uuid))
+    }
+
+    fn devices<T: FromIBinder + ?Sized>(&self) -> Vec<Strong<T>> {
+        self.devices_by_uuid.values().filter_map(|(asp, _)| asp.get_interface::<T>().ok()).collect()
     }
 
     /// The requested security level and the security level of the actual implementation may
@@ -254,6 +259,11 @@ pub fn get_keymint_dev_by_uuid(uuid: &Uuid) -> Result<(Asp, KeyMintHardwareInfo)
     } else {
         Err(Error::sys()).context("In get_keymint_dev_by_uuid: No KeyMint instance found.")
     }
+}
+
+/// Return all known keymint devices.
+pub fn get_keymint_devices() -> Vec<Strong<dyn IKeyMintDevice>> {
+    KEY_MINT_DEVICES.lock().unwrap().devices()
 }
 
 static TIME_STAMP_SERVICE_NAME: &str = "android.hardware.security.secureclock.ISecureClock";
