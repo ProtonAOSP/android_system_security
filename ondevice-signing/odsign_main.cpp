@@ -56,7 +56,7 @@ static const char* kOdrefreshPath = "/apex/com.android.art/bin/odrefresh";
 static const char* kFsVerityProcPath = "/proc/sys/fs/verity";
 
 static const bool kForceCompilation = false;
-static const bool kUseKeystore = false;
+static const bool kUseKeystore = true;
 
 static const char* kOdsignVerificationDoneProp = "odsign.verification.done";
 static const char* kOdsignKeyDoneProp = "odsign.key.done";
