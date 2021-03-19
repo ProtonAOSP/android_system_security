@@ -31,7 +31,7 @@ use android_security_apc::binder::{
     ExceptionCode, Interface, Result as BinderResult, SpIBinder, Status as BinderStatus, Strong,
 };
 use anyhow::{Context, Result};
-use binder::{IBinder, ThreadState};
+use binder::{IBinderInternal, ThreadState};
 use keystore2_apc_compat::ApcHal;
 use keystore2_selinux as selinux;
 use std::time::{Duration, Instant};
