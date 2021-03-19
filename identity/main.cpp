@@ -53,10 +53,5 @@ int main(int argc, char* argv[]) {
     CHECK(ret == ::android::OK) << "Couldn't register binder service";
     LOG(ERROR) << "Registered binder service";
 
-    // This is needed for binder callbacks from keystore on a ICredstoreTokenCallback binder.
-    android::ProcessState::self()->startThreadPool();
-
-    IPCThreadState::self()->joinThreadPool();
-
     return 0;
 }
