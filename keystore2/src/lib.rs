@@ -20,6 +20,7 @@ pub mod async_task;
 pub mod authorization;
 pub mod database;
 pub mod enforcements;
+pub mod entropy;
 pub mod error;
 pub mod globals;
 /// Internal Representation of Key Parameter and convenience functions.

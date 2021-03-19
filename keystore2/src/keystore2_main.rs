@@ -16,6 +16,7 @@
 
 use keystore2::apc::ApcManager;
 use keystore2::authorization::AuthorizationManager;
+use keystore2::entropy;
 use keystore2::globals::ENFORCEMENTS;
 use keystore2::remote_provisioning::RemoteProvisioningService;
 use keystore2::service::KeystoreService;
@@ -73,6 +74,8 @@ fn main() {
             .watch_boot_level()
             .unwrap_or_else(|e| error!("watch_boot_level failed: {}", e));
     });
+
+    entropy::register_feeder();
 
     info!("Starting thread pool now.");
     binder::ProcessState::start_thread_pool();
