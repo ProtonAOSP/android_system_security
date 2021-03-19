@@ -733,7 +733,7 @@ KeyMintOperation::finish(const std::optional<std::vector<uint8_t>>& in_input,
 
     KMV1::ErrorCode errorCode;
     auto result = mDevice->finish(
-        mOperationHandle, {} /* inParams */, input, signature, authToken, verificationToken,
+        mOperationHandle, inParams, input, signature, authToken, verificationToken,
         [&](V4_0_ErrorCode error, auto /* outParams */, const hidl_vec<uint8_t>& output) {
             errorCode = convert(error);
             *out_output = output;
