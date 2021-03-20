@@ -56,7 +56,7 @@ use crate::{
     utils::key_characteristics_to_internal,
 };
 use anyhow::{anyhow, Context, Result};
-use binder::{IBinder, Strong, ThreadState};
+use binder::{IBinderInternal, Strong, ThreadState};
 use keystore2_crypto::parse_subject_from_certificate;
 
 /// Implementation of the IKeystoreSecurityLevel Interface.
@@ -80,7 +80,7 @@ const UNDEFINED_NOT_AFTER: i64 = 253402300799000i64;
 impl KeystoreSecurityLevel {
     /// Creates a new security level instance wrapped in a
     /// BnKeystoreSecurityLevel proxy object. It also
-    /// calls `IBinder::set_requesting_sid` on the new interface, because
+    /// calls `IBinderInternal::set_requesting_sid` on the new interface, because
     /// we need it for checking keystore permissions.
     pub fn new_native_binder(
         security_level: SecurityLevel,
