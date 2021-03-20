@@ -270,10 +270,7 @@ impl KeystoreSecurityLevel {
                 purpose,
                 key_properties.as_ref(),
                 operation_parameters.as_ref(),
-                // TODO b/178222844 Replace this with the configuration returned by
-                //      KeyMintDevice::getHardwareInfo.
-                //      For now we assume that strongbox implementations need secure timestamps.
-                self.security_level == SecurityLevel::STRONGBOX,
+                self.hw_info.timestampTokenRequired,
             )
             .context("In create_operation.")?;
 
