@@ -550,11 +550,12 @@ ScopedAStatus KeyMintDevice::upgradeKey(const std::vector<uint8_t>& in_inKeyBlob
                                         std::vector<uint8_t>* _aidl_return) {
     auto legacyUpgradeParams = convertKeyParametersToLegacy(in_inUpgradeParams);
     V4_0_ErrorCode errorCode;
+
     auto result =
-        mDevice->upgradeKey(in_inKeyBlobToUpgrade, legacyUpgradeParams,
+        mDevice->upgradeKey(prefixedKeyBlobRemovePrefix(in_inKeyBlobToUpgrade), legacyUpgradeParams,
                             [&](V4_0_ErrorCode error, const hidl_vec<uint8_t>& upgradedKeyBlob) {
                                 errorCode = error;
-                                *_aidl_return = upgradedKeyBlob;
+                                *_aidl_return = keyBlobPrefix(upgradedKeyBlob, false);
                             });
     if (!result.isOk()) {
         LOG(ERROR) << __func__ << " transaction failed. " << result.description();
