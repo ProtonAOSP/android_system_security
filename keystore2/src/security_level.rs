@@ -209,6 +209,11 @@ impl KeystoreSecurityLevel {
             Domain::BLOB => {
                 check_key_permission(KeyPerm::use_(), key, &None)
                     .context("In create_operation: checking use permission for Domain::BLOB.")?;
+                if forced {
+                    check_key_permission(KeyPerm::req_forced_op(), key, &None).context(
+                        "In create_operation: checking forced permission for Domain::BLOB.",
+                    )?;
+                }
                 (
                     match &key.blob {
                         Some(blob) => blob,
@@ -233,7 +238,13 @@ impl KeystoreSecurityLevel {
                                 KeyType::Client,
                                 KeyEntryLoadBits::KM,
                                 caller_uid,
-                                |k, av| check_key_permission(KeyPerm::use_(), k, &av),
+                                |k, av| {
+                                    check_key_permission(KeyPerm::use_(), k, &av)?;
+                                    if forced {
+                                        check_key_permission(KeyPerm::req_forced_op(), k, &av)?;
+                                    }
+                                    Ok(())
+                                },
                             )
                         })
                     })
@@ -276,8 +287,6 @@ impl KeystoreSecurityLevel {
 
         let immediate_hat = immediate_hat.unwrap_or_default();
 
-        let user_id = uid_to_android_user(caller_uid);
-
         let km_blob = SUPER_KEY
             .unwrap_key_if_required(&blob_metadata, km_blob)
             .context("In create_operation. Failed to handle super encryption.")?;
@@ -301,7 +310,7 @@ impl KeystoreSecurityLevel {
                         &immediate_hat,
                     )) {
                         Err(Error::Km(ErrorCode::TOO_MANY_OPERATIONS)) => {
-                            self.operation_db.prune(caller_uid)?;
+                            self.operation_db.prune(caller_uid, forced)?;
                             continue;
                         }
                         v => return v,
@@ -314,7 +323,7 @@ impl KeystoreSecurityLevel {
 
         let operation = match begin_result.operation {
             Some(km_op) => {
-                self.operation_db.create_operation(km_op, caller_uid, auth_info)
+                self.operation_db.create_operation(km_op, caller_uid, auth_info, forced)
             },
             None => return Err(Error::sys()).context("In create_operation: Begin operation returned successfully, but did not return a valid operation."),
         };
