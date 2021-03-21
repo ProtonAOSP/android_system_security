@@ -167,12 +167,14 @@ pub struct Operation {
     outcome: Mutex<Outcome>,
     owner: u32, // Uid of the operation's owner.
     auth_info: Mutex<AuthInfo>,
+    forced: bool,
 }
 
 struct PruningInfo {
     last_usage: Instant,
     owner: u32,
     index: usize,
+    forced: bool,
 }
 
 // We don't except more than 32KiB of data in `update`, `updateAad`, and `finish`.
@@ -185,6 +187,7 @@ impl Operation {
         km_op: binder::Strong<dyn IKeyMintOperation>,
         owner: u32,
         auth_info: AuthInfo,
+        forced: bool,
     ) -> Self {
         Self {
             index,
@@ -193,6 +196,7 @@ impl Operation {
             outcome: Mutex::new(Outcome::Unknown),
             owner,
             auth_info: Mutex::new(auth_info),
+            forced,
         }
     }
 
@@ -218,6 +222,7 @@ impl Operation {
             last_usage: *self.last_usage.lock().expect("In get_pruning_info."),
             owner: self.owner,
             index: self.index,
+            forced: self.forced,
         })
     }
 
@@ -465,6 +470,7 @@ impl OperationDb {
         km_op: binder::public_api::Strong<dyn IKeyMintOperation>,
         owner: u32,
         auth_info: AuthInfo,
+        forced: bool,
     ) -> Arc<Operation> {
         // We use unwrap because we don't allow code that can panic while locked.
         let mut operations = self.operations.lock().expect("In create_operation.");
@@ -477,12 +483,13 @@ impl OperationDb {
             s.upgrade().is_none()
         }) {
             Some(free_slot) => {
-                let new_op = Arc::new(Operation::new(index - 1, km_op, owner, auth_info));
+                let new_op = Arc::new(Operation::new(index - 1, km_op, owner, auth_info, forced));
                 *free_slot = Arc::downgrade(&new_op);
                 new_op
             }
             None => {
-                let new_op = Arc::new(Operation::new(operations.len(), km_op, owner, auth_info));
+                let new_op =
+                    Arc::new(Operation::new(operations.len(), km_op, owner, auth_info, forced));
                 operations.push(Arc::downgrade(&new_op));
                 new_op
             }
@@ -565,7 +572,7 @@ impl OperationDb {
     /// ## Update
     /// We also allow callers to cannibalize their own sibling operations if no other
     /// slot can be found. In this case the least recently used sibling is pruned.
-    pub fn prune(&self, caller: u32) -> Result<(), Error> {
+    pub fn prune(&self, caller: u32, forced: bool) -> Result<(), Error> {
         loop {
             // Maps the uid of the owner to the number of operations that owner has
             // (running_siblings). More operations per owner lowers the pruning
@@ -590,7 +597,8 @@ impl OperationDb {
                     }
                 });
 
-            let caller_malus = 1u64 + *owners.entry(caller).or_default();
+            // If the operation is forced, the caller has a malus of 0.
+            let caller_malus = if forced { 0 } else { 1u64 + *owners.entry(caller).or_default() };
 
             // We iterate through all operations computing the malus and finding
             // the candidate with the highest malus which must also be higher
@@ -604,7 +612,7 @@ impl OperationDb {
             let mut oldest_caller_op: Option<CandidateInfo> = None;
             let candidate = pruning_info.iter().fold(
                 None,
-                |acc: Option<CandidateInfo>, &PruningInfo { last_usage, owner, index }| {
+                |acc: Option<CandidateInfo>, &PruningInfo { last_usage, owner, index, forced }| {
                     // Compute the age of the current operation.
                     let age = now
                         .checked_duration_since(last_usage)
@@ -624,12 +632,17 @@ impl OperationDb {
                     }
 
                     // Compute the malus of the current operation.
-                    // Expect safety: Every owner in pruning_info was counted in
-                    // the owners map. So this unwrap cannot panic.
-                    let malus = *owners
-                        .get(&owner)
-                        .expect("This is odd. We should have counted every owner in pruning_info.")
-                        + ((age.as_secs() + 1) as f64).log(6.0).floor() as u64;
+                    let malus = if forced {
+                        // Forced operations have a malus of 0. And cannot even be pruned
+                        // by other forced operations.
+                        0
+                    } else {
+                        // Expect safety: Every owner in pruning_info was counted in
+                        // the owners map. So this unwrap cannot panic.
+                        *owners.get(&owner).expect(
+                            "This is odd. We should have counted every owner in pruning_info.",
+                        ) + ((age.as_secs() + 1) as f64).log(6.0).floor() as u64
+                    };
 
                     // Now check if the current operation is a viable/better candidate
                     // the one currently stored in the accumulator.
