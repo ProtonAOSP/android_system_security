@@ -19,6 +19,7 @@ pub mod apc;
 pub mod async_task;
 pub mod authorization;
 pub mod database;
+pub mod ec_crypto;
 pub mod enforcements;
 pub mod entropy;
 pub mod error;
