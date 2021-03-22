@@ -341,6 +341,10 @@ impl KeystoreSecurityLevel {
                 0 => None,
                 _ => Some(KeyParameters { keyParameter: begin_result.params }),
             },
+            // An upgraded blob should only be returned if the caller has permission
+            // to use Domain::BLOB keys. If we got to this point, we already checked
+            // that the caller had that permission.
+            upgradedBlob: if key.domain == Domain::BLOB { upgraded_blob } else { None },
         })
     }
 
