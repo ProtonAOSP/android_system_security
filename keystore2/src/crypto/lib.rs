@@ -149,42 +149,68 @@ pub fn aes_gcm_encrypt(data: &[u8], key: &[u8]) -> Result<(Vec<u8>, Vec<u8>, Vec
     }
 }
 
-/// Generates a key from the given password and salt.
-/// The salt must be exactly 16 bytes long.
-/// Two key sizes are accepted: 16 and 32 bytes.
-pub fn derive_key_from_password(
-    pw: &[u8],
-    salt: Option<&[u8]>,
-    key_length: usize,
-) -> Result<ZVec, Error> {
-    let salt: *const u8 = match salt {
-        Some(s) => {
-            if s.len() != SALT_LENGTH {
-                return Err(Error::InvalidSaltLength);
-            }
-            s.as_ptr()
-        }
-        None => std::ptr::null(),
-    };
+/// Represents a "password" that can be used to key the PBKDF2 algorithm.
+pub enum Password<'a> {
+    /// Borrow an existing byte array
+    Ref(&'a [u8]),
+    /// Use an owned ZVec to store the key
+    Owned(ZVec),
+}
 
-    match key_length {
-        AES_128_KEY_LENGTH | AES_256_KEY_LENGTH => {}
-        _ => return Err(Error::InvalidKeyLength),
+impl<'a> From<&'a [u8]> for Password<'a> {
+    fn from(pw: &'a [u8]) -> Self {
+        Self::Ref(pw)
+    }
+}
+
+impl<'a> Password<'a> {
+    fn get_key(&'a self) -> &'a [u8] {
+        match self {
+            Self::Ref(b) => b,
+            Self::Owned(z) => &*z,
+        }
     }
 
-    let mut result = ZVec::new(key_length)?;
+    /// Generate a key from the given password and salt.
+    /// The salt must be exactly 16 bytes long.
+    /// Two key sizes are accepted: 16 and 32 bytes.
+    pub fn derive_key(&self, salt: Option<&[u8]>, key_length: usize) -> Result<ZVec, Error> {
+        let pw = self.get_key();
 
-    unsafe {
-        generateKeyFromPassword(
-            result.as_mut_ptr(),
-            result.len(),
-            pw.as_ptr() as *const std::os::raw::c_char,
-            pw.len(),
-            salt,
-        )
-    };
+        let salt: *const u8 = match salt {
+            Some(s) => {
+                if s.len() != SALT_LENGTH {
+                    return Err(Error::InvalidSaltLength);
+                }
+                s.as_ptr()
+            }
+            None => std::ptr::null(),
+        };
 
-    Ok(result)
+        match key_length {
+            AES_128_KEY_LENGTH | AES_256_KEY_LENGTH => {}
+            _ => return Err(Error::InvalidKeyLength),
+        }
+
+        let mut result = ZVec::new(key_length)?;
+
+        unsafe {
+            generateKeyFromPassword(
+                result.as_mut_ptr(),
+                result.len(),
+                pw.as_ptr() as *const std::os::raw::c_char,
+                pw.len(),
+                salt,
+            )
+        };
+
+        Ok(result)
+    }
+
+    /// Try to make another Password object with the same data.
+    pub fn try_clone(&self) -> Result<Password<'static>, Error> {
+        Ok(Password::Owned(ZVec::try_from(self.get_key())?))
+    }
 }
 
 /// Calls the boringssl HKDF_extract function.

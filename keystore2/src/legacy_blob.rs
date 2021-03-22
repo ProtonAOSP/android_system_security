@@ -26,7 +26,7 @@ use android_hardware_security_keymint::aidl::android::hardware::security::keymin
     SecurityLevel::SecurityLevel, Tag::Tag, TagType::TagType,
 };
 use anyhow::{Context, Result};
-use keystore2_crypto::{aes_gcm_decrypt, derive_key_from_password, ZVec};
+use keystore2_crypto::{aes_gcm_decrypt, Password, ZVec};
 use std::collections::{HashMap, HashSet};
 use std::{convert::TryInto, fs::File, path::Path, path::PathBuf};
 use std::{
@@ -1036,7 +1036,7 @@ impl LegacyBlobLoader {
     }
 
     /// Load and decrypt legacy super key blob.
-    pub fn load_super_key(&self, user_id: u32, pw: &[u8]) -> Result<Option<ZVec>> {
+    pub fn load_super_key(&self, user_id: u32, pw: &Password) -> Result<Option<ZVec>> {
         let path = self.make_super_key_filename(user_id);
         let blob = Self::read_generic_blob(&path)
             .context("In load_super_key: While loading super key.")?;
@@ -1046,7 +1046,8 @@ impl LegacyBlobLoader {
                 Blob {
                     value: BlobValue::PwEncrypted { iv, tag, data, salt, key_size }, ..
                 } => {
-                    let key = derive_key_from_password(pw, Some(&salt), key_size)
+                    let key = pw
+                        .derive_key(Some(&salt), key_size)
                         .context("In load_super_key: Failed to derive key from password.")?;
                     let blob = aes_gcm_decrypt(&data, &iv, &tag, &key).context(
                         "In load_super_key: while trying to decrypt legacy super key blob.",
@@ -1294,7 +1295,7 @@ mod test {
             Some(&error::Error::Rc(ResponseCode::LOCKED))
         );
 
-        key_manager.unlock_user_key(&mut db, 0, PASSWORD, &legacy_blob_loader)?;
+        key_manager.unlock_user_key(&mut db, 0, &(PASSWORD.into()), &legacy_blob_loader)?;
 
         if let (Some((Blob { flags, value: _ }, _params)), Some(cert), Some(chain)) =
             legacy_blob_loader.load_by_uid_alias(10223, "authbound", Some(&key_manager))?

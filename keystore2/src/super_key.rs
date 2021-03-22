@@ -23,8 +23,8 @@ use crate::{
 use android_system_keystore2::aidl::android::system::keystore2::Domain::Domain;
 use anyhow::{Context, Result};
 use keystore2_crypto::{
-    aes_gcm_decrypt, aes_gcm_encrypt, derive_key_from_password, generate_aes256_key, generate_salt,
-    ZVec, AES_256_KEY_LENGTH,
+    aes_gcm_decrypt, aes_gcm_encrypt, generate_aes256_key, generate_salt, Password, ZVec,
+    AES_256_KEY_LENGTH,
 };
 use std::ops::Deref;
 use std::{
@@ -130,7 +130,7 @@ impl SuperKeyManager {
         &self,
         db: &mut KeystoreDB,
         user: UserId,
-        pw: &[u8],
+        pw: &Password,
         legacy_blob_loader: &LegacyBlobLoader,
     ) -> Result<()> {
         let (_, entry) = db
@@ -233,7 +233,7 @@ impl SuperKeyManager {
         db: &mut KeystoreDB,
         legacy_migrator: &LegacyMigrator,
         user_id: u32,
-        pw: &[u8],
+        pw: &Password,
     ) -> Result<UserState> {
         let result = legacy_migrator
             .with_try_migrate_super_key(user_id, pw, || db.load_super_key(user_id))
@@ -261,7 +261,7 @@ impl SuperKeyManager {
         db: &mut KeystoreDB,
         legacy_migrator: &LegacyMigrator,
         user_id: u32,
-        pw: Option<&[u8]>,
+        pw: Option<&Password>,
     ) -> Result<UserState> {
         let super_key_exists_in_db =
             Self::super_key_exists_in_db_for_user(db, legacy_migrator, user_id).context(
@@ -296,7 +296,7 @@ impl SuperKeyManager {
         &self,
         user_id: u32,
         entry: KeyEntry,
-        pw: &[u8],
+        pw: &Password,
     ) -> Result<SuperKey> {
         let super_key = Self::extract_super_key_from_key_entry(entry, pw).context(
             "In populate_cache_from_super_key_blob. Failed to extract super key from key entry",
@@ -306,7 +306,7 @@ impl SuperKeyManager {
     }
 
     /// Extracts super key from the entry loaded from the database
-    pub fn extract_super_key_from_key_entry(entry: KeyEntry, pw: &[u8]) -> Result<SuperKey> {
+    pub fn extract_super_key_from_key_entry(entry: KeyEntry, pw: &Password) -> Result<SuperKey> {
         if let Some((blob, metadata)) = entry.key_blob_info() {
             let key = match (
                 metadata.encrypted_by(),
@@ -315,9 +315,9 @@ impl SuperKeyManager {
                 metadata.aead_tag(),
             ) {
                 (Some(&EncryptedBy::Password), Some(salt), Some(iv), Some(tag)) => {
-                    let key = derive_key_from_password(pw, Some(salt), AES_256_KEY_LENGTH).context(
-                    "In extract_super_key_from_key_entry: Failed to generate key from password.",
-                )?;
+                    let key = pw.derive_key(Some(salt), AES_256_KEY_LENGTH).context(
+                        "In extract_super_key_from_key_entry: Failed to generate key from password.",
+                    )?;
 
                     aes_gcm_decrypt(blob, iv, tag, &key).context(
                         "In extract_super_key_from_key_entry: Failed to decrypt key blob.",
@@ -344,9 +344,13 @@ impl SuperKeyManager {
     }
 
     /// Encrypts the super key from a key derived from the password, before storing in the database.
-    pub fn encrypt_with_password(super_key: &[u8], pw: &[u8]) -> Result<(Vec<u8>, BlobMetaData)> {
+    pub fn encrypt_with_password(
+        super_key: &[u8],
+        pw: &Password,
+    ) -> Result<(Vec<u8>, BlobMetaData)> {
         let salt = generate_salt().context("In encrypt_with_password: Failed to generate salt.")?;
-        let derived_key = derive_key_from_password(pw, Some(&salt), AES_256_KEY_LENGTH)
+        let derived_key = pw
+            .derive_key(Some(&salt), AES_256_KEY_LENGTH)
             .context("In encrypt_with_password: Failed to derive password.")?;
         let mut metadata = BlobMetaData::new();
         metadata.add(BlobMetaEntry::EncryptedBy(EncryptedBy::Password));
@@ -514,7 +518,7 @@ impl UserState {
         legacy_migrator: &LegacyMigrator,
         skm: &SuperKeyManager,
         user_id: u32,
-        password: Option<&[u8]>,
+        password: Option<&Password>,
     ) -> Result<UserState> {
         match skm.get_per_boot_key_by_user_id(user_id) {
             Some(super_key) => {
@@ -548,7 +552,7 @@ impl UserState {
         legacy_migrator: &LegacyMigrator,
         skm: &SuperKeyManager,
         user_id: u32,
-        password: &[u8],
+        password: &Password,
     ) -> Result<UserState> {
         match skm.get_per_boot_key_by_user_id(user_id) {
             Some(super_key) => {
