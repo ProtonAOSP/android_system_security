@@ -25,6 +25,7 @@ import android.hardware.security.sharedsecret.ISharedSecret;
  * The compatibility service allows Keystore 2.0 to connect to legacy wrapper implementations that
  * it hosts itself without registering them as a service. Keystore 2.0 would not be allowed to
  * register a HAL service, so instead it registers this service which it can then connect to.
+ * @hide
  */
 interface IKeystoreCompatService {
     /**

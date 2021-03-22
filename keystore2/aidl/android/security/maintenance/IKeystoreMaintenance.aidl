@@ -35,7 +35,6 @@ interface IKeystoreMaintenance {
      * user id.
      *
      * @param userId - Android user id
-     * @hide
      */
     void onUserAdded(in int userId);
 
@@ -47,7 +46,6 @@ interface IKeystoreMaintenance {
      * `ResponseCode::SYSTEM_ERROR` - if failed to delete the keys of the user being deleted.
      *
      * @param userId - Android user id
-     * @hide
      */
     void onUserRemoved(in int userId);
 
@@ -62,7 +60,6 @@ interface IKeystoreMaintenance {
      *
      * @param userId - Android user id
      * @param password - a secret derived from the synthetic password of the user
-     * @hide
      */
     void onUserPasswordChanged(in int userId, in @nullable byte[] password);
 
@@ -73,7 +70,6 @@ interface IKeystoreMaintenance {
      * @param domain - One of Domain.APP or Domain.SELINUX.
      * @param nspace - The UID of the app that is to be cleared if domain is Domain.APP or
      *                 the SEPolicy namespace if domain is Domain.SELINUX.
-     * @hide
      */
      void clearNamespace(Domain domain, long nspace);
 
@@ -86,7 +82,6 @@ interface IKeystoreMaintenance {
      * `ResponseCode::SYSTEM_ERROR` - if an error occurred when querying the user state.
      *
      * @param userId - Android user id
-     * @hide
      */
     UserState getState(in int userId);
 }
