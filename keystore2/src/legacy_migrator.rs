@@ -29,9 +29,8 @@ use android_system_keystore2::aidl::android::system::keystore2::{
 };
 use anyhow::{Context, Result};
 use core::ops::Deref;
-use keystore2_crypto::ZVec;
+use keystore2_crypto::{Password, ZVec};
 use std::collections::{HashMap, HashSet};
-use std::convert::TryInto;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
@@ -334,7 +333,7 @@ impl LegacyMigrator {
     pub fn with_try_migrate_super_key<F, T>(
         &self,
         user_id: u32,
-        pw: &[u8],
+        pw: &Password,
         mut key_accessor: F,
     ) -> Result<Option<T>>
     where
@@ -345,12 +344,9 @@ impl LegacyMigrator {
             Ok(None) => {}
             Err(e) => return Err(e),
         }
-
-        let pw: ZVec = pw
-            .try_into()
-            .context("In with_try_migrate_super_key: copying the password into a zvec.")?;
+        let pw = pw.try_clone().context("In with_try_migrate_super_key: Cloning password.")?;
         let result = self.do_serialized(move |migrator_state| {
-            migrator_state.check_and_migrate_super_key(user_id, pw)
+            migrator_state.check_and_migrate_super_key(user_id, &pw)
         });
 
         if let Some(result) = result {
@@ -550,7 +546,7 @@ impl LegacyMigratorState {
         }
     }
 
-    fn check_and_migrate_super_key(&mut self, user_id: u32, pw: ZVec) -> Result<()> {
+    fn check_and_migrate_super_key(&mut self, user_id: u32, pw: &Password) -> Result<()> {
         if self.recently_migrated_super_key.contains(&user_id) {
             return Ok(());
         }
@@ -561,7 +557,7 @@ impl LegacyMigratorState {
             .context("In check_and_migrate_super_key: Trying to load legacy super key.")?
         {
             let (blob, blob_metadata) =
-                crate::super_key::SuperKeyManager::encrypt_with_password(&super_key, &pw)
+                crate::super_key::SuperKeyManager::encrypt_with_password(&super_key, pw)
                     .context("In check_and_migrate_super_key: Trying to encrypt super key.")?;
 
             self.db.store_super_key(user_id, &(&blob, &blob_metadata)).context(concat!(
