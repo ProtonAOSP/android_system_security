@@ -14,6 +14,7 @@
 
 package android.security.maintenance;
 
+/** @hide */
 @Backing(type="int")
 enum UserState {
     UNINITIALIZED = 0,

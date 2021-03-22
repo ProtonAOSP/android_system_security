@@ -16,6 +16,7 @@ package android.security.authorization;
 
 /**
  * Used as exception codes by IKeystoreAuthorization.
+ * @hide
  */
 @Backing(type="int")
 enum ResponseCode {
