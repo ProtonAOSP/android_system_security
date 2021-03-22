@@ -29,6 +29,7 @@ use android_system_keystore2::aidl::android::system::keystore2::Domain::Domain;
 use android_system_keystore2::aidl::android::system::keystore2::ResponseCode::ResponseCode;
 use anyhow::{Context, Result};
 use binder::{IBinderInternal, Strong};
+use keystore2_crypto::Password;
 
 /// This struct is defined to implement the aforementioned AIDL interface.
 /// As of now, it is an empty struct.
@@ -42,7 +43,7 @@ impl Maintenance {
         Ok(result)
     }
 
-    fn on_user_password_changed(user_id: i32, password: Option<&[u8]>) -> Result<()> {
+    fn on_user_password_changed(user_id: i32, password: Option<Password>) -> Result<()> {
         //Check permission. Function should return if this failed. Therefore having '?' at the end
         //is very important.
         check_keystore_permission(KeystorePerm::change_password())
@@ -55,7 +56,7 @@ impl Maintenance {
                     &LEGACY_MIGRATOR,
                     &SUPER_KEY,
                     user_id as u32,
-                    password,
+                    password.as_ref(),
                 )
             })
             .context("In on_user_password_changed.")?
@@ -121,7 +122,7 @@ impl Interface for Maintenance {}
 
 impl IKeystoreMaintenance for Maintenance {
     fn onUserPasswordChanged(&self, user_id: i32, password: Option<&[u8]>) -> BinderResult<()> {
-        map_or_log_err(Self::on_user_password_changed(user_id, password), Ok)
+        map_or_log_err(Self::on_user_password_changed(user_id, password.map(|pw| pw.into())), Ok)
     }
 
     fn onUserAdded(&self, user_id: i32) -> BinderResult<()> {

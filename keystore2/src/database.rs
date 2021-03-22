@@ -1357,15 +1357,11 @@ impl KeystoreDB {
     }
 
     fn is_locked_error(e: &anyhow::Error) -> bool {
-        matches!(e.root_cause().downcast_ref::<rusqlite::ffi::Error>(),
-        Some(rusqlite::ffi::Error {
-            code: rusqlite::ErrorCode::DatabaseBusy,
-            ..
-        })
-        | Some(rusqlite::ffi::Error {
-            code: rusqlite::ErrorCode::DatabaseLocked,
-            ..
-        }))
+        matches!(
+            e.root_cause().downcast_ref::<rusqlite::ffi::Error>(),
+            Some(rusqlite::ffi::Error { code: rusqlite::ErrorCode::DatabaseBusy, .. })
+                | Some(rusqlite::ffi::Error { code: rusqlite::ErrorCode::DatabaseLocked, .. })
+        )
     }
 
     /// Creates a new key entry and allocates a new randomized id for the new key.
@@ -4889,7 +4885,7 @@ mod tests {
     #[test]
     fn test_store_super_key() -> Result<()> {
         let mut db = new_test_db()?;
-        let pw = "xyzabc".as_bytes();
+        let pw: keystore2_crypto::Password = (&b"xyzabc"[..]).into();
         let super_key = keystore2_crypto::generate_aes256_key()?;
         let secret = String::from("keystore2 is great.");
         let secret_bytes = secret.into_bytes();
