@@ -32,6 +32,7 @@ pub mod permission;
 pub mod remote_provisioning;
 pub mod security_level;
 pub mod service;
+pub mod shared_secret_negotiation;
 pub mod user_manager;
 pub mod utils;
 

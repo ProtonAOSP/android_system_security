@@ -23,6 +23,8 @@ extern "C" {
 
 char** getHalNames(size_t* len);
 char** getHalNamesAndVersions(size_t* len);
+char** getHidlInstances(size_t* len, const char* package, size_t major_version,
+                        size_t minor_version, const char* interfaceName);
 char** getAidlInstances(size_t* len, const char* package, size_t version,
                         const char* interfaceName);
 void freeNames(char** names, size_t len);
