@@ -33,7 +33,7 @@
 
 #define AT __func__ << ":" << __LINE__ << " "
 
-constexpr const char keystore2_service_name[] = "android.system.keystore2";
+constexpr const char keystore2_service_name[] = "android.system.keystore2.IKeystoreService/default";
 const std::string keystore2_grant_id_prefix("ks2_keystore-engine_grant_id:");
 
 /**

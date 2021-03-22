@@ -129,7 +129,7 @@ bool KeystoreKey::initialize() {
     if (sm == nullptr) {
         return false;
     }
-    auto service = sm->getService(String16("android.system.keystore2"));
+    auto service = sm->getService(String16("android.system.keystore2.IKeystoreService/default"));
     if (service == nullptr) {
         return false;
     }
