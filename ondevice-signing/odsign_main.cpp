@@ -297,6 +297,11 @@ int main(int /* argc */, char** /* argv */) {
     };
     auto scope_guard = android::base::make_scope_guard(errorScopeGuard);
 
+    if (!android::base::GetBoolProperty("ro.apex.updatable", false)) {
+        LOG(INFO) << "Device doesn't support updatable APEX, exiting.";
+        return 0;
+    }
+
     SigningKey* key;
     if (kUseKeystore) {
         auto keystoreResult = KeystoreKey::getInstance();
