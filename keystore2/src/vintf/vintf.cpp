@@ -43,6 +43,15 @@ char** getHalNamesAndVersions(size_t* len) {
     return convert(names);
 }
 
+char** getHidlInstances(size_t* len, const char* package, size_t major_version,
+                        size_t minor_version, const char* interfaceName) {
+    android::vintf::Version version(major_version, minor_version);
+    auto manifest = android::vintf::VintfObject::GetDeviceHalManifest();
+    const auto names = manifest->getHidlInstances(package, version, interfaceName);
+    *len = names.size();
+    return convert(names);
+}
+
 char** getAidlInstances(size_t* len, const char* package, size_t version,
                         const char* interfaceName) {
     auto manifest = android::vintf::VintfObject::GetDeviceHalManifest();
