@@ -18,7 +18,6 @@ package android.security.attestationmanager;
 
 /**
  * Simple data holder for a byte array, allowing for multidimensional arrays in AIDL.
- *
  * @hide
  */
 parcelable ByteArray {

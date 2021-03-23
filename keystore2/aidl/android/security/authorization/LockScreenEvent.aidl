@@ -14,6 +14,7 @@
 
 package android.security.authorization;
 
+/** @hide */
 @Backing(type="int")
 enum LockScreenEvent {
     UNLOCK = 0,

@@ -33,6 +33,7 @@ use android_system_keystore2::aidl::android::system::keystore2::{
     ResponseCode::ResponseCode as KsResponseCode };
 use anyhow::{Context, Result};
 use binder::IBinderInternal;
+use keystore2_crypto::Password;
 use keystore2_selinux as selinux;
 
 /// This is the Authorization error type, it wraps binder exceptions and the
@@ -128,10 +129,10 @@ impl AuthorizationManager {
         &self,
         lock_screen_event: LockScreenEvent,
         user_id: i32,
-        password: Option<&[u8]>,
+        password: Option<Password>,
     ) -> Result<()> {
         match (lock_screen_event, password) {
-            (LockScreenEvent::UNLOCK, Some(user_password)) => {
+            (LockScreenEvent::UNLOCK, Some(password)) => {
                 //This corresponds to the unlock() method in legacy keystore API.
                 //check permission
                 check_keystore_permission(KeystorePerm::unlock())
@@ -145,7 +146,7 @@ impl AuthorizationManager {
                             &LEGACY_MIGRATOR,
                             &SUPER_KEY,
                             user_id as u32,
-                            user_password,
+                            &password,
                         )
                     })
                     .context("In on_lock_screen_event: Unlock with password.")?
@@ -213,7 +214,10 @@ impl IKeystoreAuthorization for AuthorizationManager {
         user_id: i32,
         password: Option<&[u8]>,
     ) -> BinderResult<()> {
-        map_or_log_err(self.on_lock_screen_event(lock_screen_event, user_id, password), Ok)
+        map_or_log_err(
+            self.on_lock_screen_event(lock_screen_event, user_id, password.map(|pw| pw.into())),
+            Ok,
+        )
     }
 
     fn getAuthTokensForCredStore(
