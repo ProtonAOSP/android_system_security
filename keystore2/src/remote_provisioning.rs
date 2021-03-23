@@ -165,26 +165,26 @@ impl RemProvState {
     ///
     /// It returns the ResponseCode `OUT_OF_KEYS` if there is not one key currently assigned to the
     /// `caller_uid` and there are none available to assign.
-    pub fn get_remote_provisioning_key_and_certs(
+    pub fn get_remotely_provisioned_attestation_key_and_certs(
         &self,
         key: &KeyDescriptor,
         caller_uid: u32,
         params: &[KeyParameter],
         db: &mut KeystoreDB,
-    ) -> Result<(Option<AttestationKey>, Option<Certificate>)> {
+    ) -> Result<Option<(AttestationKey, Certificate)>> {
         if !self.is_asymmetric_key(params) || !self.check_rem_prov_enabled(db)? {
             // There is no remote provisioning component for this security level on the
             // device. Return None so the underlying KM instance knows to use its
             // factory provisioned key instead. Alternatively, it's not an asymmetric key
             // and therefore will not be attested.
-            Ok((None, None))
+            Ok(None)
         } else {
             match self.get_rem_prov_attest_key(&key, caller_uid, db).context(concat!(
                 "In get_remote_provisioning_key_and_certs: Failed to get ",
                 "attestation key"
             ))? {
-                Some(cert_chain) => Ok((
-                    Some(AttestationKey {
+                Some(cert_chain) => Ok(Some((
+                    AttestationKey {
                         keyBlob: cert_chain.private_key.to_vec(),
                         attestKeyParams: vec![],
                         issuerSubjectName: parse_subject_from_certificate(&cert_chain.batch_cert)
@@ -192,10 +192,10 @@ impl RemProvState {
                             "In get_remote_provisioning_key_and_certs: Failed to ",
                             "parse subject."
                         ))?,
-                    }),
-                    Some(Certificate { encodedCertificate: cert_chain.cert_chain }),
-                )),
-                None => Ok((None, None)),
+                    },
+                    Certificate { encodedCertificate: cert_chain.cert_chain },
+                ))),
+                None => Ok(None),
             }
         }
     }
