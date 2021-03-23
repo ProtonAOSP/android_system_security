@@ -35,6 +35,7 @@ pub mod service;
 pub mod user_manager;
 pub mod utils;
 
+mod attestation_key_utils;
 mod db_utils;
 mod gc;
 mod super_key;
