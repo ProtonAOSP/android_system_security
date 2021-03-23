@@ -53,5 +53,9 @@ int main(int argc, char* argv[]) {
     CHECK(ret == ::android::OK) << "Couldn't register binder service";
     LOG(ERROR) << "Registered binder service";
 
+    // Credstore is a single-threaded process. So devote the main thread
+    // to handling binder messages.
+    IPCThreadState::self()->joinThreadPool();
+
     return 0;
 }
