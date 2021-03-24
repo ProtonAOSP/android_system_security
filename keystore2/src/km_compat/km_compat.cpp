@@ -1332,7 +1332,7 @@ ScopedAStatus KeystoreCompatService::getSharedSecret(KeyMintSecurityLevel in_sec
 }
 
 ScopedAStatus KeystoreCompatService::getSecureClock(std::shared_ptr<ISecureClock>* _aidl_return) {
-    if (!mSharedSecret) {
+    if (!mSecureClock) {
         // The legacy verification service was always provided by the TEE variant.
         auto clock = SecureClock::createSecureClock(KeyMintSecurityLevel::TRUSTED_ENVIRONMENT);
         if (!clock) {
