@@ -90,6 +90,16 @@ interface IKeystoreMaintenance {
     UserState getState(in int userId);
 
     /**
+     * This function notifies the Keymint device of the specified securityLevel that
+     * early boot has ended, so that they no longer allow early boot keys to be used.
+     * ## Error conditions:
+     * `ResponseCode::PERMISSION_DENIED` - if the caller does not have the 'EarlyBootEnded'
+     *                                     permission.
+     * A KeyMint ErrorCode may be returned indicating a backend diagnosed error.
+     */
+     void earlyBootEnded();
+
+    /**
      * Informs Keystore 2.0 that the an off body event was detected.
      *
      * ## Error conditions:
