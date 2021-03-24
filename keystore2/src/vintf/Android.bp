@@ -55,6 +55,7 @@ rust_bindgen {
         "--size_t-is-usize",
         "--whitelist-function", "getHalNames",
         "--whitelist-function", "getHalNamesAndVersions",
+        "--whitelist-function", "getHidlInstances",
         "--whitelist-function", "getAidlInstances",
         "--whitelist-function", "freeNames",
     ],

@@ -29,6 +29,7 @@
 #include <android-base/properties.h>
 #include <android-base/scopeguard.h>
 #include <logwrap/logwrap.h>
+#include <odrefresh/odrefresh.h>
 
 #include "CertUtils.h"
 #include "KeymasterSigningKey.h"
@@ -101,18 +102,11 @@ Result<void> createX509Cert(const SigningKey& key, const std::string& outPath) {
     return {};
 }
 
-bool compileArtifacts(bool force) {
+art::odrefresh::ExitCode compileArtifacts(bool force) {
     const char* const argv[] = {kOdrefreshPath, force ? "--force-compile" : "--compile"};
-
-    return logwrap_fork_execvp(arraysize(argv), argv, nullptr, false, LOG_ALOG, false, nullptr) ==
-           0;
-}
-
-bool validateArtifacts() {
-    const char* const argv[] = {kOdrefreshPath, "--check"};
-
-    return logwrap_fork_execvp(arraysize(argv), argv, nullptr, false, LOG_ALOG, false, nullptr) ==
-           0;
+    const int exit_code =
+        logwrap_fork_execvp(arraysize(argv), argv, nullptr, false, LOG_ALOG, false, nullptr);
+    return static_cast<art::odrefresh::ExitCode>(exit_code);
 }
 
 static std::string toHex(const std::vector<uint8_t>& digest) {
@@ -303,6 +297,11 @@ int main(int /* argc */, char** /* argv */) {
     };
     auto scope_guard = android::base::make_scope_guard(errorScopeGuard);
 
+    if (!android::base::GetBoolProperty("ro.apex.updatable", false)) {
+        LOG(INFO) << "Device doesn't support updatable APEX, exiting.";
+        return 0;
+    }
+
     SigningKey* key;
     if (kUseKeystore) {
         auto keystoreResult = KeystoreKey::getInstance();
@@ -349,30 +348,27 @@ int main(int /* argc */, char** /* argv */) {
         }
     }
 
-    // Ask ART whether it considers the artifacts valid
-    LOG(INFO) << "Asking odrefresh to verify artifacts (if present)...";
-    bool artifactsValid = validateArtifacts();
-    LOG(INFO) << "odrefresh said they are " << (artifactsValid ? "VALID" : "INVALID");
-
-    // A post-condition of validating artifacts is that if the ones on /system
-    // are used, kArtArtifactsDir is removed. Conversely, if kArtArtifactsDir
-    // exists, those are artifacts that will be used, and we should verify them.
-    int err = access(kArtArtifactsDir.c_str(), F_OK);
-    // If we receive any error other than ENOENT, be suspicious
-    bool artifactsPresent = (err == 0) || (err < 0 && errno != ENOENT);
-    if (artifactsPresent) {
-        auto verificationResult = verifyArtifacts(*key, supportsFsVerity);
-        if (!verificationResult.ok()) {
-            LOG(ERROR) << verificationResult.error().message();
-            return -1;
+    art::odrefresh::ExitCode odrefresh_status = compileArtifacts(kForceCompilation);
+    if (odrefresh_status == art::odrefresh::ExitCode::kOkay) {
+        LOG(INFO) << "odrefresh said artifacts are VALID";
+        // A post-condition of validating artifacts is that if the ones on /system
+        // are used, kArtArtifactsDir is removed. Conversely, if kArtArtifactsDir
+        // exists, those are artifacts that will be used, and we should verify them.
+        int err = access(kArtArtifactsDir.c_str(), F_OK);
+        // If we receive any error other than ENOENT, be suspicious
+        bool artifactsPresent = (err == 0) || (err < 0 && errno != ENOENT);
+        if (artifactsPresent) {
+            auto verificationResult = verifyArtifacts(*key, supportsFsVerity);
+            if (!verificationResult.ok()) {
+                LOG(ERROR) << verificationResult.error().message();
+                return -1;
+            }
         }
-    }
-
-    if (!artifactsValid || kForceCompilation) {
-        LOG(INFO) << "Starting compilation... ";
-        bool ret = compileArtifacts(kForceCompilation);
-        LOG(INFO) << "Compilation done, returned " << ret;
-
+    } else if (odrefresh_status == art::odrefresh::ExitCode::kCompilationSuccess ||
+               odrefresh_status == art::odrefresh::ExitCode::kCompilationFailed) {
+        const bool compiled_all = odrefresh_status == art::odrefresh::ExitCode::kCompilationSuccess;
+        LOG(INFO) << "odrefresh compiled " << (compiled_all ? "all" : "partial")
+                  << " artifacts, returned " << odrefresh_status;
         Result<std::map<std::string, std::string>> digests;
         if (supportsFsVerity) {
             digests = addFilesToVerityRecursive(kArtArtifactsDir, *key);
@@ -385,12 +381,17 @@ int main(int /* argc */, char** /* argv */) {
             LOG(ERROR) << digests.error().message();
             return -1;
         }
-
         auto persistStatus = persistDigests(*digests, *key);
         if (!persistStatus.ok()) {
             LOG(ERROR) << persistStatus.error().message();
             return -1;
         }
+    } else if (odrefresh_status == art::odrefresh::ExitCode::kCleanupFailed) {
+        LOG(ERROR) << "odrefresh failed cleaning up existing artifacts";
+        return -1;
+    } else {
+        LOG(ERROR) << "odrefresh exited unexpectedly, returned " << odrefresh_status;
+        return -1;
     }
 
     LOG(INFO) << "On-device signing done.";

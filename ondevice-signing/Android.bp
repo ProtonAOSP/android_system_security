@@ -90,6 +90,8 @@ cc_binary {
     "VerityUtils.cpp",
   ],
 
+  header_libs: ["odrefresh_headers"],
+
   static_libs: [
     "libmini_keyctl_static", // TODO need static?
     "libc++fs",

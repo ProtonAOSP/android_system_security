@@ -18,7 +18,7 @@
 
 use crate::globals::get_keymint_device;
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
-    Algorithm::Algorithm, AttestationKey::AttestationKey, Certificate::Certificate,
+    Algorithm::Algorithm, AttestationKey::AttestationKey,
     HardwareAuthenticatorType::HardwareAuthenticatorType, IKeyMintDevice::IKeyMintDevice,
     KeyCreationResult::KeyCreationResult, KeyFormat::KeyFormat,
     KeyMintHardwareInfo::KeyMintHardwareInfo, KeyParameter::KeyParameter,
@@ -32,7 +32,8 @@ use android_system_keystore2::aidl::android::system::keystore2::{
     KeyMetadata::KeyMetadata, KeyParameters::KeyParameters,
 };
 
-use crate::database::{CertificateInfo, KeyIdGuard, KeystoreDB};
+use crate::attestation_key_utils::{get_attest_key_info, AttestationKeyInfo};
+use crate::database::{CertificateInfo, KeyIdGuard};
 use crate::globals::{DB, ENFORCEMENTS, LEGACY_MIGRATOR, SUPER_KEY};
 use crate::key_parameter::KeyParameter as KsKeyParam;
 use crate::key_parameter::KeyParameterValue as KsKeyParamValue;
@@ -57,7 +58,6 @@ use crate::{
 };
 use anyhow::{anyhow, Context, Result};
 use binder::{IBinderInternal, Strong, ThreadState};
-use keystore2_crypto::parse_subject_from_certificate;
 
 /// Implementation of the IKeystoreSecurityLevel Interface.
 pub struct KeystoreSecurityLevel {
@@ -341,6 +341,10 @@ impl KeystoreSecurityLevel {
                 0 => None,
                 _ => Some(KeyParameters { keyParameter: begin_result.params }),
             },
+            // An upgraded blob should only be returned if the caller has permission
+            // to use Domain::BLOB keys. If we got to this point, we already checked
+            // that the caller had that permission.
+            upgradedBlob: if key.domain == Domain::BLOB { upgraded_blob } else { None },
         })
     }
 
@@ -425,16 +429,19 @@ impl KeystoreSecurityLevel {
         };
 
         // generate_key requires the rebind permission.
+        // Must return on error for security reasons.
         check_key_permission(KeyPerm::rebind(), &key, &None).context("In generate_key.")?;
-        let (attest_key, cert_chain) = match (key.domain, attest_key_descriptor) {
-            (Domain::BLOB, None) => (None, None),
+
+        let attestation_key_info = match (key.domain, attest_key_descriptor) {
+            (Domain::BLOB, _) => None,
             _ => DB
-                .with::<_, Result<(Option<AttestationKey>, Option<Certificate>)>>(|db| {
-                    self.get_attest_key_and_cert_chain(
+                .with(|db| {
+                    get_attest_key_info(
                         &key,
                         caller_uid,
                         attest_key_descriptor,
                         params,
+                        &self.rem_prov_state,
                         &mut db.borrow_mut(),
                     )
                 })
@@ -444,90 +451,45 @@ impl KeystoreSecurityLevel {
             .context("In generate_key: Trying to get aaid.")?;
 
         let km_dev: Strong<dyn IKeyMintDevice> = self.keymint.get_interface()?;
-        map_km_error(km_dev.addRngEntropy(entropy))
-            .context("In generate_key: Trying to add entropy.")?;
-        let mut creation_result = map_km_error(km_dev.generateKey(&params, attest_key.as_ref()))
-            .context("In generate_key: While generating Key")?;
-        // The certificate chain ultimately gets flattened into a big DER encoded byte array,
-        // so providing that blob upfront in a single certificate entry should be fine.
-        if let Some(cert) = cert_chain {
-            creation_result.certificateChain.push(cert);
+
+        let creation_result = match attestation_key_info {
+            Some(AttestationKeyInfo::UserGenerated {
+                key_id_guard,
+                blob,
+                blob_metadata,
+                issuer_subject,
+            }) => self
+                .upgrade_keyblob_if_required_with(
+                    &*km_dev,
+                    Some(key_id_guard),
+                    &(&KeyBlob::Ref(&blob), &blob_metadata),
+                    &params,
+                    |blob| {
+                        let attest_key = Some(AttestationKey {
+                            keyBlob: blob.to_vec(),
+                            attestKeyParams: vec![],
+                            issuerSubjectName: issuer_subject.clone(),
+                        });
+                        map_km_error(km_dev.generateKey(&params, attest_key.as_ref()))
+                    },
+                )
+                .context("In generate_key: Using user generated attestation key.")
+                .map(|(result, _)| result),
+            Some(AttestationKeyInfo::RemoteProvisioned { attestation_key, attestation_certs }) => {
+                map_km_error(km_dev.generateKey(&params, Some(&attestation_key)))
+                    .context("While generating Key with remote provisioned attestation key.")
+                    .map(|mut creation_result| {
+                        creation_result.certificateChain.push(attestation_certs);
+                        creation_result
+                    })
+            }
+            None => map_km_error(km_dev.generateKey(&params, None))
+                .context("While generating Key without explicit attestation key."),
         }
+        .context("In generate_key.")?;
+
         let user_id = uid_to_android_user(caller_uid);
         self.store_new_key(key, creation_result, user_id, Some(flags)).context("In generate_key.")
-    }
-
-    fn get_attest_key_and_cert_chain(
-        &self,
-        key: &KeyDescriptor,
-        caller_uid: u32,
-        attest_key_descriptor: Option<&KeyDescriptor>,
-        params: &[KeyParameter],
-        db: &mut KeystoreDB,
-    ) -> Result<(Option<AttestationKey>, Option<Certificate>)> {
-        match attest_key_descriptor {
-            None => self
-                .rem_prov_state
-                .get_remote_provisioning_key_and_certs(&key, caller_uid, params, db),
-            Some(attest_key) => Ok((
-                Some(
-                    self.get_attest_key(&attest_key, caller_uid)
-                        .context("In generate_key: Trying to load attest key")?,
-                ),
-                None,
-            )),
-        }
-    }
-
-    fn get_attest_key(&self, key: &KeyDescriptor, caller_uid: u32) -> Result<AttestationKey> {
-        let (km_blob, cert) = self
-            .load_attest_key_blob_and_cert(&key, caller_uid)
-            .context("In get_attest_key: Failed to load blob and cert")?;
-
-        let issuer_subject: Vec<u8> = parse_subject_from_certificate(&cert)
-            .context("In get_attest_key: Failed to parse subject from certificate.")?;
-
-        Ok(AttestationKey {
-            keyBlob: km_blob.to_vec(),
-            attestKeyParams: [].to_vec(),
-            issuerSubjectName: issuer_subject,
-        })
-    }
-
-    fn load_attest_key_blob_and_cert(
-        &self,
-        key: &KeyDescriptor,
-        caller_uid: u32,
-    ) -> Result<(Vec<u8>, Vec<u8>)> {
-        match key.domain {
-            Domain::BLOB => Err(error::Error::Km(ErrorCode::INVALID_ARGUMENT)).context(
-                "In load_attest_key_blob_and_cert: Domain::BLOB attestation keys not supported",
-            ),
-            _ => {
-                let (key_id_guard, mut key_entry) = DB
-                    .with::<_, Result<(KeyIdGuard, KeyEntry)>>(|db| {
-                        db.borrow_mut().load_key_entry(
-                            &key,
-                            KeyType::Client,
-                            KeyEntryLoadBits::BOTH,
-                            caller_uid,
-                            |k, av| check_key_permission(KeyPerm::use_(), k, &av),
-                        )
-                    })
-                    .context("In load_attest_key_blob_and_cert: Failed to load key.")?;
-
-                let (blob, _) =
-                    key_entry.take_key_blob_info().ok_or_else(Error::sys).context(concat!(
-                        "In load_attest_key_blob_and_cert: Successfully loaded key entry,",
-                        " but KM blob was missing."
-                    ))?;
-                let cert = key_entry.take_cert().ok_or_else(Error::sys).context(concat!(
-                    "In load_attest_key_blob_and_cert: Successfully loaded key entry,",
-                    " but cert was missing."
-                ))?;
-                Ok((blob, cert))
-            }
-        }
     }
 
     fn import_key(
