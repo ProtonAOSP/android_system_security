@@ -1702,11 +1702,11 @@ impl KeystoreDB {
                     ],
                 )
                 .context("Failed to assign attestation key")?;
-            if result != 1 {
-                return Err(KsError::sys()).context(format!(
-                    "Expected to update a single entry but instead updated {}.",
-                    result
-                ));
+            if result == 0 {
+                return Err(KsError::Rc(ResponseCode::OUT_OF_KEYS)).context("Out of keys.");
+            } else if result > 1 {
+                return Err(KsError::sys())
+                    .context(format!("Expected to update 1 entry, instead updated {}", result));
             }
             Ok(()).no_gc()
         })
