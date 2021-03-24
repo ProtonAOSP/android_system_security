@@ -14,12 +14,16 @@
 
 //! This module implements IKeystoreMaintenance AIDL interface.
 
+use crate::error::map_km_error;
 use crate::error::Error as KeystoreError;
+use crate::globals::get_keymint_device;
 use crate::globals::{DB, LEGACY_MIGRATOR, SUPER_KEY};
 use crate::permission::KeystorePerm;
 use crate::super_key::UserState;
 use crate::utils::check_keystore_permission;
 use crate::{database::MonotonicRawTime, error::map_or_log_err};
+use android_hardware_security_keymint::aidl::android::hardware::security::keymint::IKeyMintDevice::IKeyMintDevice;
+use android_hardware_security_keymint::aidl::android::hardware::security::keymint::SecurityLevel::SecurityLevel;
 use android_security_maintenance::aidl::android::security::maintenance::{
     IKeystoreMaintenance::{BnKeystoreMaintenance, IKeystoreMaintenance},
     UserState::UserState as AidlUserState,
@@ -117,6 +121,36 @@ impl Maintenance {
         }
     }
 
+    fn early_boot_ended_help(sec_level: &SecurityLevel) -> Result<()> {
+        let (dev, _, _) =
+            get_keymint_device(sec_level).context("In early_boot_ended: getting keymint device")?;
+        let km_dev: Strong<dyn IKeyMintDevice> =
+            dev.get_interface().context("In early_boot_ended: getting keymint device interface")?;
+        map_km_error(km_dev.earlyBootEnded())
+            .context("In keymint device: calling earlyBootEnded")?;
+        Ok(())
+    }
+
+    fn early_boot_ended() -> Result<()> {
+        check_keystore_permission(KeystorePerm::early_boot_ended())
+            .context("In early_boot_ended. Checking permission")?;
+
+        let sec_levels = [
+            (SecurityLevel::TRUSTED_ENVIRONMENT, "TRUSTED_ENVIRONMENT"),
+            (SecurityLevel::STRONGBOX, "STRONGBOX"),
+        ];
+        sec_levels.iter().fold(Ok(()), |result, (sec_level, sec_level_string)| {
+            let curr_result = Maintenance::early_boot_ended_help(sec_level);
+            if curr_result.is_err() {
+                log::error!(
+                    "Call to earlyBootEnded failed for security level {}.",
+                    &sec_level_string
+                );
+            }
+            result.and(curr_result)
+        })
+    }
+
     fn on_device_off_body() -> Result<()> {
         // Security critical permission check. This statement must return on fail.
         check_keystore_permission(KeystorePerm::report_off_body())
@@ -148,6 +182,10 @@ impl IKeystoreMaintenance for Maintenance {
 
     fn getState(&self, user_id: i32) -> BinderResult<AidlUserState> {
         map_or_log_err(Self::get_state(user_id), Ok)
+    }
+
+    fn earlyBootEnded(&self) -> BinderResult<()> {
+        map_or_log_err(Self::early_boot_ended(), Ok)
     }
 
     fn onDeviceOffBody(&self) -> BinderResult<()> {
