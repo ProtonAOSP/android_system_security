@@ -29,6 +29,7 @@ interface IKeystoreMaintenance {
     /**
      * Allows LockSettingsService to inform keystore about adding a new user.
      * Callers require 'AddUser' permission.
+     *
      * ## Error conditions:
      * `ResponseCode::PERMISSION_DENIED` - if the callers do not have the 'AddUser' permission.
      * `ResponseCode::SYSTEM_ERROR` - if failed to delete the keys of an existing user with the same
@@ -41,6 +42,7 @@ interface IKeystoreMaintenance {
     /**
      * Allows LockSettingsService to inform keystore about removing a user.
      * Callers require 'RemoveUser' permission.
+     *
      * ## Error conditions:
      * `ResponseCode::PERMISSION_DENIED` - if the callers do not have the 'RemoveUser' permission.
      * `ResponseCode::SYSTEM_ERROR` - if failed to delete the keys of the user being deleted.
@@ -52,8 +54,9 @@ interface IKeystoreMaintenance {
     /**
      * Allows LockSettingsService to inform keystore about password change of a user.
      * Callers require 'ChangePassword' permission.
+     *
      * ## Error conditions:
-     * `ResponseCode::PERMISSION_DENIED` - if the callers do not have the 'ChangePassword'
+     * `ResponseCode::PERMISSION_DENIED` - if the callers does not have the 'ChangePassword'
      *                                     permission.
      * `ResponseCode::SYSTEM_ERROR` - if failed to delete the super encrypted keys of the user.
      * `ResponseCode::Locked' -  if the keystore is locked for the given user.
@@ -71,11 +74,12 @@ interface IKeystoreMaintenance {
      * @param nspace - The UID of the app that is to be cleared if domain is Domain.APP or
      *                 the SEPolicy namespace if domain is Domain.SELINUX.
      */
-     void clearNamespace(Domain domain, long nspace);
+    void clearNamespace(Domain domain, long nspace);
 
     /**
      * Allows querying user state, given user id.
      * Callers require 'GetState' permission.
+     *
      * ## Error conditions:
      * `ResponseCode::PERMISSION_DENIED` - if the callers do not have the 'GetState'
      *                                     permission.
@@ -84,4 +88,14 @@ interface IKeystoreMaintenance {
      * @param userId - Android user id
      */
     UserState getState(in int userId);
+
+    /**
+     * Informs Keystore 2.0 that the an off body event was detected.
+     *
+     * ## Error conditions:
+     * `ResponseCode::PERMISSION_DENIED` - if the caller does not have the `ReportOffBody`
+     *                                     permission.
+     * `ResponseCode::SYSTEM_ERROR` - if an unexpected error occurred.
+     */
+    void onDeviceOffBody();
 }
