@@ -391,20 +391,13 @@ void OperationSlot::freeSlot() {
 // KeyMintDevice implementation
 
 ScopedAStatus KeyMintDevice::getHardwareInfo(KeyMintHardwareInfo* _aidl_return) {
-    // TODO: What do I do about the version number?  Is it the version of the device I get?
-    auto result = mDevice->getHardwareInfo([&](auto securityLevel, const auto& keymasterName,
-                                               const auto& keymasterAuthorName) {
-        securityLevel_ =
-            static_cast<::aidl::android::hardware::security::keymint::SecurityLevel>(securityLevel);
-
-        _aidl_return->securityLevel = securityLevel_;
-        _aidl_return->keyMintName = keymasterName;
-        _aidl_return->keyMintAuthorName = keymasterAuthorName;
-    });
-    if (!result.isOk()) {
-        LOG(ERROR) << __func__ << " transaction failed. " << result.description();
-        return convertErrorCode(KMV1::ErrorCode::UNKNOWN_ERROR);
-    }
+    auto result = mDevice->halVersion();
+    _aidl_return->versionNumber = result.majorVersion * 10 + result.minorVersion;
+    securityLevel_ = convert(result.securityLevel);
+    _aidl_return->securityLevel = securityLevel_;
+    _aidl_return->keyMintName = result.keymasterName;
+    _aidl_return->keyMintAuthorName = result.authorName;
+    _aidl_return->timestampTokenRequired = securityLevel_ == KMV1::SecurityLevel::STRONGBOX;
     return ScopedAStatus::ok();
 }
 
@@ -1378,7 +1371,7 @@ ScopedAStatus KeystoreCompatService::getSharedSecret(KeyMintSecurityLevel in_sec
 }
 
 ScopedAStatus KeystoreCompatService::getSecureClock(std::shared_ptr<ISecureClock>* _aidl_return) {
-    if (!mSharedSecret) {
+    if (!mSecureClock) {
         // The legacy verification service was always provided by the TEE variant.
         auto clock = SecureClock::createSecureClock(KeyMintSecurityLevel::TRUSTED_ENVIRONMENT);
         if (!clock) {
