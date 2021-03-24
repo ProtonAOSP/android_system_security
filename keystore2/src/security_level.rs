@@ -754,6 +754,28 @@ impl KeystoreSecurityLevel {
         map_km_error(km_dev.convertStorageKeyToEphemeral(key_blob))
             .context("In keymint device convertStorageKeyToEphemeral")
     }
+
+    fn delete_key(&self, key: &KeyDescriptor) -> Result<()> {
+        if key.domain != Domain::BLOB {
+            return Err(error::Error::Km(ErrorCode::INVALID_ARGUMENT))
+                .context("In IKeystoreSecurityLevel delete_key: Key must be of Domain::BLOB");
+        }
+
+        let key_blob = key
+            .blob
+            .as_ref()
+            .ok_or(error::Error::Km(ErrorCode::INVALID_ARGUMENT))
+            .context("In IKeystoreSecurityLevel delete_key: No key blob specified")?;
+
+        check_key_permission(KeyPerm::delete(), key, &None)
+            .context("In IKeystoreSecurityLevel delete_key: Checking delete permissions")?;
+
+        let km_dev: Strong<dyn IKeyMintDevice> = self
+            .keymint
+            .get_interface()
+            .context("In IKeystoreSecurityLevel delete_key: Getting keymint device interface")?;
+        map_km_error(km_dev.deleteKey(&key_blob)).context("In keymint device deleteKey")
+    }
 }
 
 impl binder::Interface for KeystoreSecurityLevel {}
@@ -805,5 +827,8 @@ impl IKeystoreSecurityLevel for KeystoreSecurityLevel {
         storage_key: &KeyDescriptor,
     ) -> binder::public_api::Result<Vec<u8>> {
         map_or_log_err(self.convert_storage_key_to_ephemeral(storage_key), Ok)
+    }
+    fn deleteKey(&self, key: &KeyDescriptor) -> binder::public_api::Result<()> {
+        map_or_log_err(self.delete_key(key), Ok)
     }
 }
