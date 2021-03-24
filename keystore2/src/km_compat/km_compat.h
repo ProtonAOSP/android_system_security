@@ -115,6 +115,9 @@ class KeyMintDevice : public aidl::android::hardware::security::keymint::BnKeyMi
                                const std::optional<TimeStampToken>& timestampToken) override;
     ScopedAStatus earlyBootEnded() override;
 
+    ScopedAStatus convertStorageKeyToEphemeral(const std::vector<uint8_t>& storageKeyBlob,
+                                               std::vector<uint8_t>* ephemeralKeyBlob) override;
+
     ScopedAStatus performOperation(const std::vector<uint8_t>& request,
                                    std::vector<uint8_t>* response) override;
 
