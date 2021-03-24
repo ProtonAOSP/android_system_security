@@ -14,12 +14,12 @@
 
 //! This module implements IKeystoreMaintenance AIDL interface.
 
-use crate::error::map_or_log_err;
 use crate::error::Error as KeystoreError;
 use crate::globals::{DB, LEGACY_MIGRATOR, SUPER_KEY};
 use crate::permission::KeystorePerm;
 use crate::super_key::UserState;
 use crate::utils::check_keystore_permission;
+use crate::{database::MonotonicRawTime, error::map_or_log_err};
 use android_security_maintenance::aidl::android::security::maintenance::{
     IKeystoreMaintenance::{BnKeystoreMaintenance, IKeystoreMaintenance},
     UserState::UserState as AidlUserState,
@@ -116,6 +116,15 @@ impl Maintenance {
             UserState::LskfLocked => Ok(AidlUserState::LSKF_LOCKED),
         }
     }
+
+    fn on_device_off_body() -> Result<()> {
+        // Security critical permission check. This statement must return on fail.
+        check_keystore_permission(KeystorePerm::report_off_body())
+            .context("In on_device_off_body.")?;
+
+        DB.with(|db| db.borrow_mut().update_last_off_body(MonotonicRawTime::now()))
+            .context("In on_device_off_body: Trying to update last off body time.")
+    }
 }
 
 impl Interface for Maintenance {}
@@ -137,7 +146,11 @@ impl IKeystoreMaintenance for Maintenance {
         map_or_log_err(Self::clear_namespace(domain, nspace), Ok)
     }
 
-    fn getState(&self, user_id: i32) -> binder::public_api::Result<AidlUserState> {
+    fn getState(&self, user_id: i32) -> BinderResult<AidlUserState> {
         map_or_log_err(Self::get_state(user_id), Ok)
+    }
+
+    fn onDeviceOffBody(&self) -> BinderResult<()> {
+        map_or_log_err(Self::on_device_off_body(), Ok)
     }
 }
