@@ -12,13 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// TODO: Once this is stable, remove this and document everything public.
-#![allow(missing_docs)]
+//! Export into Rust a function to create a KeyMintDevice and add it as a service.
 
+#[allow(missing_docs)] // TODO remove this
 extern "C" {
     fn addKeyMintDeviceService() -> i32;
 }
 
+#[allow(missing_docs)] // TODO remove this
 pub fn add_keymint_device_service() -> i32 {
     unsafe { addKeyMintDeviceService() }
 }
