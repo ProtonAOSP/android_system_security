@@ -53,6 +53,13 @@ impl Maintenance {
         check_keystore_permission(KeystorePerm::change_password())
             .context("In on_user_password_changed.")?;
 
+        if let Some(pw) = password.as_ref() {
+            DB.with(|db| {
+                SUPER_KEY.unlock_screen_lock_bound_key(&mut db.borrow_mut(), user_id as u32, pw)
+            })
+            .context("In on_user_password_changed: unlock_screen_lock_bound_key failed")?;
+        }
+
         match DB
             .with(|db| {
                 UserState::get_with_password_changed(

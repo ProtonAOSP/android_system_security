@@ -138,6 +138,16 @@ impl AuthorizationManager {
                 check_keystore_permission(KeystorePerm::unlock())
                     .context("In on_lock_screen_event: Unlock with password.")?;
                 ENFORCEMENTS.set_device_locked(user_id, false);
+
+                DB.with(|db| {
+                    SUPER_KEY.unlock_screen_lock_bound_key(
+                        &mut db.borrow_mut(),
+                        user_id as u32,
+                        &password,
+                    )
+                })
+                .context("In on_lock_screen_event: unlock_screen_lock_bound_key failed")?;
+
                 // Unlock super key.
                 if let UserState::Uninitialized = DB
                     .with(|db| {
@@ -168,6 +178,8 @@ impl AuthorizationManager {
                 check_keystore_permission(KeystorePerm::lock())
                     .context("In on_lock_screen_event: Lock")?;
                 ENFORCEMENTS.set_device_locked(user_id, true);
+                SUPER_KEY.lock_screen_lock_bound_key(user_id as u32);
+
                 Ok(())
             }
             _ => {
