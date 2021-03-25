@@ -74,9 +74,13 @@ pub enum Error {
     #[error("Failed to generate key.")]
     ECKEYGenerateKeyFailed,
 
-    /// This is returned if the C implementation of ECKEYDeriveFromSecret returned null.
-    #[error("Failed to derive key.")]
-    ECKEYDeriveFailed,
+    /// This is returned if the C implementation of ECKEYMarshalPrivateKey returned 0.
+    #[error("Failed to marshal private key.")]
+    ECKEYMarshalPrivateKeyFailed,
+
+    /// This is returned if the C implementation of ECKEYParsePrivateKey returned null.
+    #[error("Failed to parse private key.")]
+    ECKEYParsePrivateKeyFailed,
 
     /// This is returned if the C implementation of ECPOINTPoint2Oct returned 0.
     #[error("Failed to convert point to oct.")]

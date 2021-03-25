@@ -300,7 +300,8 @@ impl KeystoreSecurityLevel {
             .upgrade_keyblob_if_required_with(
                 &*km_dev,
                 key_id_guard,
-                &(&km_blob, &blob_metadata),
+                &km_blob,
+                &blob_metadata,
                 &operation_parameters,
                 |blob| loop {
                     match map_km_error(km_dev.begin(
@@ -462,7 +463,8 @@ impl KeystoreSecurityLevel {
                 .upgrade_keyblob_if_required_with(
                     &*km_dev,
                     Some(key_id_guard),
-                    &(&KeyBlob::Ref(&blob), &blob_metadata),
+                    &KeyBlob::Ref(&blob),
+                    &blob_metadata,
                     &params,
                     |blob| {
                         let attest_key = Some(AttestationKey {
@@ -651,7 +653,8 @@ impl KeystoreSecurityLevel {
             .upgrade_keyblob_if_required_with(
                 &*km_dev,
                 Some(wrapping_key_id_guard),
-                &(&wrapping_key_blob, &wrapping_blob_metadata),
+                &wrapping_key_blob,
+                &wrapping_blob_metadata,
                 &[],
                 |wrapping_blob| {
                     let creation_result = map_km_error(km_dev.importWrappedKey(
@@ -671,48 +674,62 @@ impl KeystoreSecurityLevel {
             .context("In import_wrapped_key: Trying to store the new key.")
     }
 
+    fn store_upgraded_keyblob(
+        key_id_guard: KeyIdGuard,
+        km_uuid: Option<&Uuid>,
+        key_blob: &KeyBlob,
+        upgraded_blob: &[u8],
+    ) -> Result<()> {
+        let (upgraded_blob_to_be_stored, new_blob_metadata) =
+            SuperKeyManager::reencrypt_if_required(key_blob, &upgraded_blob)
+                .context("In store_upgraded_keyblob: Failed to handle super encryption.")?;
+
+        let mut new_blob_metadata = new_blob_metadata.unwrap_or_else(BlobMetaData::new);
+        if let Some(uuid) = km_uuid {
+            new_blob_metadata.add(BlobMetaEntry::KmUuid(*uuid));
+        }
+
+        DB.with(|db| {
+            let mut db = db.borrow_mut();
+            db.set_blob(
+                &key_id_guard,
+                SubComponentType::KEY_BLOB,
+                Some(&upgraded_blob_to_be_stored),
+                Some(&new_blob_metadata),
+            )
+        })
+        .context("In store_upgraded_keyblob: Failed to insert upgraded blob into the database.")
+    }
+
     fn upgrade_keyblob_if_required_with<T, F>(
         &self,
         km_dev: &dyn IKeyMintDevice,
         key_id_guard: Option<KeyIdGuard>,
-        blob_info: &(&KeyBlob, &BlobMetaData),
+        key_blob: &KeyBlob,
+        blob_metadata: &BlobMetaData,
         params: &[KeyParameter],
         f: F,
     ) -> Result<(T, Option<Vec<u8>>)>
     where
         F: Fn(&[u8]) -> Result<T, Error>,
     {
-        match f(blob_info.0) {
+        match f(key_blob) {
             Err(Error::Km(ErrorCode::KEY_REQUIRES_UPGRADE)) => {
-                let upgraded_blob = map_km_error(km_dev.upgradeKey(blob_info.0, params))
+                let upgraded_blob = map_km_error(km_dev.upgradeKey(key_blob, params))
                     .context("In upgrade_keyblob_if_required_with: Upgrade failed.")?;
 
-                let (upgraded_blob_to_be_stored, blob_metadata) =
-                    SuperKeyManager::reencrypt_on_upgrade_if_required(blob_info.0, &upgraded_blob)
-                        .context(
-                        "In upgrade_keyblob_if_required_with: Failed to handle super encryption.",
+                if let Some(kid) = key_id_guard {
+                    Self::store_upgraded_keyblob(
+                        kid,
+                        blob_metadata.km_uuid(),
+                        key_blob,
+                        &upgraded_blob,
+                    )
+                    .context(
+                        "In upgrade_keyblob_if_required_with: store_upgraded_keyblob failed",
                     )?;
-
-                let mut blob_metadata = blob_metadata.unwrap_or_else(BlobMetaData::new);
-                if let Some(uuid) = blob_info.1.km_uuid() {
-                    blob_metadata.add(BlobMetaEntry::KmUuid(*uuid));
                 }
 
-                key_id_guard.map_or(Ok(()), |key_id_guard| {
-                    DB.with(|db| {
-                        let mut db = db.borrow_mut();
-                        db.set_blob(
-                            &key_id_guard,
-                            SubComponentType::KEY_BLOB,
-                            Some(&upgraded_blob_to_be_stored),
-                            Some(&blob_metadata),
-                        )
-                    })
-                    .context(concat!(
-                        "In upgrade_keyblob_if_required_with: ",
-                        "Failed to insert upgraded blob into the database.",
-                    ))
-                })?;
                 match f(&upgraded_blob) {
                     Ok(v) => Ok((v, Some(upgraded_blob))),
                     Err(e) => Err(e).context(concat!(
@@ -721,10 +738,25 @@ impl KeystoreSecurityLevel {
                     )),
                 }
             }
-            Err(e) => {
-                Err(e).context("In upgrade_keyblob_if_required_with: Failed perform operation.")
+            result => {
+                if let Some(kid) = key_id_guard {
+                    if key_blob.force_reencrypt() {
+                        Self::store_upgraded_keyblob(
+                            kid,
+                            blob_metadata.km_uuid(),
+                            key_blob,
+                            key_blob,
+                        )
+                        .context(concat!(
+                            "In upgrade_keyblob_if_required_with: ",
+                            "store_upgraded_keyblob failed in forced reencrypt"
+                        ))?;
+                    }
+                }
+                result
+                    .map(|v| (v, None))
+                    .context("In upgrade_keyblob_if_required_with: Called closure failed.")
             }
-            Ok(v) => Ok((v, None)),
         }
     }
 
