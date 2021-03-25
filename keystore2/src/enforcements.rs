@@ -14,11 +14,11 @@
 
 //! This is the Keystore 2.0 Enforcements module.
 // TODO: more description to follow.
-use crate::authorization::Error as AuthzError;
 use crate::database::{AuthTokenEntry, MonotonicRawTime};
 use crate::error::{map_binder_status, Error, ErrorCode};
 use crate::globals::{get_timestamp_service, ASYNC_TASK, DB, ENFORCEMENTS};
 use crate::key_parameter::{KeyParameter, KeyParameterValue};
+use crate::{authorization::Error as AuthzError, super_key::SuperEncryptionType};
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
     Algorithm::Algorithm, ErrorCode::ErrorCode as Ec, HardwareAuthToken::HardwareAuthToken,
     HardwareAuthenticatorType::HardwareAuthenticatorType,
@@ -29,7 +29,7 @@ use android_hardware_security_secureclock::aidl::android::hardware::security::se
 };
 use android_security_authorization::aidl::android::security::authorization::ResponseCode::ResponseCode as AuthzResponseCode;
 use android_system_keystore2::aidl::android::system::keystore2::{
-    IKeystoreSecurityLevel::KEY_FLAG_AUTH_BOUND_WITHOUT_CRYPTOGRAPHIC_LSKF_BINDING,
+    Domain::Domain, IKeystoreSecurityLevel::KEY_FLAG_AUTH_BOUND_WITHOUT_CRYPTOGRAPHIC_LSKF_BINDING,
     OperationChallenge::OperationChallenge,
 };
 use android_system_keystore2::binder::Strong;
@@ -757,16 +757,32 @@ impl Enforcements {
     }
 
     /// Given the set of key parameters and flags, check if super encryption is required.
-    pub fn super_encryption_required(key_parameters: &[KeyParameter], flags: Option<i32>) -> bool {
-        let auth_bound = key_parameters.iter().any(|kp| kp.get_tag() == Tag::USER_SECURE_ID);
-
-        let skip_lskf_binding = if let Some(flags) = flags {
-            (flags & KEY_FLAG_AUTH_BOUND_WITHOUT_CRYPTOGRAPHIC_LSKF_BINDING) != 0
-        } else {
-            false
-        };
-
-        auth_bound && !skip_lskf_binding
+    pub fn super_encryption_required(
+        domain: &Domain,
+        key_parameters: &[KeyParameter],
+        flags: Option<i32>,
+    ) -> SuperEncryptionType {
+        if *domain != Domain::APP {
+            return SuperEncryptionType::None;
+        }
+        if let Some(flags) = flags {
+            if (flags & KEY_FLAG_AUTH_BOUND_WITHOUT_CRYPTOGRAPHIC_LSKF_BINDING) != 0 {
+                return SuperEncryptionType::None;
+            }
+        }
+        if key_parameters
+            .iter()
+            .any(|kp| matches!(kp.key_parameter_value(), KeyParameterValue::UnlockedDeviceRequired))
+        {
+            return SuperEncryptionType::ScreenLockBound;
+        }
+        if key_parameters
+            .iter()
+            .any(|kp| matches!(kp.key_parameter_value(), KeyParameterValue::UserSecureID(_)))
+        {
+            return SuperEncryptionType::LskfBound;
+        }
+        SuperEncryptionType::None
     }
 
     /// Finds a matching auth token along with a timestamp token.
