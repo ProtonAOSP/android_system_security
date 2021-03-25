@@ -53,6 +53,7 @@ rust_defaults {
         "liblog_rust",
         "librand",
         "librusqlite",
+        "libstatslog_rust",
         "libthiserror",
     ],
     shared_libs: [
