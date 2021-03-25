@@ -15,6 +15,7 @@
 //! This module provides convenience functions for keystore2 logging.
 use crate::error::get_error_code;
 use crate::key_parameter::KeyParameterValue as KsKeyParamValue;
+use crate::operation::Outcome;
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
     Algorithm::Algorithm, BlockMode::BlockMode, Digest::Digest, EcCurve::EcCurve,
     HardwareAuthenticatorType::HardwareAuthenticatorType, KeyOrigin::KeyOrigin,
@@ -23,6 +24,10 @@ use android_hardware_security_keymint::aidl::android::hardware::security::keymin
 use statslog_rust::keystore2_key_creation_event_reported::{
     Algorithm as StatsdAlgorithm, EcCurve as StatsdEcCurve, KeyOrigin as StatsdKeyOrigin,
     Keystore2KeyCreationEventReported, UserAuthType as StatsdUserAuthType,
+};
+
+use statslog_rust::keystore2_key_operation_event_reported::{
+    Keystore2KeyOperationEventReported, Outcome as StatsdOutcome, Purpose as StatsdKeyPurpose,
 };
 
 fn create_default_key_creation_atom() -> Keystore2KeyCreationEventReported {
@@ -50,18 +55,52 @@ fn create_default_key_creation_atom() -> Keystore2KeyCreationEventReported {
     }
 }
 
-/// Log key events via statsd API.
+fn create_default_key_operation_atom() -> Keystore2KeyOperationEventReported {
+    Keystore2KeyOperationEventReported {
+        purpose: StatsdKeyPurpose::KeyPurposeUnspecified,
+        padding_mode_bitmap: 0,
+        digest_bitmap: 0,
+        block_mode_bitmap: 0,
+        outcome: StatsdOutcome::OutcomeUnspecified,
+        error_code: 1,
+        key_upgraded: false,
+    }
+}
+
+/// Log key creation events via statsd API.
 pub fn log_key_creation_event_stats<U>(key_params: &[KeyParameter], result: &anyhow::Result<U>) {
     let key_creation_event_stats = construct_key_creation_event_stats(key_params, result);
 
     let logging_result = key_creation_event_stats.stats_write();
 
     if let Err(e) = logging_result {
-        log::error!("In log_key_event_stats. Error in logging key event. {:?}", e);
+        log::error!(
+            "In log_key_creation_event_stats. Error in logging key creation event. {:?}",
+            e
+        );
     }
 }
 
-// Given key parameters, event_type and result, populate the information in Keystore2KeyEventAtom.
+/// Log key operation events via statsd API.
+pub fn log_key_operation_event_stats(
+    key_purpose: KeyPurpose,
+    op_params: &[KeyParameter],
+    op_outcome: &Outcome,
+    key_upgraded: bool,
+) {
+    let key_operation_event_stats =
+        construct_key_operation_event_stats(key_purpose, op_params, op_outcome, key_upgraded);
+
+    let logging_result = key_operation_event_stats.stats_write();
+
+    if let Err(e) = logging_result {
+        log::error!(
+            "In log_key_operation_event_stats. Error in logging key operation event. {:?}",
+            e
+        );
+    }
+}
+
 fn construct_key_creation_event_stats<U>(
     key_params: &[KeyParameter],
     result: &anyhow::Result<U>,
@@ -141,6 +180,59 @@ fn construct_key_creation_event_stats<U>(
         }
     }
     key_creation_event_atom
+}
+
+fn construct_key_operation_event_stats(
+    key_purpose: KeyPurpose,
+    op_params: &[KeyParameter],
+    op_outcome: &Outcome,
+    key_upgraded: bool,
+) -> Keystore2KeyOperationEventReported {
+    let mut key_operation_event_atom = create_default_key_operation_atom();
+
+    key_operation_event_atom.key_upgraded = key_upgraded;
+
+    key_operation_event_atom.purpose = match key_purpose {
+        KeyPurpose::ENCRYPT => StatsdKeyPurpose::Encrypt,
+        KeyPurpose::DECRYPT => StatsdKeyPurpose::Decrypt,
+        KeyPurpose::SIGN => StatsdKeyPurpose::Sign,
+        KeyPurpose::VERIFY => StatsdKeyPurpose::Verify,
+        KeyPurpose::WRAP_KEY => StatsdKeyPurpose::WrapKey,
+        KeyPurpose::AGREE_KEY => StatsdKeyPurpose::AgreeKey,
+        KeyPurpose::ATTEST_KEY => StatsdKeyPurpose::AttestKey,
+        _ => StatsdKeyPurpose::KeyPurposeUnspecified,
+    };
+
+    key_operation_event_atom.outcome = match op_outcome {
+        Outcome::Unknown | Outcome::Dropped => StatsdOutcome::Dropped,
+        Outcome::Success => StatsdOutcome::Success,
+        Outcome::Abort => StatsdOutcome::Abort,
+        Outcome::Pruned => StatsdOutcome::Pruned,
+        Outcome::ErrorCode(e) => {
+            key_operation_event_atom.error_code = e.0;
+            StatsdOutcome::Error
+        }
+    };
+
+    for key_param in op_params.iter().map(KsKeyParamValue::from) {
+        match key_param {
+            KsKeyParamValue::PaddingMode(p) => {
+                key_operation_event_atom.padding_mode_bitmap =
+                    compute_padding_mode_bitmap(&key_operation_event_atom.padding_mode_bitmap, p);
+            }
+            KsKeyParamValue::Digest(d) => {
+                key_operation_event_atom.digest_bitmap =
+                    compute_digest_bitmap(&key_operation_event_atom.digest_bitmap, d);
+            }
+            KsKeyParamValue::BlockMode(b) => {
+                key_operation_event_atom.block_mode_bitmap =
+                    compute_block_mode_bitmap(&key_operation_event_atom.block_mode_bitmap, b);
+            }
+            _ => {}
+        }
+    }
+
+    key_operation_event_atom
 }
 
 fn compute_purpose_bitmap(purpose_bitmap: &i32, purpose: KeyPurpose) -> i32 {

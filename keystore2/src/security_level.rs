@@ -50,6 +50,7 @@ use crate::{
         KeyMetaEntry, KeyType, SubComponentType, Uuid,
     },
     operation::KeystoreOperation,
+    operation::LoggingInfo,
     operation::OperationDb,
     permission::KeyPerm,
 };
@@ -323,9 +324,12 @@ impl KeystoreSecurityLevel {
 
         let operation_challenge = auth_info.finalize_create_authorization(begin_result.challenge);
 
+        let op_params: Vec<KeyParameter> = operation_parameters.to_vec();
+
         let operation = match begin_result.operation {
             Some(km_op) => {
-                self.operation_db.create_operation(km_op, caller_uid, auth_info, forced)
+                self.operation_db.create_operation(km_op, caller_uid, auth_info, forced,
+                    LoggingInfo::new(purpose, op_params, upgraded_blob.is_some()))
             },
             None => return Err(Error::sys()).context("In create_operation: Begin operation returned successfully, but did not return a valid operation."),
         };
