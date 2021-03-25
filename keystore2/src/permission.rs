@@ -193,6 +193,7 @@ implement_permission_aidl!(
     /// ```
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     KeyPerm from KeyPermission with default (NONE, none) {
+        CONVERT_STORAGE_KEY_TO_EPHEMERAL,   selinux name: convert_storage_key_to_ephemeral;
         DELETE,         selinux name: delete;
         GEN_UNIQUE_ID,  selinux name: gen_unique_id;
         GET_INFO,       selinux name: get_info;
@@ -310,6 +311,8 @@ implement_permission!(
         ClearUID = 0x200,    selinux name: clear_uid;
         /// Checked when Credstore calls IKeystoreAuthorization to obtain auth tokens.
         GetAuthToken = 0x400,  selinux name: get_auth_token;
+        /// Checked when IKeystoreMaintenance::onDeviceOffBody is called.
+        ReportOffBody = 0x1000, selinux name: report_off_body;
     }
 );
 
@@ -584,6 +587,7 @@ mod tests {
         KeyPerm::rebind(),
         KeyPerm::update(),
         KeyPerm::use_(),
+        KeyPerm::convert_storage_key_to_ephemeral(),
     ];
 
     const SYSTEM_SERVER_PERMISSIONS_NO_GRANT: KeyPermSet = key_perm_set![
@@ -607,6 +611,7 @@ mod tests {
         KeyPerm::rebind(),
         KeyPerm::update(),
         KeyPerm::use_(),
+        KeyPerm::convert_storage_key_to_ephemeral(),
     ];
 
     const UNPRIV_PERMS: KeyPermSet = key_perm_set![

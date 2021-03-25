@@ -17,9 +17,9 @@
 use keystore2::authorization::AuthorizationManager;
 use keystore2::entropy;
 use keystore2::globals::ENFORCEMENTS;
+use keystore2::maintenance::Maintenance;
 use keystore2::remote_provisioning::RemoteProvisioningService;
 use keystore2::service::KeystoreService;
-use keystore2::user_manager::Maintenance;
 use keystore2::{apc::ApcManager, shared_secret_negotiation};
 use log::{error, info};
 use std::{panic, path::Path, sync::mpsc::channel};

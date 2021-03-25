@@ -27,13 +27,13 @@ pub mod globals;
 pub mod key_parameter;
 pub mod legacy_blob;
 pub mod legacy_migrator;
+pub mod maintenance;
 pub mod operation;
 pub mod permission;
 pub mod remote_provisioning;
 pub mod security_level;
 pub mod service;
 pub mod shared_secret_negotiation;
-pub mod user_manager;
 pub mod utils;
 
 mod attestation_key_utils;
