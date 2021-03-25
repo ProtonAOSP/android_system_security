@@ -236,10 +236,28 @@ EC_KEY* ECKEYGenerateKey() {
     return key;
 }
 
-EC_KEY* ECKEYDeriveFromSecret(const uint8_t* secret, size_t secret_len) {
+size_t ECKEYMarshalPrivateKey(const EC_KEY* priv_key, uint8_t* buf, size_t len) {
+    CBB cbb;
+    size_t out_len;
+    if (!CBB_init_fixed(&cbb, buf, len) ||
+        !EC_KEY_marshal_private_key(&cbb, priv_key, EC_PKEY_NO_PARAMETERS | EC_PKEY_NO_PUBKEY) ||
+        !CBB_finish(&cbb, nullptr, &out_len)) {
+        return 0;
+    } else {
+        return out_len;
+    }
+}
+
+EC_KEY* ECKEYParsePrivateKey(const uint8_t* buf, size_t len) {
+    CBS cbs;
+    CBS_init(&cbs, buf, len);
     EC_GROUP* group = EC_GROUP_new_by_curve_name(NID_X9_62_prime256v1);
-    auto result = EC_KEY_derive_from_secret(group, secret, secret_len);
+    auto result = EC_KEY_parse_private_key(&cbs, group);
     EC_GROUP_free(group);
+    if (result != nullptr && CBS_len(&cbs) != 0) {
+        EC_KEY_free(result);
+        return nullptr;
+    }
     return result;
 }
 

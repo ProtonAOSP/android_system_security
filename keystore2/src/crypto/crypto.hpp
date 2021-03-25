@@ -55,7 +55,9 @@ extern "C" {
 
   EC_KEY* ECKEYGenerateKey();
 
-  EC_KEY* ECKEYDeriveFromSecret(const uint8_t *secret, size_t secret_len);
+  size_t ECKEYMarshalPrivateKey(const EC_KEY *priv_key, uint8_t *buf, size_t len);
+
+  EC_KEY* ECKEYParsePrivateKey(const uint8_t *buf, size_t len);
 
   size_t ECPOINTPoint2Oct(const EC_POINT *point, uint8_t *buf, size_t len);
 
