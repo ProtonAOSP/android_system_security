@@ -23,9 +23,10 @@ use std::collections::HashMap;
 
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
     Algorithm::Algorithm, AttestationKey::AttestationKey, Certificate::Certificate,
-    IRemotelyProvisionedComponent::IRemotelyProvisionedComponent, KeyParameter::KeyParameter,
-    KeyParameterValue::KeyParameterValue, MacedPublicKey::MacedPublicKey,
-    ProtectedData::ProtectedData, SecurityLevel::SecurityLevel, Tag::Tag,
+    DeviceInfo::DeviceInfo, IRemotelyProvisionedComponent::IRemotelyProvisionedComponent,
+    KeyParameter::KeyParameter, KeyParameterValue::KeyParameterValue,
+    MacedPublicKey::MacedPublicKey, ProtectedData::ProtectedData, SecurityLevel::SecurityLevel,
+    Tag::Tag,
 };
 use android_security_remoteprovisioning::aidl::android::security::remoteprovisioning::{
     AttestationPoolStatus::AttestationPoolStatus, IRemoteProvisioning::BnRemoteProvisioning,
@@ -261,6 +262,7 @@ impl RemoteProvisioningService {
     /// challenge will ensure freshness. A `test_mode` flag will instruct the remote provisioning
     /// HAL if it is okay to accept EEKs that aren't signed by something that chains back to the
     /// baked in root of trust in the underlying IRemotelyProvisionedComponent instance.
+    #[allow(clippy::too_many_arguments)]
     pub fn generate_csr(
         &self,
         test_mode: bool,
@@ -269,6 +271,7 @@ impl RemoteProvisioningService {
         challenge: &[u8],
         sec_level: SecurityLevel,
         protected_data: &mut ProtectedData,
+        device_info: &mut DeviceInfo,
     ) -> Result<Vec<u8>> {
         let dev = self.get_dev_by_sec_level(&sec_level)?;
         let (_, _, uuid) = get_keymint_device(&sec_level)?;
@@ -280,13 +283,12 @@ impl RemoteProvisioningService {
                 .map(|key| MacedPublicKey { macedKey: key.to_vec() })
                 .collect())
         })?;
-        let mut mac = Vec::<u8>::with_capacity(32);
-        map_rem_prov_error(dev.generateCertificateRequest(
+        let mut mac = map_rem_prov_error(dev.generateCertificateRequest(
             test_mode,
             &keys_to_sign,
             eek,
             challenge,
-            &mut mac,
+            device_info,
             protected_data,
         ))
         .context("In generate_csr: Failed to generate csr")?;
@@ -399,9 +401,18 @@ impl IRemoteProvisioning for RemoteProvisioningService {
         challenge: &[u8],
         sec_level: SecurityLevel,
         protected_data: &mut ProtectedData,
+        device_info: &mut DeviceInfo,
     ) -> binder::public_api::Result<Vec<u8>> {
         map_or_log_err(
-            self.generate_csr(test_mode, num_csr, eek, challenge, sec_level, protected_data),
+            self.generate_csr(
+                test_mode,
+                num_csr,
+                eek,
+                challenge,
+                sec_level,
+                protected_data,
+                device_info,
+            ),
             Ok,
         )
     }
