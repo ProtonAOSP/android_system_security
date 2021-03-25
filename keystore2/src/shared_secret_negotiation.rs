@@ -151,8 +151,10 @@ fn connect_participants(
             |(mut connected, mut failed), e| {
                 match e {
                     SharedSecretParticipant::Aidl(instance_name) => {
-                        let service_name =
-                            format!("{}/{}", SHARED_SECRET_PACKAGE_NAME, instance_name);
+                        let service_name = format!(
+                            "{}.{}/{}",
+                            SHARED_SECRET_PACKAGE_NAME, SHARED_SECRET_INTERFACE_NAME, instance_name
+                        );
                         match map_binder_status_code(binder::get_interface(&service_name)) {
                             Err(e) => {
                                 log::warn!(
