@@ -196,26 +196,31 @@ where
     result.map_or_else(
         |e| {
             let e = map_err(e);
-            let root_cause = e.root_cause();
-            let rc = match root_cause.downcast_ref::<Error>() {
-                Some(Error::Rc(rcode)) => rcode.0,
-                Some(Error::Km(ec)) => ec.0,
-                Some(Error::Rp(_)) => ResponseCode::SYSTEM_ERROR.0,
-                // If an Error::Binder reaches this stage we report a system error.
-                // The exception code and possible service specific error will be
-                // printed in the error log above.
-                Some(Error::Binder(_, _)) | Some(Error::BinderTransaction(_)) => {
-                    ResponseCode::SYSTEM_ERROR.0
-                }
-                None => match root_cause.downcast_ref::<selinux::Error>() {
-                    Some(selinux::Error::PermissionDenied) => ResponseCode::PERMISSION_DENIED.0,
-                    _ => ResponseCode::SYSTEM_ERROR.0,
-                },
-            };
+            let rc = get_error_code(&e);
             Err(BinderStatus::new_service_specific_error(rc, None))
         },
         handle_ok,
     )
+}
+
+/// Returns the error code given a reference to the error
+pub fn get_error_code(e: &anyhow::Error) -> i32 {
+    let root_cause = e.root_cause();
+    match root_cause.downcast_ref::<Error>() {
+        Some(Error::Rc(rcode)) => rcode.0,
+        Some(Error::Km(ec)) => ec.0,
+        Some(Error::Rp(_)) => ResponseCode::SYSTEM_ERROR.0,
+        // If an Error::Binder reaches this stage we report a system error.
+        // The exception code and possible service specific error will be
+        // printed in the error log above.
+        Some(Error::Binder(_, _)) | Some(Error::BinderTransaction(_)) => {
+            ResponseCode::SYSTEM_ERROR.0
+        }
+        None => match root_cause.downcast_ref::<selinux::Error>() {
+            Some(selinux::Error::PermissionDenied) => ResponseCode::PERMISSION_DENIED.0,
+            _ => ResponseCode::SYSTEM_ERROR.0,
+        },
+    }
 }
 
 #[cfg(test)]
