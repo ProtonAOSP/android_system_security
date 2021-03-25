@@ -127,9 +127,10 @@
 
 use crate::enforcements::AuthInfo;
 use crate::error::{map_err_with, map_km_error, map_or_log_err, Error, ErrorCode, ResponseCode};
+use crate::metrics::log_key_operation_event_stats;
 use crate::utils::Asp;
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
-    IKeyMintOperation::IKeyMintOperation,
+    IKeyMintOperation::IKeyMintOperation, KeyParameter::KeyParameter, KeyPurpose::KeyPurpose,
 };
 use android_system_keystore2::aidl::android::system::keystore2::{
     IKeystoreOperation::BnKeystoreOperation, IKeystoreOperation::IKeystoreOperation,
@@ -147,12 +148,18 @@ use std::{
 /// to one of the other variants exactly once. The distinction in outcome is mainly
 /// for the statistic.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
-enum Outcome {
+pub enum Outcome {
+    /// Operations have `Outcome::Unknown` as long as they are active.
     Unknown,
+    /// Operation is successful.
     Success,
+    /// Operation is aborted.
     Abort,
+    /// Operation is dropped.
     Dropped,
+    /// Operation is pruned.
     Pruned,
+    /// Operation is failed with the error code.
     ErrorCode(ErrorCode),
 }
 
@@ -168,6 +175,26 @@ pub struct Operation {
     owner: u32, // Uid of the operation's owner.
     auth_info: Mutex<AuthInfo>,
     forced: bool,
+    logging_info: LoggingInfo,
+}
+
+/// Keeps track of the information required for logging operations.
+#[derive(Debug)]
+pub struct LoggingInfo {
+    purpose: KeyPurpose,
+    op_params: Vec<KeyParameter>,
+    key_upgraded: bool,
+}
+
+impl LoggingInfo {
+    /// Constructor
+    pub fn new(
+        purpose: KeyPurpose,
+        op_params: Vec<KeyParameter>,
+        key_upgraded: bool,
+    ) -> LoggingInfo {
+        Self { purpose, op_params, key_upgraded }
+    }
 }
 
 struct PruningInfo {
@@ -188,6 +215,7 @@ impl Operation {
         owner: u32,
         auth_info: AuthInfo,
         forced: bool,
+        logging_info: LoggingInfo,
     ) -> Self {
         Self {
             index,
@@ -197,6 +225,7 @@ impl Operation {
             owner,
             auth_info: Mutex::new(auth_info),
             forced,
+            logging_info,
         }
     }
 
@@ -437,7 +466,15 @@ impl Operation {
 
 impl Drop for Operation {
     fn drop(&mut self) {
-        if let Ok(Outcome::Unknown) = self.outcome.get_mut() {
+        let guard = self.outcome.lock().expect("In drop.");
+        log_key_operation_event_stats(
+            self.logging_info.purpose,
+            &(self.logging_info.op_params),
+            &guard,
+            self.logging_info.key_upgraded,
+        );
+        if let Outcome::Unknown = *guard {
+            drop(guard);
             // If the operation was still active we call abort, setting
             // the outcome to `Outcome::Dropped`
             if let Err(e) = self.abort(Outcome::Dropped) {
@@ -471,6 +508,7 @@ impl OperationDb {
         owner: u32,
         auth_info: AuthInfo,
         forced: bool,
+        logging_info: LoggingInfo,
     ) -> Arc<Operation> {
         // We use unwrap because we don't allow code that can panic while locked.
         let mut operations = self.operations.lock().expect("In create_operation.");
@@ -483,13 +521,26 @@ impl OperationDb {
             s.upgrade().is_none()
         }) {
             Some(free_slot) => {
-                let new_op = Arc::new(Operation::new(index - 1, km_op, owner, auth_info, forced));
+                let new_op = Arc::new(Operation::new(
+                    index - 1,
+                    km_op,
+                    owner,
+                    auth_info,
+                    forced,
+                    logging_info,
+                ));
                 *free_slot = Arc::downgrade(&new_op);
                 new_op
             }
             None => {
-                let new_op =
-                    Arc::new(Operation::new(operations.len(), km_op, owner, auth_info, forced));
+                let new_op = Arc::new(Operation::new(
+                    operations.len(),
+                    km_op,
+                    owner,
+                    auth_info,
+                    forced,
+                    logging_info,
+                ));
                 operations.push(Arc::downgrade(&new_op));
                 new_op
             }
