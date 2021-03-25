@@ -37,6 +37,7 @@ use crate::database::{CertificateInfo, KeyIdGuard};
 use crate::globals::{DB, ENFORCEMENTS, LEGACY_MIGRATOR, SUPER_KEY};
 use crate::key_parameter::KeyParameter as KsKeyParam;
 use crate::key_parameter::KeyParameterValue as KsKeyParamValue;
+use crate::metrics::log_key_creation_event_stats;
 use crate::remote_provisioning::RemProvState;
 use crate::super_key::{KeyBlob, SuperKeyManager};
 use crate::utils::{
@@ -829,7 +830,9 @@ impl IKeystoreSecurityLevel for KeystoreSecurityLevel {
         flags: i32,
         entropy: &[u8],
     ) -> binder::public_api::Result<KeyMetadata> {
-        map_or_log_err(self.generate_key(key, attestation_key, params, flags, entropy), Ok)
+        let result = self.generate_key(key, attestation_key, params, flags, entropy);
+        log_key_creation_event_stats(params, &result);
+        map_or_log_err(result, Ok)
     }
     fn importKey(
         &self,
@@ -839,7 +842,9 @@ impl IKeystoreSecurityLevel for KeystoreSecurityLevel {
         flags: i32,
         key_data: &[u8],
     ) -> binder::public_api::Result<KeyMetadata> {
-        map_or_log_err(self.import_key(key, attestation_key, params, flags, key_data), Ok)
+        let result = self.import_key(key, attestation_key, params, flags, key_data);
+        log_key_creation_event_stats(params, &result);
+        map_or_log_err(result, Ok)
     }
     fn importWrappedKey(
         &self,
@@ -849,10 +854,10 @@ impl IKeystoreSecurityLevel for KeystoreSecurityLevel {
         params: &[KeyParameter],
         authenticators: &[AuthenticatorSpec],
     ) -> binder::public_api::Result<KeyMetadata> {
-        map_or_log_err(
-            self.import_wrapped_key(key, wrapping_key, masking_key, params, authenticators),
-            Ok,
-        )
+        let result =
+            self.import_wrapped_key(key, wrapping_key, masking_key, params, authenticators);
+        log_key_creation_event_stats(params, &result);
+        map_or_log_err(result, Ok)
     }
     fn convertStorageKeyToEphemeral(
         &self,
