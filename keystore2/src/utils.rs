@@ -215,12 +215,12 @@ pub fn ui_opts_2_compat(opt: i32) -> ApcCompatUiOptions {
 }
 
 /// AID offset for uid space partitioning.
-/// TODO: Replace with bindgen generated from libcutils. b/175619259
-pub const AID_USER_OFFSET: u32 = 100000;
+pub const AID_USER_OFFSET: u32 = cutils_bindgen::AID_USER_OFFSET;
 
 /// Extracts the android user from the given uid.
 pub fn uid_to_android_user(uid: u32) -> u32 {
-    uid / AID_USER_OFFSET
+    // Safety: No memory access
+    unsafe { cutils_bindgen::multiuser_get_user_id(uid) }
 }
 
 #[cfg(test)]
