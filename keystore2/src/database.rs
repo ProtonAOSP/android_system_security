@@ -4444,7 +4444,6 @@ mod tests {
     }
 
     #[derive(Debug, PartialEq)]
-    #[allow(dead_code)]
     struct KeyEntryRow {
         id: i64,
         key_type: KeyType,

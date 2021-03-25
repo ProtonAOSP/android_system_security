@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(unused_variables)]
-
 //! This crate implements the IKeystoreSecurityLevel interface.
 
 use crate::globals::get_keymint_device;
@@ -65,7 +63,6 @@ use binder::{IBinderInternal, Strong, ThreadState};
 pub struct KeystoreSecurityLevel {
     security_level: SecurityLevel,
     keymint: Asp,
-    #[allow(dead_code)]
     hw_info: KeyMintHardwareInfo,
     km_uuid: Uuid,
     operation_db: OperationDb,
@@ -416,7 +413,7 @@ impl KeystoreSecurityLevel {
         attest_key_descriptor: Option<&KeyDescriptor>,
         params: &[KeyParameter],
         flags: i32,
-        entropy: &[u8],
+        _entropy: &[u8],
     ) -> Result<KeyMetadata> {
         if key.domain != Domain::BLOB && key.alias.is_none() {
             return Err(error::Error::Km(ErrorCode::INVALID_ARGUMENT))
@@ -502,7 +499,7 @@ impl KeystoreSecurityLevel {
     fn import_key(
         &self,
         key: &KeyDescriptor,
-        attestation_key: Option<&KeyDescriptor>,
+        _attestation_key: Option<&KeyDescriptor>,
         params: &[KeyParameter],
         flags: i32,
         key_data: &[u8],
