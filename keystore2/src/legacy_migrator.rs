@@ -14,15 +14,18 @@
 
 //! This module acts as a bridge between the legacy key database and the keystore2 database.
 
-use crate::database::{
-    BlobMetaData, BlobMetaEntry, CertificateInfo, DateTime, EncryptedBy, KeyMetaData, KeyMetaEntry,
-    KeystoreDB, Uuid, KEYSTORE_UUID,
-};
 use crate::error::Error;
 use crate::key_parameter::KeyParameterValue;
 use crate::legacy_blob::BlobValue;
 use crate::utils::uid_to_android_user;
 use crate::{async_task::AsyncTask, legacy_blob::LegacyBlobLoader};
+use crate::{
+    database::{
+        BlobMetaData, BlobMetaEntry, CertificateInfo, DateTime, EncryptedBy, KeyMetaData,
+        KeyMetaEntry, KeystoreDB, Uuid, KEYSTORE_UUID,
+    },
+    super_key::USER_SUPER_KEY,
+};
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::SecurityLevel::SecurityLevel;
 use android_system_keystore2::aidl::android::system::keystore2::{
     Domain::Domain, KeyDescriptor::KeyDescriptor, ResponseCode::ResponseCode,
@@ -450,7 +453,7 @@ impl LegacyMigratorState {
 
                         let super_key_id = match self
                             .db
-                            .load_super_key(user_id)
+                            .load_super_key(&USER_SUPER_KEY, user_id)
                             .context("In check_and_migrate: Failed to load super key")?
                         {
                             Some((_, entry)) => entry.id(),
@@ -560,10 +563,18 @@ impl LegacyMigratorState {
                 crate::super_key::SuperKeyManager::encrypt_with_password(&super_key, pw)
                     .context("In check_and_migrate_super_key: Trying to encrypt super key.")?;
 
-            self.db.store_super_key(user_id, &(&blob, &blob_metadata)).context(concat!(
-                "In check_and_migrate_super_key: ",
-                "Trying to insert legacy super_key into the database."
-            ))?;
+            self.db
+                .store_super_key(
+                    user_id,
+                    &USER_SUPER_KEY,
+                    &blob,
+                    &blob_metadata,
+                    &KeyMetaData::new(),
+                )
+                .context(concat!(
+                    "In check_and_migrate_super_key: ",
+                    "Trying to insert legacy super_key into the database."
+                ))?;
             self.legacy_loader.remove_super_key(user_id);
             self.recently_migrated_super_key.insert(user_id);
             Ok(())
@@ -602,7 +613,7 @@ impl LegacyMigratorState {
 
         let super_key_id = self
             .db
-            .load_super_key(user_id)
+            .load_super_key(&USER_SUPER_KEY, user_id)
             .context("In bulk_delete: Failed to load super key")?
             .map(|(_, entry)| entry.id());
 

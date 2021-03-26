@@ -311,6 +311,8 @@ implement_permission!(
         ClearUID = 0x200,    selinux name: clear_uid;
         /// Checked when Credstore calls IKeystoreAuthorization to obtain auth tokens.
         GetAuthToken = 0x400,  selinux name: get_auth_token;
+        /// Checked when earlyBootEnded() is called.
+        EarlyBootEnded = 0x800,   selinux name: early_boot_ended;
         /// Checked when IKeystoreMaintenance::onDeviceOffBody is called.
         ReportOffBody = 0x1000, selinux name: report_off_body;
     }
