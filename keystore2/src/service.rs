@@ -12,9 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// TODO remove when fully implemented.
-#![allow(unused_variables)]
-
 //! This crate implement the core Keystore 2.0 service API as defined by the Keystore 2.0
 //! AIDL spec.
 
@@ -199,7 +196,7 @@ impl KeystoreService {
             .context("Failed to load key entry.")?;
 
             let mut db = db.borrow_mut();
-            if let Some((key_id_guard, key_entry)) = entry {
+            if let Some((key_id_guard, _key_entry)) = entry {
                 db.set_blob(&key_id_guard, SubComponentType::CERT, public_cert, None)
                     .context("Failed to update cert subcomponent.")?;
 

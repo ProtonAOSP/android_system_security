@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![allow(unused_variables)]
-
 //! This crate implements the IKeystoreSecurityLevel interface.
 
 use crate::globals::get_keymint_device;
@@ -37,6 +35,7 @@ use crate::database::{CertificateInfo, KeyIdGuard};
 use crate::globals::{DB, ENFORCEMENTS, LEGACY_MIGRATOR, SUPER_KEY};
 use crate::key_parameter::KeyParameter as KsKeyParam;
 use crate::key_parameter::KeyParameterValue as KsKeyParamValue;
+use crate::metrics::log_key_creation_event_stats;
 use crate::remote_provisioning::RemProvState;
 use crate::super_key::{KeyBlob, SuperKeyManager};
 use crate::utils::{
@@ -49,6 +48,7 @@ use crate::{
         KeyMetaEntry, KeyType, SubComponentType, Uuid,
     },
     operation::KeystoreOperation,
+    operation::LoggingInfo,
     operation::OperationDb,
     permission::KeyPerm,
 };
@@ -63,7 +63,6 @@ use binder::{IBinderInternal, Strong, ThreadState};
 pub struct KeystoreSecurityLevel {
     security_level: SecurityLevel,
     keymint: Asp,
-    #[allow(dead_code)]
     hw_info: KeyMintHardwareInfo,
     km_uuid: Uuid,
     operation_db: OperationDb,
@@ -322,9 +321,12 @@ impl KeystoreSecurityLevel {
 
         let operation_challenge = auth_info.finalize_create_authorization(begin_result.challenge);
 
+        let op_params: Vec<KeyParameter> = operation_parameters.to_vec();
+
         let operation = match begin_result.operation {
             Some(km_op) => {
-                self.operation_db.create_operation(km_op, caller_uid, auth_info, forced)
+                self.operation_db.create_operation(km_op, caller_uid, auth_info, forced,
+                    LoggingInfo::new(purpose, op_params, upgraded_blob.is_some()))
             },
             None => return Err(Error::sys()).context("In create_operation: Begin operation returned successfully, but did not return a valid operation."),
         };
@@ -411,7 +413,7 @@ impl KeystoreSecurityLevel {
         attest_key_descriptor: Option<&KeyDescriptor>,
         params: &[KeyParameter],
         flags: i32,
-        entropy: &[u8],
+        _entropy: &[u8],
     ) -> Result<KeyMetadata> {
         if key.domain != Domain::BLOB && key.alias.is_none() {
             return Err(error::Error::Km(ErrorCode::INVALID_ARGUMENT))
@@ -497,7 +499,7 @@ impl KeystoreSecurityLevel {
     fn import_key(
         &self,
         key: &KeyDescriptor,
-        attestation_key: Option<&KeyDescriptor>,
+        _attestation_key: Option<&KeyDescriptor>,
         params: &[KeyParameter],
         flags: i32,
         key_data: &[u8],
@@ -829,7 +831,9 @@ impl IKeystoreSecurityLevel for KeystoreSecurityLevel {
         flags: i32,
         entropy: &[u8],
     ) -> binder::public_api::Result<KeyMetadata> {
-        map_or_log_err(self.generate_key(key, attestation_key, params, flags, entropy), Ok)
+        let result = self.generate_key(key, attestation_key, params, flags, entropy);
+        log_key_creation_event_stats(params, &result);
+        map_or_log_err(result, Ok)
     }
     fn importKey(
         &self,
@@ -839,7 +843,9 @@ impl IKeystoreSecurityLevel for KeystoreSecurityLevel {
         flags: i32,
         key_data: &[u8],
     ) -> binder::public_api::Result<KeyMetadata> {
-        map_or_log_err(self.import_key(key, attestation_key, params, flags, key_data), Ok)
+        let result = self.import_key(key, attestation_key, params, flags, key_data);
+        log_key_creation_event_stats(params, &result);
+        map_or_log_err(result, Ok)
     }
     fn importWrappedKey(
         &self,
@@ -849,10 +855,10 @@ impl IKeystoreSecurityLevel for KeystoreSecurityLevel {
         params: &[KeyParameter],
         authenticators: &[AuthenticatorSpec],
     ) -> binder::public_api::Result<KeyMetadata> {
-        map_or_log_err(
-            self.import_wrapped_key(key, wrapping_key, masking_key, params, authenticators),
-            Ok,
-        )
+        let result =
+            self.import_wrapped_key(key, wrapping_key, masking_key, params, authenticators);
+        log_key_creation_event_stats(params, &result);
+        map_or_log_err(result, Ok)
     }
     fn convertStorageKeyToEphemeral(
         &self,
