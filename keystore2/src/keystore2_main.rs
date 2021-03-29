@@ -25,7 +25,7 @@ use log::{error, info};
 use std::{panic, path::Path, sync::mpsc::channel};
 use vpnprofilestore::VpnProfileStore;
 
-static KS2_SERVICE_NAME: &str = "android.system.keystore2";
+static KS2_SERVICE_NAME: &str = "android.system.keystore2.IKeystoreService/default";
 static APC_SERVICE_NAME: &str = "android.security.apc";
 static AUTHORIZATION_SERVICE_NAME: &str = "android.security.authorization";
 static REMOTE_PROVISIONING_SERVICE_NAME: &str = "android.security.remoteprovisioning";
