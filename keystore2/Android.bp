@@ -100,4 +100,6 @@ rust_binary {
         "libvpnprofilestore-rust",
     ],
     init_rc: ["keystore2.rc"],
+
+    vintf_fragments: ["android.system.keystore2-service.xml"],
 }
