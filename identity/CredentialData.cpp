@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#define LOG_TAG "CredentialData"
+#define LOG_TAG "credstore"
 
 #include <chrono>
 
