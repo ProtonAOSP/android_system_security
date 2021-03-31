@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#define LOG_TAG "CredentialStore"
+#define LOG_TAG "credstore"
 
 #include <algorithm>
 

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#define LOG_TAG "WritableCredential"
+#define LOG_TAG "credstore"
 
 #include <android-base/logging.h>
 #include <android/hardware/identity/support/IdentityCredentialSupport.h>

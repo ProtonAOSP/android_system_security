@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#define LOG_TAG "CredentialStoreFactory"
+#define LOG_TAG "credstore"
 
 #include <android-base/logging.h>
 
