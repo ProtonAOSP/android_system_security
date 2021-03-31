@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#define LOG_TAG "Credential"
+#define LOG_TAG "credstore"
 
 #include <android-base/logging.h>
 #include <android/binder_manager.h>
