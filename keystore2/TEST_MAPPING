@@ -8,6 +8,9 @@
     },
     {
       "name": "keystore2_test"
+    },
+    {
+      "name": "CtsIdentityTestCases"
     }
   ]
 }
