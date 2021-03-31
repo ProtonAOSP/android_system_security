@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#define LOG_TAG "Util"
+#define LOG_TAG "credstore"
 
 #include <fcntl.h>
 #include <stdlib.h>
