@@ -49,6 +49,7 @@ void LoadKeyFromStdin(key_serial_t keyring_id, const char* keyname) {
 }
 
 void LoadKeyFromFile(key_serial_t keyring_id, const char* keyname, const std::string& path) {
+    LOG(INFO) << "LoadKeyFromFile path=" << path << " keyname=" << keyname;
     std::string content;
     if (!android::base::ReadFileToString(path, &content)) {
         LOG(ERROR) << "Failed to read key from " << path;
@@ -59,22 +60,24 @@ void LoadKeyFromFile(key_serial_t keyring_id, const char* keyname, const std::st
     }
 }
 
-void LoadKeyFromDirectory(key_serial_t keyring_id, const char* keyname, const char* dir) {
+void LoadKeyFromDirectory(key_serial_t keyring_id, const char* keyname_prefix, const char* dir) {
     if (!std::filesystem::exists(dir)) {
         return;
     }
+    int counter = 0;
     for (const auto& entry : std::filesystem::directory_iterator(dir)) {
         if (!android::base::EndsWithIgnoreCase(entry.path().c_str(), ".der")) continue;
-
-        LoadKeyFromFile(keyring_id, keyname, entry.path());
+        std::string keyname = keyname_prefix + std::to_string(counter);
+        counter++;
+        LoadKeyFromFile(keyring_id, keyname.c_str(), entry.path());
     }
 }
 
 void LoadKeyFromVerifiedPartitions(key_serial_t keyring_id) {
     // NB: Directories need to be synced with FileIntegrityService.java in
     // frameworks/base.
-    LoadKeyFromDirectory(keyring_id, "fsv_system", "/system/etc/security/fsverity");
-    LoadKeyFromDirectory(keyring_id, "fsv_product", "/product/etc/security/fsverity");
+    LoadKeyFromDirectory(keyring_id, "fsv_system_", "/system/etc/security/fsverity");
+    LoadKeyFromDirectory(keyring_id, "fsv_product_", "/product/etc/security/fsverity");
 }
 
 int main(int argc, const char** argv) {
