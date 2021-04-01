@@ -776,7 +776,7 @@ macro_rules! implement_key_parameter_value {
 
 implement_key_parameter_value! {
 /// KeyParameterValue holds a value corresponding to one of the Tags defined in
-/// the AIDL spec at hardware/interfaces/keymint
+/// the AIDL spec at hardware/interfaces/security/keymint
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
 pub enum KeyParameterValue {
     /// Associated with Tag:INVALID
