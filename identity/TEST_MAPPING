@@ -1,7 +1,7 @@
 {
   "presubmit": [
     {
-      "name": "odsign_e2e_tests"
+      "name": "CtsIdentityTestCases"
     }
   ]
 }
