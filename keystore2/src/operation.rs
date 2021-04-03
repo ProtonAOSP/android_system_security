@@ -131,6 +131,7 @@ use crate::metrics::log_key_operation_event_stats;
 use crate::utils::Asp;
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
     IKeyMintOperation::IKeyMintOperation, KeyParameter::KeyParameter, KeyPurpose::KeyPurpose,
+    SecurityLevel::SecurityLevel,
 };
 use android_system_keystore2::aidl::android::system::keystore2::{
     IKeystoreOperation::BnKeystoreOperation, IKeystoreOperation::IKeystoreOperation,
@@ -181,6 +182,7 @@ pub struct Operation {
 /// Keeps track of the information required for logging operations.
 #[derive(Debug)]
 pub struct LoggingInfo {
+    sec_level: SecurityLevel,
     purpose: KeyPurpose,
     op_params: Vec<KeyParameter>,
     key_upgraded: bool,
@@ -189,11 +191,12 @@ pub struct LoggingInfo {
 impl LoggingInfo {
     /// Constructor
     pub fn new(
+        sec_level: SecurityLevel,
         purpose: KeyPurpose,
         op_params: Vec<KeyParameter>,
         key_upgraded: bool,
     ) -> LoggingInfo {
-        Self { purpose, op_params, key_upgraded }
+        Self { sec_level, purpose, op_params, key_upgraded }
     }
 }
 
@@ -468,6 +471,7 @@ impl Drop for Operation {
     fn drop(&mut self) {
         let guard = self.outcome.lock().expect("In drop.");
         log_key_operation_event_stats(
+            self.logging_info.sec_level,
             self.logging_info.purpose,
             &(self.logging_info.op_params),
             &guard,
