@@ -3025,7 +3025,7 @@ mod tests {
     where
         F: Fn(&Uuid, &[u8]) -> Result<()> + Send + 'static,
     {
-        let super_key = Arc::new(SuperKeyManager::new());
+        let super_key: Arc<SuperKeyManager> = Default::default();
 
         let gc_db = KeystoreDB::new(path, None).expect("Failed to open test gc db_connection.");
         let gc = Gc::new_init_with(Default::default(), move || (Box::new(cb), gc_db, super_key));
