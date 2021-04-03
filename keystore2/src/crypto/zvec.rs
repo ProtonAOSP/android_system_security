@@ -104,12 +104,16 @@ impl TryFrom<&[u8]> for ZVec {
 impl TryFrom<Vec<u8>> for ZVec {
     type Error = Error;
 
-    fn try_from(v: Vec<u8>) -> Result<Self, Self::Error> {
+    fn try_from(mut v: Vec<u8>) -> Result<Self, Self::Error> {
+        let len = v.len();
+        // into_boxed_slice calls shrink_to_fit, which may move the pointer.
+        // But sometimes the contents of the Vec are already sensitive and
+        // mustn't be copied. So ensure the shrink_to_fit call is a NOP.
+        v.resize(v.capacity(), 0);
         let b = v.into_boxed_slice();
         if !b.is_empty() {
             unsafe { mlock(b.as_ptr() as *const std::ffi::c_void, b.len()) }?;
         }
-        let len = b.len();
         Ok(Self { elems: b, len })
     }
 }

@@ -92,22 +92,6 @@ pub enum SuperEncryptionType {
     ScreenLockBound,
 }
 
-#[derive(Default)]
-struct UserSuperKeys {
-    /// The per boot key is used for LSKF binding of authentication bound keys. There is one
-    /// key per android user. The key is stored on flash encrypted with a key derived from a
-    /// secret, that is itself derived from the user's lock screen knowledge factor (LSKF).
-    /// When the user unlocks the device for the first time, this key is unlocked, i.e., decrypted,
-    /// and stays memory resident until the device reboots.
-    per_boot: Option<Arc<SuperKey>>,
-    /// The screen lock key works like the per boot key with the distinction that it is cleared
-    /// from memory when the screen lock is engaged.
-    screen_lock_bound: Option<Arc<SuperKey>>,
-    /// When the device is locked, screen-lock-bound keys can still be encrypted, using
-    /// ECDH public-key encryption. This field holds the decryption private key.
-    screen_lock_bound_private: Option<Arc<SuperKey>>,
-}
-
 pub struct SuperKey {
     algorithm: SuperEncryptionAlgorithm,
     key: ZVec,
@@ -130,10 +114,22 @@ impl SuperKey {
             Err(Error::sys()).context("In aes_gcm_decrypt: Key is not an AES key")
         }
     }
+}
 
-    pub fn get_id(&self) -> i64 {
-        self.id
-    }
+#[derive(Default)]
+struct UserSuperKeys {
+    /// The per boot key is used for LSKF binding of authentication bound keys. There is one
+    /// key per android user. The key is stored on flash encrypted with a key derived from a
+    /// secret, that is itself derived from the user's lock screen knowledge factor (LSKF).
+    /// When the user unlocks the device for the first time, this key is unlocked, i.e., decrypted,
+    /// and stays memory resident until the device reboots.
+    per_boot: Option<Arc<SuperKey>>,
+    /// The screen lock key works like the per boot key with the distinction that it is cleared
+    /// from memory when the screen lock is engaged.
+    screen_lock_bound: Option<Arc<SuperKey>>,
+    /// When the device is locked, screen-lock-bound keys can still be encrypted, using
+    /// ECDH public-key encryption. This field holds the decryption private key.
+    screen_lock_bound_private: Option<Arc<SuperKey>>,
 }
 
 #[derive(Default)]
@@ -154,10 +150,6 @@ pub struct SuperKeyManager {
 }
 
 impl SuperKeyManager {
-    pub fn new() -> Self {
-        Default::default()
-    }
-
     pub fn forget_all_keys_for_user(&self, user: UserId) {
         let mut data = self.data.lock().unwrap();
         data.user_keys.remove(&user);
@@ -169,7 +161,7 @@ impl SuperKeyManager {
         data.user_keys.entry(user).or_default().per_boot = Some(super_key);
     }
 
-    fn get_key(&self, key_id: &i64) -> Option<Arc<SuperKey>> {
+    fn lookup_key(&self, key_id: &i64) -> Option<Arc<SuperKey>> {
         self.data.lock().unwrap().key_index.get(key_id).and_then(|k| k.upgrade())
     }
 
@@ -225,23 +217,25 @@ impl SuperKeyManager {
 
     /// Unwraps an encrypted key blob given metadata identifying the encryption key.
     /// The function queries `metadata.encrypted_by()` to determine the encryption key.
-    /// It then check if the required key is memory resident, and if so decrypts the
+    /// It then checks if the required key is memory resident, and if so decrypts the
     /// blob.
     pub fn unwrap_key<'a>(&self, blob: &'a [u8], metadata: &BlobMetaData) -> Result<KeyBlob<'a>> {
-        match metadata.encrypted_by() {
-            Some(EncryptedBy::KeyId(key_id)) => match self.get_key(key_id) {
-                Some(super_key) => Ok(KeyBlob::Sensitive {
-                    key: Self::unwrap_key_with_key(blob, metadata, &super_key)
-                        .context("In unwrap_key: unwrap_key_with_key failed")?,
-                    reencrypt_with: super_key.reencrypt_with.as_ref().unwrap_or(&super_key).clone(),
-                    force_reencrypt: super_key.reencrypt_with.is_some(),
-                }),
-                None => Err(Error::Rc(ResponseCode::LOCKED))
-                    .context("In unwrap_key: Required super decryption key is not in memory."),
-            },
-            _ => Err(Error::Rc(ResponseCode::VALUE_CORRUPTED))
-                .context("In unwrap_key: Cannot determined wrapping key."),
-        }
+        let key_id = if let Some(EncryptedBy::KeyId(key_id)) = metadata.encrypted_by() {
+            key_id
+        } else {
+            return Err(Error::Rc(ResponseCode::VALUE_CORRUPTED))
+                .context("In unwrap_key: Cannot determine wrapping key.");
+        };
+        let super_key = self
+            .lookup_key(&key_id)
+            .ok_or(Error::Rc(ResponseCode::LOCKED))
+            .context("In unwrap_key: Required super decryption key is not in memory.")?;
+        Ok(KeyBlob::Sensitive {
+            key: Self::unwrap_key_with_key(blob, metadata, &super_key)
+                .context("In unwrap_key: unwrap_key_with_key failed")?,
+            reencrypt_with: super_key.reencrypt_with.as_ref().unwrap_or(&super_key).clone(),
+            force_reencrypt: super_key.reencrypt_with.is_some(),
+        })
     }
 
     /// Unwraps an encrypted key blob given an encryption key.
@@ -427,9 +421,9 @@ impl SuperKeyManager {
                     return Err(Error::Rc(ResponseCode::VALUE_CORRUPTED)).context(format!(
                         concat!(
                         "In extract_super_key_from_key_entry: Super key has incomplete metadata.",
-                        "Present: encrypted_by: {}, salt: {}, iv: {}, aead_tag: {}."
+                        "encrypted_by: {:?}; Present: salt: {}, iv: {}, aead_tag: {}."
                     ),
-                        enc_by.is_some(),
+                        enc_by,
                         salt.is_some(),
                         iv.is_some(),
                         tag.is_some()
@@ -523,19 +517,19 @@ impl SuperKeyManager {
     ) -> Result<(Vec<u8>, BlobMetaData)> {
         match Enforcements::super_encryption_required(domain, key_parameters, flags) {
             SuperEncryptionType::None => Ok((key_blob.to_vec(), BlobMetaData::new())),
-            SuperEncryptionType::LskfBound => {
-                self.super_encrypt_on_key_init(db, legacy_migrator, user_id, &key_blob).context(
-                    "In handle_super_encryption_on_key_init.
-                         Failed to super encrypt the key.",
-                )
-            }
+            SuperEncryptionType::LskfBound => self
+                .super_encrypt_on_key_init(db, legacy_migrator, user_id, &key_blob)
+                .context(concat!(
+                    "In handle_super_encryption_on_key_init. ",
+                    "Failed to super encrypt with LskfBound key."
+                )),
             SuperEncryptionType::ScreenLockBound => {
                 let mut data = self.data.lock().unwrap();
                 let entry = data.user_keys.entry(user_id).or_default();
                 if let Some(super_key) = entry.screen_lock_bound.as_ref() {
                     Self::encrypt_with_aes_super_key(key_blob, &super_key).context(concat!(
                         "In handle_super_encryption_on_key_init. ",
-                        "Failed to encrypt the key with screen_lock_bound key."
+                        "Failed to encrypt with ScreenLockBound key."
                     ))
                 } else {
                     // Symmetric key is not available, use public key encryption
