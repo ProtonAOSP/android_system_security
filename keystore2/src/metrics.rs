@@ -20,14 +20,16 @@ use android_hardware_security_keymint::aidl::android::hardware::security::keymin
     Algorithm::Algorithm, BlockMode::BlockMode, Digest::Digest, EcCurve::EcCurve,
     HardwareAuthenticatorType::HardwareAuthenticatorType, KeyOrigin::KeyOrigin,
     KeyParameter::KeyParameter, KeyPurpose::KeyPurpose, PaddingMode::PaddingMode,
+    SecurityLevel::SecurityLevel,
 };
 use statslog_rust::keystore2_key_creation_event_reported::{
     Algorithm as StatsdAlgorithm, EcCurve as StatsdEcCurve, KeyOrigin as StatsdKeyOrigin,
-    Keystore2KeyCreationEventReported, UserAuthType as StatsdUserAuthType,
+    Keystore2KeyCreationEventReported, SecurityLevel as StatsdKeyCreationSecurityLevel,
+    UserAuthType as StatsdUserAuthType,
 };
-
 use statslog_rust::keystore2_key_operation_event_reported::{
     Keystore2KeyOperationEventReported, Outcome as StatsdOutcome, Purpose as StatsdKeyPurpose,
+    SecurityLevel as StatsdKeyOperationSecurityLevel,
 };
 
 fn create_default_key_creation_atom() -> Keystore2KeyCreationEventReported {
@@ -52,6 +54,7 @@ fn create_default_key_creation_atom() -> Keystore2KeyCreationEventReported {
         // as per keystore2/ResponseCode.aidl, 1 is reserved for NO_ERROR
         error_code: 1,
         attestation_requested: false,
+        security_level: StatsdKeyCreationSecurityLevel::SecurityLevelUnspecified,
     }
 }
 
@@ -64,12 +67,18 @@ fn create_default_key_operation_atom() -> Keystore2KeyOperationEventReported {
         outcome: StatsdOutcome::OutcomeUnspecified,
         error_code: 1,
         key_upgraded: false,
+        security_level: StatsdKeyOperationSecurityLevel::SecurityLevelUnspecified,
     }
 }
 
 /// Log key creation events via statsd API.
-pub fn log_key_creation_event_stats<U>(key_params: &[KeyParameter], result: &anyhow::Result<U>) {
-    let key_creation_event_stats = construct_key_creation_event_stats(key_params, result);
+pub fn log_key_creation_event_stats<U>(
+    sec_level: SecurityLevel,
+    key_params: &[KeyParameter],
+    result: &anyhow::Result<U>,
+) {
+    let key_creation_event_stats =
+        construct_key_creation_event_stats(sec_level, key_params, result);
 
     let logging_result = key_creation_event_stats.stats_write();
 
@@ -83,13 +92,19 @@ pub fn log_key_creation_event_stats<U>(key_params: &[KeyParameter], result: &any
 
 /// Log key operation events via statsd API.
 pub fn log_key_operation_event_stats(
+    sec_level: SecurityLevel,
     key_purpose: KeyPurpose,
     op_params: &[KeyParameter],
     op_outcome: &Outcome,
     key_upgraded: bool,
 ) {
-    let key_operation_event_stats =
-        construct_key_operation_event_stats(key_purpose, op_params, op_outcome, key_upgraded);
+    let key_operation_event_stats = construct_key_operation_event_stats(
+        sec_level,
+        key_purpose,
+        op_params,
+        op_outcome,
+        key_upgraded,
+    );
 
     let logging_result = key_operation_event_stats.stats_write();
 
@@ -102,6 +117,7 @@ pub fn log_key_operation_event_stats(
 }
 
 fn construct_key_creation_event_stats<U>(
+    sec_level: SecurityLevel,
     key_params: &[KeyParameter],
     result: &anyhow::Result<U>,
 ) -> Keystore2KeyCreationEventReported {
@@ -110,6 +126,16 @@ fn construct_key_creation_event_stats<U>(
     if let Err(ref e) = result {
         key_creation_event_atom.error_code = get_error_code(e);
     }
+
+    key_creation_event_atom.security_level = match sec_level {
+        SecurityLevel::SOFTWARE => StatsdKeyCreationSecurityLevel::SecurityLevelSoftware,
+        SecurityLevel::TRUSTED_ENVIRONMENT => {
+            StatsdKeyCreationSecurityLevel::SecurityLevelTrustedEnvironment
+        }
+        SecurityLevel::STRONGBOX => StatsdKeyCreationSecurityLevel::SecurityLevelStrongbox,
+        //KEYSTORE is not a valid variant here
+        _ => StatsdKeyCreationSecurityLevel::SecurityLevelUnspecified,
+    };
 
     for key_param in key_params.iter().map(KsKeyParamValue::from) {
         match key_param {
@@ -183,12 +209,23 @@ fn construct_key_creation_event_stats<U>(
 }
 
 fn construct_key_operation_event_stats(
+    sec_level: SecurityLevel,
     key_purpose: KeyPurpose,
     op_params: &[KeyParameter],
     op_outcome: &Outcome,
     key_upgraded: bool,
 ) -> Keystore2KeyOperationEventReported {
     let mut key_operation_event_atom = create_default_key_operation_atom();
+
+    key_operation_event_atom.security_level = match sec_level {
+        SecurityLevel::SOFTWARE => StatsdKeyOperationSecurityLevel::SecurityLevelSoftware,
+        SecurityLevel::TRUSTED_ENVIRONMENT => {
+            StatsdKeyOperationSecurityLevel::SecurityLevelTrustedEnvironment
+        }
+        SecurityLevel::STRONGBOX => StatsdKeyOperationSecurityLevel::SecurityLevelStrongbox,
+        //KEYSTORE is not a valid variant here
+        _ => StatsdKeyOperationSecurityLevel::SecurityLevelUnspecified,
+    };
 
     key_operation_event_atom.key_upgraded = key_upgraded;
 
