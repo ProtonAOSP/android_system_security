@@ -141,6 +141,11 @@ impl Maintenance {
     fn early_boot_ended() -> Result<()> {
         check_keystore_permission(KeystorePerm::early_boot_ended())
             .context("In early_boot_ended. Checking permission")?;
+        log::info!("In early_boot_ended.");
+
+        if let Err(e) = DB.with(|db| SUPER_KEY.set_up_boot_level_cache(&mut db.borrow_mut())) {
+            log::error!("SUPER_KEY.set_up_boot_level_cache failed:\n{:?}\n:(", e);
+        }
 
         let sec_levels = [
             (SecurityLevel::TRUSTED_ENVIRONMENT, "TRUSTED_ENVIRONMENT"),

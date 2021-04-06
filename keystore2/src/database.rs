@@ -186,6 +186,9 @@ impl_metadata!(
         KmUuid(Uuid) with accessor km_uuid,
         /// If the key is ECDH encrypted, this is the ephemeral public key
         PublicKey(Vec<u8>) with accessor public_key,
+        /// If the key is encrypted with a MaxBootLevel key, this is the boot level
+        /// of that key
+        MaxBootLevel(i32) with accessor max_boot_level,
         //  --- ADD NEW META DATA FIELDS HERE ---
         // For backwards compatibility add new entries only to
         // end of this list and above this comment.
