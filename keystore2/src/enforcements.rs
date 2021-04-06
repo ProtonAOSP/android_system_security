@@ -14,14 +14,11 @@
 
 //! This is the Keystore 2.0 Enforcements module.
 // TODO: more description to follow.
+use crate::database::{AuthTokenEntry, MonotonicRawTime};
 use crate::error::{map_binder_status, Error, ErrorCode};
 use crate::globals::{get_timestamp_service, ASYNC_TASK, DB, ENFORCEMENTS};
 use crate::key_parameter::{KeyParameter, KeyParameterValue};
 use crate::{authorization::Error as AuthzError, super_key::SuperEncryptionType};
-use crate::{
-    database::{AuthTokenEntry, MonotonicRawTime},
-    globals::SUPER_KEY,
-};
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
     Algorithm::Algorithm, ErrorCode::ErrorCode as Ec, HardwareAuthToken::HardwareAuthToken,
     HardwareAuthenticatorType::HardwareAuthenticatorType,
@@ -37,9 +34,11 @@ use android_system_keystore2::aidl::android::system::keystore2::{
 };
 use android_system_keystore2::binder::Strong;
 use anyhow::{Context, Result};
+use keystore2_system_property::PropertyWatcher;
 use std::{
     collections::{HashMap, HashSet},
     sync::{
+        atomic::{AtomicI32, Ordering},
         mpsc::{channel, Receiver, Sender, TryRecvError},
         Arc, Mutex, Weak,
     },
@@ -370,6 +369,8 @@ pub struct Enforcements {
     /// The enforcement module will try to get a confirmation token from this channel whenever
     /// an operation that requires confirmation finishes.
     confirmation_token_receiver: Arc<Mutex<Option<Receiver<Vec<u8>>>>>,
+    /// Highest boot level seen in keystore.boot_level; used to enforce MAX_BOOT_LEVEL tag.
+    boot_level: AtomicI32,
 }
 
 impl Enforcements {
@@ -595,7 +596,7 @@ impl Enforcements {
         }
 
         if let Some(level) = max_boot_level {
-            if !SUPER_KEY.level_accessible(level) {
+            if level < self.boot_level.load(Ordering::SeqCst) {
                 return Err(Error::Km(Ec::BOOT_LEVEL_EXCEEDED))
                     .context("In authorize_create: boot level is too late.");
             }
@@ -761,35 +762,27 @@ impl Enforcements {
         key_parameters: &[KeyParameter],
         flags: Option<i32>,
     ) -> SuperEncryptionType {
+        if *domain != Domain::APP {
+            return SuperEncryptionType::None;
+        }
         if let Some(flags) = flags {
             if (flags & KEY_FLAG_AUTH_BOUND_WITHOUT_CRYPTOGRAPHIC_LSKF_BINDING) != 0 {
                 return SuperEncryptionType::None;
             }
         }
-        // Each answer has a priority, numerically largest priority wins.
-        struct Candidate {
-            priority: u32,
-            enc_type: SuperEncryptionType,
-        };
-        let mut result = Candidate { priority: 0, enc_type: SuperEncryptionType::None };
-        for kp in key_parameters {
-            let t = match kp.key_parameter_value() {
-                KeyParameterValue::MaxBootLevel(level) => {
-                    Candidate { priority: 3, enc_type: SuperEncryptionType::BootLevel(*level) }
-                }
-                KeyParameterValue::UnlockedDeviceRequired if *domain == Domain::APP => {
-                    Candidate { priority: 2, enc_type: SuperEncryptionType::ScreenLockBound }
-                }
-                KeyParameterValue::UserSecureID(_) if *domain == Domain::APP => {
-                    Candidate { priority: 1, enc_type: SuperEncryptionType::LskfBound }
-                }
-                _ => Candidate { priority: 0, enc_type: SuperEncryptionType::None },
-            };
-            if t.priority > result.priority {
-                result = t;
-            }
+        if key_parameters
+            .iter()
+            .any(|kp| matches!(kp.key_parameter_value(), KeyParameterValue::UnlockedDeviceRequired))
+        {
+            return SuperEncryptionType::ScreenLockBound;
         }
-        result.enc_type
+        if key_parameters
+            .iter()
+            .any(|kp| matches!(kp.key_parameter_value(), KeyParameterValue::UserSecureID(_)))
+        {
+            return SuperEncryptionType::LskfBound;
+        }
+        SuperEncryptionType::None
     }
 
     /// Finds a matching auth token along with a timestamp token.
@@ -850,6 +843,35 @@ impl Enforcements {
         let tst = get_timestamp_token(challenge)
             .context("In get_auth_tokens. Error in getting timestamp token.")?;
         Ok((auth_token, tst))
+    }
+
+    /// Watch the `keystore.boot_level` system property, and keep self.boot_level up to date.
+    /// Blocks waiting for system property changes, so must be run in its own thread.
+    pub fn watch_boot_level(&self) -> Result<()> {
+        let mut w = PropertyWatcher::new("keystore.boot_level")?;
+        loop {
+            fn parse_value(_name: &str, value: &str) -> Result<Option<i32>> {
+                Ok(if value == "end" { None } else { Some(value.parse::<i32>()?) })
+            }
+            match w.read(parse_value)? {
+                Some(level) => {
+                    let old = self.boot_level.fetch_max(level, Ordering::SeqCst);
+                    log::info!(
+                        "Read keystore.boot_level: {}; boot level {} -> {}",
+                        level,
+                        old,
+                        std::cmp::max(old, level)
+                    );
+                }
+                None => {
+                    log::info!("keystore.boot_level is `end`, finishing.");
+                    self.boot_level.fetch_max(i32::MAX, Ordering::SeqCst);
+                    break;
+                }
+            }
+            w.wait()?;
+        }
+        Ok(())
     }
 }
 
