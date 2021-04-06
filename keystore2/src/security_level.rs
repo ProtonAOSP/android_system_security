@@ -372,7 +372,7 @@ impl KeystoreSecurityLevel {
         if params.iter().any(|kp| kp.tag == Tag::INCLUDE_UNIQUE_ID) {
             check_key_permission(KeyPerm::gen_unique_id(), key, &None).context(concat!(
                 "In add_certificate_parameters: ",
-                "Caller does not have the permission for device unique attestation."
+                "Caller does not have the permission to generate a unique ID"
             ))?;
         }
 
