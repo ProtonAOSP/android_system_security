@@ -278,8 +278,10 @@ fn connect_secureclock() -> Result<Asp> {
     let secure_clock_available =
         secureclock_instances.as_vec()?.iter().any(|instance| *instance == "default");
 
+    let default_time_stamp_service_name = format!("{}/default", TIME_STAMP_SERVICE_NAME);
+
     let secureclock = if secure_clock_available {
-        map_binder_status_code(binder::get_interface(TIME_STAMP_SERVICE_NAME))
+        map_binder_status_code(binder::get_interface(&default_time_stamp_service_name))
             .context("In connect_secureclock: Trying to connect to genuine secure clock service.")
     } else {
         // This is a no-op if it was called before.
