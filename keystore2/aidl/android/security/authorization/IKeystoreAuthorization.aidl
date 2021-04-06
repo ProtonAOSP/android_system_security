@@ -25,6 +25,7 @@ import android.security.authorization.AuthorizationTokens;
  * provide keystore with the information required to enforce authorizations on key usage.
  * @hide
  */
+ @SensitiveData
 interface IKeystoreAuthorization {
 
     /**
