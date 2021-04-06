@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::{
-    boot_level_keys::{get_level_zero_key, BootLevelKeyCache},
     database::BlobMetaData,
     database::BlobMetaEntry,
     database::EncryptedBy,
@@ -35,15 +34,12 @@ use keystore2_crypto::{
     aes_gcm_decrypt, aes_gcm_encrypt, generate_aes256_key, generate_salt, Password, ZVec,
     AES_256_KEY_LENGTH,
 };
-use keystore2_system_property::PropertyWatcher;
 use std::ops::Deref;
 use std::{
     collections::HashMap,
     sync::Arc,
     sync::{Mutex, Weak},
 };
-
-const MAX_MAX_BOOT_LEVEL: usize = 1_000_000_000;
 
 type UserId = u32;
 
@@ -94,47 +90,13 @@ pub enum SuperEncryptionType {
     LskfBound,
     /// Superencrypt with a key cleared from memory when the device is locked.
     ScreenLockBound,
-    /// Superencrypt with a key based on the desired boot level
-    BootLevel(i32),
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum SuperKeyIdentifier {
-    /// id of the super key in the database.
-    DatabaseId(i64),
-    /// Boot level of the encrypting boot level key
-    BootLevel(i32),
-}
-
-impl SuperKeyIdentifier {
-    fn from_metadata(metadata: &BlobMetaData) -> Option<Self> {
-        if let Some(EncryptedBy::KeyId(key_id)) = metadata.encrypted_by() {
-            Some(SuperKeyIdentifier::DatabaseId(*key_id))
-        } else if let Some(boot_level) = metadata.max_boot_level() {
-            Some(SuperKeyIdentifier::BootLevel(*boot_level))
-        } else {
-            None
-        }
-    }
-
-    fn add_to_metadata(&self, metadata: &mut BlobMetaData) {
-        match self {
-            SuperKeyIdentifier::DatabaseId(id) => {
-                metadata.add(BlobMetaEntry::EncryptedBy(EncryptedBy::KeyId(*id)));
-            }
-            SuperKeyIdentifier::BootLevel(level) => {
-                metadata.add(BlobMetaEntry::MaxBootLevel(*level));
-            }
-        }
-    }
 }
 
 pub struct SuperKey {
     algorithm: SuperEncryptionAlgorithm,
     key: ZVec,
-    /// Identifier of the encrypting key, used to write an encrypted blob
-    /// back to the database after re-encryption eg on a key update.
-    id: SuperKeyIdentifier,
+    // id of the super key in the database.
+    id: i64,
     /// ECDH is more expensive than AES. So on ECDH private keys we set the
     /// reencrypt_with field to point at the corresponding AES key, and the
     /// keys will be re-encrypted with AES on first use.
@@ -174,20 +136,11 @@ struct UserSuperKeys {
 struct SkmState {
     user_keys: HashMap<UserId, UserSuperKeys>,
     key_index: HashMap<i64, Weak<SuperKey>>,
-    boot_level_key_cache: Option<BootLevelKeyCache>,
 }
 
 impl SkmState {
-    fn add_key_to_key_index(&mut self, super_key: &Arc<SuperKey>) -> Result<()> {
-        if let SuperKeyIdentifier::DatabaseId(id) = super_key.id {
-            self.key_index.insert(id, Arc::downgrade(super_key));
-            Ok(())
-        } else {
-            Err(Error::sys()).context(format!(
-                "In add_key_to_key_index: cannot add key with ID {:?}",
-                super_key.id
-            ))
-        }
+    fn add_key_to_key_index(&mut self, super_key: &Arc<SuperKey>) {
+        self.key_index.insert(super_key.id, Arc::downgrade(super_key));
     }
 }
 
@@ -197,101 +150,19 @@ pub struct SuperKeyManager {
 }
 
 impl SuperKeyManager {
-    pub fn set_up_boot_level_cache(self: &Arc<Self>, db: &mut KeystoreDB) -> Result<()> {
-        let mut data = self.data.lock().unwrap();
-        if data.boot_level_key_cache.is_some() {
-            log::info!("In set_up_boot_level_cache: called for a second time");
-            return Ok(());
-        }
-        let level_zero_key = get_level_zero_key(db)
-            .context("In set_up_boot_level_cache: get_level_zero_key failed")?;
-        data.boot_level_key_cache = Some(BootLevelKeyCache::new(level_zero_key));
-        log::info!("Starting boot level watcher.");
-        let clone = self.clone();
-        std::thread::spawn(move || {
-            clone
-                .watch_boot_level()
-                .unwrap_or_else(|e| log::error!("watch_boot_level failed:\n{:?}", e));
-        });
-        Ok(())
-    }
-
-    /// Watch the `keystore.boot_level` system property, and keep boot level up to date.
-    /// Blocks waiting for system property changes, so must be run in its own thread.
-    fn watch_boot_level(&self) -> Result<()> {
-        let mut w = PropertyWatcher::new("keystore.boot_level")
-            .context("In watch_boot_level: PropertyWatcher::new failed")?;
-        loop {
-            let level = w
-                .read(|_n, v| v.parse::<usize>().map_err(std::convert::Into::into))
-                .context("In watch_boot_level: read of property failed")?;
-            // watch_boot_level should only be called once data.boot_level_key_cache is Some,
-            // so it's safe to unwrap in the branches below.
-            if level < MAX_MAX_BOOT_LEVEL {
-                log::info!("Read keystore.boot_level value {}", level);
-                let mut data = self.data.lock().unwrap();
-                data.boot_level_key_cache
-                    .as_mut()
-                    .unwrap()
-                    .advance_boot_level(level)
-                    .context("In watch_boot_level: advance_boot_level failed")?;
-            } else {
-                log::info!(
-                    "keystore.boot_level {} hits maximum {}, finishing.",
-                    level,
-                    MAX_MAX_BOOT_LEVEL
-                );
-                let mut data = self.data.lock().unwrap();
-                data.boot_level_key_cache.as_mut().unwrap().finish();
-                break;
-            }
-            w.wait().context("In watch_boot_level: property wait failed")?;
-        }
-        Ok(())
-    }
-
-    pub fn level_accessible(&self, boot_level: i32) -> bool {
-        self.data
-            .lock()
-            .unwrap()
-            .boot_level_key_cache
-            .as_ref()
-            .map_or(false, |c| c.level_accessible(boot_level as usize))
-    }
-
     pub fn forget_all_keys_for_user(&self, user: UserId) {
         let mut data = self.data.lock().unwrap();
         data.user_keys.remove(&user);
     }
 
-    fn install_per_boot_key_for_user(&self, user: UserId, super_key: Arc<SuperKey>) -> Result<()> {
+    fn install_per_boot_key_for_user(&self, user: UserId, super_key: Arc<SuperKey>) {
         let mut data = self.data.lock().unwrap();
-        data.add_key_to_key_index(&super_key)
-            .context("In install_per_boot_key_for_user: add_key_to_key_index failed")?;
+        data.add_key_to_key_index(&super_key);
         data.user_keys.entry(user).or_default().per_boot = Some(super_key);
-        Ok(())
     }
 
-    fn lookup_key(&self, key_id: &SuperKeyIdentifier) -> Result<Option<Arc<SuperKey>>> {
-        let mut data = self.data.lock().unwrap();
-        Ok(match key_id {
-            SuperKeyIdentifier::DatabaseId(id) => data.key_index.get(id).and_then(|k| k.upgrade()),
-            SuperKeyIdentifier::BootLevel(level) => data
-                .boot_level_key_cache
-                .as_mut()
-                .map(|b| b.aes_key(*level as usize))
-                .transpose()
-                .context("In lookup_key: aes_key failed")?
-                .flatten()
-                .map(|key| {
-                    Arc::new(SuperKey {
-                        algorithm: SuperEncryptionAlgorithm::Aes256Gcm,
-                        key,
-                        id: *key_id,
-                        reencrypt_with: None,
-                    })
-                }),
-        })
+    fn lookup_key(&self, key_id: &i64) -> Option<Arc<SuperKey>> {
+        self.data.lock().unwrap().key_index.get(key_id).and_then(|k| k.upgrade())
     }
 
     pub fn get_per_boot_key_by_user_id(&self, user_id: UserId) -> Option<Arc<SuperKey>> {
@@ -344,27 +215,26 @@ impl SuperKeyManager {
         Ok(())
     }
 
-    /// Check if a given key is super-encrypted, from its metadata. If so, unwrap the key using
-    /// the relevant super key.
-    pub fn unwrap_key_if_required<'a>(
-        &self,
-        metadata: &BlobMetaData,
-        blob: &'a [u8],
-    ) -> Result<KeyBlob<'a>> {
-        Ok(if let Some(key_id) = SuperKeyIdentifier::from_metadata(metadata) {
-            let super_key = self
-                .lookup_key(&key_id)
-                .context("In unwrap_key: lookup_key failed")?
-                .ok_or(Error::Rc(ResponseCode::LOCKED))
-                .context("In unwrap_key: Required super decryption key is not in memory.")?;
-            KeyBlob::Sensitive {
-                key: Self::unwrap_key_with_key(blob, metadata, &super_key)
-                    .context("In unwrap_key: unwrap_key_with_key failed")?,
-                reencrypt_with: super_key.reencrypt_with.as_ref().unwrap_or(&super_key).clone(),
-                force_reencrypt: super_key.reencrypt_with.is_some(),
-            }
+    /// Unwraps an encrypted key blob given metadata identifying the encryption key.
+    /// The function queries `metadata.encrypted_by()` to determine the encryption key.
+    /// It then checks if the required key is memory resident, and if so decrypts the
+    /// blob.
+    pub fn unwrap_key<'a>(&self, blob: &'a [u8], metadata: &BlobMetaData) -> Result<KeyBlob<'a>> {
+        let key_id = if let Some(EncryptedBy::KeyId(key_id)) = metadata.encrypted_by() {
+            key_id
         } else {
-            KeyBlob::Ref(blob)
+            return Err(Error::Rc(ResponseCode::VALUE_CORRUPTED))
+                .context("In unwrap_key: Cannot determine wrapping key.");
+        };
+        let super_key = self
+            .lookup_key(&key_id)
+            .ok_or(Error::Rc(ResponseCode::LOCKED))
+            .context("In unwrap_key: Required super decryption key is not in memory.")?;
+        Ok(KeyBlob::Sensitive {
+            key: Self::unwrap_key_with_key(blob, metadata, &super_key)
+                .context("In unwrap_key: unwrap_key_with_key failed")?,
+            reencrypt_with: super_key.reencrypt_with.as_ref().unwrap_or(&super_key).clone(),
+            force_reencrypt: super_key.reencrypt_with.is_some(),
         })
     }
 
@@ -519,7 +389,7 @@ impl SuperKeyManager {
             .context(
                 "In populate_cache_from_super_key_blob. Failed to extract super key from key entry",
             )?;
-        self.install_per_boot_key_for_user(user_id, super_key.clone())?;
+        self.install_per_boot_key_for_user(user_id, super_key.clone());
         Ok(super_key)
     }
 
@@ -560,12 +430,7 @@ impl SuperKeyManager {
                     ));
                 }
             };
-            Ok(Arc::new(SuperKey {
-                algorithm,
-                key,
-                id: SuperKeyIdentifier::DatabaseId(entry.id()),
-                reencrypt_with,
-            }))
+            Ok(Arc::new(SuperKey { algorithm, key, id: entry.id(), reencrypt_with }))
         } else {
             Err(Error::Rc(ResponseCode::VALUE_CORRUPTED))
                 .context("In extract_super_key_from_key_entry: No key blob info.")
@@ -633,7 +498,7 @@ impl SuperKeyManager {
             .context("In encrypt_with_aes_super_key: Failed to encrypt new super key.")?;
         metadata.add(BlobMetaEntry::Iv(iv));
         metadata.add(BlobMetaEntry::AeadTag(tag));
-        super_key.id.add_to_metadata(&mut metadata);
+        metadata.add(BlobMetaEntry::EncryptedBy(EncryptedBy::KeyId(super_key.id)));
         Ok((encrypted_key, metadata))
     }
 
@@ -689,23 +554,27 @@ impl SuperKeyManager {
                     metadata.add(BlobMetaEntry::Salt(salt));
                     metadata.add(BlobMetaEntry::Iv(iv));
                     metadata.add(BlobMetaEntry::AeadTag(aead_tag));
-                    SuperKeyIdentifier::DatabaseId(key_id_guard.id())
-                        .add_to_metadata(&mut metadata);
+                    metadata.add(BlobMetaEntry::EncryptedBy(EncryptedBy::KeyId(key_id_guard.id())));
                     Ok((encrypted_key, metadata))
                 }
             }
-            SuperEncryptionType::BootLevel(level) => {
-                let key_id = SuperKeyIdentifier::BootLevel(level);
-                let super_key = self
-                    .lookup_key(&key_id)
-                    .context("In handle_super_encryption_on_key_init: lookup_key failed")?
-                    .ok_or(Error::Rc(ResponseCode::LOCKED))
-                    .context("In handle_super_encryption_on_key_init: Boot stage key absent")?;
-                Self::encrypt_with_aes_super_key(key_blob, &super_key).context(concat!(
-                    "In handle_super_encryption_on_key_init: ",
-                    "Failed to encrypt with BootLevel key."
-                ))
-            }
+        }
+    }
+
+    /// Check if a given key is super-encrypted, from its metadata. If so, unwrap the key using
+    /// the relevant super key.
+    pub fn unwrap_key_if_required<'a>(
+        &self,
+        metadata: &BlobMetaData,
+        key_blob: &'a [u8],
+    ) -> Result<KeyBlob<'a>> {
+        if Self::key_super_encrypted(&metadata) {
+            let unwrapped_key = self
+                .unwrap_key(key_blob, metadata)
+                .context("In unwrap_key_if_required. Error in unwrapping the key.")?;
+            Ok(unwrapped_key)
+        } else {
+            Ok(KeyBlob::Ref(key_blob))
         }
     }
 
@@ -725,6 +594,14 @@ impl SuperKeyManager {
             }
             _ => Ok((KeyBlob::Ref(key_after_upgrade), None)),
         }
+    }
+
+    // Helper function to decide if a key is super encrypted, given metadata.
+    fn key_super_encrypted(metadata: &BlobMetaData) -> bool {
+        if let Some(&EncryptedBy::KeyId(_)) = metadata.encrypted_by() {
+            return true;
+        }
+        false
     }
 
     /// Fetch a superencryption key from the database, or create it if it doesn't already exist.
@@ -786,7 +663,7 @@ impl SuperKeyManager {
             Ok(Arc::new(SuperKey {
                 algorithm: key_type.algorithm,
                 key: super_key,
-                id: SuperKeyIdentifier::DatabaseId(key_entry.id()),
+                id: key_entry.id(),
                 reencrypt_with,
             }))
         }
@@ -825,8 +702,8 @@ impl SuperKeyManager {
                 )
             })?
             .clone();
-        data.add_key_to_key_index(&aes)?;
-        data.add_key_to_key_index(&ecdh)?;
+        data.add_key_to_key_index(&aes);
+        data.add_key_to_key_index(&ecdh);
         Ok(())
     }
 
