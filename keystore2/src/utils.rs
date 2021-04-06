@@ -217,6 +217,10 @@ pub fn ui_opts_2_compat(opt: i32) -> ApcCompatUiOptions {
 /// AID offset for uid space partitioning.
 pub const AID_USER_OFFSET: u32 = cutils_bindgen::AID_USER_OFFSET;
 
+/// AID of the keystore process itself, used for keys that
+/// keystore generates for its own use.
+pub const AID_KEYSTORE: u32 = cutils_bindgen::AID_KEYSTORE;
+
 /// Extracts the android user from the given uid.
 pub fn uid_to_android_user(uid: u32) -> u32 {
     // Safety: No memory access
