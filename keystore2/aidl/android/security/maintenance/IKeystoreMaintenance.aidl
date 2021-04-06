@@ -17,13 +17,12 @@ package android.security.maintenance;
 import android.system.keystore2.Domain;
 import android.security.maintenance.UserState;
 
-// TODO: mark the interface with @SensitiveData when the annotation is ready (b/176110256).
-
 /**
  * IKeystoreMaintenance interface exposes the methods for adding/removing users and changing the
  * user's password.
  * @hide
  */
+ @SensitiveData
 interface IKeystoreMaintenance {
 
     /**
