@@ -72,6 +72,9 @@ aidl_interface {
         rust: {
             enabled: true,
         },
+        ndk: {
+            enabled: true,
+        }
     },
 }
 
