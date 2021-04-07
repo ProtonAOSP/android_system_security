@@ -42,6 +42,7 @@ cc_binary {
         "libbinder_ndk",
         "android.hardware.keymaster@4.0",
         "libcredstore_aidl",
+        "libcrypto",
         "libutils",
         "libhidlbase",
         "android.hardware.identity-support-lib",
@@ -53,7 +54,7 @@ cc_binary {
     static_libs: [
         "android.hardware.identity-V3-cpp",
         "android.hardware.keymaster-V3-cpp",
-        "libcppbor",
+        "libcppbor_external",
     ]
 }
 
