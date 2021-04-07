@@ -665,13 +665,19 @@ static V4_0::KeyParameter convertKeyParameterToLegacy(const KMV1::KeyParameter& 
         }
         break;
     case KMV1::Tag::ATTESTATION_ID_SERIAL:
-        // TODO This tag is missing from 4.0 keymaster_tags.h
+        if (auto v = KMV1::authorizationValue(KMV1::TAG_ATTESTATION_ID_SERIAL, kp)) {
+            return V4_0::makeKeyParameter(V4_0::TAG_ATTESTATION_ID_SERIAL, v->get());
+        }
         break;
     case KMV1::Tag::ATTESTATION_ID_IMEI:
-        // TODO This tag is missing from 4.0 keymaster_tags.h
+        if (auto v = KMV1::authorizationValue(KMV1::TAG_ATTESTATION_ID_IMEI, kp)) {
+            return V4_0::makeKeyParameter(V4_0::TAG_ATTESTATION_ID_IMEI, v->get());
+        }
         break;
     case KMV1::Tag::ATTESTATION_ID_MEID:
-        // TODO This tag is missing from 4.0 keymaster_tags.h
+        if (auto v = KMV1::authorizationValue(KMV1::TAG_ATTESTATION_ID_MEID, kp)) {
+            return V4_0::makeKeyParameter(V4_0::TAG_ATTESTATION_ID_MEID, v->get());
+        }
         break;
     case KMV1::Tag::ATTESTATION_ID_MANUFACTURER:
         if (auto v = KMV1::authorizationValue(KMV1::TAG_ATTESTATION_ID_MANUFACTURER, kp)) {
@@ -971,13 +977,19 @@ static KMV1::KeyParameter convertKeyParameterFromLegacy(const V4_0::KeyParameter
         }
         break;
     case V4_0::Tag::ATTESTATION_ID_SERIAL:
-        // TODO This tag is missing from 4.0 keymaster_tags.h
+        if (auto v = unwrapper(V4_0::authorizationValue(V4_0::TAG_ATTESTATION_ID_SERIAL, kp))) {
+            return KMV1::makeKeyParameter(KMV1::TAG_ATTESTATION_ID_SERIAL, v->get());
+        }
         break;
     case V4_0::Tag::ATTESTATION_ID_IMEI:
-        // TODO This tag is missing from 4.0 keymaster_tags.h
+        if (auto v = unwrapper(V4_0::authorizationValue(V4_0::TAG_ATTESTATION_ID_IMEI, kp))) {
+            return KMV1::makeKeyParameter(KMV1::TAG_ATTESTATION_ID_IMEI, v->get());
+        }
         break;
     case V4_0::Tag::ATTESTATION_ID_MEID:
-        // TODO This tag is missing from 4.0 keymaster_tags.h
+        if (auto v = unwrapper(V4_0::authorizationValue(V4_0::TAG_ATTESTATION_ID_MEID, kp))) {
+            return KMV1::makeKeyParameter(KMV1::TAG_ATTESTATION_ID_MEID, v->get());
+        }
         break;
     case V4_0::Tag::ATTESTATION_ID_MANUFACTURER:
         if (auto v =
