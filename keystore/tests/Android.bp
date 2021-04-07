@@ -18,10 +18,6 @@ cc_test {
     ],
     srcs: [
         "aaid_truncation_test.cpp",
-        "auth_token_table_test.cpp",
-        "auth_token_formatting_test.cpp",
-        "blob_test.cpp",
-        "confirmationui_rate_limiting_test.cpp",
         "verification_token_seralization_test.cpp",
         "gtest_main.cpp",
     ],
@@ -35,7 +31,6 @@ cc_test {
         "libhidlbase",
         "libkeymaster4support",
         "libkeymaster4_1support",
-        "libkeystore_test",
         "liblog",
         "libutils",
     ],
@@ -63,17 +58,14 @@ cc_test {
     ],
     name: "confirmationui_invocation_test",
     static_libs: [
-        "android.hardware.confirmationui@1.0",
         "libbase",
         "libgtest_main",
         "libutils",
         "liblog",
     ],
     shared_libs: [
-        "libbinder",
-        "libkeystore_aidl", // for IKeyStoreService.asInterface()
-        "libkeystore_binder",
-        "libkeystore_parcelables",
+        "android.security.apc-ndk_platform",
+        "libbinder_ndk",
     ],
    sanitize: {
      cfi: false,
