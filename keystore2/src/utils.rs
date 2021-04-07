@@ -91,7 +91,13 @@ pub fn check_key_permission(
 
 /// This function checks whether a given tag corresponds to the access of device identifiers.
 pub fn is_device_id_attestation_tag(tag: Tag) -> bool {
-    matches!(tag, Tag::ATTESTATION_ID_IMEI | Tag::ATTESTATION_ID_MEID | Tag::ATTESTATION_ID_SERIAL)
+    matches!(
+        tag,
+        Tag::ATTESTATION_ID_IMEI
+            | Tag::ATTESTATION_ID_MEID
+            | Tag::ATTESTATION_ID_SERIAL
+            | Tag::DEVICE_UNIQUE_ATTESTATION
+    )
 }
 
 /// This function checks whether the calling app has the Android permissions needed to attest device
