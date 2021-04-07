@@ -15,6 +15,8 @@
 #include <chrono>
 #include <cstdio>
 #include <future>
+#include <iomanip>
+#include <iostream>
 #include <memory>
 #include <string>
 #include <vector>
@@ -24,37 +26,55 @@
 #include <base/strings/string_number_conversions.h>
 #include <base/strings/string_split.h>
 #include <base/strings/string_util.h>
-#include <base/strings/utf_string_conversions.h>
-#include <base/threading/platform_thread.h>
-#include <keystore/keymaster_types.h>
-#include <keystore/keystore_client_impl.h>
 
-#include <android/hardware/confirmationui/1.0/types.h>
-#include <android/security/BnConfirmationPromptCallback.h>
-#include <android/security/keystore/IKeystoreService.h>
+#include <aidl/android/security/apc/BnConfirmationCallback.h>
+#include <aidl/android/security/apc/IProtectedConfirmation.h>
+#include <aidl/android/system/keystore2/IKeystoreService.h>
+#include <aidl/android/system/keystore2/ResponseCode.h>
+#include <android/binder_manager.h>
+#include <android/binder_process.h>
+#include <keymint_support/authorization_set.h>
 
-#include <binder/IPCThreadState.h>
-#include <binder/IServiceManager.h>
+#include <openssl/evp.h>
+#include <openssl/mem.h>
+#include <openssl/x509.h>
 
-//#include <keystore/keystore.h>
+#include "keystore_client.pb.h"
+
+namespace apc = ::aidl::android::security::apc;
+namespace keymint = ::aidl::android::hardware::security::keymint;
+namespace ks2 = ::aidl::android::system::keystore2;
 
 using base::CommandLine;
-using keystore::KeystoreClient;
-
-using android::sp;
-using android::String16;
-using android::security::keystore::IKeystoreService;
-using base::CommandLine;
-using ConfirmationResponseCode = android::hardware::confirmationui::V1_0::ResponseCode;
+using keystore::EncryptedData;
 
 namespace {
-using namespace keystore;
 
 struct TestCase {
     std::string name;
     bool required_for_brillo_pts;
-    AuthorizationSet parameters;
+    keymint::AuthorizationSet parameters;
 };
+
+constexpr const char keystore2_service_name[] = "android.system.keystore2";
+
+int unwrapError(const ndk::ScopedAStatus& status) {
+    if (status.isOk()) return 0;
+    if (status.getExceptionCode() == EX_SERVICE_SPECIFIC) {
+        return status.getServiceSpecificError();
+    } else {
+        return static_cast<int>(ks2::ResponseCode::SYSTEM_ERROR);
+    }
+}
+
+ks2::KeyDescriptor keyDescriptor(const std::string& alias) {
+    return {
+        .domain = ks2::Domain::APP,
+        .nspace = -1,  // ignored - should be -1.
+        .alias = alias,
+        .blob = {},
+    };
+}
 
 void PrintUsageAndExit() {
     printf("Usage: keystore_client_v2 <command> [options]\n");
@@ -78,52 +98,487 @@ void PrintUsageAndExit() {
     exit(1);
 }
 
-std::unique_ptr<KeystoreClient> CreateKeystoreInstance() {
-    return std::unique_ptr<KeystoreClient>(
-        static_cast<KeystoreClient*>(new keystore::KeystoreClientImpl));
+std::shared_ptr<ks2::IKeystoreService> CreateKeystoreInstance() {
+    ::ndk::SpAIBinder keystoreBinder(AServiceManager_checkService(keystore2_service_name));
+    auto result = ks2::IKeystoreService::fromBinder(keystoreBinder);
+    if (result) return result;
+    std::cerr << "Unable to connect to Keystore.";
+    exit(-1);
 }
 
-void PrintTags(const AuthorizationSet& parameters) {
-    for (auto iter = parameters.begin(); iter != parameters.end(); ++iter) {
-        auto tag_str = toString(iter->tag);
-        printf("  %s\n", tag_str.c_str());
+std::shared_ptr<ks2::IKeystoreSecurityLevel>
+GetSecurityLevelInterface(std::shared_ptr<ks2::IKeystoreService> keystore,
+                          keymint::SecurityLevel securitylevel) {
+    std::shared_ptr<ks2::IKeystoreSecurityLevel> sec_level;
+    auto rc = keystore->getSecurityLevel(securitylevel, &sec_level);
+    if (rc.isOk()) return sec_level;
+    std::cerr << "Unable to get security level interface from Keystore: " << rc.getDescription();
+    exit(-1);
+}
+
+bool isHardwareEnforced(const ks2::Authorization& a) {
+    return !(a.securityLevel == keymint::SecurityLevel::SOFTWARE ||
+             a.securityLevel == keymint::SecurityLevel::KEYSTORE);
+}
+
+void PrintTags(const std::vector<ks2::Authorization>& characteristics, bool printHardwareEnforced) {
+    for (const auto& a : characteristics) {
+        if (isHardwareEnforced(a) == printHardwareEnforced) {
+            std::cout << toString(a.keyParameter.tag) << "\n";
+        }
     }
 }
 
-void PrintKeyCharacteristics(const AuthorizationSet& hardware_enforced_characteristics,
-                             const AuthorizationSet& software_enforced_characteristics) {
+void PrintKeyCharacteristics(const std::vector<ks2::Authorization>& characteristics) {
     printf("Hardware:\n");
-    PrintTags(hardware_enforced_characteristics);
+    PrintTags(characteristics, true /* printHardwareEnforced */);
     printf("Software:\n");
-    PrintTags(software_enforced_characteristics);
+    PrintTags(characteristics, false /* printHardwareEnforced */);
 }
 
-bool TestKey(const std::string& name, bool required, const AuthorizationSet& parameters) {
-    std::unique_ptr<KeystoreClient> keystore = CreateKeystoreInstance();
-    AuthorizationSet hardware_enforced_characteristics;
-    AuthorizationSet software_enforced_characteristics;
-    auto result =
-        keystore->generateKey("tmp", parameters, 0 /*flags*/, &hardware_enforced_characteristics,
-                              &software_enforced_characteristics);
+const char kEncryptSuffix[] = "_ENC";
+const char kAuthenticateSuffix[] = "_AUTH";
+constexpr uint32_t kAESKeySize = 256;      // bits
+constexpr uint32_t kHMACKeySize = 256;     // bits
+constexpr uint32_t kHMACOutputSize = 256;  // bits
+
+bool verifyEncryptionKeyAttributes(const std::vector<ks2::Authorization> authorizations) {
+    bool verified = true;
+    verified =
+        verified &&
+        std::any_of(authorizations.begin(), authorizations.end(), [&](const ks2::Authorization& a) {
+            return a.keyParameter.tag == keymint::Tag::ALGORITHM &&
+                   a.keyParameter.value ==
+                       keymint::KeyParameterValue::make<keymint::KeyParameterValue::algorithm>(
+                           keymint::Algorithm::AES);
+        });
+
+    verified =
+        verified &&
+        std::any_of(authorizations.begin(), authorizations.end(), [&](const ks2::Authorization& a) {
+            return a.keyParameter.tag == keymint::Tag::KEY_SIZE &&
+                   a.keyParameter.value ==
+                       keymint::KeyParameterValue::make<keymint::KeyParameterValue::integer>(
+                           kAESKeySize);
+        });
+
+    verified =
+        verified &&
+        std::any_of(authorizations.begin(), authorizations.end(), [&](const ks2::Authorization& a) {
+            return a.keyParameter.tag == keymint::Tag::BLOCK_MODE &&
+                   a.keyParameter.value ==
+                       keymint::KeyParameterValue::make<keymint::KeyParameterValue::blockMode>(
+                           keymint::BlockMode::CBC);
+        });
+
+    verified =
+        verified &&
+        std::any_of(authorizations.begin(), authorizations.end(), [&](const ks2::Authorization& a) {
+            return a.keyParameter.tag == keymint::Tag::PADDING &&
+                   a.keyParameter.value ==
+                       keymint::KeyParameterValue::make<keymint::KeyParameterValue::paddingMode>(
+                           keymint::PaddingMode::PKCS7);
+        });
+
+    return verified;
+}
+
+bool verifyAuthenticationKeyAttributes(const std::vector<ks2::Authorization> authorizations) {
+    bool verified = true;
+    verified =
+        verified &&
+        std::any_of(authorizations.begin(), authorizations.end(), [&](const ks2::Authorization& a) {
+            return a.keyParameter.tag == keymint::Tag::ALGORITHM &&
+                   a.keyParameter.value ==
+                       keymint::KeyParameterValue::make<keymint::KeyParameterValue::algorithm>(
+                           keymint::Algorithm::HMAC);
+        });
+
+    verified =
+        verified &&
+        std::any_of(authorizations.begin(), authorizations.end(), [&](const ks2::Authorization& a) {
+            return a.keyParameter.tag == keymint::Tag::KEY_SIZE &&
+                   a.keyParameter.value ==
+                       keymint::KeyParameterValue::make<keymint::KeyParameterValue::integer>(
+                           kHMACKeySize);
+        });
+
+    verified =
+        verified &&
+        std::any_of(authorizations.begin(), authorizations.end(), [&](const ks2::Authorization& a) {
+            return a.keyParameter.tag == keymint::Tag::MIN_MAC_LENGTH &&
+                   a.keyParameter.value ==
+                       keymint::KeyParameterValue::make<keymint::KeyParameterValue::integer>(
+                           kHMACOutputSize);
+        });
+
+    verified =
+        verified &&
+        std::any_of(authorizations.begin(), authorizations.end(), [&](const ks2::Authorization& a) {
+            return a.keyParameter.tag == keymint::Tag::DIGEST &&
+                   a.keyParameter.value ==
+                       keymint::KeyParameterValue::make<keymint::KeyParameterValue::digest>(
+                           keymint::Digest::SHA_2_256);
+        });
+    return verified;
+}
+
+std::variant<int, ks2::KeyEntryResponse>
+loadOrCreateAndVerifyEncryptionKey(const std::string& name, keymint::SecurityLevel securityLevel,
+                                   bool create) {
+    auto keystore = CreateKeystoreInstance();
+
+    ks2::KeyEntryResponse keyEntryResponse;
+
+    bool foundKey = true;
+    auto rc = keystore->getKeyEntry(keyDescriptor(name), &keyEntryResponse);
+    if (!rc.isOk()) {
+        auto error = unwrapError(rc);
+        if (ks2::ResponseCode(error) == ks2::ResponseCode::KEY_NOT_FOUND && create) {
+            foundKey = false;
+        } else {
+            std::cerr << "Failed to get key entry: " << rc.getDescription() << std::endl;
+            return error;
+        }
+    }
+
+    if (!foundKey) {
+        auto sec_level = GetSecurityLevelInterface(keystore, securityLevel);
+        auto params = keymint::AuthorizationSetBuilder()
+                          .AesEncryptionKey(kAESKeySize)
+                          .Padding(keymint::PaddingMode::PKCS7)
+                          .Authorization(keymint::TAG_BLOCK_MODE, keymint::BlockMode::CBC)
+                          .Authorization(keymint::TAG_NO_AUTH_REQUIRED);
+
+        ks2::KeyMetadata keyMetadata;
+
+        rc = sec_level->generateKey(keyDescriptor(name), {} /* attestationKey */,
+                                    params.vector_data(), 0 /* flags */, {} /* entropy */,
+                                    &keyMetadata);
+        if (!rc.isOk()) {
+            std::cerr << "Failed to generate key: " << rc.getDescription() << std::endl;
+            return unwrapError(rc);
+        }
+
+        rc = keystore->getKeyEntry(keyDescriptor(name), &keyEntryResponse);
+        if (!rc.isOk()) {
+            std::cerr << "Failed to get key entry (second try): " << rc.getDescription()
+                      << std::endl;
+            return unwrapError(rc);
+        }
+    }
+
+    if (!verifyEncryptionKeyAttributes(keyEntryResponse.metadata.authorizations)) {
+        std::cerr << "Key has wrong set of parameters." << std::endl;
+        return static_cast<int>(ks2::ResponseCode::INVALID_ARGUMENT);
+    }
+
+    return keyEntryResponse;
+}
+
+std::variant<int, ks2::KeyEntryResponse>
+loadOrCreateAndVerifyAuthenticationKey(const std::string& name,
+                                       keymint::SecurityLevel securityLevel, bool create) {
+    auto keystore = CreateKeystoreInstance();
+
+    ks2::KeyEntryResponse keyEntryResponse;
+
+    bool foundKey = true;
+    auto rc = keystore->getKeyEntry(keyDescriptor(name), &keyEntryResponse);
+    if (!rc.isOk()) {
+        auto error = unwrapError(rc);
+        if (ks2::ResponseCode(error) == ks2::ResponseCode::KEY_NOT_FOUND && create) {
+            foundKey = false;
+        } else {
+            std::cerr << "Failed to get HMAC key entry: " << rc.getDescription() << std::endl;
+            return error;
+        }
+    }
+
+    if (!foundKey) {
+        auto sec_level = GetSecurityLevelInterface(keystore, securityLevel);
+        auto params = keymint::AuthorizationSetBuilder()
+                          .HmacKey(kHMACKeySize)
+                          .Digest(keymint::Digest::SHA_2_256)
+                          .Authorization(keymint::TAG_MIN_MAC_LENGTH, kHMACOutputSize)
+                          .Authorization(keymint::TAG_NO_AUTH_REQUIRED);
+
+        ks2::KeyMetadata keyMetadata;
+
+        rc = sec_level->generateKey(keyDescriptor(name), {} /* attestationKey */,
+                                    params.vector_data(), 0 /* flags */, {} /* entropy */,
+                                    &keyMetadata);
+        if (!rc.isOk()) {
+            std::cerr << "Failed to generate HMAC key: " << rc.getDescription() << std::endl;
+            return unwrapError(rc);
+        }
+
+        rc = keystore->getKeyEntry(keyDescriptor(name), &keyEntryResponse);
+        if (!rc.isOk()) {
+            std::cerr << "Failed to get HMAC key entry (second try): " << rc.getDescription()
+                      << std::endl;
+            return unwrapError(rc);
+        }
+    }
+
+    if (!verifyAuthenticationKeyAttributes(keyEntryResponse.metadata.authorizations)) {
+        std::cerr << "Key has wrong set of parameters." << std::endl;
+        return static_cast<int>(ks2::ResponseCode::INVALID_ARGUMENT);
+    }
+
+    return keyEntryResponse;
+}
+
+std::variant<int, std::vector<uint8_t>>
+encryptWithAuthentication(const std::string& name, const std::vector<uint8_t>& data,
+                          keymint::SecurityLevel securityLevel) {
+    // The encryption algorithm is AES-256-CBC with PKCS #7 padding and a random
+    // IV. The authentication algorithm is HMAC-SHA256 and is computed over the
+    // cipher-text (i.e. Encrypt-then-MAC approach). This was chosen over AES-GCM
+    // because hardware support for GCM is not mandatory for all Brillo devices.
+    std::string encryption_key_name = name + kEncryptSuffix;
+    auto encryption_key_result =
+        loadOrCreateAndVerifyEncryptionKey(encryption_key_name, securityLevel, true /* create */);
+    if (auto error = std::get_if<int>(&encryption_key_result)) {
+        return *error;
+    }
+    auto encryption_key = std::get<ks2::KeyEntryResponse>(encryption_key_result);
+
+    std::string authentication_key_name = name + kAuthenticateSuffix;
+    auto authentication_key_result = loadOrCreateAndVerifyAuthenticationKey(
+        authentication_key_name, securityLevel, true /* create */);
+    if (auto error = std::get_if<int>(&authentication_key_result)) {
+        return *error;
+    }
+    auto authentication_key = std::get<ks2::KeyEntryResponse>(authentication_key_result);
+
+    ks2::CreateOperationResponse encOperationResponse;
+    auto encrypt_params = keymint::AuthorizationSetBuilder()
+                              .Authorization(keymint::TAG_PURPOSE, keymint::KeyPurpose::ENCRYPT)
+                              .Padding(keymint::PaddingMode::PKCS7)
+                              .Authorization(keymint::TAG_BLOCK_MODE, keymint::BlockMode::CBC);
+
+    auto rc = encryption_key.iSecurityLevel->createOperation(
+        encryption_key.metadata.key, encrypt_params.vector_data(), false /* forced */,
+        &encOperationResponse);
+    if (!rc.isOk()) {
+        std::cerr << "Failed to begin encryption operation: " << rc.getDescription() << std::endl;
+        return unwrapError(rc);
+    }
+
+    std::optional<std::vector<uint8_t>> optCiphertext;
+
+    rc = encOperationResponse.iOperation->finish(data, {}, &optCiphertext);
+    if (!rc.isOk()) {
+        std::cerr << "Failed to finish encryption operation: " << rc.getDescription() << std::endl;
+        return unwrapError(rc);
+    }
+
+    std::vector<uint8_t> initVector;
+    if (auto params = encOperationResponse.parameters) {
+        for (auto& p : params->keyParameter) {
+            if (auto iv = keymint::authorizationValue(keymint::TAG_NONCE, p)) {
+                initVector = std::move(iv->get());
+                break;
+            }
+        }
+        if (initVector.empty()) {
+            std::cerr << "Encryption operation did not return an IV." << std::endl;
+            return static_cast<int>(ks2::ResponseCode::SYSTEM_ERROR);
+        }
+    }
+
+    if (!optCiphertext) {
+        std::cerr << "Encryption succeeded but no ciphertext returned." << std::endl;
+        return static_cast<int>(ks2::ResponseCode::SYSTEM_ERROR);
+    }
+
+    auto ciphertext = std::move(*optCiphertext);
+    auto toBeSigned = initVector;
+    toBeSigned.insert(toBeSigned.end(), ciphertext.begin(), ciphertext.end());
+
+    ks2::CreateOperationResponse signOperationResponse;
+    auto sign_params = keymint::AuthorizationSetBuilder()
+                           .Authorization(keymint::TAG_PURPOSE, keymint::KeyPurpose::SIGN)
+                           .Digest(keymint::Digest::SHA_2_256)
+                           .Authorization(keymint::TAG_MAC_LENGTH, kHMACOutputSize);
+
+    rc = authentication_key.iSecurityLevel->createOperation(
+        authentication_key.metadata.key, sign_params.vector_data(), false /* forced */,
+        &signOperationResponse);
+    if (!rc.isOk()) {
+        std::cerr << "Failed to begin signing operation: " << rc.getDescription() << std::endl;
+        return unwrapError(rc);
+    }
+
+    std::optional<std::vector<uint8_t>> optMac;
+
+    rc = signOperationResponse.iOperation->finish(toBeSigned, {}, &optMac);
+    if (!rc.isOk()) {
+        std::cerr << "Failed to finish encryption operation: " << rc.getDescription() << std::endl;
+        return unwrapError(rc);
+    }
+
+    if (!optMac) {
+        std::cerr << "Signing succeeded but no MAC returned." << std::endl;
+        return static_cast<int>(ks2::ResponseCode::SYSTEM_ERROR);
+    }
+
+    auto mac = std::move(*optMac);
+
+    EncryptedData protobuf;
+    protobuf.set_init_vector(initVector.data(), initVector.size());
+    protobuf.set_authentication_data(mac.data(), mac.size());
+    protobuf.set_encrypted_data(ciphertext.data(), ciphertext.size());
+    std::string resultString;
+    if (!protobuf.SerializeToString(&resultString)) {
+        std::cerr << "Encrypt: Failed to serialize EncryptedData protobuf.";
+        return static_cast<int>(ks2::ResponseCode::SYSTEM_ERROR);
+    }
+
+    std::vector<uint8_t> result(reinterpret_cast<const uint8_t*>(resultString.data()),
+                                reinterpret_cast<const uint8_t*>(resultString.data()) +
+                                    resultString.size());
+    return result;
+}
+
+std::variant<int, std::vector<uint8_t>>
+decryptWithAuthentication(const std::string& name, const std::vector<uint8_t>& data) {
+
+    // Decode encrypted data
+    EncryptedData protobuf;
+    if (!protobuf.ParseFromArray(data.data(), data.size())) {
+        std::cerr << "Decrypt: Failed to parse EncryptedData protobuf." << std::endl;
+        return static_cast<int>(ks2::ResponseCode::SYSTEM_ERROR);
+    }
+
+    // Load encryption and authentication keys.
+    std::string encryption_key_name = name + kEncryptSuffix;
+    auto encryption_key_result = loadOrCreateAndVerifyEncryptionKey(
+        encryption_key_name, keymint::SecurityLevel::KEYSTORE /* ignored */, false /* create */);
+    if (auto error = std::get_if<int>(&encryption_key_result)) {
+        return *error;
+    }
+    auto encryption_key = std::get<ks2::KeyEntryResponse>(encryption_key_result);
+
+    std::string authentication_key_name = name + kAuthenticateSuffix;
+    auto authentication_key_result = loadOrCreateAndVerifyAuthenticationKey(
+        authentication_key_name, keymint::SecurityLevel::KEYSTORE /* ignored */,
+        false /* create */);
+    if (auto error = std::get_if<int>(&authentication_key_result)) {
+        return *error;
+    }
+    auto authentication_key = std::get<ks2::KeyEntryResponse>(authentication_key_result);
+
+    // Begin authentication operation
+    ks2::CreateOperationResponse signOperationResponse;
+    auto sign_params = keymint::AuthorizationSetBuilder()
+                           .Authorization(keymint::TAG_PURPOSE, keymint::KeyPurpose::VERIFY)
+                           .Digest(keymint::Digest::SHA_2_256)
+                           .Authorization(keymint::TAG_MAC_LENGTH, kHMACOutputSize);
+
+    auto rc = authentication_key.iSecurityLevel->createOperation(
+        authentication_key.metadata.key, sign_params.vector_data(), false /* forced */,
+        &signOperationResponse);
+    if (!rc.isOk()) {
+        std::cerr << "Failed to begin verify operation: " << rc.getDescription() << std::endl;
+        return unwrapError(rc);
+    }
+
+    const uint8_t* p = reinterpret_cast<const uint8_t*>(protobuf.init_vector().data());
+    std::vector<uint8_t> toBeVerified(p, p + protobuf.init_vector().size());
+
+    p = reinterpret_cast<const uint8_t*>(protobuf.encrypted_data().data());
+    toBeVerified.insert(toBeVerified.end(), p, p + protobuf.encrypted_data().size());
+
+    p = reinterpret_cast<const uint8_t*>(protobuf.authentication_data().data());
+    std::vector<uint8_t> signature(p, p + protobuf.authentication_data().size());
+
+    std::optional<std::vector<uint8_t>> optOut;
+    rc = signOperationResponse.iOperation->finish(toBeVerified, signature, &optOut);
+    if (!rc.isOk()) {
+        std::cerr << "Decrypt: HMAC verification failed: " << rc.getDescription() << std::endl;
+        return unwrapError(rc);
+    }
+
+    // Begin decryption operation
+    ks2::CreateOperationResponse encOperationResponse;
+    auto encrypt_params = keymint::AuthorizationSetBuilder()
+                              .Authorization(keymint::TAG_PURPOSE, keymint::KeyPurpose::DECRYPT)
+                              .Authorization(keymint::TAG_NONCE, protobuf.init_vector().data(),
+                                             protobuf.init_vector().size())
+                              .Padding(keymint::PaddingMode::PKCS7)
+                              .Authorization(keymint::TAG_BLOCK_MODE, keymint::BlockMode::CBC);
+
+    rc = encryption_key.iSecurityLevel->createOperation(encryption_key.metadata.key,
+                                                        encrypt_params.vector_data(),
+                                                        false /* forced */, &encOperationResponse);
+    if (!rc.isOk()) {
+        std::cerr << "Failed to begin encryption operation: " << rc.getDescription() << std::endl;
+        return unwrapError(rc);
+    }
+
+    std::optional<std::vector<uint8_t>> optPlaintext;
+
+    p = reinterpret_cast<const uint8_t*>(protobuf.encrypted_data().data());
+    std::vector<uint8_t> cyphertext(p, p + protobuf.encrypted_data().size());
+
+    rc = encOperationResponse.iOperation->finish(cyphertext, {}, &optPlaintext);
+    if (!rc.isOk()) {
+        std::cerr << "Failed to finish encryption operation: " << rc.getDescription() << std::endl;
+        return unwrapError(rc);
+    }
+
+    if (!optPlaintext) {
+        std::cerr << "Decryption succeeded but no plaintext returned." << std::endl;
+        return static_cast<int>(ks2::ResponseCode::SYSTEM_ERROR);
+    }
+
+    return *optPlaintext;
+}
+
+bool TestKey(const std::string& name, bool required,
+             const std::vector<keymint::KeyParameter>& parameters) {
+    auto keystore = CreateKeystoreInstance();
+    auto sec_level =
+        GetSecurityLevelInterface(keystore, keymint::SecurityLevel::TRUSTED_ENVIRONMENT);
+
+    ks2::KeyDescriptor keyDescriptor = {
+        .domain = ks2::Domain::APP,
+        .nspace = -1,
+        .alias = "tmp",
+        .blob = {},
+    };
+
+    ks2::KeyMetadata keyMetadata;
+
+    auto rc = sec_level->generateKey(keyDescriptor, {} /* attestationKey */, parameters,
+                                     0 /* flags */, {} /* entropy */, &keyMetadata);
     const char kBoldRedAbort[] = "\033[1;31mABORT\033[0m";
-    if (!result.isOk()) {
-        LOG(ERROR) << "Failed to generate key: " << result;
+    if (!rc.isOk()) {
+        LOG(ERROR) << "Failed to generate key: " << rc.getDescription();
         printf("[%s] %s\n", kBoldRedAbort, name.c_str());
         return false;
     }
-    result = keystore->deleteKey("tmp");
-    if (!result.isOk()) {
-        LOG(ERROR) << "Failed to delete key: " << result;
+
+    rc = keystore->deleteKey(keyDescriptor);
+    if (!rc.isOk()) {
+        LOG(ERROR) << "Failed to delete key: " << rc.getDescription();
         printf("[%s] %s\n", kBoldRedAbort, name.c_str());
         return false;
     }
     printf("===============================================================\n");
     printf("%s Key Characteristics:\n", name.c_str());
-    PrintKeyCharacteristics(hardware_enforced_characteristics, software_enforced_characteristics);
-    bool hardware_backed = (hardware_enforced_characteristics.size() > 0);
-    if (software_enforced_characteristics.GetTagCount(TAG_ALGORITHM) > 0 ||
-        software_enforced_characteristics.GetTagCount(TAG_KEY_SIZE) > 0 ||
-        software_enforced_characteristics.GetTagCount(TAG_RSA_PUBLIC_EXPONENT) > 0) {
+    PrintKeyCharacteristics(keyMetadata.authorizations);
+    bool hardware_backed = std::any_of(keyMetadata.authorizations.begin(),
+                                       keyMetadata.authorizations.end(), isHardwareEnforced);
+    if (std::any_of(keyMetadata.authorizations.begin(), keyMetadata.authorizations.end(),
+                    [&](const auto& a) {
+                        return !isHardwareEnforced(a) &&
+                               (a.keyParameter.tag == keymint::Tag::ALGORITHM ||
+                                a.keyParameter.tag == keymint::Tag::KEY_SIZE ||
+                                a.keyParameter.tag == keymint::Tag::RSA_PUBLIC_EXPONENT);
+                    })) {
         VLOG(1) << "Hardware-backed key but required characteristics enforced in software.";
         hardware_backed = false;
     }
@@ -137,60 +592,64 @@ bool TestKey(const std::string& name, bool required, const AuthorizationSet& par
     return (hardware_backed || !required);
 }
 
-AuthorizationSet GetRSASignParameters(uint32_t key_size, bool sha256_only) {
-    AuthorizationSetBuilder parameters;
+keymint::AuthorizationSet GetRSASignParameters(uint32_t key_size, bool sha256_only) {
+    keymint::AuthorizationSetBuilder parameters;
     parameters.RsaSigningKey(key_size, 65537)
-        .Digest(Digest::SHA_2_256)
-        .Padding(PaddingMode::RSA_PKCS1_1_5_SIGN)
-        .Padding(PaddingMode::RSA_PSS)
-        .Authorization(TAG_NO_AUTH_REQUIRED);
+        .Digest(keymint::Digest::SHA_2_256)
+        .Padding(keymint::PaddingMode::RSA_PKCS1_1_5_SIGN)
+        .Padding(keymint::PaddingMode::RSA_PSS)
+        .Authorization(keymint::TAG_NO_AUTH_REQUIRED);
     if (!sha256_only) {
-        parameters.Digest(Digest::SHA_2_224).Digest(Digest::SHA_2_384).Digest(Digest::SHA_2_512);
+        parameters.Digest(keymint::Digest::SHA_2_224)
+            .Digest(keymint::Digest::SHA_2_384)
+            .Digest(keymint::Digest::SHA_2_512);
     }
     return std::move(parameters);
 }
 
-AuthorizationSet GetRSAEncryptParameters(uint32_t key_size) {
-    AuthorizationSetBuilder parameters;
+keymint::AuthorizationSet GetRSAEncryptParameters(uint32_t key_size) {
+    keymint::AuthorizationSetBuilder parameters;
     parameters.RsaEncryptionKey(key_size, 65537)
-        .Padding(PaddingMode::RSA_PKCS1_1_5_ENCRYPT)
-        .Padding(PaddingMode::RSA_OAEP)
-        .Authorization(TAG_NO_AUTH_REQUIRED);
+        .Padding(keymint::PaddingMode::RSA_PKCS1_1_5_ENCRYPT)
+        .Padding(keymint::PaddingMode::RSA_OAEP)
+        .Authorization(keymint::TAG_NO_AUTH_REQUIRED);
     return std::move(parameters);
 }
 
-AuthorizationSet GetECDSAParameters(uint32_t key_size, bool sha256_only) {
-    AuthorizationSetBuilder parameters;
+keymint::AuthorizationSet GetECDSAParameters(uint32_t key_size, bool sha256_only) {
+    keymint::AuthorizationSetBuilder parameters;
     parameters.EcdsaSigningKey(key_size)
-        .Digest(Digest::SHA_2_256)
-        .Authorization(TAG_NO_AUTH_REQUIRED);
+        .Digest(keymint::Digest::SHA_2_256)
+        .Authorization(keymint::TAG_NO_AUTH_REQUIRED);
     if (!sha256_only) {
-        parameters.Digest(Digest::SHA_2_224).Digest(Digest::SHA_2_384).Digest(Digest::SHA_2_512);
+        parameters.Digest(keymint::Digest::SHA_2_224)
+            .Digest(keymint::Digest::SHA_2_384)
+            .Digest(keymint::Digest::SHA_2_512);
     }
     return std::move(parameters);
 }
 
-AuthorizationSet GetAESParameters(uint32_t key_size, bool with_gcm_mode) {
-    AuthorizationSetBuilder parameters;
-    parameters.AesEncryptionKey(key_size).Authorization(TAG_NO_AUTH_REQUIRED);
+keymint::AuthorizationSet GetAESParameters(uint32_t key_size, bool with_gcm_mode) {
+    keymint::AuthorizationSetBuilder parameters;
+    parameters.AesEncryptionKey(key_size).Authorization(keymint::TAG_NO_AUTH_REQUIRED);
     if (with_gcm_mode) {
-        parameters.Authorization(TAG_BLOCK_MODE, BlockMode::GCM)
-            .Authorization(TAG_MIN_MAC_LENGTH, 128);
+        parameters.Authorization(keymint::TAG_BLOCK_MODE, keymint::BlockMode::GCM)
+            .Authorization(keymint::TAG_MIN_MAC_LENGTH, 128);
     } else {
-        parameters.Authorization(TAG_BLOCK_MODE, BlockMode::ECB);
-        parameters.Authorization(TAG_BLOCK_MODE, BlockMode::CBC);
-        parameters.Authorization(TAG_BLOCK_MODE, BlockMode::CTR);
-        parameters.Padding(PaddingMode::NONE);
+        parameters.Authorization(keymint::TAG_BLOCK_MODE, keymint::BlockMode::ECB);
+        parameters.Authorization(keymint::TAG_BLOCK_MODE, keymint::BlockMode::CBC);
+        parameters.Authorization(keymint::TAG_BLOCK_MODE, keymint::BlockMode::CTR);
+        parameters.Padding(keymint::PaddingMode::NONE);
     }
     return std::move(parameters);
 }
 
-AuthorizationSet GetHMACParameters(uint32_t key_size, Digest digest) {
-    AuthorizationSetBuilder parameters;
+keymint::AuthorizationSet GetHMACParameters(uint32_t key_size, keymint::Digest digest) {
+    keymint::AuthorizationSetBuilder parameters;
     parameters.HmacKey(key_size)
         .Digest(digest)
-        .Authorization(TAG_MIN_MAC_LENGTH, 224)
-        .Authorization(TAG_NO_AUTH_REQUIRED);
+        .Authorization(keymint::TAG_MIN_MAC_LENGTH, 224)
+        .Authorization(keymint::TAG_NO_AUTH_REQUIRED);
     return std::move(parameters);
 }
 
@@ -212,12 +671,12 @@ std::vector<TestCase> GetTestCases() {
         {"AES-256", true, GetAESParameters(256, false)},
         {"AES-128-GCM", false, GetAESParameters(128, true)},
         {"AES-256-GCM", false, GetAESParameters(256, true)},
-        {"HMAC-SHA256-16", true, GetHMACParameters(16, Digest::SHA_2_256)},
-        {"HMAC-SHA256-32", true, GetHMACParameters(32, Digest::SHA_2_256)},
-        {"HMAC-SHA256-64", false, GetHMACParameters(64, Digest::SHA_2_256)},
-        {"HMAC-SHA224-32", false, GetHMACParameters(32, Digest::SHA_2_224)},
-        {"HMAC-SHA384-32", false, GetHMACParameters(32, Digest::SHA_2_384)},
-        {"HMAC-SHA512-32", false, GetHMACParameters(32, Digest::SHA_2_512)},
+        {"HMAC-SHA256-16", true, GetHMACParameters(16, keymint::Digest::SHA_2_256)},
+        {"HMAC-SHA256-32", true, GetHMACParameters(32, keymint::Digest::SHA_2_256)},
+        {"HMAC-SHA256-64", false, GetHMACParameters(64, keymint::Digest::SHA_2_256)},
+        {"HMAC-SHA224-32", false, GetHMACParameters(32, keymint::Digest::SHA_2_224)},
+        {"HMAC-SHA384-32", false, GetHMACParameters(32, keymint::Digest::SHA_2_384)},
+        {"HMAC-SHA512-32", false, GetHMACParameters(32, keymint::Digest::SHA_2_512)},
     };
     return std::vector<TestCase>(&test_cases[0], &test_cases[arraysize(test_cases)]);
 }
@@ -243,7 +702,8 @@ int BrilloPlatformTest(const std::string& prefix, bool test_for_0_3) {
             continue;
         }
         ++test_count;
-        if (!TestKey(test_case.name, test_case.required_for_brillo_pts, test_case.parameters)) {
+        if (!TestKey(test_case.name, test_case.required_for_brillo_pts,
+                     test_case.parameters.vector_data())) {
             VLOG(1) << "Test failed: " << test_case.name;
             ++fail_count;
         }
@@ -262,248 +722,274 @@ int ListTestCases() {
     return 0;
 }
 
-std::string ReadFile(const std::string& filename) {
+std::vector<uint8_t> ReadFile(const std::string& filename) {
     std::string content;
     base::FilePath path(filename);
     if (!base::ReadFileToString(path, &content)) {
         printf("Failed to read file: %s\n", filename.c_str());
         exit(1);
     }
-    return content;
+    std::vector<uint8_t> buffer(reinterpret_cast<const uint8_t*>(content.data()),
+                                reinterpret_cast<const uint8_t*>(content.data()) + content.size());
+    return buffer;
 }
 
-void WriteFile(const std::string& filename, const std::string& content) {
+void WriteFile(const std::string& filename, const std::vector<uint8_t>& content) {
     base::FilePath path(filename);
     int size = content.size();
-    if (base::WriteFile(path, content.data(), size) != size) {
+    if (base::WriteFile(path, reinterpret_cast<const char*>(content.data()), size) != size) {
         printf("Failed to write file: %s\n", filename.c_str());
         exit(1);
     }
 }
 
-int AddEntropy(const std::string& input, int32_t flags) {
-    std::unique_ptr<KeystoreClient> keystore = CreateKeystoreInstance();
-    int32_t result = keystore->addRandomNumberGeneratorEntropy(input, flags).getErrorCode();
-    printf("AddEntropy: %d\n", result);
-    return result;
-}
-
 // Note: auth_bound keys created with this tool will not be usable.
-int GenerateKey(const std::string& name, int32_t flags, bool auth_bound) {
-    std::unique_ptr<KeystoreClient> keystore = CreateKeystoreInstance();
-    AuthorizationSetBuilder params;
+int GenerateKey(const std::string& name, keymint::SecurityLevel securityLevel, bool auth_bound) {
+    auto keystore = CreateKeystoreInstance();
+    auto sec_level = GetSecurityLevelInterface(keystore, securityLevel);
+    keymint::AuthorizationSetBuilder params;
     params.RsaSigningKey(2048, 65537)
-        .Digest(Digest::SHA_2_224)
-        .Digest(Digest::SHA_2_256)
-        .Digest(Digest::SHA_2_384)
-        .Digest(Digest::SHA_2_512)
-        .Padding(PaddingMode::RSA_PKCS1_1_5_SIGN)
-        .Padding(PaddingMode::RSA_PSS);
+        .Digest(keymint::Digest::SHA_2_224)
+        .Digest(keymint::Digest::SHA_2_256)
+        .Digest(keymint::Digest::SHA_2_384)
+        .Digest(keymint::Digest::SHA_2_512)
+        .Padding(keymint::PaddingMode::RSA_PKCS1_1_5_SIGN)
+        .Padding(keymint::PaddingMode::RSA_PSS);
     if (auth_bound) {
         // Gatekeeper normally generates the secure user id.
         // Using zero allows the key to be created, but it will not be usuable.
-        params.Authorization(TAG_USER_SECURE_ID, 0);
+        params.Authorization(keymint::TAG_USER_SECURE_ID, 0);
     } else {
-        params.Authorization(TAG_NO_AUTH_REQUIRED);
+        params.Authorization(keymint::TAG_NO_AUTH_REQUIRED);
     }
-    AuthorizationSet hardware_enforced_characteristics;
-    AuthorizationSet software_enforced_characteristics;
-    auto result = keystore->generateKey(name, params, flags, &hardware_enforced_characteristics,
-                                        &software_enforced_characteristics);
-    printf("GenerateKey: %d\n", result.getErrorCode());
-    if (result.isOk()) {
-        PrintKeyCharacteristics(hardware_enforced_characteristics,
-                                software_enforced_characteristics);
+
+    ks2::KeyMetadata keyMetadata;
+
+    auto rc =
+        sec_level->generateKey(keyDescriptor(name), {} /* attestationKey */, params.vector_data(),
+                               0 /* flags */, {} /* entropy */, &keyMetadata);
+
+    if (rc.isOk()) {
+        std::cerr << "GenerateKey failed: " << rc.getDescription() << std::endl;
+        return unwrapError(rc);
     }
-    return result.getErrorCode();
+    std::cout << "GenerateKey: success" << std::endl;
+    PrintKeyCharacteristics(keyMetadata.authorizations);
+    return 0;
 }
 
 int GetCharacteristics(const std::string& name) {
-    std::unique_ptr<KeystoreClient> keystore = CreateKeystoreInstance();
-    AuthorizationSet hardware_enforced_characteristics;
-    AuthorizationSet software_enforced_characteristics;
-    auto result = keystore->getKeyCharacteristics(name, &hardware_enforced_characteristics,
-                                                  &software_enforced_characteristics);
-    printf("GetCharacteristics: %d\n", result.getErrorCode());
-    if (result.isOk()) {
-        PrintKeyCharacteristics(hardware_enforced_characteristics,
-                                software_enforced_characteristics);
+    auto keystore = CreateKeystoreInstance();
+
+    ks2::KeyEntryResponse keyEntryResponse;
+
+    auto rc = keystore->getKeyEntry(keyDescriptor(name), &keyEntryResponse);
+    if (!rc.isOk()) {
+        std::cerr << "Failed to get key entry: " << rc.getDescription() << std::endl;
+        return unwrapError(rc);
     }
-    return result.getErrorCode();
+
+    std::cout << "GetCharacteristics: success" << std::endl;
+    PrintKeyCharacteristics(keyEntryResponse.metadata.authorizations);
+    return 0;
 }
 
 int ExportKey(const std::string& name) {
-    std::unique_ptr<KeystoreClient> keystore = CreateKeystoreInstance();
-    std::string data;
-    int32_t result = keystore->exportKey(KeyFormat::X509, name, &data).getErrorCode();
-    printf("ExportKey: %d (%zu)\n", result, data.size());
-    return result;
+    auto keystore = CreateKeystoreInstance();
+
+    ks2::KeyEntryResponse keyEntryResponse;
+
+    auto rc = keystore->getKeyEntry(keyDescriptor(name), &keyEntryResponse);
+    if (!rc.isOk()) {
+        std::cerr << "Failed to get key entry: " << rc.getDescription() << std::endl;
+        return unwrapError(rc);
+    }
+
+    if (auto cert = keyEntryResponse.metadata.certificate) {
+        std::cout << "ExportKey: Got certificate of length (" << cert->size() << ")" << std::endl;
+    } else {
+        std::cout << "ExportKey: Key entry does not have a public component.\n";
+        std::cout << "Possibly a symmetric key?" << std::endl;
+    }
+    return 0;
 }
 
 int DeleteKey(const std::string& name) {
-    std::unique_ptr<KeystoreClient> keystore = CreateKeystoreInstance();
-    int32_t result = keystore->deleteKey(name).getErrorCode();
-    printf("DeleteKey: %d\n", result);
-    return result;
-}
+    auto keystore = CreateKeystoreInstance();
 
-int DeleteAllKeys() {
-    std::unique_ptr<KeystoreClient> keystore = CreateKeystoreInstance();
-    int32_t result = keystore->deleteAllKeys().getErrorCode();
-    printf("DeleteAllKeys: %d\n", result);
-    return result;
+    auto rc = keystore->deleteKey(keyDescriptor(name));
+    if (!rc.isOk()) {
+        std::cerr << "Failed to delete key: " << rc.getDescription();
+        return unwrapError(rc);
+    }
+    std::cout << "Successfully deleted key." << std::endl;
+    return 0;
 }
 
 int DoesKeyExist(const std::string& name) {
-    std::unique_ptr<KeystoreClient> keystore = CreateKeystoreInstance();
-    printf("DoesKeyExist: %s\n", keystore->doesKeyExist(name) ? "yes" : "no");
+    auto keystore = CreateKeystoreInstance();
+    ks2::KeyEntryResponse keyEntryResponse;
+
+    bool keyExists = true;
+    auto rc = keystore->getKeyEntry(keyDescriptor(name), &keyEntryResponse);
+    if (!rc.isOk()) {
+        auto responseCode = unwrapError(rc);
+        if (ks2::ResponseCode(responseCode) == ks2::ResponseCode::KEY_NOT_FOUND) {
+            keyExists = false;
+        } else {
+            std::cerr << "Failed to get key entry: " << rc.getDescription() << std::endl;
+            return unwrapError(rc);
+        }
+    }
+    std::cout << "DoesKeyExists: " << (keyExists ? "yes" : "no") << std::endl;
     return 0;
 }
 
-int List(const std::string& prefix) {
-    std::unique_ptr<KeystoreClient> keystore = CreateKeystoreInstance();
-    std::vector<std::string> key_list;
-    if (!keystore->listKeys(prefix, &key_list)) {
-        printf("ListKeys failed.\n");
-        return 1;
+int List() {
+    auto keystore = CreateKeystoreInstance();
+    std::vector<ks2::KeyDescriptor> key_list;
+    auto rc = keystore->listEntries(ks2::Domain::APP, -1 /* nspace ignored */, &key_list);
+    if (!rc.isOk()) {
+        std::cerr << "ListKeys failed: " << rc.getDescription() << std::endl;
+        return unwrapError(rc);
     }
-    printf("Keys:\n");
-    for (const auto& key_name : key_list) {
-        printf("  %s\n", key_name.c_str());
-    }
-    return 0;
-}
-
-int ListAppsWithKeys() {
-
-    sp<android::IServiceManager> sm = android::defaultServiceManager();
-    sp<android::IBinder> binder = sm->getService(String16("android.security.keystore"));
-    sp<IKeystoreService> service = android::interface_cast<IKeystoreService>(binder);
-    if (service == nullptr) {
-        fprintf(stderr, "Error connecting to keystore service.\n");
-        return 1;
-    }
-    int32_t aidl_return;
-    ::std::vector<::std::string> uids;
-    android::binder::Status status = service->listUidsOfAuthBoundKeys(&uids, &aidl_return);
-    if (!status.isOk()) {
-        fprintf(stderr, "Requesting uids of auth bound keys failed with error %s.\n",
-                status.toString8().c_str());
-        return 1;
-    }
-    if (!KeyStoreNativeReturnCode(aidl_return).isOk()) {
-        fprintf(stderr, "Requesting uids of auth bound keys failed with code %d.\n", aidl_return);
-        return 1;
-    }
-    printf("Apps with auth bound keys:\n");
-    for (auto i = uids.begin(); i != uids.end(); ++i) {
-        printf("%s\n", i->c_str());
+    std::cout << "Keys:\n";
+    for (const auto& key : key_list) {
+        std::cout << "  "
+                  << (key.alias ? *key.alias : "Whoopsi - no alias, this should not happen.")
+                  << std::endl;
     }
     return 0;
 }
 
 int SignAndVerify(const std::string& name) {
-    std::unique_ptr<KeystoreClient> keystore = CreateKeystoreInstance();
-    AuthorizationSetBuilder sign_params;
-    sign_params.Padding(PaddingMode::RSA_PKCS1_1_5_SIGN);
-    sign_params.Digest(Digest::SHA_2_256);
-    AuthorizationSet output_params;
-    uint64_t handle;
-    auto result =
-        keystore->beginOperation(KeyPurpose::SIGN, name, sign_params, &output_params, &handle);
-    if (!result.isOk()) {
-        printf("Sign: BeginOperation failed: %d\n", result.getErrorCode());
-        return result.getErrorCode();
+    auto keystore = CreateKeystoreInstance();
+    auto sign_params = keymint::AuthorizationSetBuilder()
+                           .Authorization(keymint::TAG_PURPOSE, keymint::KeyPurpose::SIGN)
+                           .Padding(keymint::PaddingMode::RSA_PKCS1_1_5_SIGN)
+                           .Digest(keymint::Digest::SHA_2_256);
+
+    keymint::AuthorizationSet output_params;
+
+    ks2::KeyEntryResponse keyEntryResponse;
+
+    auto rc = keystore->getKeyEntry(keyDescriptor(name), &keyEntryResponse);
+    if (!rc.isOk()) {
+        std::cerr << "Failed to get key entry: " << rc.getDescription() << std::endl;
+        return unwrapError(rc);
     }
-    AuthorizationSet empty_params;
-    std::string output_data;
-    result = keystore->finishOperation(handle, empty_params, "data_to_sign",
-                                       std::string() /*signature_to_verify*/, &output_params,
-                                       &output_data);
-    if (!result.isOk()) {
-        printf("Sign: FinishOperation failed: %d\n", result.getErrorCode());
-        return result.getErrorCode();
+
+    ks2::CreateOperationResponse operationResponse;
+
+    rc = keyEntryResponse.iSecurityLevel->createOperation(keyEntryResponse.metadata.key,
+                                                          sign_params.vector_data(),
+                                                          false /* forced */, &operationResponse);
+    if (!rc.isOk()) {
+        std::cerr << "Failed to create operation: " << rc.getDescription() << std::endl;
+        return unwrapError(rc);
     }
-    printf("Sign: %zu bytes.\n", output_data.size());
-    // We have a signature, now verify it.
-    std::string signature_to_verify = output_data;
-    output_data.clear();
-    result =
-        keystore->beginOperation(KeyPurpose::VERIFY, name, sign_params, &output_params, &handle);
-    result = keystore->finishOperation(handle, empty_params, "data_to_sign", signature_to_verify,
-                                       &output_params, &output_data);
-    if (result == ErrorCode::VERIFICATION_FAILED) {
-        printf("Verify: Failed to verify signature.\n");
-        return result.getErrorCode();
+
+    const std::vector<uint8_t> data_to_sign{0x64, 0x61, 0x74, 0x61, 0x5f, 0x74,
+                                            0x6f, 0x5f, 0x73, 0x69, 0x67, 0x6e};
+    std::optional<std::vector<uint8_t>> output_data;
+    rc = operationResponse.iOperation->finish(data_to_sign, {}, &output_data);
+    if (!rc.isOk()) {
+        std::cerr << "Failed to finalize operation: " << rc.getDescription() << std::endl;
+        return unwrapError(rc);
     }
-    if (!result.isOk()) {
-        printf("Verify: FinishOperation failed: %d\n", result.getErrorCode());
-        return result.getErrorCode();
+
+    if (!output_data) {
+        std::cerr << "Odd signing succeeded but no signature was returned." << std::endl;
+        return static_cast<int>(ks2::ResponseCode::SYSTEM_ERROR);
     }
-    printf("Verify: OK\n");
+    auto signature = std::move(*output_data);
+
+    std::cout << "Sign: " << signature.size() << " bytes." << std::endl;
+
+    if (auto cert = keyEntryResponse.metadata.certificate) {
+        const uint8_t* p = cert->data();
+        bssl::UniquePtr<X509> decoded_cert(d2i_X509(nullptr, &p, (long)cert->size()));
+        bssl::UniquePtr<EVP_PKEY> decoded_pkey(X509_get_pubkey(decoded_cert.get()));
+        bssl::UniquePtr<EVP_MD_CTX> ctx(EVP_MD_CTX_new());
+        if (!ctx) {
+            std::cerr << "Failed to created EVP_MD context. << std::endl";
+            return static_cast<int>(ks2::ResponseCode::SYSTEM_ERROR);
+        }
+
+        if (!EVP_DigestVerifyInit(ctx.get(), nullptr, EVP_sha256(), nullptr, decoded_pkey.get()) ||
+            !EVP_DigestVerifyUpdate(ctx.get(), data_to_sign.data(), data_to_sign.size()) ||
+            EVP_DigestVerifyFinal(ctx.get(), signature.data(), signature.size()) != 1) {
+            std::cerr << "Failed to verify signature." << std::endl;
+            return static_cast<int>(ks2::ResponseCode::SYSTEM_ERROR);
+        }
+    } else {
+        std::cerr << "No public key to check signature against." << std::endl;
+        return static_cast<int>(ks2::ResponseCode::SYSTEM_ERROR);
+    }
+
+    std::cout << "Verify: OK" << std::endl;
     return 0;
 }
 
 int Encrypt(const std::string& key_name, const std::string& input_filename,
-            const std::string& output_filename, int32_t flags) {
-    std::unique_ptr<KeystoreClient> keystore = CreateKeystoreInstance();
-    std::string input = ReadFile(input_filename);
-    std::string output;
-    if (!keystore->encryptWithAuthentication(key_name, input, flags, &output)) {
-        printf("EncryptWithAuthentication failed.\n");
-        return 1;
+            const std::string& output_filename, keymint::SecurityLevel securityLevel) {
+    auto input = ReadFile(input_filename);
+    auto result = encryptWithAuthentication(key_name, input, securityLevel);
+    if (auto error = std::get_if<int>(&result)) {
+        std::cerr << "EncryptWithAuthentication failed." << std::endl;
+        return *error;
     }
-    WriteFile(output_filename, output);
+    WriteFile(output_filename, std::get<std::vector<uint8_t>>(result));
     return 0;
 }
 
 int Decrypt(const std::string& key_name, const std::string& input_filename,
             const std::string& output_filename) {
-    std::unique_ptr<KeystoreClient> keystore = CreateKeystoreInstance();
-    std::string input = ReadFile(input_filename);
-    std::string output;
-    if (!keystore->decryptWithAuthentication(key_name, input, &output)) {
-        printf("DecryptWithAuthentication failed.\n");
-        return 1;
+    auto input = ReadFile(input_filename);
+    auto result = decryptWithAuthentication(key_name, input);
+    if (auto error = std::get_if<int>(&result)) {
+        std::cerr << "DecryptWithAuthentication failed." << std::endl;
+        return *error;
     }
-    WriteFile(output_filename, output);
+    WriteFile(output_filename, std::get<std::vector<uint8_t>>(result));
     return 0;
 }
 
-uint32_t securityLevelOption2Flags(const CommandLine& cmd) {
+keymint::SecurityLevel securityLevelOption2SecurlityLevel(const CommandLine& cmd) {
     if (cmd.HasSwitch("seclevel")) {
         auto str = cmd.GetSwitchValueASCII("seclevel");
         if (str == "strongbox") {
-            return KEYSTORE_FLAG_STRONGBOX;
-        } else if (str == "software") {
-            return KEYSTORE_FLAG_FALLBACK;
+            return keymint::SecurityLevel::STRONGBOX;
+        } else if (str == "tee") {
+            return keymint::SecurityLevel::TRUSTED_ENVIRONMENT;
         }
+        std::cerr << "Unknown Security level: " << str << std::endl;
+        std::cerr << "Supported security levels: \"strongbox\" or \"tee\" (default)" << std::endl;
     }
-    return KEYSTORE_FLAG_NONE;
+    return keymint::SecurityLevel::TRUSTED_ENVIRONMENT;
 }
 
 class ConfirmationListener
-    : public android::security::BnConfirmationPromptCallback,
-      public std::promise<std::tuple<ConfirmationResponseCode, std::vector<uint8_t>>> {
+    : public apc::BnConfirmationCallback,
+      public std::promise<std::tuple<apc::ResponseCode, std::optional<std::vector<uint8_t>>>> {
   public:
     ConfirmationListener() {}
 
-    virtual ::android::binder::Status
-    onConfirmationPromptCompleted(int32_t result,
-                                  const ::std::vector<uint8_t>& dataThatWasConfirmed) override {
-        this->set_value({static_cast<ConfirmationResponseCode>(result), dataThatWasConfirmed});
-        return ::android::binder::Status::ok();
-    }
+    virtual ::ndk::ScopedAStatus
+    onCompleted(::aidl::android::security::apc::ResponseCode result,
+                const std::optional<std::vector<uint8_t>>& dataConfirmed) override {
+        this->set_value({result, dataConfirmed});
+        return ::ndk::ScopedAStatus::ok();
+    };
 };
 
 int Confirmation(const std::string& promptText, const std::string& extraDataHex,
                  const std::string& locale, const std::string& uiOptionsStr,
                  const std::string& cancelAfter) {
-    sp<android::IServiceManager> sm = android::defaultServiceManager();
-    sp<android::IBinder> binder = sm->getService(String16("android.security.keystore"));
-    sp<IKeystoreService> service = android::interface_cast<IKeystoreService>(binder);
-    if (service == nullptr) {
-        printf("error: could not connect to keystore service.\n");
+    ::ndk::SpAIBinder apcBinder(AServiceManager_getService("android.security.apc"));
+    auto apcService = apc::IProtectedConfirmation::fromBinder(apcBinder);
+    if (!apcService) {
+        std::cerr << "Error: could not connect to apc service." << std::endl;
         return 1;
     }
 
@@ -537,44 +1023,28 @@ int Confirmation(const std::string& promptText, const std::string& extraDataHex,
         return 1;
     }
 
-    String16 promptText16(promptText.data(), promptText.size());
-    String16 locale16(locale.data(), locale.size());
-
-    sp<ConfirmationListener> listener = new ConfirmationListener();
+    auto listener = std::make_shared<ConfirmationListener>();
 
     auto future = listener->get_future();
-    int32_t aidl_return;
-    android::binder::Status status = service->presentConfirmationPrompt(
-        listener, promptText16, extraData, locale16, uiOptionsAsFlags, &aidl_return);
-    if (!status.isOk()) {
-        printf("Presenting confirmation prompt failed with binder status '%s'.\n",
-               status.toString8().c_str());
+    auto rc = apcService->presentPrompt(listener, promptText, extraData, locale, uiOptionsAsFlags);
+
+    if (!rc.isOk()) {
+        std::cerr << "Presenting confirmation prompt failed: " << rc.getDescription() << std::endl;
         return 1;
     }
-    ConfirmationResponseCode responseCode = static_cast<ConfirmationResponseCode>(aidl_return);
-    if (responseCode != ConfirmationResponseCode::OK) {
-        printf("Presenting confirmation prompt failed with response code %d.\n", responseCode);
-        return 1;
-    }
-    printf("Waiting for prompt to complete - use Ctrl+C to abort...\n");
+
+    std::cerr << "Waiting for prompt to complete - use Ctrl+C to abort..." << std::endl;
 
     if (cancelAfterValue > 0.0) {
-        printf("Sleeping %.1f seconds before canceling prompt...\n", cancelAfterValue);
+        std::cerr << "Sleeping " << cancelAfterValue << " seconds before canceling prompt..."
+                  << std::endl;
         auto fstatus =
             future.wait_for(std::chrono::milliseconds(uint64_t(cancelAfterValue * 1000)));
         if (fstatus == std::future_status::timeout) {
-            status = service->cancelConfirmationPrompt(listener, &aidl_return);
-            if (!status.isOk()) {
-                printf("Canceling confirmation prompt failed with binder status '%s'.\n",
-                       status.toString8().c_str());
-                return 1;
-            }
-            responseCode = static_cast<ConfirmationResponseCode>(aidl_return);
-            if (responseCode == ConfirmationResponseCode::Ignored) {
-                // The confirmation was completed by the user so take the response
-            } else if (responseCode != ConfirmationResponseCode::OK) {
-                printf("Canceling confirmation prompt failed with response code %d.\n",
-                       responseCode);
+            rc = apcService->cancelPrompt(listener);
+            if (!rc.isOk()) {
+                std::cerr << "Canceling confirmation prompt failed: " << rc.getDescription()
+                          << std::endl;
                 return 1;
             }
         }
@@ -582,27 +1052,28 @@ int Confirmation(const std::string& promptText, const std::string& extraDataHex,
 
     future.wait();
 
-    auto [rc, dataThatWasConfirmed] = future.get();
+    auto [responseCode, dataThatWasConfirmed] = future.get();
 
-    printf("Confirmation prompt completed\n"
-           "responseCode = %d\n",
-           rc);
-    printf("dataThatWasConfirmed[%zd] = {", dataThatWasConfirmed.size());
+    std::cerr << "Confirmation prompt completed\n"
+              << "responseCode = " << toString(responseCode);
     size_t newLineCountDown = 16;
     bool hasPrinted = false;
-    for (uint8_t element : dataThatWasConfirmed) {
-        if (hasPrinted) {
-            printf(", ");
-        }
-        if (newLineCountDown == 0) {
-            printf("\n  ");
-            newLineCountDown = 32;
-        }
-        printf("0x%02x", element);
-        hasPrinted = true;
-    }
-    printf("}\n");
+    if (dataThatWasConfirmed) {
+        std::cerr << "dataThatWasConfirmed[" << dataThatWasConfirmed->size() << "] = {";
+        for (uint8_t element : *dataThatWasConfirmed) {
+            if (hasPrinted) {
+                std::cerr << ", ";
+            }
+            if (newLineCountDown == 0) {
+                std::cerr << "\n  ";
+                newLineCountDown = 32;
+            }
+            std::cerr << "0x" << std::hex << std::setw(2) << std::setfill('0') << (unsigned)element;
 
+            hasPrinted = true;
+        }
+    }
+    std::cerr << std::endl;
     return 0;
 }
 
@@ -613,7 +1084,7 @@ int main(int argc, char** argv) {
     CommandLine* command_line = CommandLine::ForCurrentProcess();
     CommandLine::StringVector args = command_line->GetArgs();
 
-    android::ProcessState::self()->startThreadPool();
+    ABinderProcess_startThreadPool();
 
     if (args.empty()) {
         PrintUsageAndExit();
@@ -623,12 +1094,9 @@ int main(int argc, char** argv) {
                                   command_line->HasSwitch("test_for_0_3"));
     } else if (args[0] == "list-brillo-tests") {
         return ListTestCases();
-    } else if (args[0] == "add-entropy") {
-        return AddEntropy(command_line->GetSwitchValueASCII("input"),
-                          securityLevelOption2Flags(*command_line));
     } else if (args[0] == "generate") {
         return GenerateKey(command_line->GetSwitchValueASCII("name"),
-                           securityLevelOption2Flags(*command_line),
+                           securityLevelOption2SecurlityLevel(*command_line),
                            command_line->HasSwitch("auth_bound"));
     } else if (args[0] == "get-chars") {
         return GetCharacteristics(command_line->GetSwitchValueASCII("name"));
@@ -636,20 +1104,17 @@ int main(int argc, char** argv) {
         return ExportKey(command_line->GetSwitchValueASCII("name"));
     } else if (args[0] == "delete") {
         return DeleteKey(command_line->GetSwitchValueASCII("name"));
-    } else if (args[0] == "delete-all") {
-        return DeleteAllKeys();
     } else if (args[0] == "exists") {
         return DoesKeyExist(command_line->GetSwitchValueASCII("name"));
     } else if (args[0] == "list") {
-        return List(command_line->GetSwitchValueASCII("prefix"));
-    } else if (args[0] == "list-apps-with-keys") {
-        return ListAppsWithKeys();
+        return List();
     } else if (args[0] == "sign-verify") {
         return SignAndVerify(command_line->GetSwitchValueASCII("name"));
     } else if (args[0] == "encrypt") {
-        return Encrypt(
-            command_line->GetSwitchValueASCII("name"), command_line->GetSwitchValueASCII("in"),
-            command_line->GetSwitchValueASCII("out"), securityLevelOption2Flags(*command_line));
+        return Encrypt(command_line->GetSwitchValueASCII("name"),
+                       command_line->GetSwitchValueASCII("in"),
+                       command_line->GetSwitchValueASCII("out"),
+                       securityLevelOption2SecurlityLevel(*command_line));
     } else if (args[0] == "decrypt") {
         return Decrypt(command_line->GetSwitchValueASCII("name"),
                        command_line->GetSwitchValueASCII("in"),
