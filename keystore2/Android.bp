@@ -86,6 +86,7 @@ rust_test {
     rustlibs: [
         "libandroid_logger",
         "libkeystore2_test_utils",
+        "libnix",
     ],
 }
 
