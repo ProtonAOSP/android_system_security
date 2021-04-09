@@ -17,7 +17,6 @@
 
 use std::collections::HashMap;
 
-use crate::error::{self, map_or_log_err, ErrorCode};
 use crate::permission::{KeyPerm, KeystorePerm};
 use crate::security_level::KeystoreSecurityLevel;
 use crate::utils::{
@@ -32,6 +31,10 @@ use crate::{database::KEYSTORE_UUID, permission};
 use crate::{
     database::{KeyEntryLoadBits, KeyType, SubComponentType},
     error::ResponseCode,
+};
+use crate::{
+    error::{self, map_or_log_err, ErrorCode},
+    id_rotation::IdRotationState,
 };
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::SecurityLevel::SecurityLevel;
 use android_system_keystore2::aidl::android::system::keystore2::{
@@ -53,21 +56,26 @@ pub struct KeystoreService {
 
 impl KeystoreService {
     /// Create a new instance of the Keystore 2.0 service.
-    pub fn new_native_binder() -> Result<Strong<dyn IKeystoreService>> {
+    pub fn new_native_binder(
+        id_rotation_state: IdRotationState,
+    ) -> Result<Strong<dyn IKeystoreService>> {
         let mut result: Self = Default::default();
-        let (dev, uuid) =
-            KeystoreSecurityLevel::new_native_binder(SecurityLevel::TRUSTED_ENVIRONMENT)
-                .context(concat!(
-                    "In KeystoreService::new_native_binder: ",
-                    "Trying to construct mandatory security level TEE."
-                ))
-                .map(|(dev, uuid)| (Asp::new(dev.as_binder()), uuid))?;
+        let (dev, uuid) = KeystoreSecurityLevel::new_native_binder(
+            SecurityLevel::TRUSTED_ENVIRONMENT,
+            id_rotation_state.clone(),
+        )
+        .context(concat!(
+            "In KeystoreService::new_native_binder: ",
+            "Trying to construct mandatory security level TEE."
+        ))
+        .map(|(dev, uuid)| (Asp::new(dev.as_binder()), uuid))?;
         result.i_sec_level_by_uuid.insert(uuid, dev);
         result.uuid_by_sec_level.insert(SecurityLevel::TRUSTED_ENVIRONMENT, uuid);
 
         // Strongbox is optional, so we ignore errors and turn the result into an Option.
-        if let Ok((dev, uuid)) = KeystoreSecurityLevel::new_native_binder(SecurityLevel::STRONGBOX)
-            .map(|(dev, uuid)| (Asp::new(dev.as_binder()), uuid))
+        if let Ok((dev, uuid)) =
+            KeystoreSecurityLevel::new_native_binder(SecurityLevel::STRONGBOX, id_rotation_state)
+                .map(|(dev, uuid)| (Asp::new(dev.as_binder()), uuid))
         {
             result.i_sec_level_by_uuid.insert(uuid, dev);
             result.uuid_by_sec_level.insert(SecurityLevel::STRONGBOX, uuid);
