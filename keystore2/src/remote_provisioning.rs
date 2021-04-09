@@ -19,6 +19,8 @@
 //! certificate chains signed by some root authority and stored in a keystore SQLite
 //! DB.
 
+#![allow(clippy::from_over_into, clippy::needless_question_mark, clippy::vec_init_then_push)]
+
 use std::collections::HashMap;
 
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
