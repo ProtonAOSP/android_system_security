@@ -90,6 +90,8 @@
 //!  * The termination condition which has an empty in list.
 //!  * The public interface, which does not have @marker and calls itself with an empty out list.
 
+#![allow(clippy::from_over_into, clippy::needless_question_mark)]
+
 use std::convert::TryInto;
 
 use crate::db_utils::SqlField;
