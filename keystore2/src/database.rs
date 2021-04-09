@@ -41,6 +41,8 @@
 //! from the database module these functions take permission check
 //! callbacks.
 
+#![allow(clippy::needless_question_mark)]
+
 use crate::impl_metadata; // This is in db_utils.rs
 use crate::key_parameter::{KeyParameter, Tag};
 use crate::permission::KeyPermSet;
