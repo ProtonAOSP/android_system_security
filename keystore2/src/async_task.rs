@@ -197,7 +197,7 @@ impl AsyncTask {
             enum Action {
                 QueuedFn(Box<dyn FnOnce(&mut Shelf) + Send>),
                 IdleFns(Vec<Arc<dyn Fn(&mut Shelf) + Send + Sync>>),
-            };
+            }
             let mut done_idle = false;
 
             // When the worker starts, it takes the shelf and puts it on the stack.

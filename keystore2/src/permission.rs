@@ -18,6 +18,8 @@
 //! It also provides KeystorePerm and KeyPerm as convenience wrappers for the SELinux permission
 //! defined by keystore2 and keystore2_key respectively.
 
+#![allow(clippy::from_over_into)]
+
 use android_system_keystore2::aidl::android::system::keystore2::{
     Domain::Domain, KeyDescriptor::KeyDescriptor, KeyPermission::KeyPermission,
 };
