@@ -24,6 +24,7 @@ pub mod enforcements;
 pub mod entropy;
 pub mod error;
 pub mod globals;
+pub mod id_rotation;
 /// Internal Representation of Key Parameter and convenience functions.
 pub mod key_parameter;
 pub mod legacy_blob;
