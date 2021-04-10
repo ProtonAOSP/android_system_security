@@ -14,13 +14,13 @@
 
 //! This crate implements the Keystore 2.0 service entry point.
 
-use keystore2::authorization::AuthorizationManager;
 use keystore2::entropy;
 use keystore2::globals::ENFORCEMENTS;
 use keystore2::maintenance::Maintenance;
 use keystore2::remote_provisioning::RemoteProvisioningService;
 use keystore2::service::KeystoreService;
 use keystore2::{apc::ApcManager, shared_secret_negotiation};
+use keystore2::{authorization::AuthorizationManager, id_rotation::IdRotationState};
 use log::{error, info};
 use std::{panic, path::Path, sync::mpsc::channel};
 use vpnprofilestore::VpnProfileStore;
@@ -57,12 +57,14 @@ fn main() {
     // startup as Keystore 1.0 did because Keystore 2.0 is intended to run much earlier than
     // Keystore 1.0. Instead we set a global variable to the database path.
     // For the ground truth check the service startup rule for init (typically in keystore2.rc).
-    if let Some(dir) = args.next() {
+    let id_rotation_state = if let Some(dir) = args.next() {
+        let db_path = Path::new(&dir);
         *keystore2::globals::DB_PATH.lock().expect("Could not lock DB_PATH.") =
-            Path::new(&dir).to_path_buf();
+            db_path.to_path_buf();
+        IdRotationState::new(&db_path)
     } else {
-        panic!("Must specify a working directory.");
-    }
+        panic!("Must specify a database directory.");
+    };
 
     let (confirmation_token_sender, confirmation_token_receiver) = channel();
 
@@ -81,7 +83,7 @@ fn main() {
     info!("Starting thread pool now.");
     binder::ProcessState::start_thread_pool();
 
-    let ks_service = KeystoreService::new_native_binder().unwrap_or_else(|e| {
+    let ks_service = KeystoreService::new_native_binder(id_rotation_state).unwrap_or_else(|e| {
         panic!("Failed to create service {} because of {:?}.", KS2_SERVICE_NAME, e);
     });
     binder::add_service(KS2_SERVICE_NAME, ks_service.as_binder()).unwrap_or_else(|e| {

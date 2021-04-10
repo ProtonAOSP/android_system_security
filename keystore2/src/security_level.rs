@@ -14,7 +14,7 @@
 
 //! This crate implements the IKeystoreSecurityLevel interface.
 
-use crate::globals::get_keymint_device;
+use crate::{globals::get_keymint_device, id_rotation::IdRotationState};
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
     Algorithm::Algorithm, AttestationKey::AttestationKey,
     HardwareAuthenticatorType::HardwareAuthenticatorType, IKeyMintDevice::IKeyMintDevice,
@@ -67,6 +67,7 @@ pub struct KeystoreSecurityLevel {
     km_uuid: Uuid,
     operation_db: OperationDb,
     rem_prov_state: RemProvState,
+    id_rotation_state: IdRotationState,
 }
 
 // Blob of 32 zeroes used as empty masking key.
@@ -83,6 +84,7 @@ impl KeystoreSecurityLevel {
     /// we need it for checking keystore permissions.
     pub fn new_native_binder(
         security_level: SecurityLevel,
+        id_rotation_state: IdRotationState,
     ) -> Result<(Strong<dyn IKeystoreSecurityLevel>, Uuid)> {
         let (dev, hw_info, km_uuid) = get_keymint_device(&security_level)
             .context("In KeystoreSecurityLevel::new_native_binder.")?;
@@ -93,6 +95,7 @@ impl KeystoreSecurityLevel {
             km_uuid,
             operation_db: OperationDb::new(),
             rem_prov_state: RemProvState::new(security_level, km_uuid),
+            id_rotation_state,
         });
         result.as_binder().set_requesting_sid(true);
         Ok((result, km_uuid))
@@ -353,6 +356,7 @@ impl KeystoreSecurityLevel {
     }
 
     fn add_certificate_parameters(
+        &self,
         uid: u32,
         params: &[KeyParameter],
         key: &KeyDescriptor,
@@ -374,6 +378,14 @@ impl KeystoreSecurityLevel {
                 "In add_certificate_parameters: ",
                 "Caller does not have the permission to generate a unique ID"
             ))?;
+            if self.id_rotation_state.had_factory_reset_since_id_rotation().context(
+                "In add_certificate_parameters: Call to had_factory_reset_since_id_rotation failed."
+            )? {
+                result.push(KeyParameter{
+                    tag: Tag::RESET_SINCE_ID_ROTATION,
+                    value: KeyParameterValue::BoolValue(true),
+                })
+            }
         }
 
         // If the caller requests any device identifier attestation tag, check that they hold the
@@ -451,7 +463,8 @@ impl KeystoreSecurityLevel {
                 })
                 .context("In generate_key: Trying to get an attestation key")?,
         };
-        let params = Self::add_certificate_parameters(caller_uid, params, &key)
+        let params = self
+            .add_certificate_parameters(caller_uid, params, &key)
             .context("In generate_key: Trying to get aaid.")?;
 
         let km_dev: Strong<dyn IKeyMintDevice> = self.keymint.get_interface()?;
@@ -524,7 +537,8 @@ impl KeystoreSecurityLevel {
         // import_key requires the rebind permission.
         check_key_permission(KeyPerm::rebind(), &key, &None).context("In import_key.")?;
 
-        let params = Self::add_certificate_parameters(caller_uid, params, &key)
+        let params = self
+            .add_certificate_parameters(caller_uid, params, &key)
             .context("In import_key: Trying to get aaid.")?;
 
         let format = params
