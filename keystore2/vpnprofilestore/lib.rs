@@ -39,6 +39,10 @@ impl DB {
         let mut db = Self {
             conn: Connection::open(db_file).context("Failed to initialize SQLite connection.")?,
         };
+
+        // On busy fail Immediately. It is unlikely to succeed given a bug in sqlite.
+        db.conn.busy_handler(None).context("Failed to set busy handler.")?;
+
         db.init_tables().context("Trying to initialize vpnstore db.")?;
         Ok(db)
     }
@@ -377,7 +381,12 @@ impl IVpnProfileStore for VpnProfileStore {
 mod db_test {
     use super::*;
     use keystore2_test_utils::TempDir;
+    use std::sync::Arc;
+    use std::thread;
+    use std::time::Duration;
+    use std::time::Instant;
 
+    static TEST_ALIAS: &str = &"test_alias";
     static TEST_BLOB1: &[u8] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 0];
     static TEST_BLOB2: &[u8] = &[2, 2, 3, 4, 5, 6, 7, 8, 9, 0];
     static TEST_BLOB3: &[u8] = &[3, 2, 3, 4, 5, 6, 7, 8, 9, 0];
@@ -439,5 +448,105 @@ mod db_test {
             Some(TEST_BLOB4),
             db.get(2, "test1").expect("Failed to get profile.").as_deref()
         );
+    }
+
+    #[test]
+    fn concurrent_vpn_profile_test() -> Result<()> {
+        let temp_dir = Arc::new(
+            TempDir::new("concurrent_vpn_profile_test_").expect("Failed to create temp dir."),
+        );
+
+        let db_path = temp_dir.build().push("vpnprofile.sqlite").to_owned();
+
+        let test_begin = Instant::now();
+
+        let mut db = DB::new(&db_path).expect("Failed to open database.");
+        const PROFILE_COUNT: u32 = 5000u32;
+        const PROFILE_DB_COUNT: u32 = 5000u32;
+
+        let mut actual_profile_count = PROFILE_COUNT;
+        // First insert PROFILE_COUNT profiles.
+        for count in 0..PROFILE_COUNT {
+            if Instant::now().duration_since(test_begin) >= Duration::from_secs(15) {
+                actual_profile_count = count;
+                break;
+            }
+            let alias = format!("test_alias_{}", count);
+            db.put(1, &alias, TEST_BLOB1).expect("Failed to add profile (1).");
+        }
+
+        // Insert more keys from a different thread and into a different namespace.
+        let db_path1 = db_path.clone();
+        let handle1 = thread::spawn(move || {
+            let mut db = DB::new(&db_path1).expect("Failed to open database.");
+
+            for count in 0..actual_profile_count {
+                if Instant::now().duration_since(test_begin) >= Duration::from_secs(40) {
+                    return;
+                }
+                let alias = format!("test_alias_{}", count);
+                db.put(2, &alias, TEST_BLOB2).expect("Failed to add profile (2).");
+            }
+
+            // Then delete them again.
+            for count in 0..actual_profile_count {
+                if Instant::now().duration_since(test_begin) >= Duration::from_secs(40) {
+                    return;
+                }
+                let alias = format!("test_alias_{}", count);
+                db.remove(2, &alias).expect("Remove Failed (2).");
+            }
+        });
+
+        // And start deleting the first set of profiles.
+        let db_path2 = db_path.clone();
+        let handle2 = thread::spawn(move || {
+            let mut db = DB::new(&db_path2).expect("Failed to open database.");
+
+            for count in 0..actual_profile_count {
+                if Instant::now().duration_since(test_begin) >= Duration::from_secs(40) {
+                    return;
+                }
+                let alias = format!("test_alias_{}", count);
+                db.remove(1, &alias).expect("Remove Failed (1)).");
+            }
+        });
+
+        // While a lot of inserting and deleting is going on we have to open database connections
+        // successfully and then insert and delete a specific profile.
+        let db_path3 = db_path.clone();
+        let handle3 = thread::spawn(move || {
+            for _count in 0..PROFILE_DB_COUNT {
+                if Instant::now().duration_since(test_begin) >= Duration::from_secs(40) {
+                    return;
+                }
+                let mut db = DB::new(&db_path3).expect("Failed to open database.");
+
+                db.put(3, &TEST_ALIAS, TEST_BLOB3).expect("Failed to add profile (3).");
+
+                db.remove(3, &TEST_ALIAS).expect("Remove failed (3).");
+            }
+        });
+
+        // While thread 3 is inserting and deleting TEST_ALIAS, we try to get the alias.
+        // This may yield an entry or none, but it must not fail.
+        let handle4 = thread::spawn(move || {
+            for _count in 0..PROFILE_DB_COUNT {
+                if Instant::now().duration_since(test_begin) >= Duration::from_secs(40) {
+                    return;
+                }
+                let mut db = DB::new(&db_path).expect("Failed to open database.");
+
+                // This may return Some or None but it must not fail.
+                db.get(3, &TEST_ALIAS).expect("Failed to get profile (4).");
+            }
+        });
+
+        handle1.join().expect("Thread 1 panicked.");
+        handle2.join().expect("Thread 2 panicked.");
+        handle3.join().expect("Thread 3 panicked.");
+        handle4.join().expect("Thread 4 panicked.");
+
+        Ok(())
     }
 }
