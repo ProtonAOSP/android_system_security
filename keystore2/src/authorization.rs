@@ -22,7 +22,7 @@ use crate::utils::check_keystore_permission;
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
     HardwareAuthToken::HardwareAuthToken,
 };
-use android_security_authorization::binder::{ExceptionCode, Interface, Result as BinderResult,
+use android_security_authorization::binder::{BinderFeatures,ExceptionCode, Interface, Result as BinderResult,
      Strong, Status as BinderStatus};
 use android_security_authorization::aidl::android::security::authorization::{
     IKeystoreAuthorization::BnKeystoreAuthorization, IKeystoreAuthorization::IKeystoreAuthorization,
@@ -32,7 +32,6 @@ use android_security_authorization::aidl::android::security::authorization::{
 use android_system_keystore2::aidl::android::system::keystore2::{
     ResponseCode::ResponseCode as KsResponseCode };
 use anyhow::{Context, Result};
-use binder::IBinderInternal;
 use keystore2_crypto::Password;
 use keystore2_selinux as selinux;
 
@@ -112,9 +111,10 @@ pub struct AuthorizationManager;
 impl AuthorizationManager {
     /// Create a new instance of Keystore Authorization service.
     pub fn new_native_binder() -> Result<Strong<dyn IKeystoreAuthorization>> {
-        let result = BnKeystoreAuthorization::new_binder(Self);
-        result.as_binder().set_requesting_sid(true);
-        Ok(result)
+        Ok(BnKeystoreAuthorization::new_binder(
+            Self,
+            BinderFeatures { set_requesting_sid: true, ..BinderFeatures::default() },
+        ))
     }
 
     fn add_auth_token(&self, auth_token: &HardwareAuthToken) -> Result<()> {

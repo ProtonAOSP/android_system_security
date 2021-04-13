@@ -22,6 +22,7 @@ use android_hardware_security_keymint::aidl::android::hardware::security::keymin
     KeyMintHardwareInfo::KeyMintHardwareInfo, KeyParameter::KeyParameter,
     KeyParameterValue::KeyParameterValue, SecurityLevel::SecurityLevel, Tag::Tag,
 };
+use android_hardware_security_keymint::binder::{BinderFeatures, Strong, ThreadState};
 use android_system_keystore2::aidl::android::system::keystore2::{
     AuthenticatorSpec::AuthenticatorSpec, CreateOperationResponse::CreateOperationResponse,
     Domain::Domain, IKeystoreOperation::IKeystoreOperation,
@@ -57,7 +58,6 @@ use crate::{
     utils::key_characteristics_to_internal,
 };
 use anyhow::{anyhow, Context, Result};
-use binder::{IBinderInternal, Strong, ThreadState};
 
 /// Implementation of the IKeystoreSecurityLevel Interface.
 pub struct KeystoreSecurityLevel {
@@ -79,8 +79,8 @@ const UNDEFINED_NOT_AFTER: i64 = 253402300799000i64;
 
 impl KeystoreSecurityLevel {
     /// Creates a new security level instance wrapped in a
-    /// BnKeystoreSecurityLevel proxy object. It also
-    /// calls `IBinderInternal::set_requesting_sid` on the new interface, because
+    /// BnKeystoreSecurityLevel proxy object. It also enables
+    /// `BinderFeatures::set_requesting_sid` on the new interface, because
     /// we need it for checking keystore permissions.
     pub fn new_native_binder(
         security_level: SecurityLevel,
@@ -88,16 +88,18 @@ impl KeystoreSecurityLevel {
     ) -> Result<(Strong<dyn IKeystoreSecurityLevel>, Uuid)> {
         let (dev, hw_info, km_uuid) = get_keymint_device(&security_level)
             .context("In KeystoreSecurityLevel::new_native_binder.")?;
-        let result = BnKeystoreSecurityLevel::new_binder(Self {
-            security_level,
-            keymint: dev,
-            hw_info,
-            km_uuid,
-            operation_db: OperationDb::new(),
-            rem_prov_state: RemProvState::new(security_level, km_uuid),
-            id_rotation_state,
-        });
-        result.as_binder().set_requesting_sid(true);
+        let result = BnKeystoreSecurityLevel::new_binder(
+            Self {
+                security_level,
+                keymint: dev,
+                hw_info,
+                km_uuid,
+                operation_db: OperationDb::new(),
+                rem_prov_state: RemProvState::new(security_level, km_uuid),
+                id_rotation_state,
+            },
+            BinderFeatures { set_requesting_sid: true, ..BinderFeatures::default() },
+        );
         Ok((result, km_uuid))
     }
 

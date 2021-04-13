@@ -29,13 +29,14 @@ use android_security_maintenance::aidl::android::security::maintenance::{
     IKeystoreMaintenance::{BnKeystoreMaintenance, IKeystoreMaintenance},
     UserState::UserState as AidlUserState,
 };
-use android_security_maintenance::binder::{Interface, Result as BinderResult};
+use android_security_maintenance::binder::{
+    BinderFeatures, Interface, Result as BinderResult, Strong, ThreadState,
+};
 use android_system_keystore2::aidl::android::system::keystore2::ResponseCode::ResponseCode;
 use android_system_keystore2::aidl::android::system::keystore2::{
     Domain::Domain, KeyDescriptor::KeyDescriptor,
 };
 use anyhow::{Context, Result};
-use binder::{IBinderInternal, Strong, ThreadState};
 use keystore2_crypto::Password;
 
 /// This struct is defined to implement the aforementioned AIDL interface.
@@ -45,9 +46,10 @@ pub struct Maintenance;
 impl Maintenance {
     /// Create a new instance of Keystore User Manager service.
     pub fn new_native_binder() -> Result<Strong<dyn IKeystoreMaintenance>> {
-        let result = BnKeystoreMaintenance::new_binder(Self);
-        result.as_binder().set_requesting_sid(true);
-        Ok(result)
+        Ok(BnKeystoreMaintenance::new_binder(
+            Self,
+            BinderFeatures { set_requesting_sid: true, ..BinderFeatures::default() },
+        ))
     }
 
     fn on_user_password_changed(user_id: i32, password: Option<Password>) -> Result<()> {
