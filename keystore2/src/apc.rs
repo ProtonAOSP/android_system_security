@@ -268,7 +268,7 @@ impl ApcManager {
 
     fn present_prompt(
         &self,
-        listener: &dyn IConfirmationCallback,
+        listener: &binder::Strong<dyn IConfirmationCallback>,
         prompt_text: &str,
         extra_data: &[u8],
         locale: &str,
@@ -327,7 +327,7 @@ impl ApcManager {
         Ok(())
     }
 
-    fn cancel_prompt(&self, listener: &dyn IConfirmationCallback) -> Result<()> {
+    fn cancel_prompt(&self, listener: &binder::Strong<dyn IConfirmationCallback>) -> Result<()> {
         let mut state = self.state.lock().unwrap();
         let hal = match &mut state.session {
             None => {
@@ -358,7 +358,7 @@ impl ApcManager {
 impl IProtectedConfirmation for ApcManager {
     fn presentPrompt(
         &self,
-        listener: &dyn IConfirmationCallback,
+        listener: &binder::Strong<dyn IConfirmationCallback>,
         prompt_text: &str,
         extra_data: &[u8],
         locale: &str,
@@ -369,7 +369,10 @@ impl IProtectedConfirmation for ApcManager {
             Ok,
         )
     }
-    fn cancelPrompt(&self, listener: &dyn IConfirmationCallback) -> BinderResult<()> {
+    fn cancelPrompt(
+        &self,
+        listener: &binder::Strong<dyn IConfirmationCallback>,
+    ) -> BinderResult<()> {
         map_or_log_err(self.cancel_prompt(listener), Ok)
     }
     fn isSupported(&self) -> BinderResult<bool> {
