@@ -278,6 +278,12 @@ impl KeystoreSecurityLevel {
             },
         )?;
 
+        // Remove Tag::PURPOSE from the operation_parameters, since some keymaster devices return
+        // an error on begin() if Tag::PURPOSE is in the operation_parameters.
+        let op_params: Vec<KeyParameter> =
+            operation_parameters.iter().filter(|p| p.tag != Tag::PURPOSE).cloned().collect();
+        let operation_parameters = op_params.as_slice();
+
         let (immediate_hat, mut auth_info) = ENFORCEMENTS
             .authorize_create(
                 purpose,
