@@ -151,8 +151,25 @@ bool KeystoreKey::initialize() {
     KeyEntryResponse keyEntryResponse;
     LOG(INFO) << "Trying to retrieve existing keystore key...";
     status = mService->getKeyEntry(descriptor, &keyEntryResponse);
-    if (!status.isOk()) {
-        LOG(INFO) << "Existing keystore key not found, creating new key";
+    bool keyValid = false;
+
+    if (status.isOk()) {
+        // Make sure this is an early boot key
+        for (const auto& auth : keyEntryResponse.metadata.authorizations) {
+            if (auth.keyParameter.tag == Tag::MAX_BOOT_LEVEL) {
+                if (auth.keyParameter.value.get<KeyParameterValue::integer>() == kOdsignBootLevel) {
+                    keyValid = true;
+                    break;
+                }
+            }
+        }
+        if (!keyValid) {
+            LOG(WARNING) << "Found invalid keystore key without MAX_BOOT_LEVEL tag";
+        }
+    }
+
+    if (!keyValid) {
+        LOG(INFO) << "Existing keystore key not found or invalid, creating new key";
         auto newKeyStatus = createNewKey(descriptor);
         if (!newKeyStatus.ok()) {
             LOG(ERROR) << "Failed to create new key";
