@@ -707,7 +707,7 @@ impl KeystoreSecurityLevel {
             SuperKeyManager::reencrypt_if_required(key_blob, &upgraded_blob)
                 .context("In store_upgraded_keyblob: Failed to handle super encryption.")?;
 
-        let mut new_blob_metadata = new_blob_metadata.unwrap_or_else(BlobMetaData::new);
+        let mut new_blob_metadata = new_blob_metadata.unwrap_or_default();
         if let Some(uuid) = km_uuid {
             new_blob_metadata.add(BlobMetaEntry::KmUuid(*uuid));
         }
