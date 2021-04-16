@@ -70,13 +70,6 @@ fn main() {
 
     ENFORCEMENTS.install_confirmation_token_receiver(confirmation_token_receiver);
 
-    info!("Starting boot level watcher.");
-    std::thread::spawn(|| {
-        keystore2::globals::ENFORCEMENTS
-            .watch_boot_level()
-            .unwrap_or_else(|e| error!("watch_boot_level failed: {}", e));
-    });
-
     entropy::register_feeder();
     shared_secret_negotiation::perform_shared_secret_negotiation();
 
