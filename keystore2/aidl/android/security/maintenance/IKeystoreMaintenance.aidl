@@ -15,6 +15,7 @@
 package android.security.maintenance;
 
 import android.system.keystore2.Domain;
+import android.system.keystore2.KeyDescriptor;
 import android.security.maintenance.UserState;
 
 /**
@@ -107,4 +108,19 @@ interface IKeystoreMaintenance {
      * `ResponseCode::SYSTEM_ERROR` - if an unexpected error occurred.
      */
     void onDeviceOffBody();
+
+    /**
+     * Migrate a key from one namespace to another. The caller must have use, grant, and delete
+     * permissions on the source namespace and rebind permissions on the destination namespace.
+     * The source may be specified by Domain::APP, Domain::SELINUX, or Domain::KEY_ID. The target
+     * may be specified by Domain::APP or Domain::SELINUX.
+     *
+     * ## Error conditions:
+     * `ResponseCode::PERMISSION_DENIED` - If the caller lacks any of the required permissions.
+     * `ResponseCode::KEY_NOT_FOUND` - If the source did not exist.
+     * `ResponseCode::INVALID_ARGUMENT` - If the target exists or if any of the above mentioned
+     *                                    requirements for the domain parameter are not met.
+     * `ResponseCode::SYSTEM_ERROR` - An unexpected system error occurred.
+     */
+    void migrateKeyNamespace(in KeyDescriptor source, in KeyDescriptor destination);
 }
