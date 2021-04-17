@@ -188,6 +188,9 @@ impl_metadata!(
         KmUuid(Uuid) with accessor km_uuid,
         /// If the key is ECDH encrypted, this is the ephemeral public key
         PublicKey(Vec<u8>) with accessor public_key,
+        /// If the key is encrypted with a MaxBootLevel key, this is the boot level
+        /// of that key
+        MaxBootLevel(i32) with accessor max_boot_level,
         //  --- ADD NEW META DATA FIELDS HERE ---
         // For backwards compatibility add new entries only to
         // end of this list and above this comment.
@@ -2029,6 +2032,69 @@ impl KeystoreDB {
             ));
         }
         Ok(updated != 0)
+    }
+
+    /// Moves the key given by KeyIdGuard to the new location at `destination`. If the destination
+    /// is already occupied by a key, this function fails with `ResponseCode::INVALID_ARGUMENT`.
+    pub fn migrate_key_namespace(
+        &mut self,
+        key_id_guard: KeyIdGuard,
+        destination: &KeyDescriptor,
+        caller_uid: u32,
+        check_permission: impl Fn(&KeyDescriptor) -> Result<()>,
+    ) -> Result<()> {
+        let destination = match destination.domain {
+            Domain::APP => KeyDescriptor { nspace: caller_uid as i64, ..(*destination).clone() },
+            Domain::SELINUX => (*destination).clone(),
+            domain => {
+                return Err(KsError::Rc(ResponseCode::INVALID_ARGUMENT))
+                    .context(format!("Domain {:?} must be either APP or SELINUX.", domain));
+            }
+        };
+
+        // Security critical: Must return immediately on failure. Do not remove the '?';
+        check_permission(&destination)
+            .context("In migrate_key_namespace: Trying to check permission.")?;
+
+        let alias = destination
+            .alias
+            .as_ref()
+            .ok_or(KsError::Rc(ResponseCode::INVALID_ARGUMENT))
+            .context("In migrate_key_namespace: Alias must be specified.")?;
+
+        self.with_transaction(TransactionBehavior::Immediate, |tx| {
+            // Query the destination location. If there is a key, the migration request fails.
+            if tx
+                .query_row(
+                    "SELECT id FROM persistent.keyentry
+                     WHERE alias = ? AND domain = ? AND namespace = ?;",
+                    params![alias, destination.domain.0, destination.nspace],
+                    |_| Ok(()),
+                )
+                .optional()
+                .context("Failed to query destination.")?
+                .is_some()
+            {
+                return Err(KsError::Rc(ResponseCode::INVALID_ARGUMENT))
+                    .context("Target already exists.");
+            }
+
+            let updated = tx
+                .execute(
+                    "UPDATE persistent.keyentry
+                 SET alias = ?, domain = ?, namespace = ?
+                 WHERE id = ?;",
+                    params![alias, destination.domain.0, destination.nspace, key_id_guard.id()],
+                )
+                .context("Failed to update key entry.")?;
+
+            if updated != 1 {
+                return Err(KsError::sys())
+                    .context(format!("Update succeeded, but {} rows were updated.", updated));
+            }
+            Ok(()).no_gc()
+        })
+        .context("In migrate_key_namespace:")
     }
 
     /// Store a new key in a single transaction.
@@ -4100,6 +4166,181 @@ mod tests {
         Ok(())
     }
 
+    // Creates a key migrates it to a different location and then tries to access it by the old
+    // and new location.
+    #[test]
+    fn test_migrate_key_app_to_app() -> Result<()> {
+        let mut db = new_test_db()?;
+        const SOURCE_UID: u32 = 1u32;
+        const DESTINATION_UID: u32 = 2u32;
+        static SOURCE_ALIAS: &str = &"SOURCE_ALIAS";
+        static DESTINATION_ALIAS: &str = &"DESTINATION_ALIAS";
+        let key_id_guard =
+            make_test_key_entry(&mut db, Domain::APP, SOURCE_UID as i64, SOURCE_ALIAS, None)
+                .context("test_insert_and_load_full_keyentry_from_grant_by_key_id")?;
+
+        let source_descriptor: KeyDescriptor = KeyDescriptor {
+            domain: Domain::APP,
+            nspace: -1,
+            alias: Some(SOURCE_ALIAS.to_string()),
+            blob: None,
+        };
+
+        let destination_descriptor: KeyDescriptor = KeyDescriptor {
+            domain: Domain::APP,
+            nspace: -1,
+            alias: Some(DESTINATION_ALIAS.to_string()),
+            blob: None,
+        };
+
+        let key_id = key_id_guard.id();
+
+        db.migrate_key_namespace(key_id_guard, &destination_descriptor, DESTINATION_UID, |_k| {
+            Ok(())
+        })
+        .unwrap();
+
+        let (_, key_entry) = db
+            .load_key_entry(
+                &destination_descriptor,
+                KeyType::Client,
+                KeyEntryLoadBits::BOTH,
+                DESTINATION_UID,
+                |k, av| {
+                    assert_eq!(Domain::APP, k.domain);
+                    assert_eq!(DESTINATION_UID as i64, k.nspace);
+                    assert!(av.is_none());
+                    Ok(())
+                },
+            )
+            .unwrap();
+
+        assert_eq!(key_entry, make_test_key_entry_test_vector(key_id, None));
+
+        assert_eq!(
+            Some(&KsError::Rc(ResponseCode::KEY_NOT_FOUND)),
+            db.load_key_entry(
+                &source_descriptor,
+                KeyType::Client,
+                KeyEntryLoadBits::NONE,
+                SOURCE_UID,
+                |_k, _av| Ok(()),
+            )
+            .unwrap_err()
+            .root_cause()
+            .downcast_ref::<KsError>()
+        );
+
+        Ok(())
+    }
+
+    // Creates a key migrates it to a different location and then tries to access it by the old
+    // and new location.
+    #[test]
+    fn test_migrate_key_app_to_selinux() -> Result<()> {
+        let mut db = new_test_db()?;
+        const SOURCE_UID: u32 = 1u32;
+        const DESTINATION_UID: u32 = 2u32;
+        const DESTINATION_NAMESPACE: i64 = 1000i64;
+        static SOURCE_ALIAS: &str = &"SOURCE_ALIAS";
+        static DESTINATION_ALIAS: &str = &"DESTINATION_ALIAS";
+        let key_id_guard =
+            make_test_key_entry(&mut db, Domain::APP, SOURCE_UID as i64, SOURCE_ALIAS, None)
+                .context("test_insert_and_load_full_keyentry_from_grant_by_key_id")?;
+
+        let source_descriptor: KeyDescriptor = KeyDescriptor {
+            domain: Domain::APP,
+            nspace: -1,
+            alias: Some(SOURCE_ALIAS.to_string()),
+            blob: None,
+        };
+
+        let destination_descriptor: KeyDescriptor = KeyDescriptor {
+            domain: Domain::SELINUX,
+            nspace: DESTINATION_NAMESPACE,
+            alias: Some(DESTINATION_ALIAS.to_string()),
+            blob: None,
+        };
+
+        let key_id = key_id_guard.id();
+
+        db.migrate_key_namespace(key_id_guard, &destination_descriptor, DESTINATION_UID, |_k| {
+            Ok(())
+        })
+        .unwrap();
+
+        let (_, key_entry) = db
+            .load_key_entry(
+                &destination_descriptor,
+                KeyType::Client,
+                KeyEntryLoadBits::BOTH,
+                DESTINATION_UID,
+                |k, av| {
+                    assert_eq!(Domain::SELINUX, k.domain);
+                    assert_eq!(DESTINATION_NAMESPACE as i64, k.nspace);
+                    assert!(av.is_none());
+                    Ok(())
+                },
+            )
+            .unwrap();
+
+        assert_eq!(key_entry, make_test_key_entry_test_vector(key_id, None));
+
+        assert_eq!(
+            Some(&KsError::Rc(ResponseCode::KEY_NOT_FOUND)),
+            db.load_key_entry(
+                &source_descriptor,
+                KeyType::Client,
+                KeyEntryLoadBits::NONE,
+                SOURCE_UID,
+                |_k, _av| Ok(()),
+            )
+            .unwrap_err()
+            .root_cause()
+            .downcast_ref::<KsError>()
+        );
+
+        Ok(())
+    }
+
+    // Creates two keys and tries to migrate the first to the location of the second which
+    // is expected to fail.
+    #[test]
+    fn test_migrate_key_destination_occupied() -> Result<()> {
+        let mut db = new_test_db()?;
+        const SOURCE_UID: u32 = 1u32;
+        const DESTINATION_UID: u32 = 2u32;
+        static SOURCE_ALIAS: &str = &"SOURCE_ALIAS";
+        static DESTINATION_ALIAS: &str = &"DESTINATION_ALIAS";
+        let key_id_guard =
+            make_test_key_entry(&mut db, Domain::APP, SOURCE_UID as i64, SOURCE_ALIAS, None)
+                .context("test_insert_and_load_full_keyentry_from_grant_by_key_id")?;
+        make_test_key_entry(&mut db, Domain::APP, DESTINATION_UID as i64, DESTINATION_ALIAS, None)
+            .context("test_insert_and_load_full_keyentry_from_grant_by_key_id")?;
+
+        let destination_descriptor: KeyDescriptor = KeyDescriptor {
+            domain: Domain::APP,
+            nspace: -1,
+            alias: Some(DESTINATION_ALIAS.to_string()),
+            blob: None,
+        };
+
+        assert_eq!(
+            Some(&KsError::Rc(ResponseCode::INVALID_ARGUMENT)),
+            db.migrate_key_namespace(
+                key_id_guard,
+                &destination_descriptor,
+                DESTINATION_UID,
+                |_k| Ok(())
+            )
+            .unwrap_err()
+            .root_cause()
+            .downcast_ref::<KsError>()
+        );
+
+        Ok(())
+    }
+
     static KEY_LOCK_TEST_ALIAS: &str = "my super duper locked key";
 
     #[test]
@@ -4177,7 +4418,7 @@ mod tests {
     }
 
     #[test]
-    fn teset_database_busy_error_code() {
+    fn test_database_busy_error_code() {
         let temp_dir =
             TempDir::new("test_database_busy_error_code_").expect("Failed to create temp dir.");
 

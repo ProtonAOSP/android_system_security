@@ -278,6 +278,12 @@ impl KeystoreSecurityLevel {
             },
         )?;
 
+        // Remove Tag::PURPOSE from the operation_parameters, since some keymaster devices return
+        // an error on begin() if Tag::PURPOSE is in the operation_parameters.
+        let op_params: Vec<KeyParameter> =
+            operation_parameters.iter().filter(|p| p.tag != Tag::PURPOSE).cloned().collect();
+        let operation_parameters = op_params.as_slice();
+
         let (immediate_hat, mut auth_info) = ENFORCEMENTS
             .authorize_create(
                 purpose,
@@ -701,7 +707,7 @@ impl KeystoreSecurityLevel {
             SuperKeyManager::reencrypt_if_required(key_blob, &upgraded_blob)
                 .context("In store_upgraded_keyblob: Failed to handle super encryption.")?;
 
-        let mut new_blob_metadata = new_blob_metadata.unwrap_or_else(BlobMetaData::new);
+        let mut new_blob_metadata = new_blob_metadata.unwrap_or_default();
         if let Some(uuid) = km_uuid {
             new_blob_metadata.add(BlobMetaEntry::KmUuid(*uuid));
         }

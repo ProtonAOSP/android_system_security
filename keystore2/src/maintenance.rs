@@ -14,14 +14,15 @@
 
 //! This module implements IKeystoreMaintenance AIDL interface.
 
+use crate::database::{KeyEntryLoadBits, KeyType, MonotonicRawTime};
 use crate::error::map_km_error;
-use crate::error::Error as KeystoreError;
+use crate::error::map_or_log_err;
+use crate::error::Error;
 use crate::globals::get_keymint_device;
 use crate::globals::{DB, LEGACY_MIGRATOR, SUPER_KEY};
-use crate::permission::KeystorePerm;
+use crate::permission::{KeyPerm, KeystorePerm};
 use crate::super_key::UserState;
-use crate::utils::check_keystore_permission;
-use crate::{database::MonotonicRawTime, error::map_or_log_err};
+use crate::utils::{check_key_permission, check_keystore_permission};
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::IKeyMintDevice::IKeyMintDevice;
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::SecurityLevel::SecurityLevel;
 use android_security_maintenance::aidl::android::security::maintenance::{
@@ -29,10 +30,12 @@ use android_security_maintenance::aidl::android::security::maintenance::{
     UserState::UserState as AidlUserState,
 };
 use android_security_maintenance::binder::{Interface, Result as BinderResult};
-use android_system_keystore2::aidl::android::system::keystore2::Domain::Domain;
 use android_system_keystore2::aidl::android::system::keystore2::ResponseCode::ResponseCode;
+use android_system_keystore2::aidl::android::system::keystore2::{
+    Domain::Domain, KeyDescriptor::KeyDescriptor,
+};
 use anyhow::{Context, Result};
-use binder::{IBinderInternal, Strong};
+use binder::{IBinderInternal, Strong, ThreadState};
 use keystore2_crypto::Password;
 
 /// This struct is defined to implement the aforementioned AIDL interface.
@@ -74,7 +77,7 @@ impl Maintenance {
         {
             UserState::LskfLocked => {
                 // Error - password can not be changed when the device is locked
-                Err(KeystoreError::Rc(ResponseCode::LOCKED))
+                Err(Error::Rc(ResponseCode::LOCKED))
                     .context("In on_user_password_changed. Device is locked.")
             }
             _ => {
@@ -141,6 +144,11 @@ impl Maintenance {
     fn early_boot_ended() -> Result<()> {
         check_keystore_permission(KeystorePerm::early_boot_ended())
             .context("In early_boot_ended. Checking permission")?;
+        log::info!("In early_boot_ended.");
+
+        if let Err(e) = DB.with(|db| SUPER_KEY.set_up_boot_level_cache(&mut db.borrow_mut())) {
+            log::error!("SUPER_KEY.set_up_boot_level_cache failed:\n{:?}\n:(", e);
+        }
 
         let sec_levels = [
             (SecurityLevel::TRUSTED_ENVIRONMENT, "TRUSTED_ENVIRONMENT"),
@@ -165,6 +173,43 @@ impl Maintenance {
 
         DB.with(|db| db.borrow_mut().update_last_off_body(MonotonicRawTime::now()))
             .context("In on_device_off_body: Trying to update last off body time.")
+    }
+
+    fn migrate_key_namespace(source: &KeyDescriptor, destination: &KeyDescriptor) -> Result<()> {
+        let caller_uid = ThreadState::get_calling_uid();
+
+        DB.with(|db| {
+            let key_id_guard = match source.domain {
+                Domain::APP | Domain::SELINUX | Domain::KEY_ID => {
+                    let (key_id_guard, _) = LEGACY_MIGRATOR
+                        .with_try_migrate(&source, caller_uid, || {
+                            db.borrow_mut().load_key_entry(
+                                &source,
+                                KeyType::Client,
+                                KeyEntryLoadBits::NONE,
+                                caller_uid,
+                                |k, av| {
+                                    check_key_permission(KeyPerm::use_(), k, &av)?;
+                                    check_key_permission(KeyPerm::delete(), k, &av)?;
+                                    check_key_permission(KeyPerm::grant(), k, &av)
+                                },
+                            )
+                        })
+                        .context("In migrate_key_namespace: Failed to load key blob.")?;
+                    key_id_guard
+                }
+                _ => {
+                    return Err(Error::Rc(ResponseCode::INVALID_ARGUMENT)).context(concat!(
+                        "In migrate_key_namespace: ",
+                        "Source domain must be one of APP, SELINUX, or KEY_ID."
+                    ))
+                }
+            };
+
+            db.borrow_mut().migrate_key_namespace(key_id_guard, destination, caller_uid, |k| {
+                check_key_permission(KeyPerm::rebind(), k, &None)
+            })
+        })
     }
 }
 
@@ -197,5 +242,13 @@ impl IKeystoreMaintenance for Maintenance {
 
     fn onDeviceOffBody(&self) -> BinderResult<()> {
         map_or_log_err(Self::on_device_off_body(), Ok)
+    }
+
+    fn migrateKeyNamespace(
+        &self,
+        source: &KeyDescriptor,
+        destination: &KeyDescriptor,
+    ) -> BinderResult<()> {
+        map_or_log_err(Self::migrate_key_namespace(source, destination), Ok)
     }
 }
