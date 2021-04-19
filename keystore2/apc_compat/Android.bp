@@ -41,12 +41,12 @@ rust_bindgen {
     source_stem: "bindings",
 
     bindgen_flags: [
-        "--whitelist-function=tryGetUserConfirmationService",
-        "--whitelist-function=promptUserConfirmation",
-        "--whitelist-function=abortUserConfirmation",
-        "--whitelist-function=closeUserConfirmationService",
-        "--whitelist-var=INVALID_SERVICE_HANDLE",
-        "--whitelist-var=APC_COMPAT_.*",
+        "--allowlist-function=tryGetUserConfirmationService",
+        "--allowlist-function=promptUserConfirmation",
+        "--allowlist-function=abortUserConfirmation",
+        "--allowlist-function=closeUserConfirmationService",
+        "--allowlist-var=INVALID_SERVICE_HANDLE",
+        "--allowlist-var=APC_COMPAT_.*",
     ],
 }
 

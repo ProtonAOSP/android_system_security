@@ -29,9 +29,9 @@ rust_bindgen {
 
     bindgen_flags: [
         "--size_t-is-usize",
-        "--whitelist-function=__system_property_find",
-        "--whitelist-function=__system_property_read_callback",
-        "--whitelist-function=__system_property_wait",
+        "--allowlist-function=__system_property_find",
+        "--allowlist-function=__system_property_read_callback",
+        "--allowlist-function=__system_property_wait",
     ],
 }
 
