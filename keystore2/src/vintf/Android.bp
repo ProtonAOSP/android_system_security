@@ -53,11 +53,11 @@ rust_bindgen {
     shared_libs: ["libvintf"],
     bindgen_flags: [
         "--size_t-is-usize",
-        "--whitelist-function", "getHalNames",
-        "--whitelist-function", "getHalNamesAndVersions",
-        "--whitelist-function", "getHidlInstances",
-        "--whitelist-function", "getAidlInstances",
-        "--whitelist-function", "freeNames",
+        "--allowlist-function", "getHalNames",
+        "--allowlist-function", "getHalNamesAndVersions",
+        "--allowlist-function", "getHidlInstances",
+        "--allowlist-function", "getAidlInstances",
+        "--allowlist-function", "freeNames",
     ],
 }
 
