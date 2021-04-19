@@ -108,7 +108,6 @@ bool isKeyCreationParameter(const KMV1::KeyParameter& param) {
     case Tag::EC_CURVE:
     case Tag::RSA_PUBLIC_EXPONENT:
     case Tag::RSA_OAEP_MGF_DIGEST:
-    case Tag::BLOB_USAGE_REQUIREMENTS:
     case Tag::BOOTLOADER_ONLY:
     case Tag::ROLLBACK_RESISTANCE:
     case Tag::EARLY_BOOT_ONLY:
@@ -589,7 +588,7 @@ ScopedAStatus KeyMintDevice::destroyAttestationIds() {
 ScopedAStatus KeyMintDevice::begin(KeyPurpose in_inPurpose,
                                    const std::vector<uint8_t>& prefixedKeyBlob,
                                    const std::vector<KeyParameter>& in_inParams,
-                                   const HardwareAuthToken& in_inAuthToken,
+                                   const std::optional<HardwareAuthToken>& in_inAuthToken,
                                    BeginResult* _aidl_return) {
     if (!mOperationSlots.claimSlot()) {
         return convertErrorCode(V4_0_ErrorCode::TOO_MANY_OPERATIONS);
@@ -686,11 +685,6 @@ KeyMintDevice::convertStorageKeyToEphemeral(const std::vector<uint8_t>& prefixed
         LOG(ERROR) << __func__ << " export_key failed, code " << int32_t(km_error);
 
     return convertErrorCode(km_error);
-}
-
-ScopedAStatus KeyMintDevice::performOperation(const std::vector<uint8_t>& /* request */,
-                                              std::vector<uint8_t>* /* response */) {
-    return convertErrorCode(KMV1::ErrorCode::UNIMPLEMENTED);
 }
 
 ScopedAStatus KeyMintOperation::updateAad(const std::vector<uint8_t>& input,
