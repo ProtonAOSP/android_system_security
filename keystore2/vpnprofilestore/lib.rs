@@ -75,15 +75,11 @@ impl DB {
     }
 
     fn is_locked_error(e: &anyhow::Error) -> bool {
-        matches!(e.root_cause().downcast_ref::<rusqlite::ffi::Error>(),
-        Some(rusqlite::ffi::Error {
-            code: rusqlite::ErrorCode::DatabaseBusy,
-            ..
-        })
-        | Some(rusqlite::ffi::Error {
-            code: rusqlite::ErrorCode::DatabaseLocked,
-            ..
-        }))
+        matches!(
+            e.root_cause().downcast_ref::<rusqlite::ffi::Error>(),
+            Some(rusqlite::ffi::Error { code: rusqlite::ErrorCode::DatabaseBusy, .. })
+                | Some(rusqlite::ffi::Error { code: rusqlite::ErrorCode::DatabaseLocked, .. })
+        )
     }
 
     fn init_tables(&mut self) -> Result<()> {
@@ -192,7 +188,7 @@ where
 {
     result.map_or_else(
         |e| {
-            log::error!("{:#?}", e);
+            log::error!("{:?}", e);
             let root_cause = e.root_cause();
             let rc = match root_cause.downcast_ref::<Error>() {
                 Some(Error::Error(e)) => *e,
