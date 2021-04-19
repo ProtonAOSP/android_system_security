@@ -39,8 +39,8 @@ rust_bindgen {
 
     bindgen_flags: [
         "--size_t-is-usize",
-        "--whitelist-function=aaid_keystore_attestation_id",
-        "--whitelist-var=KEY_ATTESTATION_APPLICATION_ID_MAX_SIZE",
+        "--allowlist-function=aaid_keystore_attestation_id",
+        "--allowlist-var=KEY_ATTESTATION_APPLICATION_ID_MAX_SIZE",
     ],
 }
 
