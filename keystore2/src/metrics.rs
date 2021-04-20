@@ -13,6 +13,7 @@
 // limitations under the License.
 
 //! This module provides convenience functions for keystore2 logging.
+use crate::async_task::AsyncTask;
 use crate::error::get_error_code;
 use crate::globals::DB;
 use crate::key_parameter::KeyParameterValue as KsKeyParamValue;
@@ -25,6 +26,7 @@ use android_hardware_security_keymint::aidl::android::hardware::security::keymin
 };
 use anyhow::Result;
 use keystore2_system_property::PropertyWatcher;
+use lazy_static::lazy_static;
 use statslog_rust::{
     keystore2_key_creation_event_reported::{
         Algorithm as StatsdAlgorithm, EcCurve as StatsdEcCurve, KeyOrigin as StatsdKeyOrigin,
@@ -39,6 +41,11 @@ use statslog_rust::{
 };
 use statslog_rust_header::Atoms;
 use statspull_rust::{set_pull_atom_callback, StatsPullResult};
+
+lazy_static! {
+    /// Background thread which handles logging via statsd
+    static ref STATSD_LOGS_HANDLER: AsyncTask = Default::default();
+}
 
 fn create_default_key_creation_atom() -> Keystore2KeyCreationEventReported {
     // If a value is not present, fields represented by bitmaps and i32 fields
@@ -88,14 +95,13 @@ pub fn log_key_creation_event_stats<U>(
     let key_creation_event_stats =
         construct_key_creation_event_stats(sec_level, key_params, result);
 
-    let logging_result = key_creation_event_stats.stats_write();
+    STATSD_LOGS_HANDLER.queue_lo(move |_| {
+        let logging_result = key_creation_event_stats.stats_write();
 
-    if let Err(e) = logging_result {
-        log::error!(
-            "In log_key_creation_event_stats. Error in logging key creation event. {:?}",
-            e
-        );
-    }
+        if let Err(e) = logging_result {
+            log::error!("Error in logging key creation event in the async task. {:?}", e);
+        }
+    });
 }
 
 /// Log key operation events via statsd API.
@@ -114,14 +120,13 @@ pub fn log_key_operation_event_stats(
         key_upgraded,
     );
 
-    let logging_result = key_operation_event_stats.stats_write();
+    STATSD_LOGS_HANDLER.queue_lo(move |_| {
+        let logging_result = key_operation_event_stats.stats_write();
 
-    if let Err(e) = logging_result {
-        log::error!(
-            "In log_key_operation_event_stats. Error in logging key operation event. {:?}",
-            e
-        );
-    }
+        if let Err(e) = logging_result {
+            log::error!("Error in logging key operation event in the async task. {:?}", e);
+        }
+    });
 }
 
 fn construct_key_creation_event_stats<U>(
