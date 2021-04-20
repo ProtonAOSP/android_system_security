@@ -14,6 +14,7 @@
 
 //! This module provides convenience functions for keystore2 logging.
 use crate::error::get_error_code;
+use crate::globals::DB;
 use crate::key_parameter::KeyParameterValue as KsKeyParamValue;
 use crate::operation::Outcome;
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
@@ -22,15 +23,22 @@ use android_hardware_security_keymint::aidl::android::hardware::security::keymin
     KeyParameter::KeyParameter, KeyPurpose::KeyPurpose, PaddingMode::PaddingMode,
     SecurityLevel::SecurityLevel,
 };
-use statslog_rust::keystore2_key_creation_event_reported::{
-    Algorithm as StatsdAlgorithm, EcCurve as StatsdEcCurve, KeyOrigin as StatsdKeyOrigin,
-    Keystore2KeyCreationEventReported, SecurityLevel as StatsdKeyCreationSecurityLevel,
-    UserAuthType as StatsdUserAuthType,
+use anyhow::Result;
+use keystore2_system_property::PropertyWatcher;
+use statslog_rust::{
+    keystore2_key_creation_event_reported::{
+        Algorithm as StatsdAlgorithm, EcCurve as StatsdEcCurve, KeyOrigin as StatsdKeyOrigin,
+        Keystore2KeyCreationEventReported, SecurityLevel as StatsdKeyCreationSecurityLevel,
+        UserAuthType as StatsdUserAuthType,
+    },
+    keystore2_key_operation_event_reported::{
+        Keystore2KeyOperationEventReported, Outcome as StatsdOutcome, Purpose as StatsdKeyPurpose,
+        SecurityLevel as StatsdKeyOperationSecurityLevel,
+    },
+    keystore2_storage_stats::StorageType as StatsdStorageType,
 };
-use statslog_rust::keystore2_key_operation_event_reported::{
-    Keystore2KeyOperationEventReported, Outcome as StatsdOutcome, Purpose as StatsdKeyPurpose,
-    SecurityLevel as StatsdKeyOperationSecurityLevel,
-};
+use statslog_rust_header::Atoms;
+use statspull_rust::{set_pull_atom_callback, StatsPullResult};
 
 fn create_default_key_creation_atom() -> Keystore2KeyCreationEventReported {
     // If a value is not present, fields represented by bitmaps and i32 fields
@@ -75,7 +83,7 @@ fn create_default_key_operation_atom() -> Keystore2KeyOperationEventReported {
 pub fn log_key_creation_event_stats<U>(
     sec_level: SecurityLevel,
     key_params: &[KeyParameter],
-    result: &anyhow::Result<U>,
+    result: &Result<U>,
 ) {
     let key_creation_event_stats =
         construct_key_creation_event_stats(sec_level, key_params, result);
@@ -119,7 +127,7 @@ pub fn log_key_operation_event_stats(
 fn construct_key_creation_event_stats<U>(
     sec_level: SecurityLevel,
     key_params: &[KeyParameter],
-    result: &anyhow::Result<U>,
+    result: &Result<U>,
 ) -> Keystore2KeyCreationEventReported {
     let mut key_creation_event_atom = create_default_key_creation_atom();
 
@@ -375,6 +383,55 @@ fn compute_block_mode_bitmap(block_mode_bitmap: &i32, block_mode: BlockMode) -> 
     }
     bitmap
 }
+
+/// Registers pull metrics callbacks
+pub fn register_pull_metrics_callbacks() -> Result<()> {
+    // Before registering the callbacks with statsd, we have to wait for the system to finish
+    // booting up. This avoids possible races that may occur at startup. For example, statsd
+    // depends on a companion service, and if registration happens too soon it will fail since
+    // the companion service isn't up yet.
+    let mut watcher = PropertyWatcher::new("sys.boot_completed")?;
+    loop {
+        watcher.wait()?;
+        let value = watcher.read(|_name, value| Ok(value.trim().to_string()));
+        if value? == "1" {
+            set_pull_atom_callback(Atoms::Keystore2StorageStats, None, pull_metrics_callback);
+            break;
+        }
+    }
+    Ok(())
+}
+
+fn pull_metrics_callback() -> StatsPullResult {
+    let mut result = StatsPullResult::new();
+    let mut append = |stat| {
+        match stat {
+            Ok(s) => result.push(Box::new(s)),
+            Err(error) => {
+                log::error!("pull_metrics_callback: Error getting storage stat: {}", error)
+            }
+        };
+    };
+    DB.with(|db| {
+        let mut db = db.borrow_mut();
+        append(db.get_storage_stat(StatsdStorageType::Database));
+        append(db.get_storage_stat(StatsdStorageType::KeyEntry));
+        append(db.get_storage_stat(StatsdStorageType::KeyEntryIdIndex));
+        append(db.get_storage_stat(StatsdStorageType::KeyEntryDomainNamespaceIndex));
+        append(db.get_storage_stat(StatsdStorageType::BlobEntry));
+        append(db.get_storage_stat(StatsdStorageType::BlobEntryKeyEntryIdIndex));
+        append(db.get_storage_stat(StatsdStorageType::KeyParameter));
+        append(db.get_storage_stat(StatsdStorageType::KeyParameterKeyEntryIdIndex));
+        append(db.get_storage_stat(StatsdStorageType::KeyMetadata));
+        append(db.get_storage_stat(StatsdStorageType::KeyMetadataKeyEntryIdIndex));
+        append(db.get_storage_stat(StatsdStorageType::Grant));
+        append(db.get_storage_stat(StatsdStorageType::AuthToken));
+        append(db.get_storage_stat(StatsdStorageType::BlobMetadata));
+        append(db.get_storage_stat(StatsdStorageType::BlobMetadataBlobEntryIdIndex));
+    });
+    result
+}
+
 /// Enum defining the bit position for each padding mode. Since padding mode can be repeatable, it
 /// is represented using a bitmap.
 #[allow(non_camel_case_types)]
