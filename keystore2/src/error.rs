@@ -140,7 +140,7 @@ pub fn map_binder_status_code<T>(r: Result<T, StatusCode>) -> Result<T, Error> {
 /// This function should be used by Keystore service calls to translate error conditions
 /// into service specific exceptions.
 ///
-/// All error conditions get logged by this function.
+/// All error conditions get logged by this function, except for KEY_NOT_FOUND error.
 ///
 /// All `Error::Rc(x)` and `Error::Km(x)` variants get mapped onto a service specific error
 /// code of x. This is possible because KeyMint `ErrorCode` errors are always negative and
@@ -174,7 +174,13 @@ where
     map_err_with(
         result,
         |e| {
-            log::error!("{:?}", e);
+            // Make the key not found errors silent.
+            if !matches!(
+                e.root_cause().downcast_ref::<Error>(),
+                Some(Error::Rc(ResponseCode::KEY_NOT_FOUND))
+            ) {
+                log::error!("{:?}", e);
+            }
             e
         },
         handle_ok,
