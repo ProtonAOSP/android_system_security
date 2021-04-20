@@ -173,7 +173,7 @@ impl Error {
 /// This function should be used by vpnprofilestore service calls to translate error conditions
 /// into service specific exceptions.
 ///
-/// All error conditions get logged by this function.
+/// All error conditions get logged by this function, except for ERROR_PROFILE_NOT_FOUND error.
 ///
 /// `Error::Error(x)` variants get mapped onto a service specific error code of `x`.
 ///
@@ -188,12 +188,16 @@ where
 {
     result.map_or_else(
         |e| {
-            log::error!("{:?}", e);
             let root_cause = e.root_cause();
-            let rc = match root_cause.downcast_ref::<Error>() {
-                Some(Error::Error(e)) => *e,
-                Some(Error::Binder(_, _)) | None => ERROR_SYSTEM_ERROR,
+            let (rc, log_error) = match root_cause.downcast_ref::<Error>() {
+                // Make the profile not found errors silent.
+                Some(Error::Error(ERROR_PROFILE_NOT_FOUND)) => (ERROR_PROFILE_NOT_FOUND, false),
+                Some(Error::Error(e)) => (*e, true),
+                Some(Error::Binder(_, _)) | None => (ERROR_SYSTEM_ERROR, true),
             };
+            if log_error {
+                log::error!("{:?}", e);
+            }
             Err(BinderStatus::new_service_specific_error(rc, None))
         },
         handle_ok,
