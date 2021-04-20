@@ -54,6 +54,8 @@ rust_defaults {
         "librand",
         "librusqlite",
         "libstatslog_rust",
+        "libstatslog_rust_header",
+        "libstatspull_rust",
         "libthiserror",
     ],
     shared_libs: [

@@ -72,6 +72,9 @@ use android_system_keystore2::aidl::android::system::keystore2::{
 use android_security_remoteprovisioning::aidl::android::security::remoteprovisioning::{
     AttestationPoolStatus::AttestationPoolStatus,
 };
+use statslog_rust::keystore2_storage_stats::{
+	Keystore2StorageStats, StorageType as StatsdStorageType,
+};
 
 use keystore2_crypto::ZVec;
 use lazy_static::lazy_static;
@@ -829,6 +832,9 @@ impl KeystoreDB {
     const UNASSIGNED_KEY_ID: i64 = -1i64;
     const PERBOOT_DB_FILE_NAME: &'static str = &"file:perboot.sqlite?mode=memory&cache=shared";
 
+    /// Name of the file that holds the cross-boot persistent database.
+    pub const PERSISTENT_DB_FILENAME: &'static str = &"persistent.sqlite";
+
     /// This creates a PerBootDbKeepAlive object to keep the per boot database alive.
     pub fn keep_perboot_db_alive() -> Result<PerBootDbKeepAlive> {
         let conn = Connection::open_in_memory()
@@ -847,7 +853,7 @@ impl KeystoreDB {
     pub fn new(db_root: &Path, gc: Option<Gc>) -> Result<Self> {
         // Build the path to the sqlite file.
         let mut persistent_path = db_root.to_path_buf();
-        persistent_path.push("persistent.sqlite");
+        persistent_path.push(Self::PERSISTENT_DB_FILENAME);
 
         // Now convert them to strings prefixed with "file:"
         let mut persistent_path_str = "file:".to_owned();
@@ -1040,6 +1046,100 @@ impl KeystoreDB {
         }
 
         Ok(conn)
+    }
+
+    fn do_table_size_query(
+        &mut self,
+        storage_type: StatsdStorageType,
+        query: &str,
+        params: &[&str],
+    ) -> Result<Keystore2StorageStats> {
+        let (total, unused) = self.with_transaction(TransactionBehavior::Deferred, |tx| {
+            tx.query_row(query, params, |row| Ok((row.get(0)?, row.get(1)?)))
+                .with_context(|| {
+                    format!("get_storage_stat: Error size of storage type {}", storage_type as i32)
+                })
+                .no_gc()
+        })?;
+        Ok(Keystore2StorageStats { storage_type, size: total, unused_size: unused })
+    }
+
+    fn get_total_size(&mut self) -> Result<Keystore2StorageStats> {
+        self.do_table_size_query(
+            StatsdStorageType::Database,
+            "SELECT page_count * page_size, freelist_count * page_size
+             FROM pragma_page_count('persistent'),
+                  pragma_page_size('persistent'),
+                  persistent.pragma_freelist_count();",
+            &[],
+        )
+    }
+
+    fn get_table_size(
+        &mut self,
+        storage_type: StatsdStorageType,
+        schema: &str,
+        table: &str,
+    ) -> Result<Keystore2StorageStats> {
+        self.do_table_size_query(
+            storage_type,
+            "SELECT pgsize,unused FROM dbstat(?1)
+             WHERE name=?2 AND aggregate=TRUE;",
+            &[schema, table],
+        )
+    }
+
+    /// Fetches a storage statisitics atom for a given storage type. For storage
+    /// types that map to a table, information about the table's storage is
+    /// returned. Requests for storage types that are not DB tables return None.
+    pub fn get_storage_stat(
+        &mut self,
+        storage_type: StatsdStorageType,
+    ) -> Result<Keystore2StorageStats> {
+        match storage_type {
+            StatsdStorageType::Database => self.get_total_size(),
+            StatsdStorageType::KeyEntry => {
+                self.get_table_size(storage_type, "persistent", "keyentry")
+            }
+            StatsdStorageType::KeyEntryIdIndex => {
+                self.get_table_size(storage_type, "persistent", "keyentry_id_index")
+            }
+            StatsdStorageType::KeyEntryDomainNamespaceIndex => {
+                self.get_table_size(storage_type, "persistent", "keyentry_domain_namespace_index")
+            }
+            StatsdStorageType::BlobEntry => {
+                self.get_table_size(storage_type, "persistent", "blobentry")
+            }
+            StatsdStorageType::BlobEntryKeyEntryIdIndex => {
+                self.get_table_size(storage_type, "persistent", "blobentry_keyentryid_index")
+            }
+            StatsdStorageType::KeyParameter => {
+                self.get_table_size(storage_type, "persistent", "keyparameter")
+            }
+            StatsdStorageType::KeyParameterKeyEntryIdIndex => {
+                self.get_table_size(storage_type, "persistent", "keyparameter_keyentryid_index")
+            }
+            StatsdStorageType::KeyMetadata => {
+                self.get_table_size(storage_type, "persistent", "keymetadata")
+            }
+            StatsdStorageType::KeyMetadataKeyEntryIdIndex => {
+                self.get_table_size(storage_type, "persistent", "keymetadata_keyentryid_index")
+            }
+            StatsdStorageType::Grant => self.get_table_size(storage_type, "persistent", "grant"),
+            StatsdStorageType::AuthToken => {
+                self.get_table_size(storage_type, "perboot", "authtoken")
+            }
+            StatsdStorageType::BlobMetadata => {
+                self.get_table_size(storage_type, "persistent", "blobmetadata")
+            }
+            StatsdStorageType::BlobMetadataBlobEntryIdIndex => {
+                self.get_table_size(storage_type, "persistent", "blobmetadata_blobentryid_index")
+            }
+            _ => Err(anyhow::Error::msg(format!(
+                "Unsupported storage type: {}",
+                storage_type as i32
+            ))),
+        }
     }
 
     /// This function is intended to be used by the garbage collector.
@@ -3072,6 +3172,8 @@ mod tests {
     use rusqlite::NO_PARAMS;
     use rusqlite::{Error, TransactionBehavior};
     use std::cell::RefCell;
+    use std::collections::BTreeMap;
+    use std::fmt::Write;
     use std::sync::atomic::{AtomicU8, Ordering};
     use std::sync::Arc;
     use std::thread;
@@ -5170,6 +5272,194 @@ mod tests {
         let decrypted_secret_bytes =
             loaded_super_key.aes_gcm_decrypt(&encrypted_secret, &iv, &tag)?;
         assert_eq!(secret_bytes, &*decrypted_secret_bytes);
+        Ok(())
+    }
+
+    fn get_valid_statsd_storage_types() -> Vec<StatsdStorageType> {
+        vec![
+            StatsdStorageType::KeyEntry,
+            StatsdStorageType::KeyEntryIdIndex,
+            StatsdStorageType::KeyEntryDomainNamespaceIndex,
+            StatsdStorageType::BlobEntry,
+            StatsdStorageType::BlobEntryKeyEntryIdIndex,
+            StatsdStorageType::KeyParameter,
+            StatsdStorageType::KeyParameterKeyEntryIdIndex,
+            StatsdStorageType::KeyMetadata,
+            StatsdStorageType::KeyMetadataKeyEntryIdIndex,
+            StatsdStorageType::Grant,
+            StatsdStorageType::AuthToken,
+            StatsdStorageType::BlobMetadata,
+            StatsdStorageType::BlobMetadataBlobEntryIdIndex,
+        ]
+    }
+
+    /// Perform a simple check to ensure that we can query all the storage types
+    /// that are supported by the DB. Check for reasonable values.
+    #[test]
+    fn test_query_all_valid_table_sizes() -> Result<()> {
+        const PAGE_SIZE: i64 = 4096;
+
+        let mut db = new_test_db()?;
+
+        for t in get_valid_statsd_storage_types() {
+            let stat = db.get_storage_stat(t)?;
+            assert!(stat.size >= PAGE_SIZE);
+            assert!(stat.size >= stat.unused_size);
+        }
+
+        Ok(())
+    }
+
+    fn get_storage_stats_map(db: &mut KeystoreDB) -> BTreeMap<i32, Keystore2StorageStats> {
+        get_valid_statsd_storage_types()
+            .into_iter()
+            .map(|t| (t as i32, db.get_storage_stat(t).unwrap()))
+            .collect()
+    }
+
+    fn assert_storage_increased(
+        db: &mut KeystoreDB,
+        increased_storage_types: Vec<StatsdStorageType>,
+        baseline: &mut BTreeMap<i32, Keystore2StorageStats>,
+    ) {
+        for storage in increased_storage_types {
+            // Verify the expected storage increased.
+            let new = db.get_storage_stat(storage).unwrap();
+            let storage = storage as i32;
+            let old = &baseline[&storage];
+            assert!(new.size >= old.size, "{}: {} >= {}", storage, new.size, old.size);
+            assert!(
+                new.unused_size <= old.unused_size,
+                "{}: {} <= {}",
+                storage,
+                new.unused_size,
+                old.unused_size
+            );
+
+            // Update the baseline with the new value so that it succeeds in the
+            // later comparison.
+            baseline.insert(storage, new);
+        }
+
+        // Get an updated map of the storage and verify there were no unexpected changes.
+        let updated_stats = get_storage_stats_map(db);
+        assert_eq!(updated_stats.len(), baseline.len());
+
+        for &k in baseline.keys() {
+            let stringify = |map: &BTreeMap<i32, Keystore2StorageStats>| -> String {
+                let mut s = String::new();
+                for &k in map.keys() {
+                    writeln!(&mut s, "  {}: {}, {}", &k, map[&k].size, map[&k].unused_size)
+                        .expect("string concat failed");
+                }
+                s
+            };
+
+            assert!(
+                updated_stats[&k].size == baseline[&k].size
+                    && updated_stats[&k].unused_size == baseline[&k].unused_size,
+                "updated_stats:\n{}\nbaseline:\n{}",
+                stringify(&updated_stats),
+                stringify(&baseline)
+            );
+        }
+    }
+
+    #[test]
+    fn test_verify_key_table_size_reporting() -> Result<()> {
+        let mut db = new_test_db()?;
+        let mut working_stats = get_storage_stats_map(&mut db);
+
+        let key_id = db.create_key_entry(&Domain::APP, &42, &KEYSTORE_UUID)?;
+        assert_storage_increased(
+            &mut db,
+            vec![
+                StatsdStorageType::KeyEntry,
+                StatsdStorageType::KeyEntryIdIndex,
+                StatsdStorageType::KeyEntryDomainNamespaceIndex,
+            ],
+            &mut working_stats,
+        );
+
+        let mut blob_metadata = BlobMetaData::new();
+        blob_metadata.add(BlobMetaEntry::EncryptedBy(EncryptedBy::Password));
+        db.set_blob(&key_id, SubComponentType::KEY_BLOB, Some(TEST_KEY_BLOB), None)?;
+        assert_storage_increased(
+            &mut db,
+            vec![
+                StatsdStorageType::BlobEntry,
+                StatsdStorageType::BlobEntryKeyEntryIdIndex,
+                StatsdStorageType::BlobMetadata,
+                StatsdStorageType::BlobMetadataBlobEntryIdIndex,
+            ],
+            &mut working_stats,
+        );
+
+        let params = make_test_params(None);
+        db.insert_keyparameter(&key_id, &params)?;
+        assert_storage_increased(
+            &mut db,
+            vec![StatsdStorageType::KeyParameter, StatsdStorageType::KeyParameterKeyEntryIdIndex],
+            &mut working_stats,
+        );
+
+        let mut metadata = KeyMetaData::new();
+        metadata.add(KeyMetaEntry::CreationDate(DateTime::from_millis_epoch(123456789)));
+        db.insert_key_metadata(&key_id, &metadata)?;
+        assert_storage_increased(
+            &mut db,
+            vec![StatsdStorageType::KeyMetadata, StatsdStorageType::KeyMetadataKeyEntryIdIndex],
+            &mut working_stats,
+        );
+
+        let mut sum = 0;
+        for stat in working_stats.values() {
+            sum += stat.size;
+        }
+        let total = db.get_storage_stat(StatsdStorageType::Database)?.size;
+        assert!(sum <= total, "Expected sum <= total. sum: {}, total: {}", sum, total);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_verify_auth_table_size_reporting() -> Result<()> {
+        let mut db = new_test_db()?;
+        let mut working_stats = get_storage_stats_map(&mut db);
+        db.insert_auth_token(&HardwareAuthToken {
+            challenge: 123,
+            userId: 456,
+            authenticatorId: 789,
+            authenticatorType: kmhw_authenticator_type::ANY,
+            timestamp: Timestamp { milliSeconds: 10 },
+            mac: b"mac".to_vec(),
+        })?;
+        assert_storage_increased(&mut db, vec![StatsdStorageType::AuthToken], &mut working_stats);
+        Ok(())
+    }
+
+    #[test]
+    fn test_verify_grant_table_size_reporting() -> Result<()> {
+        const OWNER: i64 = 1;
+        let mut db = new_test_db()?;
+        make_test_key_entry(&mut db, Domain::APP, OWNER, TEST_ALIAS, None)?;
+
+        let mut working_stats = get_storage_stats_map(&mut db);
+        db.grant(
+            &KeyDescriptor {
+                domain: Domain::APP,
+                nspace: 0,
+                alias: Some(TEST_ALIAS.to_string()),
+                blob: None,
+            },
+            OWNER as u32,
+            123,
+            key_perm_set![KeyPerm::use_()],
+            |_, _| Ok(()),
+        )?;
+
+        assert_storage_increased(&mut db, vec![StatsdStorageType::Grant], &mut working_stats);
+
         Ok(())
     }
 }
