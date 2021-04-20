@@ -224,6 +224,7 @@ pub fn get_level_zero_key(db: &mut KeystoreDB) -> Result<ZVec> {
         KeyParameterValue::KeySize(256).into(),
         KeyParameterValue::MinMacLength(256).into(),
         KeyParameterValue::KeyPurpose(KeyPurpose::SIGN).into(),
+        KeyParameterValue::NoAuthRequired.into(),
         KeyParameterValue::MaxUsesPerBoot(1).into(),
     ];
     // We use TRUSTED_ENVIRONMENT here because it is the authority on when
