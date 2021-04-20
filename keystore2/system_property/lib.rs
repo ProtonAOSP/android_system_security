@@ -15,8 +15,9 @@
 //! This crate provides the PropertyWatcher type, which watches for changes
 //! in Android system properties.
 
+use keystore2_system_property_bindgen::prop_info as PropInfo;
 use std::os::raw::c_char;
-use std::ptr::null_mut;
+use std::ptr::null;
 use std::{
     ffi::{c_void, CStr, CString},
     str::Utf8Error,
@@ -56,27 +57,34 @@ pub type Result<T> = std::result::Result<T, PropertyWatcherError>;
 /// as `keystore.boot_level`; it can report the current value of this
 /// property, or wait for it to change.
 pub struct PropertyWatcher {
-    prop_info: *const keystore2_system_property_bindgen::prop_info,
+    prop_name: CString,
+    prop_info: *const PropInfo,
     serial: keystore2_system_property_bindgen::__uint32_t,
 }
 
 impl PropertyWatcher {
     /// Create a PropertyWatcher for the named system property.
     pub fn new(name: &str) -> Result<Self> {
-        let cstr = CString::new(name)?;
-        // Unsafe FFI call. We generate the CStr in this function
-        // and so ensure it is valid during call.
-        // Returned pointer is valid for the lifetime of the program.
-        let prop_info =
-            unsafe { keystore2_system_property_bindgen::__system_property_find(cstr.as_ptr()) };
-        if prop_info.is_null() {
-            Err(PropertyWatcherError::SystemPropertyAbsent)
+        Ok(Self { prop_name: CString::new(name)?, prop_info: null(), serial: 0 })
+    }
+
+    // Lazy-initializing accessor for self.prop_info.
+    fn get_prop_info(&mut self) -> Option<*const PropInfo> {
+        if self.prop_info.is_null() {
+            // Unsafe required for FFI call. Input and output are both const.
+            // The returned pointer is valid for the lifetime of the program.
+            self.prop_info = unsafe {
+                keystore2_system_property_bindgen::__system_property_find(self.prop_name.as_ptr())
+            };
+        }
+        if self.prop_info.is_null() {
+            None
         } else {
-            Ok(Self { prop_info, serial: 0 })
+            Some(self.prop_info)
         }
     }
 
-    fn read_raw(&self, mut f: impl FnOnce(Option<&CStr>, Option<&CStr>)) {
+    fn read_raw(prop_info: *const PropInfo, mut f: impl FnOnce(Option<&CStr>, Option<&CStr>)) {
         // Unsafe function converts values passed to us by
         // __system_property_read_callback to Rust form
         // and pass them to inner callback.
@@ -98,7 +106,7 @@ impl PropertyWatcher {
         // to a void pointer, and unwrap it in our callback.
         unsafe {
             keystore2_system_property_bindgen::__system_property_read_callback(
-                self.prop_info,
+                prop_info,
                 Some(callback),
                 &mut f as *mut _ as *mut c_void,
             )
@@ -108,12 +116,14 @@ impl PropertyWatcher {
     /// Call the passed function, passing it the name and current value
     /// of this system property. See documentation for
     /// `__system_property_read_callback` for details.
-    pub fn read<T, F>(&self, f: F) -> Result<T>
+    /// Returns an error if the property is empty or doesn't exist.
+    pub fn read<T, F>(&mut self, f: F) -> Result<T>
     where
         F: FnOnce(&str, &str) -> anyhow::Result<T>,
     {
+        let prop_info = self.get_prop_info().ok_or(PropertyWatcherError::SystemPropertyAbsent)?;
         let mut result = Err(PropertyWatcherError::ReadCallbackNotCalled);
-        self.read_raw(|name, value| {
+        Self::read_raw(prop_info, |name, value| {
             // use a wrapping closure as an erzatz try block.
             result = (|| {
                 let name = name.ok_or(PropertyWatcherError::MissingCString)?.to_str()?;
@@ -124,10 +134,43 @@ impl PropertyWatcher {
         result
     }
 
+    // Waits for the property that self is watching to be created. Returns immediately if the
+    // property already exists.
+    fn wait_for_property_creation(&mut self) -> Result<()> {
+        let mut global_serial = 0;
+        loop {
+            match self.get_prop_info() {
+                Some(_) => return Ok(()),
+                None => {
+                    // Unsafe call for FFI. The function modifies only global_serial, and has
+                    // no side-effects.
+                    if !unsafe {
+                        // Wait for a global serial number change, then try again. On success,
+                        // the function will update global_serial with the last version seen.
+                        keystore2_system_property_bindgen::__system_property_wait(
+                            null(),
+                            global_serial,
+                            &mut global_serial,
+                            null(),
+                        )
+                    } {
+                        return Err(PropertyWatcherError::WaitFailed);
+                    }
+                }
+            }
+        }
+    }
+
     /// Wait for the system property to change. This
     /// records the serial number of the last change, so
     /// race conditions are avoided.
     pub fn wait(&mut self) -> Result<()> {
+        // If the property is null, then wait for it to be created. Subsequent waits will
+        // skip this step and wait for our specific property to change.
+        if self.prop_info.is_null() {
+            return self.wait_for_property_creation();
+        }
+
         let mut new_serial = self.serial;
         // Unsafe block to call __system_property_wait.
         // All arguments are private to PropertyWatcher so we
@@ -137,7 +180,7 @@ impl PropertyWatcher {
                 self.prop_info,
                 self.serial,
                 &mut new_serial,
-                null_mut(),
+                null(),
             )
         } {
             return Err(PropertyWatcherError::WaitFailed);
