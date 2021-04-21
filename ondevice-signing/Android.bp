@@ -87,6 +87,7 @@ cc_binary {
     "Keymaster.cpp",
     "KeymasterSigningKey.cpp",
     "KeystoreKey.cpp",
+    "KeystoreHmacKey.cpp",
     "VerityUtils.cpp",
   ],
 
