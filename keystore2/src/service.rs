@@ -37,13 +37,13 @@ use crate::{
     id_rotation::IdRotationState,
 };
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::SecurityLevel::SecurityLevel;
+use android_hardware_security_keymint::binder::{BinderFeatures, Strong, ThreadState};
 use android_system_keystore2::aidl::android::system::keystore2::{
     Domain::Domain, IKeystoreSecurityLevel::IKeystoreSecurityLevel,
     IKeystoreService::BnKeystoreService, IKeystoreService::IKeystoreService,
     KeyDescriptor::KeyDescriptor, KeyEntryResponse::KeyEntryResponse, KeyMetadata::KeyMetadata,
 };
 use anyhow::{Context, Result};
-use binder::{IBinderInternal, Strong, ThreadState};
 use error::Error;
 use keystore2_selinux as selinux;
 
@@ -90,9 +90,10 @@ impl KeystoreService {
                 "In KeystoreService::new_native_binder: Trying to initialize the legacy migrator.",
             )?;
 
-        let result = BnKeystoreService::new_binder(result);
-        result.as_binder().set_requesting_sid(true);
-        Ok(result)
+        Ok(BnKeystoreService::new_binder(
+            result,
+            BinderFeatures { set_requesting_sid: true, ..BinderFeatures::default() },
+        ))
     }
 
     fn uuid_to_sec_level(&self, uuid: &Uuid) -> SecurityLevel {
