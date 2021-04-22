@@ -61,47 +61,54 @@ struct AuthRequest {
     state: AuthRequestState,
     /// This need to be set to Some to fulfill a AuthRequestState::OpAuth or
     /// AuthRequestState::TimeStampedOpAuth.
-    hat: Option<HardwareAuthToken>,
+    hat: Mutex<Option<HardwareAuthToken>>,
 }
 
+unsafe impl Sync for AuthRequest {}
+
 impl AuthRequest {
-    fn op_auth() -> Arc<Mutex<Self>> {
-        Arc::new(Mutex::new(Self { state: AuthRequestState::OpAuth, hat: None }))
+    fn op_auth() -> Arc<Self> {
+        Arc::new(Self { state: AuthRequestState::OpAuth, hat: Mutex::new(None) })
     }
 
-    fn timestamped_op_auth(receiver: Receiver<Result<TimeStampToken, Error>>) -> Arc<Mutex<Self>> {
-        Arc::new(Mutex::new(Self {
+    fn timestamped_op_auth(receiver: Receiver<Result<TimeStampToken, Error>>) -> Arc<Self> {
+        Arc::new(Self {
             state: AuthRequestState::TimeStampedOpAuth(receiver),
-            hat: None,
-        }))
+            hat: Mutex::new(None),
+        })
     }
 
     fn timestamp(
         hat: HardwareAuthToken,
         receiver: Receiver<Result<TimeStampToken, Error>>,
-    ) -> Arc<Mutex<Self>> {
-        Arc::new(Mutex::new(Self { state: AuthRequestState::TimeStamp(receiver), hat: Some(hat) }))
+    ) -> Arc<Self> {
+        Arc::new(Self { state: AuthRequestState::TimeStamp(receiver), hat: Mutex::new(Some(hat)) })
     }
 
-    fn add_auth_token(&mut self, hat: HardwareAuthToken) {
-        self.hat = Some(hat)
+    fn add_auth_token(&self, hat: HardwareAuthToken) {
+        *self.hat.lock().unwrap() = Some(hat)
     }
 
-    fn get_auth_tokens(&mut self) -> Result<(HardwareAuthToken, Option<TimeStampToken>)> {
-        match (&self.state, self.hat.is_some()) {
-            (AuthRequestState::OpAuth, true) => Ok((self.hat.take().unwrap(), None)),
-            (AuthRequestState::TimeStampedOpAuth(recv), true)
-            | (AuthRequestState::TimeStamp(recv), true) => {
+    fn get_auth_tokens(&self) -> Result<(HardwareAuthToken, Option<TimeStampToken>)> {
+        let hat = self
+            .hat
+            .lock()
+            .unwrap()
+            .take()
+            .ok_or(Error::Km(ErrorCode::KEY_USER_NOT_AUTHENTICATED))
+            .context("In get_auth_tokens: No operation auth token received.")?;
+
+        let tst = match &self.state {
+            AuthRequestState::TimeStampedOpAuth(recv) | AuthRequestState::TimeStamp(recv) => {
                 let result = recv.recv().context("In get_auth_tokens: Sender disconnected.")?;
-                let tst = result.context(concat!(
+                Some(result.context(concat!(
                     "In get_auth_tokens: Worker responded with error ",
                     "from generating timestamp token."
-                ))?;
-                Ok((self.hat.take().unwrap(), Some(tst)))
+                ))?)
             }
-            (_, false) => Err(Error::Km(ErrorCode::KEY_USER_NOT_AUTHENTICATED))
-                .context("In get_auth_tokens: No operation auth token received."),
-        }
+            AuthRequestState::OpAuth => None,
+        };
+        Ok((hat, tst))
     }
 }
 
@@ -127,7 +134,7 @@ enum DeferredAuthState {
     /// We block on timestamp tokens, because we can always make progress on these requests.
     /// The per-op auth tokens might never come, which means we fail if the client calls
     /// update or finish before we got a per-op auth token.
-    Waiting(Arc<Mutex<AuthRequest>>),
+    Waiting(Arc<AuthRequest>),
     /// In this state we have gotten all of the required tokens, we just cache them to
     /// be used when the operation progresses.
     Token(HardwareAuthToken, Option<TimeStampToken>),
@@ -169,9 +176,15 @@ impl TokenReceiverMap {
     const CLEANUP_PERIOD: u8 = 25;
 
     pub fn add_auth_token(&self, hat: HardwareAuthToken) {
-        let mut map = self.map_and_cleanup_counter.lock().unwrap();
-        let (ref mut map, _) = *map;
-        if let Some((_, recv)) = map.remove_entry(&hat.challenge) {
+        let recv = {
+            // Limit the scope of the mutex guard, so that it is not held while the auth token is
+            // added.
+            let mut map = self.map_and_cleanup_counter.lock().unwrap();
+            let (ref mut map, _) = *map;
+            map.remove_entry(&hat.challenge)
+        };
+
+        if let Some((_, recv)) = recv {
             recv.add_auth_token(hat);
         }
     }
@@ -191,7 +204,7 @@ impl TokenReceiverMap {
 }
 
 #[derive(Debug)]
-struct TokenReceiver(Weak<Mutex<AuthRequest>>);
+struct TokenReceiver(Weak<AuthRequest>);
 
 impl TokenReceiver {
     fn is_obsolete(&self) -> bool {
@@ -200,8 +213,7 @@ impl TokenReceiver {
 
     fn add_auth_token(&self, hat: HardwareAuthToken) {
         if let Some(state_arc) = self.0.upgrade() {
-            let mut state = state_arc.lock().unwrap();
-            state.add_auth_token(hat);
+            state_arc.add_auth_token(hat);
         }
     }
 }
@@ -326,8 +338,7 @@ impl AuthInfo {
     /// tokens into the DeferredAuthState::Token state for future use.
     fn get_auth_tokens(&mut self) -> Result<(Option<HardwareAuthToken>, Option<TimeStampToken>)> {
         let deferred_tokens = if let DeferredAuthState::Waiting(ref auth_request) = self.state {
-            let mut state = auth_request.lock().unwrap();
-            Some(state.get_auth_tokens().context("In AuthInfo::get_auth_tokens.")?)
+            Some(auth_request.get_auth_tokens().context("In AuthInfo::get_auth_tokens.")?)
         } else {
             None
         };

@@ -420,7 +420,7 @@ impl LegacyMigratorState {
             .context("In list_uid: Trying to list legacy entries.")
     }
 
-    /// This is a key migration request that can run in the migrator thread. This should
+    /// This is a key migration request that must run in the migrator thread. This must
     /// be passed to do_serialized.
     fn check_and_migrate(&mut self, uid: u32, mut key: KeyDescriptor) -> Result<()> {
         let alias = key.alias.clone().ok_or_else(|| {

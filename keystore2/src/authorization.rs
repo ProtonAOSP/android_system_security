@@ -118,7 +118,7 @@ impl AuthorizationManager {
     }
 
     fn add_auth_token(&self, auth_token: &HardwareAuthToken) -> Result<()> {
-        //check keystore permission
+        // Check keystore permission.
         check_keystore_permission(KeystorePerm::add_auth()).context("In add_auth_token.")?;
 
         ENFORCEMENTS.add_auth_token(auth_token.clone())?;
@@ -133,8 +133,8 @@ impl AuthorizationManager {
     ) -> Result<()> {
         match (lock_screen_event, password) {
             (LockScreenEvent::UNLOCK, Some(password)) => {
-                //This corresponds to the unlock() method in legacy keystore API.
-                //check permission
+                // This corresponds to the unlock() method in legacy keystore API.
+                // check permission
                 check_keystore_permission(KeystorePerm::unlock())
                     .context("In on_lock_screen_event: Unlock with password.")?;
                 ENFORCEMENTS.set_device_locked(user_id, false);
@@ -201,7 +201,7 @@ impl AuthorizationManager {
         check_keystore_permission(KeystorePerm::get_auth_token())
             .context("In get_auth_tokens_for_credstore.")?;
 
-        // if the challenge is zero, return error
+        // If the challenge is zero, return error
         if challenge == 0 {
             return Err(Error::Rc(ResponseCode::INVALID_ARGUMENT))
                 .context("In get_auth_tokens_for_credstore. Challenge can not be zero.");
