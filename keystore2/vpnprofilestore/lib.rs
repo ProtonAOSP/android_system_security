@@ -18,9 +18,11 @@ use android_security_vpnprofilestore::aidl::android::security::vpnprofilestore::
     IVpnProfileStore::BnVpnProfileStore, IVpnProfileStore::IVpnProfileStore,
     IVpnProfileStore::ERROR_PROFILE_NOT_FOUND, IVpnProfileStore::ERROR_SYSTEM_ERROR,
 };
-use android_security_vpnprofilestore::binder::{Result as BinderResult, Status as BinderStatus};
+use android_security_vpnprofilestore::binder::{
+    BinderFeatures, ExceptionCode, Result as BinderResult, Status as BinderStatus, Strong,
+    ThreadState,
+};
 use anyhow::{Context, Result};
-use binder::{ExceptionCode, Strong, ThreadState};
 use keystore2::{async_task::AsyncTask, legacy_blob::LegacyBlobLoader};
 use rusqlite::{
     params, Connection, OptionalExtension, Transaction, TransactionBehavior, NO_PARAMS,
@@ -224,7 +226,7 @@ impl VpnProfileStore {
 
         let result = Self { db_path, async_task: Default::default() };
         result.init_shelf(path);
-        BnVpnProfileStore::new_binder(result)
+        BnVpnProfileStore::new_binder(result, BinderFeatures::default())
     }
 
     fn open_db(&self) -> Result<DB> {

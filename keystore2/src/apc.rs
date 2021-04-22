@@ -28,10 +28,10 @@ use android_security_apc::aidl::android::security::apc::{
     ResponseCode::ResponseCode,
 };
 use android_security_apc::binder::{
-    ExceptionCode, Interface, Result as BinderResult, SpIBinder, Status as BinderStatus, Strong,
+    BinderFeatures, ExceptionCode, Interface, Result as BinderResult, SpIBinder,
+    Status as BinderStatus, Strong, ThreadState,
 };
 use anyhow::{Context, Result};
-use binder::{IBinderInternal, ThreadState};
 use keystore2_apc_compat::ApcHal;
 use keystore2_selinux as selinux;
 use std::time::{Duration, Instant};
@@ -203,11 +203,10 @@ impl ApcManager {
     pub fn new_native_binder(
         confirmation_token_sender: Sender<Vec<u8>>,
     ) -> Result<Strong<dyn IProtectedConfirmation>> {
-        let result = BnProtectedConfirmation::new_binder(Self {
-            state: Arc::new(Mutex::new(ApcState::new(confirmation_token_sender))),
-        });
-        result.as_binder().set_requesting_sid(true);
-        Ok(result)
+        Ok(BnProtectedConfirmation::new_binder(
+            Self { state: Arc::new(Mutex::new(ApcState::new(confirmation_token_sender))) },
+            BinderFeatures { set_requesting_sid: true, ..BinderFeatures::default() },
+        ))
     }
 
     fn result(
