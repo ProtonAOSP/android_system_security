@@ -133,11 +133,11 @@ use android_hardware_security_keymint::aidl::android::hardware::security::keymin
     IKeyMintOperation::IKeyMintOperation, KeyParameter::KeyParameter, KeyPurpose::KeyPurpose,
     SecurityLevel::SecurityLevel,
 };
+use android_hardware_security_keymint::binder::BinderFeatures;
 use android_system_keystore2::aidl::android::system::keystore2::{
     IKeystoreOperation::BnKeystoreOperation, IKeystoreOperation::IKeystoreOperation,
 };
 use anyhow::{anyhow, Context, Result};
-use binder::IBinderInternal;
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex, MutexGuard, Weak},
@@ -783,16 +783,16 @@ pub struct KeystoreOperation {
 
 impl KeystoreOperation {
     /// Creates a new operation instance wrapped in a
-    /// BnKeystoreOperation proxy object. It also
-    /// calls `IBinderInternal::set_requesting_sid` on the new interface, because
+    /// BnKeystoreOperation proxy object. It also enables
+    /// `BinderFeatures::set_requesting_sid` on the new interface, because
     /// we need it for checking Keystore permissions.
     pub fn new_native_binder(
         operation: Arc<Operation>,
     ) -> binder::public_api::Strong<dyn IKeystoreOperation> {
-        let result =
-            BnKeystoreOperation::new_binder(Self { operation: Mutex::new(Some(operation)) });
-        result.as_binder().set_requesting_sid(true);
-        result
+        BnKeystoreOperation::new_binder(
+            Self { operation: Mutex::new(Some(operation)) },
+            BinderFeatures { set_requesting_sid: true, ..BinderFeatures::default() },
+        )
     }
 
     /// Grabs the outer operation mutex and calls `f` on the locked operation.

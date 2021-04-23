@@ -22,7 +22,7 @@ use crate::utils::check_keystore_permission;
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
     HardwareAuthToken::HardwareAuthToken,
 };
-use android_security_authorization::binder::{ExceptionCode, Interface, Result as BinderResult,
+use android_security_authorization::binder::{BinderFeatures,ExceptionCode, Interface, Result as BinderResult,
      Strong, Status as BinderStatus};
 use android_security_authorization::aidl::android::security::authorization::{
     IKeystoreAuthorization::BnKeystoreAuthorization, IKeystoreAuthorization::IKeystoreAuthorization,
@@ -32,7 +32,6 @@ use android_security_authorization::aidl::android::security::authorization::{
 use android_system_keystore2::aidl::android::system::keystore2::{
     ResponseCode::ResponseCode as KsResponseCode };
 use anyhow::{Context, Result};
-use binder::IBinderInternal;
 use keystore2_crypto::Password;
 use keystore2_selinux as selinux;
 
@@ -112,13 +111,14 @@ pub struct AuthorizationManager;
 impl AuthorizationManager {
     /// Create a new instance of Keystore Authorization service.
     pub fn new_native_binder() -> Result<Strong<dyn IKeystoreAuthorization>> {
-        let result = BnKeystoreAuthorization::new_binder(Self);
-        result.as_binder().set_requesting_sid(true);
-        Ok(result)
+        Ok(BnKeystoreAuthorization::new_binder(
+            Self,
+            BinderFeatures { set_requesting_sid: true, ..BinderFeatures::default() },
+        ))
     }
 
     fn add_auth_token(&self, auth_token: &HardwareAuthToken) -> Result<()> {
-        //check keystore permission
+        // Check keystore permission.
         check_keystore_permission(KeystorePerm::add_auth()).context("In add_auth_token.")?;
 
         ENFORCEMENTS.add_auth_token(auth_token.clone())?;
@@ -133,8 +133,8 @@ impl AuthorizationManager {
     ) -> Result<()> {
         match (lock_screen_event, password) {
             (LockScreenEvent::UNLOCK, Some(password)) => {
-                //This corresponds to the unlock() method in legacy keystore API.
-                //check permission
+                // This corresponds to the unlock() method in legacy keystore API.
+                // check permission
                 check_keystore_permission(KeystorePerm::unlock())
                     .context("In on_lock_screen_event: Unlock with password.")?;
                 ENFORCEMENTS.set_device_locked(user_id, false);
@@ -201,7 +201,7 @@ impl AuthorizationManager {
         check_keystore_permission(KeystorePerm::get_auth_token())
             .context("In get_auth_tokens_for_credstore.")?;
 
-        // if the challenge is zero, return error
+        // If the challenge is zero, return error
         if challenge == 0 {
             return Err(Error::Rc(ResponseCode::INVALID_ARGUMENT))
                 .context("In get_auth_tokens_for_credstore. Challenge can not be zero.");
