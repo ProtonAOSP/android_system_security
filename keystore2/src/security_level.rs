@@ -25,8 +25,8 @@ use android_hardware_security_keymint::aidl::android::hardware::security::keymin
 use android_hardware_security_keymint::binder::{BinderFeatures, Strong, ThreadState};
 use android_system_keystore2::aidl::android::system::keystore2::{
     AuthenticatorSpec::AuthenticatorSpec, CreateOperationResponse::CreateOperationResponse,
-    Domain::Domain, IKeystoreOperation::IKeystoreOperation,
-    IKeystoreSecurityLevel::BnKeystoreSecurityLevel,
+    Domain::Domain, EphemeralStorageKeyResponse::EphemeralStorageKeyResponse,
+    IKeystoreOperation::IKeystoreOperation, IKeystoreSecurityLevel::BnKeystoreSecurityLevel,
     IKeystoreSecurityLevel::IKeystoreSecurityLevel, KeyDescriptor::KeyDescriptor,
     KeyMetadata::KeyMetadata, KeyParameters::KeyParameters,
 };
@@ -785,7 +785,10 @@ impl KeystoreSecurityLevel {
         }
     }
 
-    fn convert_storage_key_to_ephemeral(&self, storage_key: &KeyDescriptor) -> Result<Vec<u8>> {
+    fn convert_storage_key_to_ephemeral(
+        &self,
+        storage_key: &KeyDescriptor,
+    ) -> Result<EphemeralStorageKeyResponse> {
         if storage_key.domain != Domain::BLOB {
             return Err(error::Error::Km(ErrorCode::INVALID_ARGUMENT)).context(concat!(
                 "In IKeystoreSecurityLevel convert_storage_key_to_ephemeral: ",
@@ -808,8 +811,26 @@ impl KeystoreSecurityLevel {
             "In IKeystoreSecurityLevel convert_storage_key_to_ephemeral: ",
             "Getting keymint device interface"
         ))?;
-        map_km_error(km_dev.convertStorageKeyToEphemeral(key_blob))
-            .context("In keymint device convertStorageKeyToEphemeral")
+        match map_km_error(km_dev.convertStorageKeyToEphemeral(key_blob)) {
+            Ok(result) => {
+                Ok(EphemeralStorageKeyResponse { ephemeralKey: result, upgradedBlob: None })
+            }
+            Err(error::Error::Km(ErrorCode::KEY_REQUIRES_UPGRADE)) => {
+                let upgraded_blob = map_km_error(km_dev.upgradeKey(key_blob, &[]))
+                    .context("In convert_storage_key_to_ephemeral: Failed to upgrade key blob.")?;
+                let ephemeral_key = map_km_error(km_dev.convertStorageKeyToEphemeral(key_blob))
+                    .context(concat!(
+                        "In convert_storage_key_to_ephemeral: ",
+                        "Failed to retrieve ephemeral key (after upgrade)."
+                    ))?;
+                Ok(EphemeralStorageKeyResponse {
+                    ephemeralKey: ephemeral_key,
+                    upgradedBlob: Some(upgraded_blob),
+                })
+            }
+            Err(e) => Err(e)
+                .context("In convert_storage_key_to_ephemeral: Failed to retrieve ephemeral key."),
+        }
     }
 
     fn delete_key(&self, key: &KeyDescriptor) -> Result<()> {
@@ -886,7 +907,7 @@ impl IKeystoreSecurityLevel for KeystoreSecurityLevel {
     fn convertStorageKeyToEphemeral(
         &self,
         storage_key: &KeyDescriptor,
-    ) -> binder::public_api::Result<Vec<u8>> {
+    ) -> binder::public_api::Result<EphemeralStorageKeyResponse> {
         map_or_log_err(self.convert_storage_key_to_ephemeral(storage_key), Ok)
     }
     fn deleteKey(&self, key: &KeyDescriptor) -> binder::public_api::Result<()> {
