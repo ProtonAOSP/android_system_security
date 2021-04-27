@@ -45,7 +45,6 @@ using VerificationToken = ::android::hardware::keymaster::V4_0::VerificationToke
 using android::sp;
 using android::base::Error;
 using android::base::Result;
-using android::base::unique_fd;
 using android::hardware::hidl_vec;
 
 Keymaster::Keymaster() {}
