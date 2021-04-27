@@ -295,8 +295,6 @@ impl KeystoreSecurityLevel {
             )
             .context("In create_operation.")?;
 
-        let immediate_hat = immediate_hat.unwrap_or_default();
-
         let km_blob = SUPER_KEY
             .unwrap_key_if_required(&blob_metadata, km_blob)
             .context("In create_operation. Failed to handle super encryption.")?;
@@ -318,7 +316,7 @@ impl KeystoreSecurityLevel {
                         purpose,
                         blob,
                         &operation_parameters,
-                        &immediate_hat,
+                        immediate_hat.as_ref(),
                     )) {
                         Err(Error::Km(ErrorCode::TOO_MANY_OPERATIONS)) => {
                             self.operation_db.prune(caller_uid, forced)?;
