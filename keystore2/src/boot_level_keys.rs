@@ -196,7 +196,7 @@ impl KeyMintDevice {
 
         let begin_result: BeginResult = self
             .upgrade_keyblob_if_required_with(db, &km_dev, key_id_guard, &key_blob, |blob| {
-                map_km_error(km_dev.begin(purpose, blob, operation_parameters, &Default::default()))
+                map_km_error(km_dev.begin(purpose, blob, operation_parameters, None))
             })
             .context("In use_key_in_one_step: Failed to begin operation.")?;
         let operation: Strong<dyn IKeyMintOperation> = begin_result
