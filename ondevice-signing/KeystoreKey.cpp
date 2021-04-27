@@ -51,8 +51,6 @@ using android::system::keystore2::KeyMetadata;
 using android::base::Error;
 using android::base::Result;
 
-using android::base::unique_fd;
-
 // Keystore boot level that the odsign key uses
 static const int kOdsignBootLevel = 30;
 
