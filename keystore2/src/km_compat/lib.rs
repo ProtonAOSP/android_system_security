@@ -30,10 +30,9 @@ mod tests {
     use super::*;
     use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
         Algorithm::Algorithm, BeginResult::BeginResult, BlockMode::BlockMode, Digest::Digest,
-        ErrorCode::ErrorCode, HardwareAuthToken::HardwareAuthToken, IKeyMintDevice::IKeyMintDevice,
-        KeyCreationResult::KeyCreationResult, KeyFormat::KeyFormat, KeyParameter::KeyParameter,
-        KeyParameterValue::KeyParameterValue, KeyPurpose::KeyPurpose, PaddingMode::PaddingMode,
-        SecurityLevel::SecurityLevel, Tag::Tag,
+        ErrorCode::ErrorCode, IKeyMintDevice::IKeyMintDevice, KeyCreationResult::KeyCreationResult,
+        KeyFormat::KeyFormat, KeyParameter::KeyParameter, KeyParameterValue::KeyParameterValue,
+        KeyPurpose::KeyPurpose, PaddingMode::PaddingMode, SecurityLevel::SecurityLevel, Tag::Tag,
     };
     use android_hardware_security_keymint::binder::{self, Strong};
     use android_security_compat::aidl::android::security::compat::IKeystoreCompatService::IKeystoreCompatService;
@@ -260,7 +259,7 @@ mod tests {
         if let Some(mut extras) = extra_params {
             kps.append(&mut extras);
         }
-        let result = legacy.begin(purpose, &blob, &kps, &HardwareAuthToken::default());
+        let result = legacy.begin(purpose, &blob, &kps, None);
         assert!(result.is_ok(), "{:?}", result);
         result.unwrap()
     }

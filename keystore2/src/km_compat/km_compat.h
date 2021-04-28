@@ -109,7 +109,7 @@ class KeyMintDevice : public aidl::android::hardware::security::keymint::BnKeyMi
     ScopedAStatus destroyAttestationIds() override;
     ScopedAStatus begin(KeyPurpose in_inPurpose, const std::vector<uint8_t>& in_inKeyBlob,
                         const std::vector<KeyParameter>& in_inParams,
-                        const HardwareAuthToken& in_inAuthToken,
+                        const std::optional<HardwareAuthToken>& in_inAuthToken,
                         BeginResult* _aidl_return) override;
     ScopedAStatus deviceLocked(bool passwordOnly,
                                const std::optional<TimeStampToken>& timestampToken) override;
@@ -117,9 +117,6 @@ class KeyMintDevice : public aidl::android::hardware::security::keymint::BnKeyMi
 
     ScopedAStatus convertStorageKeyToEphemeral(const std::vector<uint8_t>& storageKeyBlob,
                                                std::vector<uint8_t>* ephemeralKeyBlob) override;
-
-    ScopedAStatus performOperation(const std::vector<uint8_t>& request,
-                                   std::vector<uint8_t>* response) override;
 
     // These are public to allow testing code to use them directly.
     // This class should not be used publicly anyway.

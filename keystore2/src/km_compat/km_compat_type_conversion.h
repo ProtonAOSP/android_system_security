@@ -503,9 +503,6 @@ static V4_0::KeyParameter convertKeyParameterToLegacy(const KMV1::KeyParameter& 
             return V4_0::makeKeyParameter(V4_0::TAG_INCLUDE_UNIQUE_ID, v->get());
         }
         break;
-    case KMV1::Tag::BLOB_USAGE_REQUIREMENTS:
-        // This tag has been removed. Mapped on invalid.
-        break;
     case KMV1::Tag::BOOTLOADER_ONLY:
         if (auto v = KMV1::authorizationValue(KMV1::TAG_BOOTLOADER_ONLY, kp)) {
             return V4_0::makeKeyParameter(V4_0::TAG_BOOTLOADER_ONLY, v->get());
