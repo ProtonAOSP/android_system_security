@@ -17,6 +17,7 @@
 
 use std::collections::HashMap;
 
+use crate::audit_log::log_key_deleted;
 use crate::permission::{KeyPerm, KeystorePerm};
 use crate::security_level::KeystoreSecurityLevel;
 use crate::utils::{
@@ -374,7 +375,9 @@ impl IKeystoreService for KeystoreService {
         map_or_log_err(self.list_entries(domain, namespace), Ok)
     }
     fn deleteKey(&self, key: &KeyDescriptor) -> binder::public_api::Result<()> {
-        map_or_log_err(self.delete_key(key), Ok)
+        let result = self.delete_key(key);
+        log_key_deleted(key, ThreadState::get_calling_uid(), result.is_ok());
+        map_or_log_err(result, Ok)
     }
     fn grant(
         &self,

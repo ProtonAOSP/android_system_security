@@ -50,6 +50,7 @@ rust_defaults {
         "liblazy_static",
         "liblibc",
         "liblibsqlite3_sys",
+        "liblog_event_list",
         "liblog_rust",
         "librand",
         "librusqlite",

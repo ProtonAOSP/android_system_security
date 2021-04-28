@@ -173,6 +173,8 @@ lazy_static! {
     /// Legacy migrator. Atomically migrates legacy blobs to the database.
     pub static ref LEGACY_MIGRATOR: Arc<LegacyMigrator> =
         Arc::new(LegacyMigrator::new(ASYNC_TASK.clone()));
+    /// Background thread which handles logging via statsd and logd
+    pub static ref LOGS_HANDLER: Arc<AsyncTask> = Default::default();
 }
 
 static KEYMINT_SERVICE_NAME: &str = "android.hardware.security.keymint.IKeyMintDevice";
