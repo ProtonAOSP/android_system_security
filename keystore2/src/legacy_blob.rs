@@ -206,7 +206,7 @@ impl Blob {
 }
 
 impl LegacyBlobLoader {
-    const IV_SIZE: usize = keystore2_crypto::IV_LENGTH;
+    const IV_SIZE: usize = keystore2_crypto::LEGACY_IV_LENGTH;
     const GCM_TAG_LENGTH: usize = keystore2_crypto::TAG_LENGTH;
     const SALT_SIZE: usize = keystore2_crypto::SALT_LENGTH;
 
