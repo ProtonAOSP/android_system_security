@@ -17,28 +17,17 @@
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
     Algorithm::Algorithm, Digest::Digest, KeyPurpose::KeyPurpose, SecurityLevel::SecurityLevel,
 };
-use android_system_keystore2::aidl::android::system::keystore2::{
-    Domain::Domain, KeyDescriptor::KeyDescriptor,
-};
 use anyhow::{Context, Result};
 use keystore2_crypto::{hkdf_expand, ZVec, AES_256_KEY_LENGTH};
 use std::{collections::VecDeque, convert::TryFrom};
 
-use crate::{
-    database::KeystoreDB, key_parameter::KeyParameterValue, raw_device::KeyMintDevice,
-    utils::AID_KEYSTORE,
-};
+use crate::{database::KeystoreDB, key_parameter::KeyParameterValue, raw_device::KeyMintDevice};
 
 /// This is not thread safe; caller must hold a lock before calling.
 /// In practice the caller is SuperKeyManager and the lock is the
 /// Mutex on its internal state.
 pub fn get_level_zero_key(db: &mut KeystoreDB) -> Result<ZVec> {
-    let key_desc = KeyDescriptor {
-        domain: Domain::APP,
-        nspace: AID_KEYSTORE as i64,
-        alias: Some("boot_level_key".to_string()),
-        blob: None,
-    };
+    let key_desc = KeyMintDevice::internal_descriptor("boot_level_key".to_string());
     let params = [
         KeyParameterValue::Algorithm(Algorithm::HMAC).into(),
         KeyParameterValue::Digest(Digest::SHA_2_256).into(),
@@ -60,10 +49,11 @@ pub fn get_level_zero_key(db: &mut KeystoreDB) -> Result<ZVec> {
     let level_zero_key = km_dev
         .use_key_in_one_step(
             db,
-            key_id_guard,
+            &key_id_guard,
             &key_entry,
             KeyPurpose::SIGN,
             &params,
+            None,
             b"Create boot level key",
         )
         .context("In get_level_zero_key: use_key_in_one_step failed")?;

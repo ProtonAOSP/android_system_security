@@ -27,7 +27,6 @@ import android.security.authorization.AuthorizationTokens;
  */
  @SensitiveData
 interface IKeystoreAuthorization {
-
     /**
      * Allows the Android authenticators to hand over an auth token to Keystore.
      * Callers require 'AddAuth' permission.
@@ -58,9 +57,29 @@ interface IKeystoreAuthorization {
      * @param userId - Android user id
      *
      * @param password - synthetic password derived by the user denoted by the user id
+     *
+     * @param unlockingSids - list of biometric SIDs for this user. This will be null when
+     *                        lockScreenEvent is UNLOCK, but may be non-null when
+     *                        lockScreenEvent is LOCK.
+     *
+     *                        When the device is unlocked, Keystore stores in memory
+     *                        a super-encryption key that protects UNLOCKED_DEVICE_REQUIRED
+     *                        keys; this key is wiped from memory when the device is locked.
+     *
+     *                        If unlockingSids is non-empty on lock, then before the
+     *                        super-encryption key is wiped from memory, a copy of it
+     *                        is stored in memory encrypted with a fresh AES key.
+     *                        This key is then imported into KM, tagged such that it can be
+     *                        used given a valid, recent auth token for any of the
+     *                        unlockingSids.
+     *
+     *                        Then, when the device is unlocked again, if a suitable auth token
+     *                        has been sent to keystore, it is used to recover the
+     *                        super-encryption key, so that UNLOCKED_DEVICE_REQUIRED keys can
+     *                        be used once again.
      */
     void onLockScreenEvent(in LockScreenEvent lockScreenEvent, in int userId,
-                           in @nullable byte[] password);
+                           in @nullable byte[] password, in @nullable long[] unlockingSids);
 
     /**
      * Allows Credstore to retrieve a HardwareAuthToken and a TimestampToken.

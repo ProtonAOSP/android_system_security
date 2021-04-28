@@ -25,12 +25,13 @@ use crate::{
     utils::{key_characteristics_to_internal, Asp, AID_KEYSTORE},
 };
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
-    BeginResult::BeginResult, ErrorCode::ErrorCode, IKeyMintDevice::IKeyMintDevice,
-    IKeyMintOperation::IKeyMintOperation, KeyParameter::KeyParameter, KeyPurpose::KeyPurpose,
+    BeginResult::BeginResult, ErrorCode::ErrorCode, HardwareAuthToken::HardwareAuthToken,
+    IKeyMintDevice::IKeyMintDevice, IKeyMintOperation::IKeyMintOperation,
+    KeyCreationResult::KeyCreationResult, KeyParameter::KeyParameter, KeyPurpose::KeyPurpose,
     SecurityLevel::SecurityLevel,
 };
 use android_system_keystore2::aidl::android::system::keystore2::{
-    KeyDescriptor::KeyDescriptor, ResponseCode::ResponseCode,
+    Domain::Domain, KeyDescriptor::KeyDescriptor, ResponseCode::ResponseCode,
 };
 use anyhow::{Context, Result};
 use binder::Strong;
@@ -57,23 +58,26 @@ impl KeyMintDevice {
         Ok(KeyMintDevice { asp, km_uuid })
     }
 
-    /// Generate a KM key and store in the database.
-    fn generate_and_store_key(
+    /// Create a KM key and store in the database.
+    pub fn create_and_store_key<F>(
         &self,
         db: &mut KeystoreDB,
         key_desc: &KeyDescriptor,
-        params: &[KeyParameter],
-    ) -> Result<()> {
+        creator: F,
+    ) -> Result<()>
+    where
+        F: FnOnce(Strong<dyn IKeyMintDevice>) -> Result<KeyCreationResult, binder::Status>,
+    {
         let km_dev: Strong<dyn IKeyMintDevice> = self
             .asp
             .get_interface()
-            .context("In generate_and_store_key: Failed to get KeyMint device")?;
-        let creation_result = map_km_error(km_dev.generateKey(params, None))
-            .context("In generate_and_store_key: generateKey failed")?;
+            .context("In create_and_store_key: Failed to get KeyMint device")?;
+        let creation_result =
+            map_km_error(creator(km_dev)).context("In create_and_store_key: creator failed")?;
         let key_parameters = key_characteristics_to_internal(creation_result.keyCharacteristics);
 
         let creation_date =
-            DateTime::now().context("In generate_and_store_key: DateTime::now() failed")?;
+            DateTime::now().context("In create_and_store_key: DateTime::now() failed")?;
 
         let mut key_metadata = KeyMetaData::new();
         key_metadata.add(KeyMetaEntry::CreationDate(creation_date));
@@ -88,8 +92,42 @@ impl KeyMintDevice {
             &key_metadata,
             &self.km_uuid,
         )
-        .context("In generate_and_store_key: store_new_key failed")?;
+        .context("In create_and_store_key: store_new_key failed")?;
         Ok(())
+    }
+
+    /// Generate a KeyDescriptor for internal-use keys.
+    pub fn internal_descriptor(alias: String) -> KeyDescriptor {
+        KeyDescriptor {
+            domain: Domain::APP,
+            nspace: AID_KEYSTORE as i64,
+            alias: Some(alias),
+            blob: None,
+        }
+    }
+
+    /// Look up an internal-use key in the database given a key descriptor.
+    pub fn lookup_from_desc(
+        db: &mut KeystoreDB,
+        key_desc: &KeyDescriptor,
+    ) -> Result<(KeyIdGuard, KeyEntry)> {
+        db.load_key_entry(&key_desc, KeyType::Client, KeyEntryLoadBits::KM, AID_KEYSTORE, |_, _| {
+            Ok(())
+        })
+        .context("In lookup_from_desc: load_key_entry failed")
+    }
+
+    /// Look up the key in the database, and return None if it is absent.
+    pub fn not_found_is_none(
+        lookup: Result<(KeyIdGuard, KeyEntry)>,
+    ) -> Result<Option<(KeyIdGuard, KeyEntry)>> {
+        match lookup {
+            Ok(result) => Ok(Some(result)),
+            Err(e) => match e.root_cause().downcast_ref::<Error>() {
+                Some(&Error::Rc(ResponseCode::KEY_NOT_FOUND)) => Ok(None),
+                _ => Err(e),
+            },
+        }
     }
 
     /// This does the lookup and store in separate transactions; caller must
@@ -105,26 +143,16 @@ impl KeyMintDevice {
         // - because the caller needs to hold a lock in any case
         // - because it avoids holding database locks during slow
         //   KeyMint operations
-        let lookup = db.load_key_entry(
-            &key_desc,
-            KeyType::Client,
-            KeyEntryLoadBits::KM,
-            AID_KEYSTORE,
-            |_, _| Ok(()),
-        );
-        match lookup {
-            Ok(result) => return Ok(result),
-            Err(e) => match e.root_cause().downcast_ref::<Error>() {
-                Some(&Error::Rc(ResponseCode::KEY_NOT_FOUND)) => {}
-                _ => return Err(e),
-            },
+        let lookup = Self::not_found_is_none(Self::lookup_from_desc(db, key_desc))
+            .context("In lookup_or_generate_key: first lookup failed")?;
+        if let Some(result) = lookup {
+            Ok(result)
+        } else {
+            self.create_and_store_key(db, &key_desc, |km_dev| km_dev.generateKey(&params, None))
+                .context("In lookup_or_generate_key: generate_and_store_key failed")?;
+            Self::lookup_from_desc(db, key_desc)
+                .context("In lookup_or_generate_key: secpnd lookup failed")
         }
-        self.generate_and_store_key(db, &key_desc, &params)
-            .context("In lookup_or_generate_key: generate_and_store_key failed")?;
-        db.load_key_entry(&key_desc, KeyType::Client, KeyEntryLoadBits::KM, AID_KEYSTORE, |_, _| {
-            Ok(())
-        })
-        .context("In lookup_or_generate_key: load_key_entry failed")
     }
 
     /// Call the passed closure; if it returns `KEY_REQUIRES_UPGRADE`, call upgradeKey, and
@@ -133,7 +161,7 @@ impl KeyMintDevice {
         &self,
         db: &mut KeystoreDB,
         km_dev: &Strong<dyn IKeyMintDevice>,
-        key_id_guard: KeyIdGuard,
+        key_id_guard: &KeyIdGuard,
         key_blob: &KeyBlob,
         f: F,
     ) -> Result<T>
@@ -149,7 +177,7 @@ impl KeyMintDevice {
                 new_blob_metadata.add(BlobMetaEntry::KmUuid(self.km_uuid));
 
                 db.set_blob(
-                    &key_id_guard,
+                    key_id_guard,
                     SubComponentType::KEY_BLOB,
                     Some(&upgraded_blob),
                     Some(&new_blob_metadata),
@@ -170,13 +198,15 @@ impl KeyMintDevice {
 
     /// Use the created key in an operation that can be done with
     /// a call to begin followed by a call to finish.
+    #[allow(clippy::too_many_arguments)]
     pub fn use_key_in_one_step(
         &self,
         db: &mut KeystoreDB,
-        key_id_guard: KeyIdGuard,
+        key_id_guard: &KeyIdGuard,
         key_entry: &KeyEntry,
         purpose: KeyPurpose,
         operation_parameters: &[KeyParameter],
+        auth_token: Option<&HardwareAuthToken>,
         input: &[u8],
     ) -> Result<Vec<u8>> {
         let km_dev: Strong<dyn IKeyMintDevice> = self
@@ -193,7 +223,7 @@ impl KeyMintDevice {
 
         let begin_result: BeginResult = self
             .upgrade_keyblob_if_required_with(db, &km_dev, key_id_guard, &key_blob, |blob| {
-                map_km_error(km_dev.begin(purpose, blob, operation_parameters, None))
+                map_km_error(km_dev.begin(purpose, blob, operation_parameters, auth_token))
             })
             .context("In use_key_in_one_step: Failed to begin operation.")?;
         let operation: Strong<dyn IKeyMintOperation> = begin_result

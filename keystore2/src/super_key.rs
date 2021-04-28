@@ -19,31 +19,45 @@ use crate::{
     database::EncryptedBy,
     database::KeyEntry,
     database::KeyType,
-    database::{KeyMetaData, KeyMetaEntry, KeystoreDB},
+    database::{KeyIdGuard, KeyMetaData, KeyMetaEntry, KeystoreDB},
     ec_crypto::ECDHPrivateKey,
     enforcements::Enforcements,
     error::Error,
     error::ResponseCode,
-    key_parameter::KeyParameter,
+    key_parameter::{KeyParameter, KeyParameterValue},
     legacy_blob::LegacyBlobLoader,
     legacy_migrator::LegacyMigrator,
+    raw_device::KeyMintDevice,
     try_insert::TryInsert,
 };
-use android_system_keystore2::aidl::android::system::keystore2::Domain::Domain;
+use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
+    Algorithm::Algorithm, BlockMode::BlockMode, HardwareAuthToken::HardwareAuthToken,
+    HardwareAuthenticatorType::HardwareAuthenticatorType, KeyFormat::KeyFormat,
+    KeyParameter::KeyParameter as KmKeyParameter, KeyPurpose::KeyPurpose, PaddingMode::PaddingMode,
+    SecurityLevel::SecurityLevel,
+};
+use android_system_keystore2::aidl::android::system::keystore2::{
+    Domain::Domain, KeyDescriptor::KeyDescriptor,
+};
 use anyhow::{Context, Result};
 use keystore2_crypto::{
     aes_gcm_decrypt, aes_gcm_encrypt, generate_aes256_key, generate_salt, Password, ZVec,
     AES_256_KEY_LENGTH,
 };
 use keystore2_system_property::PropertyWatcher;
-use std::ops::Deref;
 use std::{
     collections::HashMap,
     sync::Arc,
     sync::{Mutex, Weak},
 };
+use std::{convert::TryFrom, ops::Deref};
 
 const MAX_MAX_BOOT_LEVEL: usize = 1_000_000_000;
+/// Allow up to 15 seconds between the user unlocking using a biometric, and the auth
+/// token being used to unlock in [`SuperKeyManager::try_unlock_user_with_biometric`].
+/// This seems short enough for security purposes, while long enough that even the
+/// very slowest device will present the auth token in time.
+const BIOMETRIC_AUTH_TIMEOUT_S: i32 = 15; // seconds
 
 type UserId = u32;
 
@@ -154,6 +168,66 @@ impl SuperKey {
     }
 }
 
+/// A SuperKey that has been encrypted with an AES-GCM key. For
+/// encryption the key is in memory, and for decryption it is in KM.
+struct LockedKey {
+    algorithm: SuperEncryptionAlgorithm,
+    id: SuperKeyIdentifier,
+    nonce: Vec<u8>,
+    ciphertext: Vec<u8>, // with tag appended
+}
+
+impl LockedKey {
+    fn new(key: &[u8], to_encrypt: &Arc<SuperKey>) -> Result<Self> {
+        let (mut ciphertext, nonce, mut tag) = aes_gcm_encrypt(&to_encrypt.key, key)?;
+        ciphertext.append(&mut tag);
+        Ok(LockedKey { algorithm: to_encrypt.algorithm, id: to_encrypt.id, nonce, ciphertext })
+    }
+
+    fn decrypt(
+        &self,
+        db: &mut KeystoreDB,
+        km_dev: &KeyMintDevice,
+        key_id_guard: &KeyIdGuard,
+        key_entry: &KeyEntry,
+        auth_token: &HardwareAuthToken,
+        reencrypt_with: Option<Arc<SuperKey>>,
+    ) -> Result<Arc<SuperKey>> {
+        let key_params = vec![
+            KeyParameterValue::Algorithm(Algorithm::AES),
+            KeyParameterValue::KeySize(256),
+            KeyParameterValue::BlockMode(BlockMode::GCM),
+            KeyParameterValue::PaddingMode(PaddingMode::NONE),
+            KeyParameterValue::Nonce(self.nonce.clone()),
+            KeyParameterValue::MacLength(128),
+        ];
+        let key_params: Vec<KmKeyParameter> = key_params.into_iter().map(|x| x.into()).collect();
+        let key = ZVec::try_from(km_dev.use_key_in_one_step(
+            db,
+            key_id_guard,
+            key_entry,
+            KeyPurpose::DECRYPT,
+            &key_params,
+            Some(auth_token),
+            &self.ciphertext,
+        )?)?;
+        Ok(Arc::new(SuperKey { algorithm: self.algorithm, key, id: self.id, reencrypt_with }))
+    }
+}
+
+/// Keys for unlocking UNLOCKED_DEVICE_REQUIRED keys, as LockedKeys, complete with
+/// a database descriptor for the encrypting key and the sids for the auth tokens
+/// that can be used to decrypt it.
+struct BiometricUnlock {
+    /// List of auth token SIDs that can be used to unlock these keys.
+    sids: Vec<i64>,
+    /// Database descriptor of key to use to unlock.
+    key_desc: KeyDescriptor,
+    /// Locked versions of the matching UserSuperKeys fields
+    screen_lock_bound: LockedKey,
+    screen_lock_bound_private: LockedKey,
+}
+
 #[derive(Default)]
 struct UserSuperKeys {
     /// The per boot key is used for LSKF binding of authentication bound keys. There is one
@@ -168,6 +242,8 @@ struct UserSuperKeys {
     /// When the device is locked, screen-lock-bound keys can still be encrypted, using
     /// ECDH public-key encryption. This field holds the decryption private key.
     screen_lock_bound_private: Option<Arc<SuperKey>>,
+    /// Versions of the above two keys, locked behind a biometric.
+    biometric_unlock: Option<BiometricUnlock>,
 }
 
 #[derive(Default)]
@@ -639,7 +715,7 @@ impl SuperKeyManager {
 
     /// Check if super encryption is required and if so, super-encrypt the key to be stored in
     /// the database.
-    #[allow(clippy::clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub fn handle_super_encryption_on_key_init(
         &self,
         db: &mut KeystoreDB,
@@ -831,11 +907,126 @@ impl SuperKeyManager {
     }
 
     /// Wipe the screen-lock bound keys for this user from memory.
-    pub fn lock_screen_lock_bound_key(&self, user_id: UserId) {
+    pub fn lock_screen_lock_bound_key(
+        &self,
+        db: &mut KeystoreDB,
+        user_id: UserId,
+        unlocking_sids: &[i64],
+    ) {
+        log::info!("Locking screen bound for user {} sids {:?}", user_id, unlocking_sids);
         let mut data = self.data.lock().unwrap();
         let mut entry = data.user_keys.entry(user_id).or_default();
+        if !unlocking_sids.is_empty() {
+            if let (Some(aes), Some(ecdh)) = (
+                entry.screen_lock_bound.as_ref().cloned(),
+                entry.screen_lock_bound_private.as_ref().cloned(),
+            ) {
+                let res = (|| -> Result<()> {
+                    let key_desc = KeyMintDevice::internal_descriptor(format!(
+                        "biometric_unlock_key_{}",
+                        user_id
+                    ));
+                    let encrypting_key = generate_aes256_key()?;
+                    let km_dev: KeyMintDevice =
+                        KeyMintDevice::get(SecurityLevel::TRUSTED_ENVIRONMENT)
+                            .context("In lock_screen_lock_bound_key: KeyMintDevice::get failed")?;
+                    let mut key_params = vec![
+                        KeyParameterValue::Algorithm(Algorithm::AES),
+                        KeyParameterValue::KeySize(256),
+                        KeyParameterValue::BlockMode(BlockMode::GCM),
+                        KeyParameterValue::PaddingMode(PaddingMode::NONE),
+                        KeyParameterValue::CallerNonce,
+                        KeyParameterValue::KeyPurpose(KeyPurpose::DECRYPT),
+                        KeyParameterValue::MinMacLength(128),
+                        KeyParameterValue::AuthTimeout(BIOMETRIC_AUTH_TIMEOUT_S),
+                        KeyParameterValue::HardwareAuthenticatorType(
+                            HardwareAuthenticatorType::FINGERPRINT,
+                        ),
+                    ];
+                    for sid in unlocking_sids {
+                        key_params.push(KeyParameterValue::UserSecureID(*sid));
+                    }
+                    let key_params: Vec<KmKeyParameter> =
+                        key_params.into_iter().map(|x| x.into()).collect();
+                    km_dev.create_and_store_key(db, &key_desc, |dev| {
+                        dev.importKey(key_params.as_slice(), KeyFormat::RAW, &encrypting_key, None)
+                    })?;
+                    entry.biometric_unlock = Some(BiometricUnlock {
+                        sids: unlocking_sids.into(),
+                        key_desc,
+                        screen_lock_bound: LockedKey::new(&encrypting_key, &aes)?,
+                        screen_lock_bound_private: LockedKey::new(&encrypting_key, &ecdh)?,
+                    });
+                    Ok(())
+                })();
+                // There is no reason to propagate an error here upwards. We must discard
+                // entry.screen_lock_bound* in any case.
+                if let Err(e) = res {
+                    log::error!("Error setting up biometric unlock: {:#?}", e);
+                }
+            }
+        }
         entry.screen_lock_bound = None;
         entry.screen_lock_bound_private = None;
+    }
+
+    /// User has unlocked, not using a password. See if any of our stored auth tokens can be used
+    /// to unlock the keys protecting UNLOCKED_DEVICE_REQUIRED keys.
+    pub fn try_unlock_user_with_biometric(
+        &self,
+        db: &mut KeystoreDB,
+        user_id: UserId,
+    ) -> Result<()> {
+        let mut data = self.data.lock().unwrap();
+        let mut entry = data.user_keys.entry(user_id).or_default();
+        if let Some(biometric) = entry.biometric_unlock.as_ref() {
+            let (key_id_guard, key_entry) =
+                KeyMintDevice::lookup_from_desc(db, &biometric.key_desc)?;
+            let km_dev: KeyMintDevice = KeyMintDevice::get(SecurityLevel::TRUSTED_ENVIRONMENT)
+                .context("In try_unlock_user_with_biometric: KeyMintDevice::get failed")?;
+            for sid in &biometric.sids {
+                if let Some((auth_token_entry, _)) = db.find_auth_token_entry(|entry| {
+                    entry.auth_token().userId == *sid || entry.auth_token().authenticatorId == *sid
+                })? {
+                    let res: Result<(Arc<SuperKey>, Arc<SuperKey>)> = (|| {
+                        let slb = biometric.screen_lock_bound.decrypt(
+                            db,
+                            &km_dev,
+                            &key_id_guard,
+                            &key_entry,
+                            auth_token_entry.auth_token(),
+                            None,
+                        )?;
+                        let slbp = biometric.screen_lock_bound_private.decrypt(
+                            db,
+                            &km_dev,
+                            &key_id_guard,
+                            &key_entry,
+                            auth_token_entry.auth_token(),
+                            Some(slb.clone()),
+                        )?;
+                        Ok((slb, slbp))
+                    })();
+                    match res {
+                        Ok((slb, slbp)) => {
+                            entry.screen_lock_bound = Some(slb.clone());
+                            entry.screen_lock_bound_private = Some(slbp.clone());
+                            data.add_key_to_key_index(&slb)?;
+                            data.add_key_to_key_index(&slbp)?;
+                            log::info!(concat!(
+                                "In try_unlock_user_with_biometric: ",
+                                "Successfully unlocked with biometric"
+                            ));
+                            return Ok(());
+                        }
+                        Err(e) => {
+                            log::warn!("In try_unlock_user_with_biometric: attempt failed: {:?}", e)
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 }
 
