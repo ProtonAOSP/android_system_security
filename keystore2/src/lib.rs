@@ -34,6 +34,7 @@ pub mod maintenance;
 pub mod metrics;
 pub mod operation;
 pub mod permission;
+pub mod raw_device;
 pub mod remote_provisioning;
 pub mod security_level;
 pub mod service;
