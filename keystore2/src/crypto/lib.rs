@@ -30,7 +30,7 @@ use std::marker::PhantomData;
 pub use zvec::ZVec;
 
 /// Length of the expected initialization vector.
-pub const IV_LENGTH: usize = 16;
+pub const GCM_IV_LENGTH: usize = 12;
 /// Length of the expected AEAD TAG.
 pub const TAG_LENGTH: usize = 16;
 /// Length of an AES 256 key in bytes.
@@ -40,9 +40,9 @@ pub const AES_128_KEY_LENGTH: usize = 16;
 /// Length of the expected salt for key from password generation.
 pub const SALT_LENGTH: usize = 16;
 
-// This is the number of bytes of the GCM IV that is expected to be initialized
-// with random bytes.
-const GCM_IV_LENGTH: usize = 12;
+/// Older versions of keystore produced IVs with four extra
+/// ignored zero bytes at the end; recognise and trim those.
+pub const LEGACY_IV_LENGTH: usize = 16;
 
 /// Generate an AES256 key, essentially 32 random bytes from the underlying
 /// boringssl library discretely stuffed into a ZVec.
@@ -80,10 +80,13 @@ pub fn generate_random_data(size: usize) -> Result<Vec<u8>, Error> {
 /// freed. Input key is taken as a slice for flexibility, but it is recommended that it is held
 /// in a ZVec as well.
 pub fn aes_gcm_decrypt(data: &[u8], iv: &[u8], tag: &[u8], key: &[u8]) -> Result<ZVec, Error> {
-    if iv.len() != IV_LENGTH {
-        return Err(Error::InvalidIvLength);
-    }
-
+    // Old versions of aes_gcm_encrypt produced 16 byte IVs, but the last four bytes were ignored
+    // so trim these to the correct size.
+    let iv = match iv.len() {
+        GCM_IV_LENGTH => iv,
+        LEGACY_IV_LENGTH => &iv[..GCM_IV_LENGTH],
+        _ => return Err(Error::InvalidIvLength),
+    };
     if tag.len() != TAG_LENGTH {
         return Err(Error::InvalidAeadTagLength);
     }
@@ -96,8 +99,8 @@ pub fn aes_gcm_decrypt(data: &[u8], iv: &[u8], tag: &[u8], key: &[u8]) -> Result
     let mut result = ZVec::new(data.len())?;
 
     // Safety: The first two arguments must point to buffers with a size given by the third
-    // argument. The key must have a size of 16 or 32 bytes which we check above.
-    // The iv and tag arguments must be 16 bytes, which we also check above.
+    // argument. We pass the length of the key buffer along with the key.
+    // The `iv` buffer must be 12 bytes and the `tag` buffer 16, which we check above.
     match unsafe {
         AES_gcm_decrypt(
             data.as_ptr(),
@@ -118,10 +121,9 @@ pub fn aes_gcm_decrypt(data: &[u8], iv: &[u8], tag: &[u8], key: &[u8]) -> Result
 /// This function accepts 128 and 256-bit keys and uses AES128 and AES256 respectively based on
 /// the key length. The function generates an initialization vector. The return value is a tuple
 /// of `(ciphertext, iv, tag)`.
-pub fn aes_gcm_encrypt(data: &[u8], key: &[u8]) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), Error> {
-    let mut iv = vec![0; IV_LENGTH];
-    // Safety: iv is longer than GCM_IV_LENGTH, which is 12 while IV_LENGTH is 16.
-    // The iv needs to be 16 bytes long, but the last 4 bytes remain zeroed.
+pub fn aes_gcm_encrypt(plaintext: &[u8], key: &[u8]) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), Error> {
+    let mut iv = vec![0; GCM_IV_LENGTH];
+    // Safety: iv is GCM_IV_LENGTH bytes long.
     if !unsafe { randomBytes(iv.as_mut_ptr(), GCM_IV_LENGTH) } {
         return Err(Error::RandomNumberGenerationFailed);
     }
@@ -131,21 +133,25 @@ pub fn aes_gcm_encrypt(data: &[u8], key: &[u8]) -> Result<(Vec<u8>, Vec<u8>, Vec
         _ => return Err(Error::InvalidKeyLength),
     }
 
-    let mut result: Vec<u8> = vec![0; data.len()];
+    let mut ciphertext: Vec<u8> = vec![0; plaintext.len()];
     let mut tag: Vec<u8> = vec![0; TAG_LENGTH];
-    match unsafe {
+    // Safety: The first two arguments must point to buffers with a size given by the third
+    // argument. We pass the length of the key buffer along with the key.
+    // The `iv` buffer must be 12 bytes and the `tag` buffer 16, which we check above.
+    if unsafe {
         AES_gcm_encrypt(
-            data.as_ptr(),
-            result.as_mut_ptr(),
-            data.len(),
+            plaintext.as_ptr(),
+            ciphertext.as_mut_ptr(),
+            plaintext.len(),
             key.as_ptr(),
             key.len(),
             iv.as_ptr(),
             tag.as_mut_ptr(),
         )
     } {
-        true => Ok((result, iv, tag)),
-        false => Err(Error::EncryptionFailed),
+        Ok((ciphertext, iv, tag))
+    } else {
+        Err(Error::EncryptionFailed)
     }
 }
 
