@@ -15,209 +15,19 @@
 //! Offer keys based on the "boot level" for superencryption.
 
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
-    Algorithm::Algorithm, BeginResult::BeginResult, Digest::Digest, ErrorCode::ErrorCode,
-    IKeyMintDevice::IKeyMintDevice, IKeyMintOperation::IKeyMintOperation,
-    KeyParameter::KeyParameter, KeyPurpose::KeyPurpose, SecurityLevel::SecurityLevel,
-};
-use android_system_keystore2::aidl::android::system::keystore2::{
-    Domain::Domain, KeyDescriptor::KeyDescriptor, ResponseCode::ResponseCode,
+    Algorithm::Algorithm, Digest::Digest, KeyPurpose::KeyPurpose, SecurityLevel::SecurityLevel,
 };
 use anyhow::{Context, Result};
-use binder::Strong;
 use keystore2_crypto::{hkdf_expand, ZVec, AES_256_KEY_LENGTH};
 use std::{collections::VecDeque, convert::TryFrom};
 
-use crate::{
-    database::{
-        BlobMetaData, BlobMetaEntry, CertificateInfo, DateTime, KeyEntry, KeyEntryLoadBits,
-        KeyIdGuard, KeyMetaData, KeyMetaEntry, KeyType, KeystoreDB, SubComponentType, Uuid,
-    },
-    error::{map_km_error, Error},
-    globals::get_keymint_device,
-    key_parameter::KeyParameterValue,
-    super_key::KeyBlob,
-    utils::{key_characteristics_to_internal, Asp, AID_KEYSTORE},
-};
-
-/// Wrapper for operating directly on a KeyMint device.
-/// These methods often mirror methods in [`crate::security_level`]. However
-/// the functions in [`crate::security_level`] make assumptions that hold, and has side effects
-/// that make sense, only if called by an external client through binder.
-/// In addition we are trying to maintain a separation between interface services
-/// so that the architecture is compatible with a future move to multiple thread pools.
-/// So the simplest approach today is to write new implementations of them for internal use.
-/// Because these methods run very early, we don't even try to cooperate with
-/// the operation slot database; we assume there will be plenty of slots.
-struct KeyMintDevice {
-    asp: Asp,
-    km_uuid: Uuid,
-}
-
-impl KeyMintDevice {
-    fn get(security_level: SecurityLevel) -> Result<KeyMintDevice> {
-        let (asp, _hw_info, km_uuid) = get_keymint_device(&security_level)
-            .context("In KeyMintDevice::get: get_keymint_device failed")?;
-        Ok(KeyMintDevice { asp, km_uuid })
-    }
-
-    /// Generate a KM key and store in the database.
-    fn generate_and_store_key(
-        &self,
-        db: &mut KeystoreDB,
-        key_desc: &KeyDescriptor,
-        params: &[KeyParameter],
-    ) -> Result<()> {
-        let km_dev: Strong<dyn IKeyMintDevice> = self
-            .asp
-            .get_interface()
-            .context("In generate_and_store_key: Failed to get KeyMint device")?;
-        let creation_result = map_km_error(km_dev.generateKey(params, None))
-            .context("In generate_and_store_key: generateKey failed")?;
-        let key_parameters = key_characteristics_to_internal(creation_result.keyCharacteristics);
-
-        let creation_date =
-            DateTime::now().context("In generate_and_store_key: DateTime::now() failed")?;
-
-        let mut key_metadata = KeyMetaData::new();
-        key_metadata.add(KeyMetaEntry::CreationDate(creation_date));
-        let mut blob_metadata = BlobMetaData::new();
-        blob_metadata.add(BlobMetaEntry::KmUuid(self.km_uuid));
-
-        db.store_new_key(
-            &key_desc,
-            &key_parameters,
-            &(&creation_result.keyBlob, &blob_metadata),
-            &CertificateInfo::new(None, None),
-            &key_metadata,
-            &self.km_uuid,
-        )
-        .context("In generate_and_store_key: store_new_key failed")?;
-        Ok(())
-    }
-
-    /// This does the lookup and store in separate transactions; caller must
-    /// hold a lock before calling.
-    fn lookup_or_generate_key(
-        &self,
-        db: &mut KeystoreDB,
-        key_desc: &KeyDescriptor,
-        params: &[KeyParameter],
-    ) -> Result<(KeyIdGuard, KeyEntry)> {
-        // We use a separate transaction for the lookup than for the store
-        // - to keep the code simple
-        // - because the caller needs to hold a lock in any case
-        // - because it avoids holding database locks during slow
-        //   KeyMint operations
-        let lookup = db.load_key_entry(
-            &key_desc,
-            KeyType::Client,
-            KeyEntryLoadBits::KM,
-            AID_KEYSTORE,
-            |_, _| Ok(()),
-        );
-        match lookup {
-            Ok(result) => return Ok(result),
-            Err(e) => match e.root_cause().downcast_ref::<Error>() {
-                Some(&Error::Rc(ResponseCode::KEY_NOT_FOUND)) => {}
-                _ => return Err(e),
-            },
-        }
-        self.generate_and_store_key(db, &key_desc, &params)
-            .context("In lookup_or_generate_key: generate_and_store_key failed")?;
-        db.load_key_entry(&key_desc, KeyType::Client, KeyEntryLoadBits::KM, AID_KEYSTORE, |_, _| {
-            Ok(())
-        })
-        .context("In lookup_or_generate_key: load_key_entry failed")
-    }
-
-    /// Call the passed closure; if it returns `KEY_REQUIRES_UPGRADE`, call upgradeKey, and
-    /// write the upgraded key to the database.
-    fn upgrade_keyblob_if_required_with<T, F>(
-        &self,
-        db: &mut KeystoreDB,
-        km_dev: &Strong<dyn IKeyMintDevice>,
-        key_id_guard: KeyIdGuard,
-        key_blob: &KeyBlob,
-        f: F,
-    ) -> Result<T>
-    where
-        F: Fn(&[u8]) -> Result<T, Error>,
-    {
-        match f(key_blob) {
-            Err(Error::Km(ErrorCode::KEY_REQUIRES_UPGRADE)) => {
-                let upgraded_blob = map_km_error(km_dev.upgradeKey(key_blob, &[]))
-                    .context("In upgrade_keyblob_if_required_with: Upgrade failed")?;
-
-                let mut new_blob_metadata = BlobMetaData::new();
-                new_blob_metadata.add(BlobMetaEntry::KmUuid(self.km_uuid));
-
-                db.set_blob(
-                    &key_id_guard,
-                    SubComponentType::KEY_BLOB,
-                    Some(&upgraded_blob),
-                    Some(&new_blob_metadata),
-                )
-                .context(concat!(
-                    "In upgrade_keyblob_if_required_with: ",
-                    "Failed to insert upgraded blob into the database"
-                ))?;
-
-                Ok(f(&upgraded_blob).context(concat!(
-                    "In upgrade_keyblob_if_required_with: ",
-                    "Closure failed after upgrade"
-                ))?)
-            }
-            result => Ok(result.context("In upgrade_keyblob_if_required_with: Closure failed")?),
-        }
-    }
-
-    /// Use the created key in an operation that can be done with
-    /// a call to begin followed by a call to finish.
-    fn use_key_in_one_step(
-        &self,
-        db: &mut KeystoreDB,
-        key_id_guard: KeyIdGuard,
-        key_entry: &KeyEntry,
-        purpose: KeyPurpose,
-        operation_parameters: &[KeyParameter],
-        input: &[u8],
-    ) -> Result<Vec<u8>> {
-        let km_dev: Strong<dyn IKeyMintDevice> = self
-            .asp
-            .get_interface()
-            .context("In use_key_in_one_step: Failed to get KeyMint device")?;
-
-        let (key_blob, _blob_metadata) = key_entry
-            .key_blob_info()
-            .as_ref()
-            .ok_or_else(Error::sys)
-            .context("use_key_in_one_step: Keyblob missing")?;
-        let key_blob = KeyBlob::Ref(&key_blob);
-
-        let begin_result: BeginResult = self
-            .upgrade_keyblob_if_required_with(db, &km_dev, key_id_guard, &key_blob, |blob| {
-                map_km_error(km_dev.begin(purpose, blob, operation_parameters, None))
-            })
-            .context("In use_key_in_one_step: Failed to begin operation.")?;
-        let operation: Strong<dyn IKeyMintOperation> = begin_result
-            .operation
-            .ok_or_else(Error::sys)
-            .context("In use_key_in_one_step: Operation missing")?;
-        map_km_error(operation.finish(Some(input), None, None, None, None))
-            .context("In use_key_in_one_step: Failed to finish operation.")
-    }
-}
+use crate::{database::KeystoreDB, key_parameter::KeyParameterValue, raw_device::KeyMintDevice};
 
 /// This is not thread safe; caller must hold a lock before calling.
 /// In practice the caller is SuperKeyManager and the lock is the
 /// Mutex on its internal state.
 pub fn get_level_zero_key(db: &mut KeystoreDB) -> Result<ZVec> {
-    let key_desc = KeyDescriptor {
-        domain: Domain::APP,
-        nspace: AID_KEYSTORE as i64,
-        alias: Some("boot_level_key".to_string()),
-        blob: None,
-    };
+    let key_desc = KeyMintDevice::internal_descriptor("boot_level_key".to_string());
     let params = [
         KeyParameterValue::Algorithm(Algorithm::HMAC).into(),
         KeyParameterValue::Digest(Digest::SHA_2_256).into(),
@@ -239,10 +49,11 @@ pub fn get_level_zero_key(db: &mut KeystoreDB) -> Result<ZVec> {
     let level_zero_key = km_dev
         .use_key_in_one_step(
             db,
-            key_id_guard,
+            &key_id_guard,
             &key_entry,
             KeyPurpose::SIGN,
             &params,
+            None,
             b"Create boot level key",
         )
         .context("In get_level_zero_key: use_key_in_one_step failed")?;

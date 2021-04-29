@@ -34,6 +34,7 @@ pub mod maintenance;
 pub mod metrics;
 pub mod operation;
 pub mod permission;
+pub mod raw_device;
 pub mod remote_provisioning;
 pub mod security_level;
 pub mod service;
@@ -42,6 +43,7 @@ pub mod try_insert;
 pub mod utils;
 
 mod attestation_key_utils;
+mod audit_log;
 mod db_utils;
 mod gc;
 mod super_key;

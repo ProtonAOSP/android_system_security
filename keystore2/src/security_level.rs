@@ -32,6 +32,7 @@ use android_system_keystore2::aidl::android::system::keystore2::{
 };
 
 use crate::attestation_key_utils::{get_attest_key_info, AttestationKeyInfo};
+use crate::audit_log::{log_key_deleted, log_key_generated, log_key_imported};
 use crate::database::{CertificateInfo, KeyIdGuard};
 use crate::globals::{DB, ENFORCEMENTS, LEGACY_MIGRATOR, SUPER_KEY};
 use crate::key_parameter::KeyParameter as KsKeyParam;
@@ -875,6 +876,7 @@ impl IKeystoreSecurityLevel for KeystoreSecurityLevel {
     ) -> binder::public_api::Result<KeyMetadata> {
         let result = self.generate_key(key, attestation_key, params, flags, entropy);
         log_key_creation_event_stats(self.security_level, params, &result);
+        log_key_generated(key, ThreadState::get_calling_uid(), result.is_ok());
         map_or_log_err(result, Ok)
     }
     fn importKey(
@@ -887,6 +889,7 @@ impl IKeystoreSecurityLevel for KeystoreSecurityLevel {
     ) -> binder::public_api::Result<KeyMetadata> {
         let result = self.import_key(key, attestation_key, params, flags, key_data);
         log_key_creation_event_stats(self.security_level, params, &result);
+        log_key_imported(key, ThreadState::get_calling_uid(), result.is_ok());
         map_or_log_err(result, Ok)
     }
     fn importWrappedKey(
@@ -900,6 +903,7 @@ impl IKeystoreSecurityLevel for KeystoreSecurityLevel {
         let result =
             self.import_wrapped_key(key, wrapping_key, masking_key, params, authenticators);
         log_key_creation_event_stats(self.security_level, params, &result);
+        log_key_imported(key, ThreadState::get_calling_uid(), result.is_ok());
         map_or_log_err(result, Ok)
     }
     fn convertStorageKeyToEphemeral(
@@ -909,6 +913,8 @@ impl IKeystoreSecurityLevel for KeystoreSecurityLevel {
         map_or_log_err(self.convert_storage_key_to_ephemeral(storage_key), Ok)
     }
     fn deleteKey(&self, key: &KeyDescriptor) -> binder::public_api::Result<()> {
-        map_or_log_err(self.delete_key(key), Ok)
+        let result = self.delete_key(key);
+        log_key_deleted(key, ThreadState::get_calling_uid(), result.is_ok());
+        map_or_log_err(result, Ok)
     }
 }
