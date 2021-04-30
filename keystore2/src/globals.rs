@@ -172,7 +172,7 @@ lazy_static! {
         &DB_PATH.lock().expect("Could not get the database path for legacy blob loader.")));
     /// Legacy migrator. Atomically migrates legacy blobs to the database.
     pub static ref LEGACY_MIGRATOR: Arc<LegacyMigrator> =
-        Arc::new(LegacyMigrator::new(ASYNC_TASK.clone()));
+        Arc::new(LegacyMigrator::new(Arc::new(Default::default())));
     /// Background thread which handles logging via statsd and logd
     pub static ref LOGS_HANDLER: Arc<AsyncTask> = Default::default();
 }
