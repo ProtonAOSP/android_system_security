@@ -118,6 +118,11 @@ class KeyMintDevice : public aidl::android::hardware::security::keymint::BnKeyMi
     ScopedAStatus convertStorageKeyToEphemeral(const std::vector<uint8_t>& storageKeyBlob,
                                                std::vector<uint8_t>* ephemeralKeyBlob) override;
 
+    ScopedAStatus
+    getKeyCharacteristics(const std::vector<uint8_t>& storageKeyBlob,
+                          const std::vector<uint8_t>& appId, const std::vector<uint8_t>& appData,
+                          std::vector<KeyCharacteristics>* keyCharacteristics) override;
+
     // These are public to allow testing code to use them directly.
     // This class should not be used publicly anyway.
     std::variant<std::vector<Certificate>, KMV1_ErrorCode>
