@@ -687,6 +687,14 @@ KeyMintDevice::convertStorageKeyToEphemeral(const std::vector<uint8_t>& prefixed
     return convertErrorCode(km_error);
 }
 
+ScopedAStatus
+KeyMintDevice::getKeyCharacteristics(const std::vector<uint8_t>& /* storageKeyBlob */,
+                                     const std::vector<uint8_t>& /* appId */,
+                                     const std::vector<uint8_t>& /* appData */,
+                                     std::vector<KeyCharacteristics>* /* keyCharacteristics */) {
+    return convertErrorCode(KMV1::ErrorCode::UNIMPLEMENTED);
+}
+
 ScopedAStatus KeyMintOperation::updateAad(const std::vector<uint8_t>& input,
                                           const std::optional<HardwareAuthToken>& optAuthToken,
                                           const std::optional<TimeStampToken>& optTimeStampToken) {
