@@ -682,9 +682,10 @@ impl Enforcements {
             // So the HAT cannot be presented on create. So on update/finish we present both
             // an per-op-bound auth token and a timestamp token.
             (Some(_), true, true) => (None, DeferredAuthState::TimeStampedOpAuthRequired),
-            (Some(hat), true, false) => {
-                (None, DeferredAuthState::TimeStampRequired(hat.take_auth_token()))
-            }
+            (Some(hat), true, false) => (
+                Some(hat.auth_token().clone()),
+                DeferredAuthState::TimeStampRequired(hat.take_auth_token()),
+            ),
             (Some(hat), false, true) => {
                 (Some(hat.take_auth_token()), DeferredAuthState::OpAuthRequired)
             }
