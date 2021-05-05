@@ -23,7 +23,7 @@ use android_security_vpnprofilestore::binder::{
     ThreadState,
 };
 use anyhow::{Context, Result};
-use keystore2::{async_task::AsyncTask, legacy_blob::LegacyBlobLoader};
+use keystore2::{async_task::AsyncTask, legacy_blob::LegacyBlobLoader, utils::watchdog as wd};
 use rusqlite::{
     params, Connection, OptionalExtension, Transaction, TransactionBehavior, NO_PARAMS,
 };
@@ -366,15 +366,19 @@ impl binder::Interface for VpnProfileStore {}
 
 impl IVpnProfileStore for VpnProfileStore {
     fn get(&self, alias: &str) -> BinderResult<Vec<u8>> {
+        let _wp = wd::watch_millis("IVpnProfileStore::get", 500);
         map_or_log_err(self.get(alias), Ok)
     }
     fn put(&self, alias: &str, profile: &[u8]) -> BinderResult<()> {
+        let _wp = wd::watch_millis("IVpnProfileStore::put", 500);
         map_or_log_err(self.put(alias, profile), Ok)
     }
     fn remove(&self, alias: &str) -> BinderResult<()> {
+        let _wp = wd::watch_millis("IVpnProfileStore::remove", 500);
         map_or_log_err(self.remove(alias), Ok)
     }
     fn list(&self, prefix: &str) -> BinderResult<Vec<String>> {
+        let _wp = wd::watch_millis("IVpnProfileStore::list", 500);
         map_or_log_err(self.list(prefix), Ok)
     }
 }
