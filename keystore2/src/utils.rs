@@ -107,11 +107,17 @@ pub fn check_device_attestation_permissions() -> anyhow::Result<()> {
     let permission_controller: binder::Strong<dyn IPermissionController::IPermissionController> =
         binder::get_interface("permission")?;
 
-    let binder_result = permission_controller.checkPermission(
-        "android.permission.READ_PRIVILEGED_PHONE_STATE",
-        ThreadState::get_calling_pid(),
-        ThreadState::get_calling_uid() as i32,
-    );
+    let binder_result = {
+        let _wp = watchdog::watch_millis(
+            "In check_device_attestation_permissions: calling checkPermission.",
+            500,
+        );
+        permission_controller.checkPermission(
+            "android.permission.READ_PRIVILEGED_PHONE_STATE",
+            ThreadState::get_calling_pid(),
+            ThreadState::get_calling_uid() as i32,
+        )
+    };
     let has_permissions = map_binder_status(binder_result)
         .context("In check_device_attestation_permissions: checkPermission failed")?;
     match has_permissions {

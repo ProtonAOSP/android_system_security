@@ -29,6 +29,7 @@ use crate::{
     legacy_migrator::LegacyMigrator,
     raw_device::KeyMintDevice,
     try_insert::TryInsert,
+    utils::watchdog as wd,
 };
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
     Algorithm::Algorithm, BlockMode::BlockMode, HardwareAuthToken::HardwareAuthToken,
@@ -949,6 +950,10 @@ impl SuperKeyManager {
                     let key_params: Vec<KmKeyParameter> =
                         key_params.into_iter().map(|x| x.into()).collect();
                     km_dev.create_and_store_key(db, &key_desc, |dev| {
+                        let _wp = wd::watch_millis(
+                            "In lock_screen_lock_bound_key: calling importKey.",
+                            500,
+                        );
                         dev.importKey(key_params.as_slice(), KeyFormat::RAW, &encrypting_key, None)
                     })?;
                     entry.biometric_unlock = Some(BiometricUnlock {

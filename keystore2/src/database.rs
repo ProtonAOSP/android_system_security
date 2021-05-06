@@ -46,7 +46,7 @@
 use crate::impl_metadata; // This is in db_utils.rs
 use crate::key_parameter::{KeyParameter, Tag};
 use crate::permission::KeyPermSet;
-use crate::utils::{get_current_time_in_seconds, AID_USER_OFFSET};
+use crate::utils::{get_current_time_in_seconds, watchdog as wd, AID_USER_OFFSET};
 use crate::{
     db_utils::{self, SqlField},
     gc::Gc,
@@ -851,6 +851,8 @@ impl KeystoreDB {
     /// KeystoreDB cannot be used by multiple threads.
     /// Each thread should open their own connection using `thread_local!`.
     pub fn new(db_root: &Path, gc: Option<Gc>) -> Result<Self> {
+        let _wp = wd::watch_millis("KeystoreDB::new", 500);
+
         // Build the path to the sqlite file.
         let mut persistent_path = db_root.to_path_buf();
         persistent_path.push(Self::PERSISTENT_DB_FILENAME);
@@ -1096,6 +1098,8 @@ impl KeystoreDB {
         &mut self,
         storage_type: StatsdStorageType,
     ) -> Result<Keystore2StorageStats> {
+        let _wp = wd::watch_millis("KeystoreDB::get_storage_stat", 500);
+
         match storage_type {
             StatsdStorageType::Database => self.get_total_size(),
             StatsdStorageType::KeyEntry => {
@@ -1151,6 +1155,7 @@ impl KeystoreDB {
         &mut self,
         blob_id_to_delete: Option<i64>,
     ) -> Result<Option<(i64, Vec<u8>, BlobMetaData)>> {
+        let _wp = wd::watch_millis("KeystoreDB::handle_next_superseded_blob", 500);
         self.with_transaction(TransactionBehavior::Immediate, |tx| {
             // Delete the given blob if one was given.
             if let Some(blob_id_to_delete) = blob_id_to_delete {
@@ -1220,6 +1225,8 @@ impl KeystoreDB {
     /// Unlike with `mark_unreferenced`, we don't need to purge grants, because only keys that made
     /// it to `KeyLifeCycle::Live` may have grants.
     pub fn cleanup_leftovers(&mut self) -> Result<usize> {
+        let _wp = wd::watch_millis("KeystoreDB::cleanup_leftovers", 500);
+
         self.with_transaction(TransactionBehavior::Immediate, |tx| {
             tx.execute(
                 "UPDATE persistent.keyentry SET state = ? WHERE state = ?;",
@@ -1239,6 +1246,8 @@ impl KeystoreDB {
         alias: &str,
         key_type: KeyType,
     ) -> Result<bool> {
+        let _wp = wd::watch_millis("KeystoreDB::key_exists", 500);
+
         self.with_transaction(TransactionBehavior::Immediate, |tx| {
             let key_descriptor =
                 KeyDescriptor { domain, nspace, alias: Some(alias.to_string()), blob: None };
@@ -1264,6 +1273,8 @@ impl KeystoreDB {
         blob_metadata: &BlobMetaData,
         key_metadata: &KeyMetaData,
     ) -> Result<KeyEntry> {
+        let _wp = wd::watch_millis("KeystoreDB::store_super_key", 500);
+
         self.with_transaction(TransactionBehavior::Immediate, |tx| {
             let key_id = Self::insert_with_retry(|id| {
                 tx.execute(
@@ -1307,6 +1318,8 @@ impl KeystoreDB {
         key_type: &SuperKeyType,
         user_id: u32,
     ) -> Result<Option<(KeyIdGuard, KeyEntry)>> {
+        let _wp = wd::watch_millis("KeystoreDB::load_super_key", 500);
+
         self.with_transaction(TransactionBehavior::Immediate, |tx| {
             let key_descriptor = KeyDescriptor {
                 domain: Domain::APP,
@@ -1346,6 +1359,8 @@ impl KeystoreDB {
     where
         F: Fn() -> Result<(Vec<u8>, BlobMetaData)>,
     {
+        let _wp = wd::watch_millis("KeystoreDB::get_or_create_key_with", 500);
+
         self.with_transaction(TransactionBehavior::Immediate, |tx| {
             let id = {
                 let mut stmt = tx
@@ -1494,6 +1509,8 @@ impl KeystoreDB {
         namespace: &i64,
         km_uuid: &Uuid,
     ) -> Result<KeyIdGuard> {
+        let _wp = wd::watch_millis("KeystoreDB::create_key_entry", 500);
+
         self.with_transaction(TransactionBehavior::Immediate, |tx| {
             Self::create_key_entry_internal(tx, domain, namespace, km_uuid).no_gc()
         })
@@ -1545,6 +1562,8 @@ impl KeystoreDB {
         private_key: &[u8],
         km_uuid: &Uuid,
     ) -> Result<()> {
+        let _wp = wd::watch_millis("KeystoreDB::create_attestation_key_entry", 500);
+
         self.with_transaction(TransactionBehavior::Immediate, |tx| {
             let key_id = KEY_ID_LOCK.get(
                 Self::insert_with_retry(|id| {
@@ -1587,6 +1606,8 @@ impl KeystoreDB {
         blob: Option<&[u8]>,
         blob_metadata: Option<&BlobMetaData>,
     ) -> Result<()> {
+        let _wp = wd::watch_millis("KeystoreDB::set_blob", 500);
+
         self.with_transaction(TransactionBehavior::Immediate, |tx| {
             Self::set_blob_internal(&tx, key_id.0, sc_type, blob, blob_metadata).need_gc()
         })
@@ -1598,6 +1619,8 @@ impl KeystoreDB {
     /// We use this to insert key blobs into the database which can then be garbage collected
     /// lazily by the key garbage collector.
     pub fn set_deleted_blob(&mut self, blob: &[u8], blob_metadata: &BlobMetaData) -> Result<()> {
+        let _wp = wd::watch_millis("KeystoreDB::set_deleted_blob", 500);
+
         self.with_transaction(TransactionBehavior::Immediate, |tx| {
             Self::set_blob_internal(
                 &tx,
@@ -1708,6 +1731,8 @@ impl KeystoreDB {
         expiration_date: i64,
         km_uuid: &Uuid,
     ) -> Result<()> {
+        let _wp = wd::watch_millis("KeystoreDB::store_signed_attestation_certificate_chain", 500);
+
         self.with_transaction(TransactionBehavior::Immediate, |tx| {
             let mut stmt = tx
                 .prepare(
@@ -1777,6 +1802,8 @@ impl KeystoreDB {
         namespace: i64,
         km_uuid: &Uuid,
     ) -> Result<()> {
+        let _wp = wd::watch_millis("KeystoreDB::assign_attestation_key", 500);
+
         match domain {
             Domain::APP | Domain::SELINUX => {}
             _ => {
@@ -1839,6 +1866,8 @@ impl KeystoreDB {
         num_keys: i32,
         km_uuid: &Uuid,
     ) -> Result<Vec<Vec<u8>>> {
+        let _wp = wd::watch_millis("KeystoreDB::fetch_unsigned_attestation_keys", 500);
+
         self.with_transaction(TransactionBehavior::Immediate, |tx| {
             let mut stmt = tx
                 .prepare(
@@ -1876,6 +1905,8 @@ impl KeystoreDB {
     /// Removes any keys that have expired as of the current time. Returns the number of keys
     /// marked unreferenced that are bound to be garbage collected.
     pub fn delete_expired_attestation_keys(&mut self) -> Result<i32> {
+        let _wp = wd::watch_millis("KeystoreDB::delete_expired_attestation_keys", 500);
+
         self.with_transaction(TransactionBehavior::Immediate, |tx| {
             let mut stmt = tx
                 .prepare(
@@ -1911,6 +1942,8 @@ impl KeystoreDB {
     /// Deletes all remotely provisioned attestation keys in the system, regardless of the state
     /// they are in. This is useful primarily as a testing mechanism.
     pub fn delete_all_attestation_keys(&mut self) -> Result<i64> {
+        let _wp = wd::watch_millis("KeystoreDB::delete_all_attestation_keys", 500);
+
         self.with_transaction(TransactionBehavior::Immediate, |tx| {
             let mut stmt = tx
                 .prepare(
@@ -1942,6 +1975,8 @@ impl KeystoreDB {
         date: i64,
         km_uuid: &Uuid,
     ) -> Result<AttestationPoolStatus> {
+        let _wp = wd::watch_millis("KeystoreDB::get_attestation_pool_status", 500);
+
         self.with_transaction(TransactionBehavior::Immediate, |tx| {
             let mut stmt = tx.prepare(
                 "SELECT data
@@ -2009,6 +2044,8 @@ impl KeystoreDB {
         namespace: i64,
         km_uuid: &Uuid,
     ) -> Result<Option<CertificateChain>> {
+        let _wp = wd::watch_millis("KeystoreDB::retrieve_attestation_key_and_cert_chain", 500);
+
         match domain {
             Domain::APP | Domain::SELINUX => {}
             _ => {
@@ -2143,6 +2180,8 @@ impl KeystoreDB {
         caller_uid: u32,
         check_permission: impl Fn(&KeyDescriptor) -> Result<()>,
     ) -> Result<()> {
+        let _wp = wd::watch_millis("KeystoreDB::migrate_key_namespace", 500);
+
         let destination = match destination.domain {
             Domain::APP => KeyDescriptor { nspace: caller_uid as i64, ..(*destination).clone() },
             Domain::SELINUX => (*destination).clone(),
@@ -2211,6 +2250,8 @@ impl KeystoreDB {
         metadata: &KeyMetaData,
         km_uuid: &Uuid,
     ) -> Result<KeyIdGuard> {
+        let _wp = wd::watch_millis("KeystoreDB::store_new_key", 500);
+
         let (alias, domain, namespace) = match key {
             KeyDescriptor { alias: Some(alias), domain: Domain::APP, nspace, blob: None }
             | KeyDescriptor { alias: Some(alias), domain: Domain::SELINUX, nspace, blob: None } => {
@@ -2266,6 +2307,8 @@ impl KeystoreDB {
         cert: &[u8],
         km_uuid: &Uuid,
     ) -> Result<KeyIdGuard> {
+        let _wp = wd::watch_millis("KeystoreDB::store_new_certificate", 500);
+
         let (alias, domain, namespace) = match key {
             KeyDescriptor { alias: Some(alias), domain: Domain::APP, nspace, blob: None }
             | KeyDescriptor { alias: Some(alias), domain: Domain::SELINUX, nspace, blob: None } => {
@@ -2545,6 +2588,8 @@ impl KeystoreDB {
     /// zero, the key also gets marked unreferenced and scheduled for deletion.
     /// Returns Ok(true) if the key was marked unreferenced as a hint to the garbage collector.
     pub fn check_and_update_key_usage_count(&mut self, key_id: i64) -> Result<()> {
+        let _wp = wd::watch_millis("KeystoreDB::check_and_update_key_usage_count", 500);
+
         self.with_transaction(TransactionBehavior::Immediate, |tx| {
             let limit: Option<i32> = tx
                 .query_row(
@@ -2591,6 +2636,8 @@ impl KeystoreDB {
         caller_uid: u32,
         check_permission: impl Fn(&KeyDescriptor, Option<KeyPermSet>) -> Result<()>,
     ) -> Result<(KeyIdGuard, KeyEntry)> {
+        let _wp = wd::watch_millis("KeystoreDB::load_key_entry", 500);
+
         loop {
             match self.load_key_entry_internal(
                 key,
@@ -2718,6 +2765,8 @@ impl KeystoreDB {
         caller_uid: u32,
         check_permission: impl Fn(&KeyDescriptor, Option<KeyPermSet>) -> Result<()>,
     ) -> Result<()> {
+        let _wp = wd::watch_millis("KeystoreDB::unbind_key", 500);
+
         self.with_transaction(TransactionBehavior::Immediate, |tx| {
             let (key_id, access_key_descriptor, access_vector) =
                 Self::load_access_tuple(tx, key, key_type, caller_uid)
@@ -2747,6 +2796,8 @@ impl KeystoreDB {
     /// Delete all artifacts belonging to the namespace given by the domain-namespace tuple.
     /// This leaves all of the blob entries orphaned for subsequent garbage collection.
     pub fn unbind_keys_for_namespace(&mut self, domain: Domain, namespace: i64) -> Result<()> {
+        let _wp = wd::watch_millis("KeystoreDB::unbind_keys_for_namespace", 500);
+
         if !(domain == Domain::APP || domain == Domain::SELINUX) {
             return Err(KsError::Rc(ResponseCode::INVALID_ARGUMENT))
                 .context("In unbind_keys_for_namespace.");
@@ -2798,6 +2849,8 @@ impl KeystoreDB {
         user_id: u32,
         keep_non_super_encrypted_keys: bool,
     ) -> Result<()> {
+        let _wp = wd::watch_millis("KeystoreDB::unbind_keys_for_user", 500);
+
         self.with_transaction(TransactionBehavior::Immediate, |tx| {
             let mut stmt = tx
                 .prepare(&format!(
@@ -2898,6 +2951,8 @@ impl KeystoreDB {
     /// The key descriptors will have the domain, nspace, and alias field set.
     /// Domain must be APP or SELINUX, the caller must make sure of that.
     pub fn list(&mut self, domain: Domain, namespace: i64) -> Result<Vec<KeyDescriptor>> {
+        let _wp = wd::watch_millis("KeystoreDB::list", 500);
+
         self.with_transaction(TransactionBehavior::Deferred, |tx| {
             let mut stmt = tx
                 .prepare(
@@ -2939,6 +2994,8 @@ impl KeystoreDB {
         access_vector: KeyPermSet,
         check_permission: impl Fn(&KeyDescriptor, &KeyPermSet) -> Result<()>,
     ) -> Result<KeyDescriptor> {
+        let _wp = wd::watch_millis("KeystoreDB::grant", 500);
+
         self.with_transaction(TransactionBehavior::Immediate, |tx| {
             // Load the key_id and complete the access control tuple.
             // We ignore the access vector here because grants cannot be granted.
@@ -3004,6 +3061,8 @@ impl KeystoreDB {
         grantee_uid: u32,
         check_permission: impl Fn(&KeyDescriptor) -> Result<()>,
     ) -> Result<()> {
+        let _wp = wd::watch_millis("KeystoreDB::ungrant", 500);
+
         self.with_transaction(TransactionBehavior::Immediate, |tx| {
             // Load the key_id and complete the access control tuple.
             // We ignore the access vector here because grants cannot be granted.
@@ -3055,6 +3114,8 @@ impl KeystoreDB {
 
     /// Insert or replace the auth token based on the UNIQUE constraint of the auth token table
     pub fn insert_auth_token(&mut self, auth_token: &HardwareAuthToken) -> Result<()> {
+        let _wp = wd::watch_millis("KeystoreDB::insert_auth_token", 500);
+
         self.with_transaction(TransactionBehavior::Immediate, |tx| {
             tx.execute(
                 "INSERT OR REPLACE INTO perboot.authtoken (challenge, user_id, auth_id,
@@ -3082,6 +3143,8 @@ impl KeystoreDB {
     where
         F: Fn(&AuthTokenEntry) -> bool,
     {
+        let _wp = wd::watch_millis("KeystoreDB::find_auth_token_entry", 500);
+
         self.with_transaction(TransactionBehavior::Deferred, |tx| {
             let mut stmt = tx
                 .prepare("SELECT * from perboot.authtoken ORDER BY time_received DESC;")
@@ -3117,6 +3180,8 @@ impl KeystoreDB {
 
     /// Insert last_off_body into the metadata table at the initialization of auth token table
     pub fn insert_last_off_body(&mut self, last_off_body: MonotonicRawTime) -> Result<()> {
+        let _wp = wd::watch_millis("KeystoreDB::insert_last_off_body", 500);
+
         self.with_transaction(TransactionBehavior::Immediate, |tx| {
             tx.execute(
                 "INSERT OR REPLACE INTO perboot.metadata (key, value) VALUES (?, ?);",
@@ -3129,6 +3194,8 @@ impl KeystoreDB {
 
     /// Update last_off_body when on_device_off_body is called
     pub fn update_last_off_body(&mut self, last_off_body: MonotonicRawTime) -> Result<()> {
+        let _wp = wd::watch_millis("KeystoreDB::update_last_off_body", 500);
+
         self.with_transaction(TransactionBehavior::Immediate, |tx| {
             tx.execute(
                 "UPDATE perboot.metadata SET value = ? WHERE key = ?;",
@@ -3141,6 +3208,8 @@ impl KeystoreDB {
 
     /// Get last_off_body time when finding auth tokens
     fn get_last_off_body(tx: &Transaction) -> Result<MonotonicRawTime> {
+        let _wp = wd::watch_millis("KeystoreDB::get_last_off_body", 500);
+
         tx.query_row(
             "SELECT value from perboot.metadata WHERE key = ?;",
             params!["last_off_body"],
