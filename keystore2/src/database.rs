@@ -41,8 +41,6 @@
 //! from the database module these functions take permission check
 //! callbacks.
 
-#![allow(clippy::needless_question_mark)]
-
 use crate::impl_metadata; // This is in db_utils.rs
 use crate::key_parameter::{KeyParameter, Tag};
 use crate::permission::KeyPermSet;
@@ -1909,7 +1907,7 @@ impl KeystoreDB {
                         km_uuid,
                         num_keys
                     ],
-                    |row| Ok(row.get(0)?),
+                    |row| row.get(0),
                 )?
                 .collect::<rusqlite::Result<Vec<Vec<u8>>>>()
                 .context("Failed to execute statement")?;
@@ -1968,7 +1966,7 @@ impl KeystoreDB {
                 )
                 .context("Failed to prepare statement")?;
             let keys_to_delete = stmt
-                .query_map(params![KeyType::Attestation], |row| Ok(row.get(0)?))?
+                .query_map(params![KeyType::Attestation], |row| row.get(0))?
                 .collect::<rusqlite::Result<Vec<i64>>>()
                 .context("Failed to execute statement")?;
             let num_deleted = keys_to_delete
@@ -2013,7 +2011,7 @@ impl KeystoreDB {
                         km_uuid,
                         KeyLifeCycle::Live
                     ],
-                    |row| Ok(row.get(0)?),
+                    |row| row.get(0),
                 )?
                 .collect::<rusqlite::Result<Vec<DateTime>>>()
                 .context("Failed to execute metadata statement")?;
@@ -3229,7 +3227,7 @@ impl KeystoreDB {
         tx.query_row(
             "SELECT value from perboot.metadata WHERE key = ?;",
             params!["last_off_body"],
-            |row| Ok(row.get(0)?),
+            |row| row.get(0),
         )
         .context("In get_last_off_body: query_row failed.")
     }
