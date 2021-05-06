@@ -47,3 +47,4 @@ mod audit_log;
 mod db_utils;
 mod gc;
 mod super_key;
+mod watchdog;
