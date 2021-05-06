@@ -45,7 +45,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::database::{CertificateChain, KeystoreDB, Uuid};
 use crate::error::{self, map_or_log_err, map_rem_prov_error, Error};
 use crate::globals::{get_keymint_device, get_remotely_provisioned_component, DB};
-use crate::utils::Asp;
+use crate::utils::{watchdog as wd, Asp};
 
 /// Contains helper functions to check if remote provisioning is enabled on the system and, if so,
 /// to assign and retrieve attestation keys and certificate chains.
@@ -392,6 +392,7 @@ impl IRemoteProvisioning for RemoteProvisioningService {
         expired_by: i64,
         sec_level: SecurityLevel,
     ) -> binder::public_api::Result<AttestationPoolStatus> {
+        let _wp = wd::watch_millis("IRemoteProvisioning::getPoolStatus", 500);
         map_or_log_err(self.get_pool_status(expired_by, sec_level), Ok)
     }
 
@@ -405,6 +406,7 @@ impl IRemoteProvisioning for RemoteProvisioningService {
         protected_data: &mut ProtectedData,
         device_info: &mut DeviceInfo,
     ) -> binder::public_api::Result<Vec<u8>> {
+        let _wp = wd::watch_millis("IRemoteProvisioning::generateCsr", 500);
         map_or_log_err(
             self.generate_csr(
                 test_mode,
@@ -427,6 +429,7 @@ impl IRemoteProvisioning for RemoteProvisioningService {
         expiration_date: i64,
         sec_level: SecurityLevel,
     ) -> binder::public_api::Result<()> {
+        let _wp = wd::watch_millis("IRemoteProvisioning::provisionCertChain", 500);
         map_or_log_err(
             self.provision_cert_chain(public_key, batch_cert, certs, expiration_date, sec_level),
             Ok,
@@ -438,14 +441,17 @@ impl IRemoteProvisioning for RemoteProvisioningService {
         is_test_mode: bool,
         sec_level: SecurityLevel,
     ) -> binder::public_api::Result<()> {
+        let _wp = wd::watch_millis("IRemoteProvisioning::generateKeyPair", 500);
         map_or_log_err(self.generate_key_pair(is_test_mode, sec_level), Ok)
     }
 
     fn getSecurityLevels(&self) -> binder::public_api::Result<Vec<SecurityLevel>> {
+        let _wp = wd::watch_millis("IRemoteProvisioning::getSecurityLevels", 500);
         map_or_log_err(self.get_security_levels(), Ok)
     }
 
     fn deleteAllKeys(&self) -> binder::public_api::Result<i64> {
+        let _wp = wd::watch_millis("IRemoteProvisioning::deleteAllKeys", 500);
         map_or_log_err(self.delete_all_keys(), Ok)
     }
 }
