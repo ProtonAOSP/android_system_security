@@ -17,7 +17,7 @@
 use crate::error::Error;
 use crate::key_parameter::KeyParameterValue;
 use crate::legacy_blob::BlobValue;
-use crate::utils::uid_to_android_user;
+use crate::utils::{uid_to_android_user, watchdog as wd};
 use crate::{async_task::AsyncTask, legacy_blob::LegacyBlobLoader};
 use crate::{
     database::{
@@ -196,6 +196,8 @@ impl LegacyMigrator {
 
     /// List all aliases for uid in the legacy database.
     pub fn list_uid(&self, domain: Domain, namespace: i64) -> Result<Vec<KeyDescriptor>> {
+        let _wp = wd::watch_millis("LegacyMigrator::list_uid", 500);
+
         let uid = match (domain, namespace) {
             (Domain::APP, namespace) => namespace as u32,
             (Domain::SELINUX, Self::WIFI_NAMESPACE) => Self::AID_WIFI,
@@ -290,6 +292,8 @@ impl LegacyMigrator {
     where
         F: Fn() -> Result<T>,
     {
+        let _wp = wd::watch_millis("LegacyMigrator::with_try_migrate", 500);
+
         // Access the key and return on success.
         match key_accessor() {
             Ok(result) => return Ok(result),
@@ -342,6 +346,8 @@ impl LegacyMigrator {
     where
         F: FnMut() -> Result<Option<T>>,
     {
+        let _wp = wd::watch_millis("LegacyMigrator::with_try_migrate_super_key", 500);
+
         match key_accessor() {
             Ok(Some(result)) => return Ok(Some(result)),
             Ok(None) => {}
@@ -364,6 +370,8 @@ impl LegacyMigrator {
     /// Deletes all keys belonging to the given namespace, migrating them into the database
     /// for subsequent garbage collection if necessary.
     pub fn bulk_delete_uid(&self, domain: Domain, nspace: i64) -> Result<()> {
+        let _wp = wd::watch_millis("LegacyMigrator::bulk_delete_uid", 500);
+
         let uid = match (domain, nspace) {
             (Domain::APP, nspace) => nspace as u32,
             (Domain::SELINUX, Self::WIFI_NAMESPACE) => Self::AID_WIFI,
@@ -385,6 +393,8 @@ impl LegacyMigrator {
         user_id: u32,
         keep_non_super_encrypted_keys: bool,
     ) -> Result<()> {
+        let _wp = wd::watch_millis("LegacyMigrator::bulk_delete_user", 500);
+
         let result = self.do_serialized(move |migrator_state| {
             migrator_state
                 .bulk_delete(BulkDeleteRequest::User(user_id), keep_non_super_encrypted_keys)

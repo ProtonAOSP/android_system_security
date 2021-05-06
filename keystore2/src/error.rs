@@ -30,16 +30,13 @@
 //! Keystore functions should use `anyhow::Result` to return error conditions, and
 //! context should be added every time an error is forwarded.
 
-use std::cmp::PartialEq;
-
 pub use android_hardware_security_keymint::aidl::android::hardware::security::keymint::ErrorCode::ErrorCode;
 pub use android_system_keystore2::aidl::android::system::keystore2::ResponseCode::ResponseCode;
-
-use keystore2_selinux as selinux;
-
 use android_system_keystore2::binder::{
     ExceptionCode, Result as BinderResult, Status as BinderStatus, StatusCode,
 };
+use keystore2_selinux as selinux;
+use std::cmp::PartialEq;
 
 /// This is the main Keystore error type. It wraps the Keystore `ResponseCode` generated
 /// from AIDL in the `Rc` variant and Keymint `ErrorCode` in the Km variant.
