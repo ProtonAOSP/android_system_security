@@ -22,7 +22,7 @@ use crate::{
     error::{map_km_error, Error},
     globals::get_keymint_device,
     super_key::KeyBlob,
-    utils::{key_characteristics_to_internal, Asp, AID_KEYSTORE},
+    utils::{key_characteristics_to_internal, watchdog as wd, Asp, AID_KEYSTORE},
 };
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
     BeginResult::BeginResult, ErrorCode::ErrorCode, HardwareAuthToken::HardwareAuthToken,
@@ -151,7 +151,7 @@ impl KeyMintDevice {
             self.create_and_store_key(db, &key_desc, |km_dev| km_dev.generateKey(&params, None))
                 .context("In lookup_or_generate_key: generate_and_store_key failed")?;
             Self::lookup_from_desc(db, key_desc)
-                .context("In lookup_or_generate_key: secpnd lookup failed")
+                .context("In lookup_or_generate_key: second lookup failed")
         }
     }
 
@@ -170,8 +170,14 @@ impl KeyMintDevice {
     {
         match f(key_blob) {
             Err(Error::Km(ErrorCode::KEY_REQUIRES_UPGRADE)) => {
-                let upgraded_blob = map_km_error(km_dev.upgradeKey(key_blob, &[]))
-                    .context("In upgrade_keyblob_if_required_with: Upgrade failed")?;
+                let upgraded_blob = map_km_error({
+                    let _wp = wd::watch_millis(
+                        "In KeyMintDevice::upgrade_keyblob_if_required_with: calling upgradeKey.",
+                        500,
+                    );
+                    km_dev.upgradeKey(key_blob, &[])
+                })
+                .context("In upgrade_keyblob_if_required_with: Upgrade failed")?;
 
                 let mut new_blob_metadata = BlobMetaData::new();
                 new_blob_metadata.add(BlobMetaEntry::KmUuid(self.km_uuid));
@@ -223,14 +229,20 @@ impl KeyMintDevice {
 
         let begin_result: BeginResult = self
             .upgrade_keyblob_if_required_with(db, &km_dev, key_id_guard, &key_blob, |blob| {
-                map_km_error(km_dev.begin(purpose, blob, operation_parameters, auth_token))
+                map_km_error({
+                    let _wp = wd::watch_millis("In use_key_in_one_step: calling: begin", 500);
+                    km_dev.begin(purpose, blob, operation_parameters, auth_token)
+                })
             })
             .context("In use_key_in_one_step: Failed to begin operation.")?;
         let operation: Strong<dyn IKeyMintOperation> = begin_result
             .operation
             .ok_or_else(Error::sys)
             .context("In use_key_in_one_step: Operation missing")?;
-        map_km_error(operation.finish(Some(input), None, None, None, None))
-            .context("In use_key_in_one_step: Failed to finish operation.")
+        map_km_error({
+            let _wp = wd::watch_millis("In use_key_in_one_step: calling: finish", 500);
+            operation.finish(Some(input), None, None, None, None)
+        })
+        .context("In use_key_in_one_step: Failed to finish operation.")
     }
 }

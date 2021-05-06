@@ -268,6 +268,7 @@ impl Watchdog {
                     break;
                 }
             }
+            log::info!("Watchdog thread idle -> terminating. Have a great day.");
         }));
         state.state = State::Running;
     }
