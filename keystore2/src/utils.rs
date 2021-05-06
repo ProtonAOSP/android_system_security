@@ -233,6 +233,55 @@ pub fn uid_to_android_user(uid: u32) -> u32 {
     unsafe { cutils_bindgen::multiuser_get_user_id(uid) }
 }
 
+/// This module provides helpers for simplified use of the watchdog module.
+#[cfg(feature = "watchdog")]
+pub mod watchdog {
+    pub use crate::watchdog::WatchPoint;
+    use crate::watchdog::Watchdog;
+    use lazy_static::lazy_static;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    lazy_static! {
+        /// A Watchdog thread, that can be used to create watch points.
+        static ref WD: Arc<Watchdog> = Watchdog::new(Duration::from_secs(10));
+    }
+
+    /// Sets a watch point with `id` and a timeout of `millis` milliseconds.
+    pub fn watch_millis(id: &'static str, millis: u64) -> Option<WatchPoint> {
+        Watchdog::watch(&WD, id, Duration::from_millis(millis))
+    }
+
+    /// Like `watch_millis` but with a callback that is called every time a report
+    /// is printed about this watch point.
+    pub fn watch_millis_with(
+        id: &'static str,
+        millis: u64,
+        callback: impl Fn() -> String + Send + 'static,
+    ) -> Option<WatchPoint> {
+        Watchdog::watch_with(&WD, id, Duration::from_millis(millis), callback)
+    }
+}
+
+/// This module provides empty/noop implementations of the watch dog utility functions.
+#[cfg(not(feature = "watchdog"))]
+pub mod watchdog {
+    /// Noop watch point.
+    pub struct WatchPoint();
+    /// Sets a Noop watch point.
+    fn watch_millis(_: &'static str, _: u64) -> Option<WatchPoint> {
+        None
+    }
+
+    pub fn watch_millis_with(
+        _: &'static str,
+        _: u64,
+        _: impl Fn() -> String + Send + 'static,
+    ) -> Option<WatchPoint> {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
