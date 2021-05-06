@@ -66,18 +66,19 @@ struct WatchdogState {
     thread: Option<thread::JoinHandle<()>>,
     timeout: Duration,
     records: HashMap<Index, Record>,
+    last_report: Instant,
     has_overdue: bool,
 }
 
 impl WatchdogState {
-    fn update_overdue_and_find_next_timeout(&mut self) -> Option<Duration> {
+    fn update_overdue_and_find_next_timeout(&mut self) -> (bool, Option<Duration>) {
         let now = Instant::now();
         let mut next_timeout: Option<Duration> = None;
-        self.has_overdue = false;
+        let mut has_overdue = false;
         for (_, r) in self.records.iter() {
             let timeout = r.deadline.saturating_duration_since(now);
             if timeout == Duration::new(0, 0) {
-                self.has_overdue = true;
+                has_overdue = true;
                 continue;
             }
             next_timeout = match next_timeout {
@@ -91,13 +92,25 @@ impl WatchdogState {
                 None => Some(timeout),
             };
         }
-        next_timeout
+        (has_overdue, next_timeout)
     }
 
-    fn log_report(&self) -> bool {
-        if !self.has_overdue {
-            return false;
+    fn log_report(&mut self, has_overdue: bool) -> bool {
+        match (self.has_overdue, has_overdue) {
+            (true, true) => {
+                if self.last_report.elapsed() < Watchdog::NOISY_REPORT_TIMEOUT {
+                    self.has_overdue = false;
+                    return false;
+                }
+            }
+            (_, false) => {
+                self.has_overdue = false;
+                return false;
+            }
+            (false, true) => {}
         }
+        self.last_report = Instant::now();
+        self.has_overdue = has_overdue;
         log::warn!("Keystore Watchdog report:");
         log::warn!("Overdue records:");
         let now = Instant::now();
@@ -164,6 +177,7 @@ impl Watchdog {
                     thread: None,
                     timeout,
                     records: HashMap::new(),
+                    last_report: Instant::now(),
                     has_overdue: false,
                 }),
             )),
@@ -249,8 +263,8 @@ impl Watchdog {
             let mut state = state.lock().unwrap();
 
             loop {
-                let next_timeout = state.update_overdue_and_find_next_timeout();
-                let has_overdue = state.log_report();
+                let (has_overdue, next_timeout) = state.update_overdue_and_find_next_timeout();
+                state.log_report(has_overdue);
                 let (next_timeout, idle) = match (has_overdue, next_timeout) {
                     (true, Some(next_timeout)) => {
                         (min(next_timeout, Self::NOISY_REPORT_TIMEOUT), false)
