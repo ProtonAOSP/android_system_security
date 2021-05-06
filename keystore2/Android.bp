@@ -79,7 +79,7 @@ rust_library {
     rustlibs: [
         "liblog_rust",
         "librand",
-    ]
+    ],
 }
 
 rust_test {
@@ -111,6 +111,38 @@ rust_binary {
         "libvpnprofilestore-rust",
     ],
     init_rc: ["keystore2.rc"],
+
+    // In S, keystore2 is the only process using dynamically linked Rust from
+    // /system. As a result, the usual savings from sharing libraries don't
+    // apply.
+    // Remove `prefer_rlib: true` once we have several processes, once a space
+    // calculation shows net RAM savings, or once we have automatic variant
+    // selection available in the build system.
+    prefer_rlib: true,
+
+    // TODO(b/187412695)
+    // This is a hack to work around the build system not installing
+    // dynamic dependencies of rlibs to the device. This section should
+    // be removed once that works correctly.
+    shared_libs: [
+        "android.hardware.confirmationui@1.0",
+        "android.hardware.security.sharedsecret-V1-ndk_platform",
+        "android.security.compat-ndk_platform",
+        "libc",
+        "libdl_android",
+        "libdl",
+        "libandroidicu",
+        "libkeymint",
+        "libkeystore2_aaid",
+        "libkeystore2_apc_compat",
+        "libkeystore2_crypto",
+        "libkeystore2_vintf_cpp",
+        "libkm_compat_service",
+        "libkm_compat",
+        "libm",
+        "libstatspull",
+        "libstatssocket",
+    ],
 
     vintf_fragments: ["android.system.keystore2-service.xml"],
 }
