@@ -47,4 +47,6 @@ mod audit_log;
 mod db_utils;
 mod gc;
 mod super_key;
+
+#[cfg(feature = "watchdog")]
 mod watchdog;
