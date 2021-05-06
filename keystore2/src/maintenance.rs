@@ -225,30 +225,37 @@ impl Interface for Maintenance {}
 
 impl IKeystoreMaintenance for Maintenance {
     fn onUserPasswordChanged(&self, user_id: i32, password: Option<&[u8]>) -> BinderResult<()> {
+        let _wp = wd::watch_millis("IKeystoreMaintenance::onUserPasswordChanged", 500);
         map_or_log_err(Self::on_user_password_changed(user_id, password.map(|pw| pw.into())), Ok)
     }
 
     fn onUserAdded(&self, user_id: i32) -> BinderResult<()> {
+        let _wp = wd::watch_millis("IKeystoreMaintenance::onUserAdded", 500);
         map_or_log_err(Self::add_or_remove_user(user_id), Ok)
     }
 
     fn onUserRemoved(&self, user_id: i32) -> BinderResult<()> {
+        let _wp = wd::watch_millis("IKeystoreMaintenance::onUserRemoved", 500);
         map_or_log_err(Self::add_or_remove_user(user_id), Ok)
     }
 
     fn clearNamespace(&self, domain: Domain, nspace: i64) -> BinderResult<()> {
+        let _wp = wd::watch_millis("IKeystoreMaintenance::clearNamespace", 500);
         map_or_log_err(Self::clear_namespace(domain, nspace), Ok)
     }
 
     fn getState(&self, user_id: i32) -> BinderResult<AidlUserState> {
+        let _wp = wd::watch_millis("IKeystoreMaintenance::getState", 500);
         map_or_log_err(Self::get_state(user_id), Ok)
     }
 
     fn earlyBootEnded(&self) -> BinderResult<()> {
+        let _wp = wd::watch_millis("IKeystoreMaintenance::earlyBootEnded", 500);
         map_or_log_err(Self::early_boot_ended(), Ok)
     }
 
     fn onDeviceOffBody(&self) -> BinderResult<()> {
+        let _wp = wd::watch_millis("IKeystoreMaintenance::onDeviceOffBody", 500);
         map_or_log_err(Self::on_device_off_body(), Ok)
     }
 
@@ -257,6 +264,7 @@ impl IKeystoreMaintenance for Maintenance {
         source: &KeyDescriptor,
         destination: &KeyDescriptor,
     ) -> BinderResult<()> {
+        let _wp = wd::watch_millis("IKeystoreMaintenance::migrateKeyNamespace", 500);
         map_or_log_err(Self::migrate_key_namespace(source, destination), Ok)
     }
 }
