@@ -2821,32 +2821,33 @@ impl KeystoreDB {
                 "DELETE FROM persistent.keymetadata
                 WHERE keyentryid IN (
                     SELECT id FROM persistent.keyentry
-                    WHERE domain = ? AND namespace = ?
+                    WHERE domain = ? AND namespace = ? AND key_type = ?
                 );",
-                params![domain.0, namespace],
+                params![domain.0, namespace, KeyType::Client],
             )
             .context("Trying to delete keymetadata.")?;
             tx.execute(
                 "DELETE FROM persistent.keyparameter
                 WHERE keyentryid IN (
                     SELECT id FROM persistent.keyentry
-                    WHERE domain = ? AND namespace = ?
+                    WHERE domain = ? AND namespace = ? AND key_type = ?
                 );",
-                params![domain.0, namespace],
+                params![domain.0, namespace, KeyType::Client],
             )
             .context("Trying to delete keyparameters.")?;
             tx.execute(
                 "DELETE FROM persistent.grant
                 WHERE keyentryid IN (
                     SELECT id FROM persistent.keyentry
-                    WHERE domain = ? AND namespace = ?
+                    WHERE domain = ? AND namespace = ? AND key_type = ?
                 );",
-                params![domain.0, namespace],
+                params![domain.0, namespace, KeyType::Client],
             )
             .context("Trying to delete grants.")?;
             tx.execute(
-                "DELETE FROM persistent.keyentry WHERE domain = ? AND namespace = ?;",
-                params![domain.0, namespace],
+                "DELETE FROM persistent.keyentry
+                 WHERE domain = ? AND namespace = ? AND key_type = ?;",
+                params![domain.0, namespace, KeyType::Client],
             )
             .context("Trying to delete keyentry.")?;
             Ok(()).need_gc()
