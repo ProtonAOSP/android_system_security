@@ -951,6 +951,7 @@ impl IKeystoreSecurityLevel for KeystoreSecurityLevel {
         operation_parameters: &[KeyParameter],
         forced: bool,
     ) -> binder::public_api::Result<CreateOperationResponse> {
+        let _wp = self.watch_millis("IKeystoreSecurityLevel::createOperation", 500);
         map_or_log_err(self.create_operation(key, operation_parameters, forced), Ok)
     }
     fn generateKey(
@@ -961,6 +962,9 @@ impl IKeystoreSecurityLevel for KeystoreSecurityLevel {
         flags: i32,
         entropy: &[u8],
     ) -> binder::public_api::Result<KeyMetadata> {
+        // Duration is set to 5 seconds, because generateKey - especially for RSA keys, takes more
+        // time than other operations
+        let _wp = self.watch_millis("IKeystoreSecurityLevel::generateKey", 5000);
         let result = self.generate_key(key, attestation_key, params, flags, entropy);
         log_key_creation_event_stats(self.security_level, params, &result);
         log_key_generated(key, ThreadState::get_calling_uid(), result.is_ok());
@@ -974,6 +978,7 @@ impl IKeystoreSecurityLevel for KeystoreSecurityLevel {
         flags: i32,
         key_data: &[u8],
     ) -> binder::public_api::Result<KeyMetadata> {
+        let _wp = self.watch_millis("IKeystoreSecurityLevel::importKey", 500);
         let result = self.import_key(key, attestation_key, params, flags, key_data);
         log_key_creation_event_stats(self.security_level, params, &result);
         log_key_imported(key, ThreadState::get_calling_uid(), result.is_ok());
@@ -987,6 +992,7 @@ impl IKeystoreSecurityLevel for KeystoreSecurityLevel {
         params: &[KeyParameter],
         authenticators: &[AuthenticatorSpec],
     ) -> binder::public_api::Result<KeyMetadata> {
+        let _wp = self.watch_millis("IKeystoreSecurityLevel::importWrappedKey", 500);
         let result =
             self.import_wrapped_key(key, wrapping_key, masking_key, params, authenticators);
         log_key_creation_event_stats(self.security_level, params, &result);
@@ -997,9 +1003,11 @@ impl IKeystoreSecurityLevel for KeystoreSecurityLevel {
         &self,
         storage_key: &KeyDescriptor,
     ) -> binder::public_api::Result<EphemeralStorageKeyResponse> {
+        let _wp = self.watch_millis("IKeystoreSecurityLevel::convertStorageKeyToEphemeral", 500);
         map_or_log_err(self.convert_storage_key_to_ephemeral(storage_key), Ok)
     }
     fn deleteKey(&self, key: &KeyDescriptor) -> binder::public_api::Result<()> {
+        let _wp = self.watch_millis("IKeystoreSecurityLevel::deleteKey", 500);
         let result = self.delete_key(key);
         log_key_deleted(key, ThreadState::get_calling_uid(), result.is_ok());
         map_or_log_err(result, Ok)

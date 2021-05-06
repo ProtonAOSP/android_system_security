@@ -842,6 +842,7 @@ impl binder::Interface for KeystoreOperation {}
 
 impl IKeystoreOperation for KeystoreOperation {
     fn updateAad(&self, aad_input: &[u8]) -> binder::public_api::Result<()> {
+        let _wp = wd::watch_millis("IKeystoreOperation::updateAad", 500);
         map_or_log_err(
             self.with_locked_operation(
                 |op| op.update_aad(aad_input).context("In KeystoreOperation::updateAad"),
@@ -852,6 +853,7 @@ impl IKeystoreOperation for KeystoreOperation {
     }
 
     fn update(&self, input: &[u8]) -> binder::public_api::Result<Option<Vec<u8>>> {
+        let _wp = wd::watch_millis("IKeystoreOperation::update", 500);
         map_or_log_err(
             self.with_locked_operation(
                 |op| op.update(input).context("In KeystoreOperation::update"),
@@ -865,6 +867,7 @@ impl IKeystoreOperation for KeystoreOperation {
         input: Option<&[u8]>,
         signature: Option<&[u8]>,
     ) -> binder::public_api::Result<Option<Vec<u8>>> {
+        let _wp = wd::watch_millis("IKeystoreOperation::finish", 500);
         map_or_log_err(
             self.with_locked_operation(
                 |op| op.finish(input, signature).context("In KeystoreOperation::finish"),
@@ -875,6 +878,7 @@ impl IKeystoreOperation for KeystoreOperation {
     }
 
     fn abort(&self) -> binder::public_api::Result<()> {
+        let _wp = wd::watch_millis("IKeystoreOperation::abort", 500);
         map_err_with(
             self.with_locked_operation(
                 |op| op.abort(Outcome::Abort).context("In KeystoreOperation::abort"),
