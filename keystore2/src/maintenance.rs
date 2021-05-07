@@ -179,8 +179,8 @@ impl Maintenance {
         check_keystore_permission(KeystorePerm::report_off_body())
             .context("In on_device_off_body.")?;
 
-        DB.with(|db| db.borrow_mut().update_last_off_body(MonotonicRawTime::now()))
-            .context("In on_device_off_body: Trying to update last off body time.")
+        DB.with(|db| db.borrow_mut().update_last_off_body(MonotonicRawTime::now()));
+        Ok(())
     }
 
     fn migrate_key_namespace(source: &KeyDescriptor, destination: &KeyDescriptor) -> Result<()> {
