@@ -90,8 +90,6 @@
 //!  * The termination condition which has an empty in list.
 //!  * The public interface, which does not have @marker and calls itself with an empty out list.
 
-#![allow(clippy::from_over_into, clippy::needless_question_mark)]
-
 use std::convert::TryInto;
 
 use crate::db_utils::SqlField;
@@ -601,9 +599,9 @@ macro_rules! implement_try_from_to_km_parameter {
         ], [$($in)*]
     }};
     (@into $enum_name:ident, [$($out:tt)*], []) => {
-        impl Into<KmKeyParameter> for $enum_name {
-            fn into(self) -> KmKeyParameter {
-                match self {
+        impl From<$enum_name> for KmKeyParameter {
+            fn from(x: $enum_name) -> Self {
+                match x {
                     $($out)*
                 }
             }
@@ -1389,11 +1387,11 @@ mod storage_tests {
             db.prepare("SELECT tag, data, security_level FROM persistent.keyparameter")?;
         let mut rows = stmt.query(NO_PARAMS)?;
         let row = rows.next()?.unwrap();
-        Ok(KeyParameter::new_from_sql(
+        KeyParameter::new_from_sql(
             Tag(row.get(0)?),
             &SqlField::new(1, row),
             SecurityLevel(row.get(2)?),
-        )?)
+        )
     }
 }
 
