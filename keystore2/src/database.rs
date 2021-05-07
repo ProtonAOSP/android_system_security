@@ -1166,6 +1166,9 @@ impl KeystoreDB {
                 tx.execute("DELETE FROM persistent.blobentry WHERE id = ?;", params![blob_id])
                     .context("Trying to blob.")?;
             }
+
+            Self::cleanup_unreferenced(tx).context("Trying to cleanup unreferenced.")?;
+
             // Find up to max_blobx more superseded key blobs, load their metadata and return it.
             let result: Vec<(i64, Vec<u8>)> = {
                 let mut stmt = tx
@@ -2853,6 +2856,47 @@ impl KeystoreDB {
             Ok(()).need_gc()
         })
         .context("In unbind_keys_for_namespace")
+    }
+
+    fn cleanup_unreferenced(tx: &Transaction) -> Result<()> {
+        let _wp = wd::watch_millis("KeystoreDB::cleanup_unreferenced", 500);
+        {
+            tx.execute(
+                "DELETE FROM persistent.keymetadata
+            WHERE keyentryid IN (
+                SELECT id FROM persistent.keyentry
+                WHERE state = ?
+            );",
+                params![KeyLifeCycle::Unreferenced],
+            )
+            .context("Trying to delete keymetadata.")?;
+            tx.execute(
+                "DELETE FROM persistent.keyparameter
+            WHERE keyentryid IN (
+                SELECT id FROM persistent.keyentry
+                WHERE state = ?
+            );",
+                params![KeyLifeCycle::Unreferenced],
+            )
+            .context("Trying to delete keyparameters.")?;
+            tx.execute(
+                "DELETE FROM persistent.grant
+            WHERE keyentryid IN (
+                SELECT id FROM persistent.keyentry
+                WHERE state = ?
+            );",
+                params![KeyLifeCycle::Unreferenced],
+            )
+            .context("Trying to delete grants.")?;
+            tx.execute(
+                "DELETE FROM persistent.keyentry
+                WHERE state = ?;",
+                params![KeyLifeCycle::Unreferenced],
+            )
+            .context("Trying to delete keyentry.")?;
+            Result::<()>::Ok(())
+        }
+        .context("In cleanup_unreferenced")
     }
 
     /// Delete the keys created on behalf of the user, denoted by the user id.
