@@ -21,7 +21,7 @@ use std::{
     sync::{mpsc::Sender, Arc, Mutex},
 };
 
-use crate::utils::{compat_2_response_code, ui_opts_2_compat};
+use crate::utils::{compat_2_response_code, ui_opts_2_compat, watchdog as wd};
 use android_security_apc::aidl::android::security::apc::{
     IConfirmationCallback::IConfirmationCallback,
     IProtectedConfirmation::{BnProtectedConfirmation, IProtectedConfirmation},
@@ -363,6 +363,8 @@ impl IProtectedConfirmation for ApcManager {
         locale: &str,
         ui_option_flags: i32,
     ) -> BinderResult<()> {
+        // presentPrompt can take more time than other operations.
+        let _wp = wd::watch_millis("IProtectedConfirmation::presentPrompt", 3000);
         map_or_log_err(
             self.present_prompt(listener, prompt_text, extra_data, locale, ui_option_flags),
             Ok,
@@ -372,9 +374,11 @@ impl IProtectedConfirmation for ApcManager {
         &self,
         listener: &binder::Strong<dyn IConfirmationCallback>,
     ) -> BinderResult<()> {
+        let _wp = wd::watch_millis("IProtectedConfirmation::cancelPrompt", 500);
         map_or_log_err(self.cancel_prompt(listener), Ok)
     }
     fn isSupported(&self) -> BinderResult<bool> {
+        let _wp = wd::watch_millis("IProtectedConfirmation::isSupported", 500);
         map_or_log_err(Self::is_supported(), Ok)
     }
 }

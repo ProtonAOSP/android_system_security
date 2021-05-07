@@ -128,7 +128,7 @@
 use crate::enforcements::AuthInfo;
 use crate::error::{map_err_with, map_km_error, map_or_log_err, Error, ErrorCode, ResponseCode};
 use crate::metrics::log_key_operation_event_stats;
-use crate::utils::Asp;
+use crate::utils::{watchdog as wd, Asp};
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
     IKeyMintOperation::IKeyMintOperation, KeyParameter::KeyParameter, KeyPurpose::KeyPurpose,
     SecurityLevel::SecurityLevel,
@@ -291,6 +291,8 @@ impl Operation {
                 }
             };
 
+        let _wp = wd::watch_millis("In Operation::prune: calling abort()", 500);
+
         // We abort the operation. If there was an error we log it but ignore it.
         if let Err(e) = map_km_error(km_op.abort()) {
             log::error!("In prune: KeyMint::abort failed with {:?}.", e);
@@ -370,10 +372,10 @@ impl Operation {
             .before_update()
             .context("In update_aad: Trying to get auth tokens.")?;
 
-        self.update_outcome(
-            &mut *outcome,
-            map_km_error(km_op.updateAad(aad_input, hat.as_ref(), tst.as_ref())),
-        )
+        self.update_outcome(&mut *outcome, {
+            let _wp = wd::watch_millis("Operation::update_aad: calling updateAad", 500);
+            map_km_error(km_op.updateAad(aad_input, hat.as_ref(), tst.as_ref()))
+        })
         .context("In update_aad: KeyMint::update failed.")?;
 
         Ok(())
@@ -397,10 +399,10 @@ impl Operation {
             .context("In update: Trying to get auth tokens.")?;
 
         let output = self
-            .update_outcome(
-                &mut *outcome,
-                map_km_error(km_op.update(input, hat.as_ref(), tst.as_ref())),
-            )
+            .update_outcome(&mut *outcome, {
+                let _wp = wd::watch_millis("Operation::update: calling update", 500);
+                map_km_error(km_op.update(input, hat.as_ref(), tst.as_ref()))
+            })
             .context("In update: KeyMint::update failed.")?;
 
         if output.is_empty() {
@@ -430,16 +432,16 @@ impl Operation {
             .context("In finish: Trying to get auth tokens.")?;
 
         let output = self
-            .update_outcome(
-                &mut *outcome,
+            .update_outcome(&mut *outcome, {
+                let _wp = wd::watch_millis("Operation::finish: calling finish", 500);
                 map_km_error(km_op.finish(
                     input,
                     signature,
                     hat.as_ref(),
                     tst.as_ref(),
                     confirmation_token.as_deref(),
-                )),
-            )
+                ))
+            })
             .context("In finish: KeyMint::finish failed.")?;
 
         self.auth_info.lock().unwrap().after_finish().context("In finish.")?;
@@ -463,7 +465,10 @@ impl Operation {
         let km_op: binder::public_api::Strong<dyn IKeyMintOperation> =
             self.km_op.get_interface().context("In abort: Failed to get KeyMintOperation.")?;
 
-        map_km_error(km_op.abort()).context("In abort: KeyMint::abort failed.")
+        {
+            let _wp = wd::watch_millis("Operation::abort: calling abort", 500);
+            map_km_error(km_op.abort()).context("In abort: KeyMint::abort failed.")
+        }
     }
 }
 
@@ -837,6 +842,7 @@ impl binder::Interface for KeystoreOperation {}
 
 impl IKeystoreOperation for KeystoreOperation {
     fn updateAad(&self, aad_input: &[u8]) -> binder::public_api::Result<()> {
+        let _wp = wd::watch_millis("IKeystoreOperation::updateAad", 500);
         map_or_log_err(
             self.with_locked_operation(
                 |op| op.update_aad(aad_input).context("In KeystoreOperation::updateAad"),
@@ -847,6 +853,7 @@ impl IKeystoreOperation for KeystoreOperation {
     }
 
     fn update(&self, input: &[u8]) -> binder::public_api::Result<Option<Vec<u8>>> {
+        let _wp = wd::watch_millis("IKeystoreOperation::update", 500);
         map_or_log_err(
             self.with_locked_operation(
                 |op| op.update(input).context("In KeystoreOperation::update"),
@@ -860,6 +867,7 @@ impl IKeystoreOperation for KeystoreOperation {
         input: Option<&[u8]>,
         signature: Option<&[u8]>,
     ) -> binder::public_api::Result<Option<Vec<u8>>> {
+        let _wp = wd::watch_millis("IKeystoreOperation::finish", 500);
         map_or_log_err(
             self.with_locked_operation(
                 |op| op.finish(input, signature).context("In KeystoreOperation::finish"),
@@ -870,6 +878,7 @@ impl IKeystoreOperation for KeystoreOperation {
     }
 
     fn abort(&self) -> binder::public_api::Result<()> {
+        let _wp = wd::watch_millis("IKeystoreOperation::abort", 500);
         map_err_with(
             self.with_locked_operation(
                 |op| op.abort(Outcome::Abort).context("In KeystoreOperation::abort"),

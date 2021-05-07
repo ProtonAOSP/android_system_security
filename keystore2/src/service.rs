@@ -22,7 +22,7 @@ use crate::permission::{KeyPerm, KeystorePerm};
 use crate::security_level::KeystoreSecurityLevel;
 use crate::utils::{
     check_grant_permission, check_key_permission, check_keystore_permission,
-    key_parameters_to_authorizations, Asp,
+    key_parameters_to_authorizations, watchdog as wd, Asp,
 };
 use crate::{
     database::Uuid,
@@ -354,9 +354,13 @@ impl IKeystoreService for KeystoreService {
         &self,
         security_level: SecurityLevel,
     ) -> binder::public_api::Result<Strong<dyn IKeystoreSecurityLevel>> {
+        let _wp = wd::watch_millis_with("IKeystoreService::getSecurityLevel", 500, move || {
+            format!("security_level: {}", security_level.0)
+        });
         map_or_log_err(self.get_security_level(security_level), Ok)
     }
     fn getKeyEntry(&self, key: &KeyDescriptor) -> binder::public_api::Result<KeyEntryResponse> {
+        let _wp = wd::watch_millis("IKeystoreService::get_key_entry", 500);
         map_or_log_err(self.get_key_entry(key), Ok)
     }
     fn updateSubcomponent(
@@ -365,6 +369,7 @@ impl IKeystoreService for KeystoreService {
         public_cert: Option<&[u8]>,
         certificate_chain: Option<&[u8]>,
     ) -> binder::public_api::Result<()> {
+        let _wp = wd::watch_millis("IKeystoreService::updateSubcomponent", 500);
         map_or_log_err(self.update_subcomponent(key, public_cert, certificate_chain), Ok)
     }
     fn listEntries(
@@ -372,9 +377,11 @@ impl IKeystoreService for KeystoreService {
         domain: Domain,
         namespace: i64,
     ) -> binder::public_api::Result<Vec<KeyDescriptor>> {
+        let _wp = wd::watch_millis("IKeystoreService::listEntries", 500);
         map_or_log_err(self.list_entries(domain, namespace), Ok)
     }
     fn deleteKey(&self, key: &KeyDescriptor) -> binder::public_api::Result<()> {
+        let _wp = wd::watch_millis("IKeystoreService::deleteKey", 500);
         let result = self.delete_key(key);
         log_key_deleted(key, ThreadState::get_calling_uid(), result.is_ok());
         map_or_log_err(result, Ok)
@@ -385,9 +392,11 @@ impl IKeystoreService for KeystoreService {
         grantee_uid: i32,
         access_vector: i32,
     ) -> binder::public_api::Result<KeyDescriptor> {
+        let _wp = wd::watch_millis("IKeystoreService::grant", 500);
         map_or_log_err(self.grant(key, grantee_uid, access_vector.into()), Ok)
     }
     fn ungrant(&self, key: &KeyDescriptor, grantee_uid: i32) -> binder::public_api::Result<()> {
+        let _wp = wd::watch_millis("IKeystoreService::ungrant", 500);
         map_or_log_err(self.ungrant(key, grantee_uid), Ok)
     }
 }

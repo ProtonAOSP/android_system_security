@@ -22,7 +22,7 @@ use crate::globals::get_keymint_device;
 use crate::globals::{DB, LEGACY_MIGRATOR, SUPER_KEY};
 use crate::permission::{KeyPerm, KeystorePerm};
 use crate::super_key::UserState;
-use crate::utils::{check_key_permission, check_keystore_permission};
+use crate::utils::{check_key_permission, check_keystore_permission, watchdog as wd};
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::IKeyMintDevice::IKeyMintDevice;
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::SecurityLevel::SecurityLevel;
 use android_security_maintenance::aidl::android::security::maintenance::{
@@ -133,11 +133,17 @@ impl Maintenance {
         }
     }
 
-    fn early_boot_ended_help(sec_level: &SecurityLevel) -> Result<()> {
-        let (dev, _, _) =
-            get_keymint_device(sec_level).context("In early_boot_ended: getting keymint device")?;
+    fn early_boot_ended_help(sec_level: SecurityLevel) -> Result<()> {
+        let (dev, _, _) = get_keymint_device(&sec_level)
+            .context("In early_boot_ended: getting keymint device")?;
         let km_dev: Strong<dyn IKeyMintDevice> =
             dev.get_interface().context("In early_boot_ended: getting keymint device interface")?;
+
+        let _wp = wd::watch_millis_with(
+            "In early_boot_ended_help: calling earlyBootEnded()",
+            500,
+            move || format!("Seclevel: {:?}", sec_level),
+        );
         map_km_error(km_dev.earlyBootEnded())
             .context("In keymint device: calling earlyBootEnded")?;
         Ok(())
@@ -157,7 +163,7 @@ impl Maintenance {
             (SecurityLevel::STRONGBOX, "STRONGBOX"),
         ];
         sec_levels.iter().fold(Ok(()), |result, (sec_level, sec_level_string)| {
-            let curr_result = Maintenance::early_boot_ended_help(sec_level);
+            let curr_result = Maintenance::early_boot_ended_help(*sec_level);
             if curr_result.is_err() {
                 log::error!(
                     "Call to earlyBootEnded failed for security level {}.",
@@ -219,30 +225,37 @@ impl Interface for Maintenance {}
 
 impl IKeystoreMaintenance for Maintenance {
     fn onUserPasswordChanged(&self, user_id: i32, password: Option<&[u8]>) -> BinderResult<()> {
+        let _wp = wd::watch_millis("IKeystoreMaintenance::onUserPasswordChanged", 500);
         map_or_log_err(Self::on_user_password_changed(user_id, password.map(|pw| pw.into())), Ok)
     }
 
     fn onUserAdded(&self, user_id: i32) -> BinderResult<()> {
+        let _wp = wd::watch_millis("IKeystoreMaintenance::onUserAdded", 500);
         map_or_log_err(Self::add_or_remove_user(user_id), Ok)
     }
 
     fn onUserRemoved(&self, user_id: i32) -> BinderResult<()> {
+        let _wp = wd::watch_millis("IKeystoreMaintenance::onUserRemoved", 500);
         map_or_log_err(Self::add_or_remove_user(user_id), Ok)
     }
 
     fn clearNamespace(&self, domain: Domain, nspace: i64) -> BinderResult<()> {
+        let _wp = wd::watch_millis("IKeystoreMaintenance::clearNamespace", 500);
         map_or_log_err(Self::clear_namespace(domain, nspace), Ok)
     }
 
     fn getState(&self, user_id: i32) -> BinderResult<AidlUserState> {
+        let _wp = wd::watch_millis("IKeystoreMaintenance::getState", 500);
         map_or_log_err(Self::get_state(user_id), Ok)
     }
 
     fn earlyBootEnded(&self) -> BinderResult<()> {
+        let _wp = wd::watch_millis("IKeystoreMaintenance::earlyBootEnded", 500);
         map_or_log_err(Self::early_boot_ended(), Ok)
     }
 
     fn onDeviceOffBody(&self) -> BinderResult<()> {
+        let _wp = wd::watch_millis("IKeystoreMaintenance::onDeviceOffBody", 500);
         map_or_log_err(Self::on_device_off_body(), Ok)
     }
 
@@ -251,6 +264,7 @@ impl IKeystoreMaintenance for Maintenance {
         source: &KeyDescriptor,
         destination: &KeyDescriptor,
     ) -> BinderResult<()> {
+        let _wp = wd::watch_millis("IKeystoreMaintenance::migrateKeyNamespace", 500);
         map_or_log_err(Self::migrate_key_namespace(source, destination), Ok)
     }
 }
