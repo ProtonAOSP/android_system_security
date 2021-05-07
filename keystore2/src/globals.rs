@@ -54,24 +54,11 @@ static DB_INIT: Once = Once::new();
 /// is run only once, as long as the ASYNC_TASK instance is the same. So only one additional
 /// database connection is created for the garbage collector worker.
 pub fn create_thread_local_db() -> KeystoreDB {
-    let gc = Gc::new_init_with(ASYNC_TASK.clone(), || {
-        (
-            Box::new(|uuid, blob| {
-                let km_dev: Strong<dyn IKeyMintDevice> =
-                    get_keymint_dev_by_uuid(uuid).map(|(dev, _)| dev)?.get_interface()?;
-                let _wp = wd::watch_millis("In create_thread_local_db: calling deleteKey", 500);
-                map_km_error(km_dev.deleteKey(&*blob))
-                    .context("In invalidate key closure: Trying to invalidate key blob.")
-            }),
-            KeystoreDB::new(&DB_PATH.lock().expect("Could not get the database directory."), None)
-                .expect("Failed to open database."),
-            SUPER_KEY.clone(),
-        )
-    });
-
-    let mut db =
-        KeystoreDB::new(&DB_PATH.lock().expect("Could not get the database directory."), Some(gc))
-            .expect("Failed to open database.");
+    let mut db = KeystoreDB::new(
+        &DB_PATH.lock().expect("Could not get the database directory."),
+        Some(GC.clone()),
+    )
+    .expect("Failed to open database.");
     DB_INIT.call_once(|| {
         log::info!("Touching Keystore 2.0 database for this first time since boot.");
         db.insert_last_off_body(MonotonicRawTime::now())
@@ -177,6 +164,21 @@ lazy_static! {
         Arc::new(LegacyMigrator::new(Arc::new(Default::default())));
     /// Background thread which handles logging via statsd and logd
     pub static ref LOGS_HANDLER: Arc<AsyncTask> = Default::default();
+
+    static ref GC: Arc<Gc> = Arc::new(Gc::new_init_with(ASYNC_TASK.clone(), || {
+        (
+            Box::new(|uuid, blob| {
+                let km_dev: Strong<dyn IKeyMintDevice> =
+                    get_keymint_dev_by_uuid(uuid).map(|(dev, _)| dev)?.get_interface()?;
+                let _wp = wd::watch_millis("In invalidate key closure: calling deleteKey", 500);
+                map_km_error(km_dev.deleteKey(&*blob))
+                    .context("In invalidate key closure: Trying to invalidate key blob.")
+            }),
+            KeystoreDB::new(&DB_PATH.lock().expect("Could not get the database directory."), None)
+                .expect("Failed to open database."),
+            SUPER_KEY.clone(),
+        )
+    }));
 }
 
 static KEYMINT_SERVICE_NAME: &str = "android.hardware.security.keymint.IKeyMintDevice";
