@@ -20,22 +20,28 @@
 
 use crate::{
     async_task,
-    database::{KeystoreDB, Uuid},
+    database::{BlobMetaData, KeystoreDB, Uuid},
     super_key::SuperKeyManager,
 };
 use anyhow::{Context, Result};
 use async_task::AsyncTask;
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicU8, Ordering},
+    Arc,
+};
 
 pub struct Gc {
     async_task: Arc<AsyncTask>,
+    notified: Arc<AtomicU8>,
 }
 
 impl Gc {
     /// Creates a garbage collector using the given async_task.
-    /// The garbage collector needs a function to invalidate key blobs and a database connection.
-    /// Both are obtained from the init function. The function is only called if this is first
-    /// time a garbage collector was initialized with the given AsyncTask instance.
+    /// The garbage collector needs a function to invalidate key blobs, a database connection,
+    /// and a reference to the `SuperKeyManager`. They are obtained from the init function.
+    /// The function is only called if this is first time a garbage collector was initialized
+    /// with the given AsyncTask instance.
+    /// Note: It is a logical error to initialize different Gc instances with the same `AsyncTask`.
     pub fn new_init_with<F>(async_task: Arc<AsyncTask>, init: F) -> Self
     where
         F: FnOnce() -> (
@@ -46,34 +52,43 @@ impl Gc {
             + 'static,
     {
         let weak_at = Arc::downgrade(&async_task);
+        let notified = Arc::new(AtomicU8::new(0));
+        let notified_clone = notified.clone();
         // Initialize the task's shelf.
         async_task.queue_hi(move |shelf| {
             let (invalidate_key, db, super_key) = init();
+            let notified = notified_clone;
             shelf.get_or_put_with(|| GcInternal {
-                blob_id_to_delete: None,
+                deleted_blob_ids: vec![],
+                superseded_blobs: vec![],
                 invalidate_key,
                 db,
                 async_task: weak_at,
                 super_key,
+                notified,
             });
         });
-        Self { async_task }
+        Self { async_task, notified }
     }
 
     /// Notifies the key garbage collector to iterate through orphaned and superseded blobs and
     /// attempts their deletion. We only process one key at a time and then schedule another
     /// attempt by queueing it in the async_task (low priority) queue.
     pub fn notify_gc(&self) {
-        self.async_task.queue_lo(|shelf| shelf.get_downcast_mut::<GcInternal>().unwrap().step())
+        if let Ok(0) = self.notified.compare_exchange(0, 1, Ordering::Relaxed, Ordering::Relaxed) {
+            self.async_task.queue_lo(|shelf| shelf.get_downcast_mut::<GcInternal>().unwrap().step())
+        }
     }
 }
 
 struct GcInternal {
-    blob_id_to_delete: Option<i64>,
+    deleted_blob_ids: Vec<i64>,
+    superseded_blobs: Vec<(i64, Vec<u8>, BlobMetaData)>,
     invalidate_key: Box<dyn Fn(&Uuid, &[u8]) -> Result<()> + Send + 'static>,
     db: KeystoreDB,
     async_task: std::sync::Weak<AsyncTask>,
     super_key: Arc<SuperKeyManager>,
+    notified: Arc<AtomicU8>,
 }
 
 impl GcInternal {
@@ -81,16 +96,23 @@ impl GcInternal {
     /// We process one key at a time, because deleting a key is a time consuming process which
     /// may involve calling into the KeyMint backend and we don't want to hog neither the backend
     /// nor the database for extended periods of time.
+    /// To limit the number of database transactions, which are also expensive and competing
+    /// with threads on the critical path, deleted blobs are loaded in batches.
     fn process_one_key(&mut self) -> Result<()> {
-        if let Some((blob_id, blob, blob_metadata)) = self
-            .db
-            .handle_next_superseded_blob(self.blob_id_to_delete.take())
-            .context("In process_one_key: Trying to handle superseded blob.")?
-        {
-            // Set the blob_id as the next to be deleted blob. So it will be
+        if self.superseded_blobs.is_empty() {
+            let blobs = self
+                .db
+                .handle_next_superseded_blobs(&self.deleted_blob_ids, 20)
+                .context("In process_one_key: Trying to handle superseded blob.")?;
+            self.deleted_blob_ids = vec![];
+            self.superseded_blobs = blobs;
+        }
+
+        if let Some((blob_id, blob, blob_metadata)) = self.superseded_blobs.pop() {
+            // Add the next blob_id to the deleted blob ids list. So it will be
             // removed from the database regardless of whether the following
             // succeeds or not.
-            self.blob_id_to_delete = Some(blob_id);
+            self.deleted_blob_ids.push(blob_id);
 
             // If the key has a km_uuid we try to get the corresponding device
             // and delete the key, unwrapping if necessary and possible.
@@ -110,13 +132,20 @@ impl GcInternal {
 
     /// Processes one key and then schedules another attempt until it runs out of blobs to delete.
     fn step(&mut self) {
+        self.notified.store(0, Ordering::Relaxed);
         if let Err(e) = self.process_one_key() {
             log::error!("Error trying to delete blob entry. {:?}", e);
         }
         // Schedule the next step. This gives high priority requests a chance to interleave.
-        if self.blob_id_to_delete.is_some() {
+        if !self.deleted_blob_ids.is_empty() {
             if let Some(at) = self.async_task.upgrade() {
-                at.queue_lo(move |shelf| shelf.get_downcast_mut::<GcInternal>().unwrap().step());
+                if let Ok(0) =
+                    self.notified.compare_exchange(0, 1, Ordering::Relaxed, Ordering::Relaxed)
+                {
+                    at.queue_lo(move |shelf| {
+                        shelf.get_downcast_mut::<GcInternal>().unwrap().step()
+                    });
+                }
             }
         }
     }
