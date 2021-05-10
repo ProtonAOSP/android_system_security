@@ -1045,6 +1045,12 @@ impl KeystoreDB {
             break;
         }
 
+        // Drop the cache size from default (2M) to 0.5M
+        conn.execute("PRAGMA persistent.cache_size = -500;", params![])
+            .context("Failed to decrease cache size for persistent db")?;
+        conn.execute("PRAGMA perboot.cache_size = -500;", params![])
+            .context("Failed to decrease cache size for perboot db")?;
+
         Ok(conn)
     }
 
