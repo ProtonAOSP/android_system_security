@@ -851,9 +851,6 @@ impl KeystoreDB {
 
         let conn = Self::make_connection(&persistent_path_str)?;
 
-        // On busy fail Immediately. It is unlikely to succeed given a bug in sqlite.
-        conn.busy_handler(None).context("In KeystoreDB::new: Failed to set busy handler.")?;
-
         let mut db = Self { conn, gc, perboot: perboot::PERBOOT_DB.clone() };
         db.with_transaction(TransactionBehavior::Immediate, |tx| {
             Self::init_tables(tx).context("Trying to initialize tables.").no_gc()
@@ -1413,18 +1410,6 @@ impl KeystoreDB {
         .context("In get_or_create_key_with.")
     }
 
-    /// SQLite3 seems to hold a shared mutex while running the busy handler when
-    /// waiting for the database file to become available. This makes it
-    /// impossible to successfully recover from a locked database when the
-    /// transaction holding the device busy is in the same process on a
-    /// different connection. As a result the busy handler has to time out and
-    /// fail in order to make progress.
-    ///
-    /// Instead, we set the busy handler to None (return immediately). And catch
-    /// Busy and Locked errors (the latter occur on in memory databases with
-    /// shared cache, e.g., the per-boot database.) and restart the transaction
-    /// after a grace period of half a millisecond.
-    ///
     /// Creates a transaction with the given behavior and executes f with the new transaction.
     /// The transaction is committed only if f returns Ok and retried if DatabaseBusy
     /// or DatabaseLocked is encountered.

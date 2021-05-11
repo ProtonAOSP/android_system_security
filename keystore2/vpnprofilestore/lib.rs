@@ -42,9 +42,6 @@ impl DB {
             conn: Connection::open(db_file).context("Failed to initialize SQLite connection.")?,
         };
 
-        // On busy fail Immediately. It is unlikely to succeed given a bug in sqlite.
-        db.conn.busy_handler(None).context("Failed to set busy handler.")?;
-
         db.init_tables().context("Trying to initialize vpnstore db.")?;
         Ok(db)
     }
