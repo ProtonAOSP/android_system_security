@@ -39,7 +39,7 @@ use anyhow::{Context, Result};
 use binder::FromIBinder;
 use keystore2_vintf::get_aidl_instances;
 use lazy_static::lazy_static;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::{cell::RefCell, sync::Once};
 use std::{collections::HashMap, path::Path, path::PathBuf};
 
@@ -55,7 +55,7 @@ static DB_INIT: Once = Once::new();
 /// database connection is created for the garbage collector worker.
 pub fn create_thread_local_db() -> KeystoreDB {
     let mut db = KeystoreDB::new(
-        &DB_PATH.lock().expect("Could not get the database directory."),
+        &DB_PATH.read().expect("Could not get the database directory."),
         Some(GC.clone()),
     )
     .expect("Failed to open database.");
@@ -139,7 +139,7 @@ impl RemotelyProvisionedDevicesMap {
 
 lazy_static! {
     /// The path where keystore stores all its keys.
-    pub static ref DB_PATH: Mutex<PathBuf> = Mutex::new(
+    pub static ref DB_PATH: RwLock<PathBuf> = RwLock::new(
         Path::new("/data/misc/keystore").to_path_buf());
     /// Runtime database of unwrapped super keys.
     pub static ref SUPER_KEY: Arc<SuperKeyManager> = Default::default();
@@ -157,7 +157,7 @@ lazy_static! {
     /// LegacyBlobLoader is initialized and exists globally.
     /// The same directory used by the database is used by the LegacyBlobLoader as well.
     pub static ref LEGACY_BLOB_LOADER: Arc<LegacyBlobLoader> = Arc::new(LegacyBlobLoader::new(
-        &DB_PATH.lock().expect("Could not get the database path for legacy blob loader.")));
+        &DB_PATH.read().expect("Could not get the database path for legacy blob loader.")));
     /// Legacy migrator. Atomically migrates legacy blobs to the database.
     pub static ref LEGACY_MIGRATOR: Arc<LegacyMigrator> =
         Arc::new(LegacyMigrator::new(Arc::new(Default::default())));
@@ -173,7 +173,7 @@ lazy_static! {
                 map_km_error(km_dev.deleteKey(&*blob))
                     .context("In invalidate key closure: Trying to invalidate key blob.")
             }),
-            KeystoreDB::new(&DB_PATH.lock().expect("Could not get the database directory."), None)
+            KeystoreDB::new(&DB_PATH.read().expect("Could not get the database directory."), None)
                 .expect("Failed to open database."),
             SUPER_KEY.clone(),
         )
