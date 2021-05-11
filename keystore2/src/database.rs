@@ -2395,11 +2395,12 @@ impl KeystoreDB {
                 let mut stmt = tx
                     .prepare(
                         "SELECT keyentryid, access_vector FROM persistent.grant
-                            WHERE grantee = ? AND id = ?;",
+                            WHERE grantee = ? AND id = ? AND
+                            (SELECT state FROM persistent.keyentry WHERE id = keyentryid) = ?;",
                     )
                     .context("Domain::GRANT prepare statement failed")?;
                 let mut rows = stmt
-                    .query(params![caller_uid as i64, key.nspace])
+                    .query(params![caller_uid as i64, key.nspace, KeyLifeCycle::Live])
                     .context("Domain:Grant: query failed.")?;
                 let (key_id, access_vector): (i64, i32) =
                     db_utils::with_rows_extract_one(&mut rows, |row| {
