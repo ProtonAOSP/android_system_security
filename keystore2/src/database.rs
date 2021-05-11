@@ -41,6 +41,8 @@
 //! from the database module these functions take permission check
 //! callbacks.
 
+mod perboot;
+
 use crate::impl_metadata; // This is in db_utils.rs
 use crate::key_parameter::{KeyParameter, Tag};
 use crate::permission::KeyPermSet;
@@ -60,9 +62,6 @@ use std::{convert::TryFrom, convert::TryInto, ops::Deref, time::SystemTimeError}
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
     HardwareAuthToken::HardwareAuthToken,
     HardwareAuthenticatorType::HardwareAuthenticatorType, SecurityLevel::SecurityLevel,
-};
-use android_hardware_security_secureclock::aidl::android::hardware::security::secureclock::{
-    Timestamp::Timestamp,
 };
 use android_system_keystore2::aidl::android::system::keystore2::{
     Domain::Domain, KeyDescriptor::KeyDescriptor,
@@ -734,6 +733,7 @@ impl<T> DoGc<T> for Result<T> {
 pub struct KeystoreDB {
     conn: Connection,
     gc: Option<Arc<Gc>>,
+    perboot: Arc<perboot::PerbootDB>,
 }
 
 /// Database representation of the monotonic time retrieved from the system call clock_gettime with
@@ -782,6 +782,7 @@ impl FromSql for MonotonicRawTime {
 
 /// This struct encapsulates the information to be stored in the database about the auth tokens
 /// received by keystore.
+#[derive(Clone)]
 pub struct AuthTokenEntry {
     auth_token: HardwareAuthToken,
     time_received: MonotonicRawTime,
@@ -828,20 +829,9 @@ pub struct PerBootDbKeepAlive(Connection);
 
 impl KeystoreDB {
     const UNASSIGNED_KEY_ID: i64 = -1i64;
-    const PERBOOT_DB_FILE_NAME: &'static str = &"file:perboot.sqlite?mode=memory&cache=shared";
 
     /// Name of the file that holds the cross-boot persistent database.
     pub const PERSISTENT_DB_FILENAME: &'static str = &"persistent.sqlite";
-
-    /// This creates a PerBootDbKeepAlive object to keep the per boot database alive.
-    pub fn keep_perboot_db_alive() -> Result<PerBootDbKeepAlive> {
-        let conn = Connection::open_in_memory()
-            .context("In keep_perboot_db_alive: Failed to initialize SQLite connection.")?;
-
-        conn.execute("ATTACH DATABASE ? as perboot;", params![Self::PERBOOT_DB_FILE_NAME])
-            .context("In keep_perboot_db_alive: Failed to attach database perboot.")?;
-        Ok(PerBootDbKeepAlive(conn))
-    }
 
     /// This will create a new database connection connecting the two
     /// files persistent.sqlite and perboot.sqlite in the given directory.
@@ -859,12 +849,12 @@ impl KeystoreDB {
         let mut persistent_path_str = "file:".to_owned();
         persistent_path_str.push_str(&persistent_path.to_string_lossy());
 
-        let conn = Self::make_connection(&persistent_path_str, &Self::PERBOOT_DB_FILE_NAME)?;
+        let conn = Self::make_connection(&persistent_path_str)?;
 
         // On busy fail Immediately. It is unlikely to succeed given a bug in sqlite.
         conn.busy_handler(None).context("In KeystoreDB::new: Failed to set busy handler.")?;
 
-        let mut db = Self { conn, gc };
+        let mut db = Self { conn, gc, perboot: perboot::PERBOOT_DB.clone() };
         db.with_transaction(TransactionBehavior::Immediate, |tx| {
             Self::init_tables(tx).context("Trying to initialize tables.").no_gc()
         })?;
@@ -978,41 +968,10 @@ impl KeystoreDB {
         )
         .context("Failed to initialize \"grant\" table.")?;
 
-        //TODO: only drop the following two perboot tables if this is the first start up
-        //during the boot (b/175716626).
-        // tx.execute("DROP TABLE IF EXISTS perboot.authtoken;", NO_PARAMS)
-        //     .context("Failed to drop perboot.authtoken table")?;
-        tx.execute(
-            "CREATE TABLE IF NOT EXISTS perboot.authtoken (
-                        id INTEGER PRIMARY KEY,
-                        challenge INTEGER,
-                        user_id INTEGER,
-                        auth_id INTEGER,
-                        authenticator_type INTEGER,
-                        timestamp INTEGER,
-                        mac BLOB,
-                        time_received INTEGER,
-                        UNIQUE(user_id, auth_id, authenticator_type));",
-            NO_PARAMS,
-        )
-        .context("Failed to initialize \"authtoken\" table.")?;
-
-        // tx.execute("DROP TABLE IF EXISTS perboot.metadata;", NO_PARAMS)
-        //     .context("Failed to drop perboot.metadata table")?;
-        // metadata table stores certain miscellaneous information required for keystore functioning
-        // during a boot cycle, as key-value pairs.
-        tx.execute(
-            "CREATE TABLE IF NOT EXISTS perboot.metadata (
-                        key TEXT,
-                        value BLOB,
-                        UNIQUE(key));",
-            NO_PARAMS,
-        )
-        .context("Failed to initialize \"metadata\" table.")?;
         Ok(())
     }
 
-    fn make_connection(persistent_file: &str, perboot_file: &str) -> Result<Connection> {
+    fn make_connection(persistent_file: &str) -> Result<Connection> {
         let conn =
             Connection::open_in_memory().context("Failed to initialize SQLite connection.")?;
 
@@ -1030,26 +989,10 @@ impl KeystoreDB {
             }
             break;
         }
-        loop {
-            if let Err(e) = conn
-                .execute("ATTACH DATABASE ? as perboot;", params![perboot_file])
-                .context("Failed to attach database perboot.")
-            {
-                if Self::is_locked_error(&e) {
-                    std::thread::sleep(std::time::Duration::from_micros(500));
-                    continue;
-                } else {
-                    return Err(e);
-                }
-            }
-            break;
-        }
 
         // Drop the cache size from default (2M) to 0.5M
         conn.execute("PRAGMA persistent.cache_size = -500;", params![])
             .context("Failed to decrease cache size for persistent db")?;
-        conn.execute("PRAGMA perboot.cache_size = -500;", params![])
-            .context("Failed to decrease cache size for perboot db")?;
 
         Ok(conn)
     }
@@ -1135,7 +1078,15 @@ impl KeystoreDB {
             }
             StatsdStorageType::Grant => self.get_table_size(storage_type, "persistent", "grant"),
             StatsdStorageType::AuthToken => {
-                self.get_table_size(storage_type, "perboot", "authtoken")
+                // Since the table is actually a BTreeMap now, unused_size is not meaningfully
+                // reportable
+                // Size provided is only an approximation
+                Ok(Keystore2StorageStats {
+                    storage_type,
+                    size: (self.perboot.auth_tokens_len() * std::mem::size_of::<AuthTokenEntry>())
+                        as i64,
+                    unused_size: 0,
+                })
             }
             StatsdStorageType::BlobMetadata => {
                 self.get_table_size(storage_type, "persistent", "blobmetadata")
@@ -3177,110 +3128,35 @@ impl KeystoreDB {
         }
     }
 
-    /// Insert or replace the auth token based on the UNIQUE constraint of the auth token table
-    pub fn insert_auth_token(&mut self, auth_token: &HardwareAuthToken) -> Result<()> {
-        let _wp = wd::watch_millis("KeystoreDB::insert_auth_token", 500);
-
-        self.with_transaction(TransactionBehavior::Immediate, |tx| {
-            tx.execute(
-                "INSERT OR REPLACE INTO perboot.authtoken (challenge, user_id, auth_id,
-            authenticator_type, timestamp, mac, time_received) VALUES(?, ?, ?, ?, ?, ?, ?);",
-                params![
-                    auth_token.challenge,
-                    auth_token.userId,
-                    auth_token.authenticatorId,
-                    auth_token.authenticatorType.0 as i32,
-                    auth_token.timestamp.milliSeconds as i64,
-                    auth_token.mac,
-                    MonotonicRawTime::now(),
-                ],
-            )
-            .context("In insert_auth_token: failed to insert auth token into the database")?;
-            Ok(()).no_gc()
-        })
+    /// Insert or replace the auth token based on (user_id, auth_id, auth_type)
+    pub fn insert_auth_token(&mut self, auth_token: &HardwareAuthToken) {
+        self.perboot.insert_auth_token_entry(AuthTokenEntry::new(
+            auth_token.clone(),
+            MonotonicRawTime::now(),
+        ))
     }
 
     /// Find the newest auth token matching the given predicate.
-    pub fn find_auth_token_entry<F>(
-        &mut self,
-        p: F,
-    ) -> Result<Option<(AuthTokenEntry, MonotonicRawTime)>>
+    pub fn find_auth_token_entry<F>(&self, p: F) -> Option<(AuthTokenEntry, MonotonicRawTime)>
     where
         F: Fn(&AuthTokenEntry) -> bool,
     {
-        let _wp = wd::watch_millis("KeystoreDB::find_auth_token_entry", 500);
-
-        self.with_transaction(TransactionBehavior::Deferred, |tx| {
-            let mut stmt = tx
-                .prepare("SELECT * from perboot.authtoken ORDER BY time_received DESC;")
-                .context("Prepare statement failed.")?;
-
-            let mut rows = stmt.query(NO_PARAMS).context("Failed to query.")?;
-
-            while let Some(row) = rows.next().context("Failed to get next row.")? {
-                let entry = AuthTokenEntry::new(
-                    HardwareAuthToken {
-                        challenge: row.get(1)?,
-                        userId: row.get(2)?,
-                        authenticatorId: row.get(3)?,
-                        authenticatorType: HardwareAuthenticatorType(row.get(4)?),
-                        timestamp: Timestamp { milliSeconds: row.get(5)? },
-                        mac: row.get(6)?,
-                    },
-                    row.get(7)?,
-                );
-                if p(&entry) {
-                    return Ok(Some((
-                        entry,
-                        Self::get_last_off_body(tx)
-                            .context("In find_auth_token_entry: Trying to get last off body")?,
-                    )))
-                    .no_gc();
-                }
-            }
-            Ok(None).no_gc()
-        })
-        .context("In find_auth_token_entry.")
+        self.perboot.find_auth_token_entry(p).map(|entry| (entry, self.get_last_off_body()))
     }
 
     /// Insert last_off_body into the metadata table at the initialization of auth token table
-    pub fn insert_last_off_body(&mut self, last_off_body: MonotonicRawTime) -> Result<()> {
-        let _wp = wd::watch_millis("KeystoreDB::insert_last_off_body", 500);
-
-        self.with_transaction(TransactionBehavior::Immediate, |tx| {
-            tx.execute(
-                "INSERT OR REPLACE INTO perboot.metadata (key, value) VALUES (?, ?);",
-                params!["last_off_body", last_off_body],
-            )
-            .context("In insert_last_off_body: failed to insert.")?;
-            Ok(()).no_gc()
-        })
+    pub fn insert_last_off_body(&self, last_off_body: MonotonicRawTime) {
+        self.perboot.set_last_off_body(last_off_body)
     }
 
     /// Update last_off_body when on_device_off_body is called
-    pub fn update_last_off_body(&mut self, last_off_body: MonotonicRawTime) -> Result<()> {
-        let _wp = wd::watch_millis("KeystoreDB::update_last_off_body", 500);
-
-        self.with_transaction(TransactionBehavior::Immediate, |tx| {
-            tx.execute(
-                "UPDATE perboot.metadata SET value = ? WHERE key = ?;",
-                params![last_off_body, "last_off_body"],
-            )
-            .context("In update_last_off_body: failed to update.")?;
-            Ok(()).no_gc()
-        })
+    pub fn update_last_off_body(&self, last_off_body: MonotonicRawTime) {
+        self.perboot.set_last_off_body(last_off_body)
     }
 
     /// Get last_off_body time when finding auth tokens
-    fn get_last_off_body(tx: &Transaction) -> Result<MonotonicRawTime> {
-        let _wp = wd::watch_millis("KeystoreDB::get_last_off_body", 500);
-
-        tx.query_row(
-            "SELECT value from perboot.metadata WHERE key = ?;",
-            params!["last_off_body"],
-            |row| row.get(0),
-        )
-        .context("In get_last_off_body: query_row failed.")
+    fn get_last_off_body(&self) -> MonotonicRawTime {
+        self.perboot.get_last_off_body()
     }
 }
 
@@ -3304,7 +3180,7 @@ mod tests {
         Timestamp::Timestamp,
     };
     use rusqlite::NO_PARAMS;
-    use rusqlite::{Error, TransactionBehavior};
+    use rusqlite::TransactionBehavior;
     use std::cell::RefCell;
     use std::collections::BTreeMap;
     use std::fmt::Write;
@@ -3316,9 +3192,9 @@ mod tests {
     use std::time::Instant;
 
     fn new_test_db() -> Result<KeystoreDB> {
-        let conn = KeystoreDB::make_connection("file::memory:", "file::memory:")?;
+        let conn = KeystoreDB::make_connection("file::memory:")?;
 
-        let mut db = KeystoreDB { conn, gc: None };
+        let mut db = KeystoreDB { conn, gc: None, perboot: Arc::new(perboot::PerbootDB::new()) };
         db.with_transaction(TransactionBehavior::Immediate, |tx| {
             KeystoreDB::init_tables(tx).context("Failed to initialize tables.").no_gc()
         })?;
@@ -3404,15 +3280,6 @@ mod tests {
         assert_eq!(tables[3], "keyentry");
         assert_eq!(tables[4], "keymetadata");
         assert_eq!(tables[5], "keyparameter");
-        let tables = db
-            .conn
-            .prepare("SELECT name from perboot.sqlite_master WHERE type='table' ORDER BY name;")?
-            .query_map(params![], |row| row.get(0))?
-            .collect::<rusqlite::Result<Vec<String>>>()?;
-
-        assert_eq!(tables.len(), 2);
-        assert_eq!(tables[0], "authtoken");
-        assert_eq!(tables[1], "metadata");
         Ok(())
     }
 
@@ -3427,8 +3294,8 @@ mod tests {
             timestamp: Timestamp { milliSeconds: 500 },
             mac: String::from("mac").into_bytes(),
         };
-        db.insert_auth_token(&auth_token1)?;
-        let auth_tokens_returned = get_auth_tokens(&mut db)?;
+        db.insert_auth_token(&auth_token1);
+        let auth_tokens_returned = get_auth_tokens(&db);
         assert_eq!(auth_tokens_returned.len(), 1);
 
         // insert another auth token with the same values for the columns in the UNIQUE constraint
@@ -3442,8 +3309,8 @@ mod tests {
             mac: String::from("mac").into_bytes(),
         };
 
-        db.insert_auth_token(&auth_token2)?;
-        let mut auth_tokens_returned = get_auth_tokens(&mut db)?;
+        db.insert_auth_token(&auth_token2);
+        let mut auth_tokens_returned = get_auth_tokens(&db);
         assert_eq!(auth_tokens_returned.len(), 1);
 
         if let Some(auth_token) = auth_tokens_returned.pop() {
@@ -3461,33 +3328,16 @@ mod tests {
             mac: String::from("mac").into_bytes(),
         };
 
-        db.insert_auth_token(&auth_token3)?;
-        let auth_tokens_returned = get_auth_tokens(&mut db)?;
+        db.insert_auth_token(&auth_token3);
+        let auth_tokens_returned = get_auth_tokens(&db);
         assert_eq!(auth_tokens_returned.len(), 2);
 
         Ok(())
     }
 
     // utility function for test_auth_token_table_invariant()
-    fn get_auth_tokens(db: &mut KeystoreDB) -> Result<Vec<AuthTokenEntry>> {
-        let mut stmt = db.conn.prepare("SELECT * from perboot.authtoken;")?;
-
-        let auth_token_entries: Vec<AuthTokenEntry> = stmt
-            .query_map(NO_PARAMS, |row| {
-                Ok(AuthTokenEntry::new(
-                    HardwareAuthToken {
-                        challenge: row.get(1)?,
-                        userId: row.get(2)?,
-                        authenticatorId: row.get(3)?,
-                        authenticatorType: HardwareAuthenticatorType(row.get(4)?),
-                        timestamp: Timestamp { milliSeconds: row.get(5)? },
-                        mac: row.get(6)?,
-                    },
-                    row.get(7)?,
-                ))
-            })?
-            .collect::<Result<Vec<AuthTokenEntry>, Error>>()?;
-        Ok(auth_token_entries)
+    fn get_auth_tokens(db: &KeystoreDB) -> Vec<AuthTokenEntry> {
+        db.perboot.get_all_auth_token_entries()
     }
 
     #[test]
@@ -5341,16 +5191,16 @@ mod tests {
     #[test]
     fn test_last_off_body() -> Result<()> {
         let mut db = new_test_db()?;
-        db.insert_last_off_body(MonotonicRawTime::now())?;
+        db.insert_last_off_body(MonotonicRawTime::now());
         let tx = db.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let last_off_body_1 = KeystoreDB::get_last_off_body(&tx)?;
         tx.commit()?;
+        let last_off_body_1 = db.get_last_off_body();
         let one_second = Duration::from_secs(1);
         thread::sleep(one_second);
-        db.update_last_off_body(MonotonicRawTime::now())?;
+        db.update_last_off_body(MonotonicRawTime::now());
         let tx2 = db.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let last_off_body_2 = KeystoreDB::get_last_off_body(&tx2)?;
         tx2.commit()?;
+        let last_off_body_2 = db.get_last_off_body();
         assert!(last_off_body_1.seconds() < last_off_body_2.seconds());
         Ok(())
     }
@@ -5437,7 +5287,12 @@ mod tests {
 
         for t in get_valid_statsd_storage_types() {
             let stat = db.get_storage_stat(t)?;
-            assert!(stat.size >= PAGE_SIZE);
+            // AuthToken can be less than a page since it's in a btree, not sqlite
+            // TODO(b/187474736) stop using if-let here
+            if let StatsdStorageType::AuthToken = t {
+            } else {
+                assert!(stat.size >= PAGE_SIZE);
+            }
             assert!(stat.size >= stat.unused_size);
         }
 
@@ -5567,7 +5422,7 @@ mod tests {
             authenticatorType: kmhw_authenticator_type::ANY,
             timestamp: Timestamp { milliSeconds: 10 },
             mac: b"mac".to_vec(),
-        })?;
+        });
         assert_storage_increased(&mut db, vec![StatsdStorageType::AuthToken], &mut working_stats);
         Ok(())
     }
@@ -5594,6 +5449,42 @@ mod tests {
 
         assert_storage_increased(&mut db, vec![StatsdStorageType::Grant], &mut working_stats);
 
+        Ok(())
+    }
+
+    #[test]
+    fn find_auth_token_entry_returns_latest() -> Result<()> {
+        let mut db = new_test_db()?;
+        db.insert_auth_token(&HardwareAuthToken {
+            challenge: 123,
+            userId: 456,
+            authenticatorId: 789,
+            authenticatorType: kmhw_authenticator_type::ANY,
+            timestamp: Timestamp { milliSeconds: 10 },
+            mac: b"mac0".to_vec(),
+        });
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        db.insert_auth_token(&HardwareAuthToken {
+            challenge: 123,
+            userId: 457,
+            authenticatorId: 789,
+            authenticatorType: kmhw_authenticator_type::ANY,
+            timestamp: Timestamp { milliSeconds: 12 },
+            mac: b"mac1".to_vec(),
+        });
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        db.insert_auth_token(&HardwareAuthToken {
+            challenge: 123,
+            userId: 458,
+            authenticatorId: 789,
+            authenticatorType: kmhw_authenticator_type::ANY,
+            timestamp: Timestamp { milliSeconds: 3 },
+            mac: b"mac2".to_vec(),
+        });
+        // All three entries are in the database
+        assert_eq!(db.perboot.auth_tokens_len(), 3);
+        // It selected the most recent timestamp
+        assert_eq!(db.find_auth_token_entry(|_| true).unwrap().0.auth_token.mac, b"mac2".to_vec());
         Ok(())
     }
 }
