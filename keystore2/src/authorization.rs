@@ -121,7 +121,7 @@ impl AuthorizationManager {
         // Check keystore permission.
         check_keystore_permission(KeystorePerm::add_auth()).context("In add_auth_token.")?;
 
-        ENFORCEMENTS.add_auth_token(auth_token.clone())?;
+        ENFORCEMENTS.add_auth_token(auth_token.clone());
         Ok(())
     }
 
