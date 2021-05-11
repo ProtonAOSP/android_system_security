@@ -984,6 +984,12 @@ impl KeystoreDB {
                     return Err(e);
                 }
             }
+            let result: String = conn
+                .pragma_update_and_check(None, "journal_mode", &"WAL", |row| row.get(0))
+                .expect("Attempting to set journal mode failed.");
+            if result != "wal" {
+                error!("Failed to put DB in WAL mode.  This will make keystore slow.");
+            }
             break;
         }
 

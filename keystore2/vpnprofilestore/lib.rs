@@ -24,6 +24,7 @@ use android_security_vpnprofilestore::binder::{
 };
 use anyhow::{Context, Result};
 use keystore2::{async_task::AsyncTask, legacy_blob::LegacyBlobLoader, utils::watchdog as wd};
+use log::error;
 use rusqlite::{
     params, Connection, OptionalExtension, Transaction, TransactionBehavior, NO_PARAMS,
 };
@@ -43,6 +44,15 @@ impl DB {
         };
 
         db.init_tables().context("Trying to initialize vpnstore db.")?;
+
+        let result: String = db
+            .conn
+            .pragma_update_and_check(None, "journal_mode", &"WAL", |row| row.get(0))
+            .expect("Attempting to set journal mode failed.");
+        if result != "wal" {
+            error!("Failed to put DB in WAL mode.  This will make keystore slow.");
+        }
+
         Ok(db)
     }
 
