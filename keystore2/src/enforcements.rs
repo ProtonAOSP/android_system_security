@@ -638,8 +638,7 @@ impl Enforcements {
                 } else {
                     unlocked_device_required
                 }
-            })
-            .context("In authorize_create: Trying to get required auth token.")?;
+            });
             Some(
                 hat_and_last_off_body
                     .ok_or(Error::Km(Ec::KEY_USER_NOT_AUTHENTICATED))
@@ -700,15 +699,11 @@ impl Enforcements {
         })
     }
 
-    fn find_auth_token<F>(p: F) -> Result<Option<(AuthTokenEntry, MonotonicRawTime)>>
+    fn find_auth_token<F>(p: F) -> Option<(AuthTokenEntry, MonotonicRawTime)>
     where
         F: Fn(&AuthTokenEntry) -> bool,
     {
-        DB.with(|db| {
-            let mut db = db.borrow_mut();
-            db.find_auth_token_entry(p).context("Trying to find auth token.")
-        })
-        .context("In find_auth_token.")
+        DB.with(|db| db.borrow().find_auth_token_entry(p))
     }
 
     /// Checks if the time now since epoch is greater than (or equal, if is_given_time_inclusive is
@@ -752,11 +747,9 @@ impl Enforcements {
     /// Add this auth token to the database.
     /// Then present the auth token to the op auth map. If an operation is waiting for this
     /// auth token this fulfills the request and removes the receiver from the map.
-    pub fn add_auth_token(&self, hat: HardwareAuthToken) -> Result<()> {
-        DB.with(|db| db.borrow_mut().insert_auth_token(&hat)).context("In add_auth_token.")?;
-
+    pub fn add_auth_token(&self, hat: HardwareAuthToken) {
+        DB.with(|db| db.borrow_mut().insert_auth_token(&hat));
         self.op_auth_map.add_auth_token(hat);
-        Ok(())
     }
 
     /// This allows adding an entry to the op_auth_map, indexed by the operation challenge.
@@ -824,10 +817,7 @@ impl Enforcements {
         // Filter the matching auth tokens by challenge
         let result = Self::find_auth_token(|hat: &AuthTokenEntry| {
             (challenge == hat.challenge()) && hat.satisfies(&sids, auth_type)
-        })
-        .context(
-            "In get_auth_tokens: Failed to get a matching auth token filtered by challenge.",
-        )?;
+        });
 
         let auth_token = if let Some((auth_token_entry, _)) = result {
             auth_token_entry.take_auth_token()
@@ -842,10 +832,7 @@ impl Enforcements {
                             auth_token_max_age_millis > token_age_in_millis
                         });
                     token_valid && auth_token_entry.satisfies(&sids, auth_type)
-                })
-                .context(
-                    "In get_auth_tokens: Failed to get a matching auth token filtered by age.",
-                )?;
+                });
 
                 if let Some((auth_token_entry, _)) = result {
                     auth_token_entry.take_auth_token()

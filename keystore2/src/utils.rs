@@ -36,7 +36,6 @@ use keystore2_apc_compat::{
     APC_COMPAT_ERROR_IGNORED, APC_COMPAT_ERROR_OK, APC_COMPAT_ERROR_OPERATION_PENDING,
     APC_COMPAT_ERROR_SYSTEM_ERROR,
 };
-use std::convert::TryFrom;
 use std::sync::Mutex;
 
 /// This function uses its namesake in the permission module and in
@@ -197,8 +196,7 @@ pub fn get_current_time_in_seconds() -> i64 {
     // defined to be an error that can never happen (i.e. the result is always ok).
     // This suppresses the compiler's complaint about converting tv_sec to i64 in method
     // get_current_time_in_seconds.
-    #[allow(clippy::useless_conversion)]
-    i64::try_from(current_time.tv_sec).unwrap()
+    current_time.tv_sec as i64
 }
 
 /// Converts a response code as returned by the Android Protected Confirmation HIDL compatibility
