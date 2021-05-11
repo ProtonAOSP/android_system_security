@@ -992,7 +992,7 @@ impl SuperKeyManager {
             for sid in &biometric.sids {
                 if let Some((auth_token_entry, _)) = db.find_auth_token_entry(|entry| {
                     entry.auth_token().userId == *sid || entry.auth_token().authenticatorId == *sid
-                })? {
+                }) {
                     let res: Result<(Arc<SuperKey>, Arc<SuperKey>)> = (|| {
                         let slb = biometric.screen_lock_bound.decrypt(
                             db,
