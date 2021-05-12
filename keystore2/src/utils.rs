@@ -185,18 +185,15 @@ pub fn key_parameters_to_authorizations(
     parameters.into_iter().map(|p| p.into_authorization()).collect()
 }
 
-/// This returns the current time (in seconds) as an instance of a monotonic clock, by invoking the
-/// system call since Rust does not support getting monotonic time instance as an integer.
-pub fn get_current_time_in_seconds() -> i64 {
+/// This returns the current time (in milliseconds) as an instance of a monotonic clock,
+/// by invoking the system call since Rust does not support getting monotonic time instance
+/// as an integer.
+pub fn get_current_time_in_milliseconds() -> i64 {
     let mut current_time = libc::timespec { tv_sec: 0, tv_nsec: 0 };
     // Following unsafe block includes one system call to get monotonic time.
     // Therefore, it is not considered harmful.
     unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC_RAW, &mut current_time) };
-    // It is safe to unwrap here because try_from() returns std::convert::Infallible, which is
-    // defined to be an error that can never happen (i.e. the result is always ok).
-    // This suppresses the compiler's complaint about converting tv_sec to i64 in method
-    // get_current_time_in_seconds.
-    current_time.tv_sec as i64
+    current_time.tv_sec as i64 * 1000 + (current_time.tv_nsec as i64 / 1_000_000)
 }
 
 /// Converts a response code as returned by the Android Protected Confirmation HIDL compatibility
