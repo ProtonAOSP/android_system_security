@@ -47,10 +47,6 @@ fn main() {
     // Saying hi.
     info!("Keystore2 is starting.");
 
-    // Initialize the per boot database.
-    let _keep_me_alive = keystore2::database::KeystoreDB::keep_perboot_db_alive()
-        .expect("Failed to initialize the perboot database.");
-
     let mut args = std::env::args();
     args.next().expect("That's odd. How is there not even a first argument?");
 

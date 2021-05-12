@@ -61,8 +61,7 @@ pub fn create_thread_local_db() -> KeystoreDB {
     .expect("Failed to open database.");
     DB_INIT.call_once(|| {
         log::info!("Touching Keystore 2.0 database for this first time since boot.");
-        db.insert_last_off_body(MonotonicRawTime::now())
-            .expect("Could not initialize database with last off body.");
+        db.insert_last_off_body(MonotonicRawTime::now());
         log::info!("Calling cleanup leftovers.");
         let n = db.cleanup_leftovers().expect("Failed to cleanup database on startup.");
         if n != 0 {
