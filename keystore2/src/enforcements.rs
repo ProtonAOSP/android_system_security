@@ -824,12 +824,12 @@ impl Enforcements {
         } else {
             // Filter the matching auth tokens by age.
             if auth_token_max_age_millis != 0 {
-                let now_in_millis = MonotonicRawTime::now().milli_seconds();
+                let now_in_millis = MonotonicRawTime::now();
                 let result = Self::find_auth_token(|auth_token_entry: &AuthTokenEntry| {
                     let token_valid = now_in_millis
-                        .checked_sub(auth_token_entry.time_received().milli_seconds())
+                        .checked_sub(&auth_token_entry.time_received())
                         .map_or(false, |token_age_in_millis| {
-                            auth_token_max_age_millis > token_age_in_millis
+                            auth_token_max_age_millis > token_age_in_millis.milliseconds()
                         });
                     token_valid && auth_token_entry.satisfies(&sids, auth_type)
                 });
