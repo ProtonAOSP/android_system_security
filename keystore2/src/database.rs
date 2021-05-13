@@ -46,7 +46,7 @@ mod perboot;
 use crate::impl_metadata; // This is in db_utils.rs
 use crate::key_parameter::{KeyParameter, Tag};
 use crate::permission::KeyPermSet;
-use crate::utils::{get_current_time_in_seconds, watchdog as wd, AID_USER_OFFSET};
+use crate::utils::{get_current_time_in_milliseconds, watchdog as wd, AID_USER_OFFSET};
 use crate::{
     db_utils::{self, SqlField},
     gc::Gc,
@@ -737,29 +737,24 @@ pub struct KeystoreDB {
 }
 
 /// Database representation of the monotonic time retrieved from the system call clock_gettime with
-/// CLOCK_MONOTONIC_RAW. Stores monotonic time as i64 in seconds.
+/// CLOCK_MONOTONIC_RAW. Stores monotonic time as i64 in milliseconds.
 #[derive(Debug, Copy, Clone, Default, Eq, PartialEq, Ord, PartialOrd)]
 pub struct MonotonicRawTime(i64);
 
 impl MonotonicRawTime {
     /// Constructs a new MonotonicRawTime
     pub fn now() -> Self {
-        Self(get_current_time_in_seconds())
+        Self(get_current_time_in_milliseconds())
     }
 
-    /// Constructs a new MonotonicRawTime from a given number of seconds.
-    pub fn from_secs(val: i64) -> Self {
-        Self(val)
+    /// Returns the value of MonotonicRawTime in milliseconds as i64
+    pub fn milliseconds(&self) -> i64 {
+        self.0
     }
 
     /// Returns the integer value of MonotonicRawTime as i64
     pub fn seconds(&self) -> i64 {
-        self.0
-    }
-
-    /// Returns the value of MonotonicRawTime in milli seconds as i64
-    pub fn milli_seconds(&self) -> i64 {
-        self.0 * 1000
+        self.0 / 1000
     }
 
     /// Like i64::checked_sub.
@@ -785,6 +780,7 @@ impl FromSql for MonotonicRawTime {
 #[derive(Clone)]
 pub struct AuthTokenEntry {
     auth_token: HardwareAuthToken,
+    // Time received in milliseconds
     time_received: MonotonicRawTime,
 }
 
@@ -5207,7 +5203,7 @@ mod tests {
         let tx2 = db.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx2.commit()?;
         let last_off_body_2 = db.get_last_off_body();
-        assert!(last_off_body_1.seconds() < last_off_body_2.seconds());
+        assert!(last_off_body_1 < last_off_body_2);
         Ok(())
     }
 
