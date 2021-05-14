@@ -46,7 +46,7 @@ mod perboot;
 use crate::impl_metadata; // This is in db_utils.rs
 use crate::key_parameter::{KeyParameter, Tag};
 use crate::permission::KeyPermSet;
-use crate::utils::{get_current_time_in_seconds, watchdog as wd, AID_USER_OFFSET};
+use crate::utils::{get_current_time_in_milliseconds, watchdog as wd, AID_USER_OFFSET};
 use crate::{
     db_utils::{self, SqlField},
     gc::Gc,
@@ -737,29 +737,24 @@ pub struct KeystoreDB {
 }
 
 /// Database representation of the monotonic time retrieved from the system call clock_gettime with
-/// CLOCK_MONOTONIC_RAW. Stores monotonic time as i64 in seconds.
+/// CLOCK_MONOTONIC_RAW. Stores monotonic time as i64 in milliseconds.
 #[derive(Debug, Copy, Clone, Default, Eq, PartialEq, Ord, PartialOrd)]
 pub struct MonotonicRawTime(i64);
 
 impl MonotonicRawTime {
     /// Constructs a new MonotonicRawTime
     pub fn now() -> Self {
-        Self(get_current_time_in_seconds())
+        Self(get_current_time_in_milliseconds())
     }
 
-    /// Constructs a new MonotonicRawTime from a given number of seconds.
-    pub fn from_secs(val: i64) -> Self {
-        Self(val)
+    /// Returns the value of MonotonicRawTime in milliseconds as i64
+    pub fn milliseconds(&self) -> i64 {
+        self.0
     }
 
     /// Returns the integer value of MonotonicRawTime as i64
     pub fn seconds(&self) -> i64 {
-        self.0
-    }
-
-    /// Returns the value of MonotonicRawTime in milli seconds as i64
-    pub fn milli_seconds(&self) -> i64 {
-        self.0 * 1000
+        self.0 / 1000
     }
 
     /// Like i64::checked_sub.
@@ -785,6 +780,7 @@ impl FromSql for MonotonicRawTime {
 #[derive(Clone)]
 pub struct AuthTokenEntry {
     auth_token: HardwareAuthToken,
+    // Time received in milliseconds
     time_received: MonotonicRawTime,
 }
 
@@ -833,6 +829,20 @@ impl KeystoreDB {
     /// Name of the file that holds the cross-boot persistent database.
     pub const PERSISTENT_DB_FILENAME: &'static str = &"persistent.sqlite";
 
+    /// Set write-ahead logging mode on the persistent database found in `db_root`.
+    pub fn set_wal_mode(db_root: &Path) -> Result<()> {
+        let path = Self::make_persistent_path(&db_root)?;
+        let conn =
+            Connection::open(path).context("In KeystoreDB::set_wal_mode: Failed to open DB")?;
+        let mode: String = conn
+            .pragma_update_and_check(None, "journal_mode", &"WAL", |row| row.get(0))
+            .context("In KeystoreDB::set_wal_mode: Failed to set journal_mode")?;
+        match mode.as_str() {
+            "wal" => Ok(()),
+            _ => Err(anyhow!("Unable to set WAL mode, db is still in {} mode.", mode)),
+        }
+    }
+
     /// This will create a new database connection connecting the two
     /// files persistent.sqlite and perboot.sqlite in the given directory.
     /// It also attempts to initialize all of the tables.
@@ -841,15 +851,8 @@ impl KeystoreDB {
     pub fn new(db_root: &Path, gc: Option<Arc<Gc>>) -> Result<Self> {
         let _wp = wd::watch_millis("KeystoreDB::new", 500);
 
-        // Build the path to the sqlite file.
-        let mut persistent_path = db_root.to_path_buf();
-        persistent_path.push(Self::PERSISTENT_DB_FILENAME);
-
-        // Now convert them to strings prefixed with "file:"
-        let mut persistent_path_str = "file:".to_owned();
-        persistent_path_str.push_str(&persistent_path.to_string_lossy());
-
-        let conn = Self::make_connection(&persistent_path_str)?;
+        let persistent_path = Self::make_persistent_path(&db_root)?;
+        let conn = Self::make_connection(&persistent_path)?;
 
         let mut db = Self { conn, gc, perboot: perboot::PERBOOT_DB.clone() };
         db.with_transaction(TransactionBehavior::Immediate, |tx| {
@@ -966,6 +969,18 @@ impl KeystoreDB {
         .context("Failed to initialize \"grant\" table.")?;
 
         Ok(())
+    }
+
+    fn make_persistent_path(db_root: &Path) -> Result<String> {
+        // Build the path to the sqlite file.
+        let mut persistent_path = db_root.to_path_buf();
+        persistent_path.push(Self::PERSISTENT_DB_FILENAME);
+
+        // Now convert them to strings prefixed with "file:"
+        let mut persistent_path_str = "file:".to_owned();
+        persistent_path_str.push_str(&persistent_path.to_string_lossy());
+
+        Ok(persistent_path_str)
     }
 
     fn make_connection(persistent_file: &str) -> Result<Connection> {
@@ -3165,6 +3180,7 @@ mod tests {
     use android_hardware_security_secureclock::aidl::android::hardware::security::secureclock::{
         Timestamp::Timestamp,
     };
+    use rusqlite::DatabaseName::Attached;
     use rusqlite::NO_PARAMS;
     use rusqlite::TransactionBehavior;
     use std::cell::RefCell;
@@ -5187,7 +5203,7 @@ mod tests {
         let tx2 = db.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx2.commit()?;
         let last_off_body_2 = db.get_last_off_body();
-        assert!(last_off_body_1.seconds() < last_off_body_2.seconds());
+        assert!(last_off_body_1 < last_off_body_2);
         Ok(())
     }
 
@@ -5471,6 +5487,28 @@ mod tests {
         assert_eq!(db.perboot.auth_tokens_len(), 3);
         // It selected the most recent timestamp
         assert_eq!(db.find_auth_token_entry(|_| true).unwrap().0.auth_token.mac, b"mac2".to_vec());
+        Ok(())
+    }
+
+    #[test]
+    fn test_set_wal_mode() -> Result<()> {
+        let temp_dir = TempDir::new("test_set_wal_mode")?;
+        let mut db = KeystoreDB::new(temp_dir.path(), None)?;
+        let mode: String =
+            db.conn.pragma_query_value(Some(Attached("persistent")), "journal_mode", |row| {
+                row.get(0)
+            })?;
+        assert_eq!(mode, "delete");
+        db.conn.close().expect("Close didn't work");
+
+        KeystoreDB::set_wal_mode(temp_dir.path())?;
+
+        db = KeystoreDB::new(temp_dir.path(), None)?;
+        let mode: String =
+            db.conn.pragma_query_value(Some(Attached("persistent")), "journal_mode", |row| {
+                row.get(0)
+            })?;
+        assert_eq!(mode, "wal");
         Ok(())
     }
 }
