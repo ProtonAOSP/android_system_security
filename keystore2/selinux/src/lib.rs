@@ -20,6 +20,13 @@
 //!  * selabel_lookup for the keystore2_key backend.
 //! And it provides an owning wrapper around context strings `Context`.
 
+use anyhow::Context as AnyhowContext;
+use anyhow::{anyhow, Result};
+use lazy_static::lazy_static;
+pub use selinux::pid_t;
+use selinux::SELABEL_CTX_ANDROID_KEYSTORE2_KEY;
+use selinux::SELINUX_CB_LOG;
+use selinux_bindgen as selinux;
 use std::ffi::{CStr, CString};
 use std::fmt;
 use std::io;
@@ -29,17 +36,17 @@ use std::os::raw::c_char;
 use std::ptr;
 use std::sync;
 
-use selinux_bindgen as selinux;
-
-use anyhow::Context as AnyhowContext;
-use anyhow::{anyhow, Result};
-
-use selinux::SELABEL_CTX_ANDROID_KEYSTORE2_KEY;
-use selinux::SELINUX_CB_LOG;
-
-pub use selinux::pid_t;
-
 static SELINUX_LOG_INIT: sync::Once = sync::Once::new();
+
+lazy_static! {
+    /// `selinux_check_access` is only thread safe if avc_init was called with lock callbacks.
+    /// However, avc_init is deprecated and not exported by androids version of libselinux.
+    /// `selinux_set_callbacks` does not allow setting lock callbacks. So the only option
+    /// that remains right now is to put a big lock around calls into libselinux.
+    /// TODO b/188079221 It should suffice to protect `selinux_check_access` but until we are
+    /// certain of that, we leave the extra locks in place
+    static ref LIB_SELINUX_LOCK: sync::Mutex<()> = Default::default();
+}
 
 fn redirect_selinux_logs_to_logcat() {
     // `selinux_set_callback` assigns the static lifetime function pointer
@@ -164,6 +171,8 @@ impl KeystoreKeyBackend {
     /// `selinux_android_keystore2_key_context_handle`.
     pub fn new() -> Result<Self> {
         init_logger_once();
+        let _lock = LIB_SELINUX_LOCK.lock().unwrap();
+
         let handle = unsafe { selinux::selinux_android_keystore2_key_context_handle() };
         if handle.is_null() {
             return Err(anyhow!(Error::sys("Failed to open KeystoreKeyBackend")));
@@ -192,6 +201,8 @@ impl Backend for KeystoreKeyBackend {
         match unsafe {
             // No need to initialize the logger here because it cannot run unless
             // KeystoreKeyBackend::new has run.
+            let _lock = LIB_SELINUX_LOCK.lock().unwrap();
+
             selinux::selabel_lookup(self.handle, &mut con, c_key.as_ptr(), Self::BACKEND_TYPE)
         } {
             0 => {
@@ -219,6 +230,8 @@ impl Backend for KeystoreKeyBackend {
 ///  * Err(io::Error::last_os_error()) if getcon failed.
 pub fn getcon() -> Result<Context> {
     init_logger_once();
+    let _lock = LIB_SELINUX_LOCK.lock().unwrap();
+
     let mut con: *mut c_char = ptr::null_mut();
     match unsafe { selinux::getcon(&mut con) } {
         0 => {
@@ -241,6 +254,8 @@ pub fn getcon() -> Result<Context> {
 ///  * Err(io::Error::last_os_error()) if getpidcon failed.
 pub fn getpidcon(pid: selinux::pid_t) -> Result<Context> {
     init_logger_once();
+    let _lock = LIB_SELINUX_LOCK.lock().unwrap();
+
     let mut con: *mut c_char = ptr::null_mut();
     match unsafe { selinux::getpidcon(pid, &mut con) } {
         0 => {
@@ -267,6 +282,7 @@ pub fn getpidcon(pid: selinux::pid_t) -> Result<Context> {
 ///            the access check.
 pub fn check_access(source: &CStr, target: &CStr, tclass: &str, perm: &str) -> Result<()> {
     init_logger_once();
+
     let c_tclass = CString::new(tclass).with_context(|| {
         format!("check_access: Failed to convert tclass \"{}\" to CString.", tclass)
     })?;
@@ -275,6 +291,8 @@ pub fn check_access(source: &CStr, target: &CStr, tclass: &str, perm: &str) -> R
     })?;
 
     match unsafe {
+        let _lock = LIB_SELINUX_LOCK.lock().unwrap();
+
         selinux::selinux_check_access(
             source.as_ptr(),
             target.as_ptr(),
