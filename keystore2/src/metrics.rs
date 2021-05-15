@@ -23,7 +23,7 @@ use android_hardware_security_keymint::aidl::android::hardware::security::keymin
     KeyParameter::KeyParameter, KeyPurpose::KeyPurpose, PaddingMode::PaddingMode,
     SecurityLevel::SecurityLevel,
 };
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use keystore2_system_property::PropertyWatcher;
 use statslog_rust::{
     keystore2_key_creation_event_reported::{
@@ -39,6 +39,47 @@ use statslog_rust::{
 };
 use statslog_rust_header::Atoms;
 use statspull_rust::{set_pull_atom_callback, StatsPullResult};
+
+// Waits and returns Ok if boot is completed.
+fn wait_for_boot_completed() -> Result<()> {
+    let watcher = PropertyWatcher::new("sys.boot_completed");
+    match watcher {
+        Ok(mut watcher) => {
+            loop {
+                let wait_result = watcher.wait();
+                match wait_result {
+                    Ok(_) => {
+                        let value_result =
+                            watcher.read(|_name, value| Ok(value.trim().to_string()));
+                        match value_result {
+                            Ok(value) => {
+                                if value == "1" {
+                                    break;
+                                }
+                            }
+                            Err(e) => {
+                                log::error!(
+                                    "In wait_for_boot_completed: Failed while reading property. {}",
+                                    e
+                                );
+                                return Err(anyhow!("Error in waiting for boot completion."));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("In wait_for_boot_completed: Failed while waiting. {}", e);
+                        return Err(anyhow!("Error in waiting for boot completion."));
+                    }
+                }
+            }
+            Ok(())
+        }
+        Err(e) => {
+            log::error!("In wait_for_boot_completed: Failed to create PropertyWatcher. {}", e);
+            Err(anyhow!("Error in waiting for boot completion."))
+        }
+    }
+}
 
 fn create_default_key_creation_atom() -> Keystore2KeyCreationEventReported {
     // If a value is not present, fields represented by bitmaps and i32 fields
@@ -89,10 +130,10 @@ pub fn log_key_creation_event_stats<U>(
         construct_key_creation_event_stats(sec_level, key_params, result);
 
     LOGS_HANDLER.queue_lo(move |_| {
-        let logging_result = key_creation_event_stats.stats_write();
-
-        if let Err(e) = logging_result {
-            log::error!("Error in logging key creation event in the async task. {:?}", e);
+        if let Ok(()) = wait_for_boot_completed() {
+            if let Err(e) = key_creation_event_stats.stats_write() {
+                log::error!("Error in logging key creation event in the async task. {:?}", e);
+            }
         }
     });
 }
@@ -114,10 +155,10 @@ pub fn log_key_operation_event_stats(
     );
 
     LOGS_HANDLER.queue_lo(move |_| {
-        let logging_result = key_operation_event_stats.stats_write();
-
-        if let Err(e) = logging_result {
-            log::error!("Error in logging key operation event in the async task. {:?}", e);
+        if let Ok(()) = wait_for_boot_completed() {
+            if let Err(e) = key_operation_event_stats.stats_write() {
+                log::error!("Error in logging key operation event in the async task. {:?}", e);
+            }
         }
     });
 }
@@ -383,21 +424,17 @@ fn compute_block_mode_bitmap(block_mode_bitmap: &i32, block_mode: BlockMode) -> 
 }
 
 /// Registers pull metrics callbacks
-pub fn register_pull_metrics_callbacks() -> Result<()> {
+pub fn register_pull_metrics_callbacks() {
     // Before registering the callbacks with statsd, we have to wait for the system to finish
     // booting up. This avoids possible races that may occur at startup. For example, statsd
     // depends on a companion service, and if registration happens too soon it will fail since
     // the companion service isn't up yet.
-    let mut watcher = PropertyWatcher::new("sys.boot_completed")?;
-    loop {
-        watcher.wait()?;
-        let value = watcher.read(|_name, value| Ok(value.trim().to_string()));
-        if value? == "1" {
+    LOGS_HANDLER.queue_lo(move |_| {
+        if let Ok(()) = wait_for_boot_completed() {
             set_pull_atom_callback(Atoms::Keystore2StorageStats, None, pull_metrics_callback);
-            break;
+            log::info!("Pull metrics callbacks successfully registered.")
         }
-    }
-    Ok(())
+    });
 }
 
 fn pull_metrics_callback() -> StatsPullResult {
