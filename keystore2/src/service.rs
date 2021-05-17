@@ -291,7 +291,7 @@ impl KeystoreService {
             &mut DB
                 .with(|db| {
                     let mut db = db.borrow_mut();
-                    db.list(k.domain, k.nspace)
+                    db.list(k.domain, k.nspace, KeyType::Client)
                 })
                 .context("In list_entries: Trying to list keystore database.")?,
         );
