@@ -19,16 +19,15 @@ use crate::{
         BlobMetaData, BlobMetaEntry, CertificateInfo, DateTime, KeyEntry, KeyEntryLoadBits,
         KeyIdGuard, KeyMetaData, KeyMetaEntry, KeyType, KeystoreDB, SubComponentType, Uuid,
     },
-    error::{map_km_error, Error},
+    error::{map_km_error, Error, ErrorCode},
     globals::get_keymint_device,
     super_key::KeyBlob,
     utils::{key_characteristics_to_internal, watchdog as wd, Asp, AID_KEYSTORE},
 };
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
-    BeginResult::BeginResult, ErrorCode::ErrorCode, HardwareAuthToken::HardwareAuthToken,
-    IKeyMintDevice::IKeyMintDevice, IKeyMintOperation::IKeyMintOperation,
-    KeyCreationResult::KeyCreationResult, KeyParameter::KeyParameter, KeyPurpose::KeyPurpose,
-    SecurityLevel::SecurityLevel,
+    BeginResult::BeginResult, HardwareAuthToken::HardwareAuthToken, IKeyMintDevice::IKeyMintDevice,
+    IKeyMintOperation::IKeyMintOperation, KeyCreationResult::KeyCreationResult,
+    KeyParameter::KeyParameter, KeyPurpose::KeyPurpose, SecurityLevel::SecurityLevel,
 };
 use android_system_keystore2::aidl::android::system::keystore2::{
     Domain::Domain, KeyDescriptor::KeyDescriptor, ResponseCode::ResponseCode,
@@ -48,14 +47,39 @@ use binder::Strong;
 pub struct KeyMintDevice {
     asp: Asp,
     km_uuid: Uuid,
+    version: i32,
 }
 
 impl KeyMintDevice {
+    /// Version number of KeyMasterDevice@V4_0
+    pub const KEY_MASTER_V4_0: i32 = 40;
+    /// Version number of KeyMasterDevice@V4_1
+    pub const KEY_MASTER_V4_1: i32 = 41;
+    /// Version number of KeyMintDevice@V1
+    pub const KEY_MINT_V1: i32 = 100;
+
     /// Get a [`KeyMintDevice`] for the given [`SecurityLevel`]
     pub fn get(security_level: SecurityLevel) -> Result<KeyMintDevice> {
-        let (asp, _hw_info, km_uuid) = get_keymint_device(&security_level)
+        let (asp, hw_info, km_uuid) = get_keymint_device(&security_level)
             .context("In KeyMintDevice::get: get_keymint_device failed")?;
-        Ok(KeyMintDevice { asp, km_uuid })
+
+        Ok(KeyMintDevice { asp, km_uuid, version: hw_info.versionNumber })
+    }
+
+    /// Get a [`KeyMintDevice`] for the given [`SecurityLevel`], return
+    /// [`None`] if the error `HARDWARE_TYPE_UNAVAILABLE` is returned
+    pub fn get_or_none(security_level: SecurityLevel) -> Result<Option<KeyMintDevice>> {
+        KeyMintDevice::get(security_level).map(Some).or_else(|e| {
+            match e.root_cause().downcast_ref::<Error>() {
+                Some(Error::Km(ErrorCode::HARDWARE_TYPE_UNAVAILABLE)) => Ok(None),
+                _ => Err(e),
+            }
+        })
+    }
+
+    /// Returns the version of the underlying KeyMint/KeyMaster device.
+    pub fn version(&self) -> i32 {
+        self.version
     }
 
     /// Create a KM key and store in the database.
@@ -145,14 +169,24 @@ impl KeyMintDevice {
         //   KeyMint operations
         let lookup = Self::not_found_is_none(Self::lookup_from_desc(db, key_desc))
             .context("In lookup_or_generate_key: first lookup failed")?;
-        if let Some(result) = lookup {
-            Ok(result)
-        } else {
-            self.create_and_store_key(db, &key_desc, |km_dev| km_dev.generateKey(&params, None))
-                .context("In lookup_or_generate_key: generate_and_store_key failed")?;
-            Self::lookup_from_desc(db, key_desc)
-                .context("In lookup_or_generate_key: second lookup failed")
+
+        if let Some((key_id_guard, key_entry)) = lookup {
+            // If the key is associated with a different km instance
+            // or if there is no blob metadata for some reason the key entry
+            // is considered corrupted and needs to be replaced with a new one.
+            if key_entry
+                .key_blob_info()
+                .as_ref()
+                .map(|(_, blob_metadata)| Some(&self.km_uuid) == blob_metadata.km_uuid())
+                .unwrap_or(false)
+            {
+                return Ok((key_id_guard, key_entry));
+            }
         }
+        self.create_and_store_key(db, &key_desc, |km_dev| km_dev.generateKey(&params, None))
+            .context("In lookup_or_generate_key: generate_and_store_key failed")?;
+        Self::lookup_from_desc(db, key_desc)
+            .context("In lookup_or_generate_key: second lookup failed")
     }
 
     /// Call the passed closure; if it returns `KEY_REQUIRES_UPGRADE`, call upgradeKey, and
