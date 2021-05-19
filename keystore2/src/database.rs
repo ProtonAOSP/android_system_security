@@ -2967,19 +2967,28 @@ impl KeystoreDB {
     /// Returns a list of KeyDescriptors in the selected domain/namespace.
     /// The key descriptors will have the domain, nspace, and alias field set.
     /// Domain must be APP or SELINUX, the caller must make sure of that.
-    pub fn list(&mut self, domain: Domain, namespace: i64) -> Result<Vec<KeyDescriptor>> {
+    pub fn list(
+        &mut self,
+        domain: Domain,
+        namespace: i64,
+        key_type: KeyType,
+    ) -> Result<Vec<KeyDescriptor>> {
         let _wp = wd::watch_millis("KeystoreDB::list", 500);
 
         self.with_transaction(TransactionBehavior::Deferred, |tx| {
             let mut stmt = tx
                 .prepare(
                     "SELECT alias FROM persistent.keyentry
-             WHERE domain = ? AND namespace = ? AND alias IS NOT NULL AND state = ?;",
+                     WHERE domain = ?
+                     AND namespace = ?
+                     AND alias IS NOT NULL
+                     AND state = ?
+                     AND key_type = ?;",
                 )
                 .context("In list: Failed to prepare.")?;
 
             let mut rows = stmt
-                .query(params![domain.0 as u32, namespace, KeyLifeCycle::Live])
+                .query(params![domain.0 as u32, namespace, KeyLifeCycle::Live, key_type])
                 .context("In list: Failed to query.")?;
 
             let mut descriptors: Vec<KeyDescriptor> = Vec::new();
@@ -4723,7 +4732,7 @@ mod tests {
                 })
                 .collect();
             list_o_descriptors.sort();
-            let mut list_result = db.list(*domain, *namespace)?;
+            let mut list_result = db.list(*domain, *namespace, KeyType::Client)?;
             list_result.sort();
             assert_eq!(list_o_descriptors, list_result);
 
@@ -4753,7 +4762,7 @@ mod tests {
             loaded_entries.sort_unstable();
             assert_eq!(list_o_ids, loaded_entries);
         }
-        assert_eq!(Vec::<KeyDescriptor>::new(), db.list(Domain::SELINUX, 101)?);
+        assert_eq!(Vec::<KeyDescriptor>::new(), db.list(Domain::SELINUX, 101, KeyType::Client)?);
 
         Ok(())
     }
@@ -5216,11 +5225,11 @@ mod tests {
         make_test_key_entry(&mut db, Domain::APP, 110000, TEST_ALIAS, None)?;
         db.unbind_keys_for_user(2, false)?;
 
-        assert_eq!(1, db.list(Domain::APP, 110000)?.len());
-        assert_eq!(0, db.list(Domain::APP, 210000)?.len());
+        assert_eq!(1, db.list(Domain::APP, 110000, KeyType::Client)?.len());
+        assert_eq!(0, db.list(Domain::APP, 210000, KeyType::Client)?.len());
 
         db.unbind_keys_for_user(1, true)?;
-        assert_eq!(0, db.list(Domain::APP, 110000)?.len());
+        assert_eq!(0, db.list(Domain::APP, 110000, KeyType::Client)?.len());
 
         Ok(())
     }

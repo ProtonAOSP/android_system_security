@@ -56,7 +56,7 @@ struct TestCase {
     keymint::AuthorizationSet parameters;
 };
 
-constexpr const char keystore2_service_name[] = "android.system.keystore2";
+constexpr const char keystore2_service_name[] = "android.system.keystore2.IKeystoreService/default";
 
 int unwrapError(const ndk::ScopedAStatus& status) {
     if (status.isOk()) return 0;
@@ -769,7 +769,7 @@ int GenerateKey(const std::string& name, keymint::SecurityLevel securityLevel, b
         sec_level->generateKey(keyDescriptor(name), {} /* attestationKey */, params.vector_data(),
                                0 /* flags */, {} /* entropy */, &keyMetadata);
 
-    if (rc.isOk()) {
+    if (!rc.isOk()) {
         std::cerr << "GenerateKey failed: " << rc.getDescription() << std::endl;
         return unwrapError(rc);
     }

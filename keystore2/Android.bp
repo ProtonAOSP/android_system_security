@@ -145,4 +145,6 @@ rust_binary {
     ],
 
     vintf_fragments: ["android.system.keystore2-service.xml"],
+
+    required: ["keystore_cli_v2"],
 }
