@@ -136,12 +136,9 @@ bool KeystoreKey::initialize() {
         return false;
     }
 
-    auto status = mService->getSecurityLevel(SecurityLevel::STRONGBOX, &mSecurityLevel);
+    auto status = mService->getSecurityLevel(SecurityLevel::TRUSTED_ENVIRONMENT, &mSecurityLevel);
     if (!status.isOk()) {
-        status = mService->getSecurityLevel(SecurityLevel::TRUSTED_ENVIRONMENT, &mSecurityLevel);
-        if (!status.isOk()) {
-            return false;
-        }
+        return false;
     }
 
     auto descriptor = getKeyDescriptor();
@@ -150,7 +147,6 @@ bool KeystoreKey::initialize() {
     LOG(INFO) << "Trying to retrieve existing keystore key...";
     status = mService->getKeyEntry(descriptor, &keyEntryResponse);
     bool keyValid = false;
-
     if (status.isOk()) {
         // Make sure this is an early boot key
         for (const auto& auth : keyEntryResponse.metadata.authorizations) {
@@ -163,6 +159,17 @@ bool KeystoreKey::initialize() {
         }
         if (!keyValid) {
             LOG(WARNING) << "Found invalid keystore key without MAX_BOOT_LEVEL tag";
+        }
+
+        // On some earlier builds, we created this key on the Strongbox security level;
+        // we now use TEE keys instead (mostly for speed). It shouldn't matter since
+        // verified boot is protected by the TEE anyway. If the key happens to be on
+        // the wrong security level, delete it (this should happen just once).
+        if (keyEntryResponse.metadata.keySecurityLevel != SecurityLevel::TRUSTED_ENVIRONMENT) {
+            LOG(WARNING) << "Discarding key with security level: "
+                         << android::hardware::security::keymint::toString(
+                                keyEntryResponse.metadata.keySecurityLevel);
+            keyValid = false;
         }
     }
 
