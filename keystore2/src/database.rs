@@ -3168,6 +3168,30 @@ impl KeystoreDB {
     fn get_last_off_body(&self) -> MonotonicRawTime {
         self.perboot.get_last_off_body()
     }
+
+    /// Load descriptor of a key by key id
+    pub fn load_key_descriptor(&mut self, key_id: i64) -> Result<Option<KeyDescriptor>> {
+        let _wp = wd::watch_millis("KeystoreDB::load_key_descriptor", 500);
+
+        self.with_transaction(TransactionBehavior::Deferred, |tx| {
+            tx.query_row(
+                "SELECT domain, namespace, alias FROM persistent.keyentry WHERE id = ?;",
+                params![key_id],
+                |row| {
+                    Ok(KeyDescriptor {
+                        domain: Domain(row.get(0)?),
+                        nspace: row.get(1)?,
+                        alias: row.get(2)?,
+                        blob: None,
+                    })
+                },
+            )
+            .optional()
+            .context("Trying to load key descriptor")
+            .no_gc()
+        })
+        .context("In load_key_descriptor.")
+    }
 }
 
 #[cfg(test)]
@@ -5518,6 +5542,22 @@ mod tests {
                 row.get(0)
             })?;
         assert_eq!(mode, "wal");
+        Ok(())
+    }
+
+    #[test]
+    fn test_load_key_descriptor() -> Result<()> {
+        let mut db = new_test_db()?;
+        let key_id = make_test_key_entry(&mut db, Domain::APP, 1, TEST_ALIAS, None)?.0;
+
+        let key = db.load_key_descriptor(key_id)?.unwrap();
+
+        assert_eq!(key.domain, Domain::APP);
+        assert_eq!(key.nspace, 1);
+        assert_eq!(key.alias, Some(TEST_ALIAS.to_string()));
+
+        // No such id
+        assert_eq!(db.load_key_descriptor(key_id + 1)?, None);
         Ok(())
     }
 }
