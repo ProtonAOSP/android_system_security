@@ -15,7 +15,9 @@
 //! This crate implements the IKeystoreSecurityLevel interface.
 
 use crate::attestation_key_utils::{get_attest_key_info, AttestationKeyInfo};
-use crate::audit_log::{log_key_deleted, log_key_generated, log_key_imported};
+use crate::audit_log::{
+    log_key_deleted, log_key_generated, log_key_imported, log_key_integrity_violation,
+};
 use crate::database::{CertificateInfo, KeyIdGuard};
 use crate::error::{self, map_km_error, map_or_log_err, Error, ErrorCode};
 use crate::globals::{DB, ENFORCEMENTS, LEGACY_MIGRATOR, SUPER_KEY};
@@ -324,6 +326,18 @@ impl KeystoreSecurityLevel {
                         Err(Error::Km(ErrorCode::TOO_MANY_OPERATIONS)) => {
                             self.operation_db.prune(caller_uid, forced)?;
                             continue;
+                        }
+                        v @ Err(Error::Km(ErrorCode::INVALID_KEY_BLOB)) => {
+                            if let Some((key_id, _)) = key_properties {
+                                if let Ok(Some(key)) =
+                                    DB.with(|db| db.borrow_mut().load_key_descriptor(key_id))
+                                {
+                                    log_key_integrity_violation(&key);
+                                } else {
+                                    log::error!("Failed to load key descriptor for audit log");
+                                }
+                            }
+                            return v;
                         }
                         v => return v,
                     }
