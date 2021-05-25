@@ -956,13 +956,23 @@ impl SuperKeyManager {
                     }
                     let key_params: Vec<KmKeyParameter> =
                         key_params.into_iter().map(|x| x.into()).collect();
-                    km_dev.create_and_store_key(db, &key_desc, |dev| {
-                        let _wp = wd::watch_millis(
-                            "In lock_screen_lock_bound_key: calling importKey.",
-                            500,
-                        );
-                        dev.importKey(key_params.as_slice(), KeyFormat::RAW, &encrypting_key, None)
-                    })?;
+                    km_dev.create_and_store_key(
+                        db,
+                        &key_desc,
+                        KeyType::Client, /* TODO Should be Super b/189470584 */
+                        |dev| {
+                            let _wp = wd::watch_millis(
+                                "In lock_screen_lock_bound_key: calling importKey.",
+                                500,
+                            );
+                            dev.importKey(
+                                key_params.as_slice(),
+                                KeyFormat::RAW,
+                                &encrypting_key,
+                                None,
+                            )
+                        },
+                    )?;
                     entry.biometric_unlock = Some(BiometricUnlock {
                         sids: unlocking_sids.into(),
                         key_desc,

@@ -1481,12 +1481,13 @@ impl KeystoreDB {
         &mut self,
         domain: &Domain,
         namespace: &i64,
+        key_type: KeyType,
         km_uuid: &Uuid,
     ) -> Result<KeyIdGuard> {
         let _wp = wd::watch_millis("KeystoreDB::create_key_entry", 500);
 
         self.with_transaction(TransactionBehavior::Immediate, |tx| {
-            Self::create_key_entry_internal(tx, domain, namespace, km_uuid).no_gc()
+            Self::create_key_entry_internal(tx, domain, namespace, key_type, km_uuid).no_gc()
         })
         .context("In create_key_entry.")
     }
@@ -1495,6 +1496,7 @@ impl KeystoreDB {
         tx: &Transaction,
         domain: &Domain,
         namespace: &i64,
+        key_type: KeyType,
         km_uuid: &Uuid,
     ) -> Result<KeyIdGuard> {
         match *domain {
@@ -1512,7 +1514,7 @@ impl KeystoreDB {
                      VALUES(?, ?, ?, ?, NULL, ?, ?);",
                     params![
                         id,
-                        KeyType::Client,
+                        key_type,
                         domain.0 as u32,
                         *namespace,
                         KeyLifeCycle::Existing,
@@ -2103,6 +2105,7 @@ impl KeystoreDB {
         alias: &str,
         domain: &Domain,
         namespace: &i64,
+        key_type: KeyType,
     ) -> Result<bool> {
         match *domain {
             Domain::APP | Domain::SELINUX => {}
@@ -2117,15 +2120,15 @@ impl KeystoreDB {
             .execute(
                 "UPDATE persistent.keyentry
                  SET alias = NULL, domain = NULL, namespace = NULL, state = ?
-                 WHERE alias = ? AND domain = ? AND namespace = ?;",
-                params![KeyLifeCycle::Unreferenced, alias, domain.0 as u32, namespace],
+                 WHERE alias = ? AND domain = ? AND namespace = ? AND key_type = ?;",
+                params![KeyLifeCycle::Unreferenced, alias, domain.0 as u32, namespace, key_type],
             )
             .context("In rebind_alias: Failed to rebind existing entry.")?;
         let result = tx
             .execute(
                 "UPDATE persistent.keyentry
                     SET alias = ?, state = ?
-                    WHERE id = ? AND domain = ? AND namespace = ? AND state = ?;",
+                    WHERE id = ? AND domain = ? AND namespace = ? AND state = ? AND key_type = ?;",
                 params![
                     alias,
                     KeyLifeCycle::Live,
@@ -2133,6 +2136,7 @@ impl KeystoreDB {
                     domain.0 as u32,
                     *namespace,
                     KeyLifeCycle::Existing,
+                    key_type,
                 ],
             )
             .context("In rebind_alias: Failed to set alias.")?;
@@ -2215,9 +2219,11 @@ impl KeystoreDB {
     /// fields, and rebinds the given alias to the new key.
     /// The boolean returned is a hint for the garbage collector. If true, a key was replaced,
     /// is now unreferenced and needs to be collected.
+    #[allow(clippy::clippy::too_many_arguments)]
     pub fn store_new_key(
         &mut self,
         key: &KeyDescriptor,
+        key_type: KeyType,
         params: &[KeyParameter],
         blob_info: &(&[u8], &BlobMetaData),
         cert_info: &CertificateInfo,
@@ -2237,7 +2243,7 @@ impl KeystoreDB {
             }
         };
         self.with_transaction(TransactionBehavior::Immediate, |tx| {
-            let key_id = Self::create_key_entry_internal(tx, &domain, namespace, km_uuid)
+            let key_id = Self::create_key_entry_internal(tx, &domain, namespace, key_type, km_uuid)
                 .context("Trying to create new key entry.")?;
             let (blob, blob_metadata) = *blob_info;
             Self::set_blob_internal(
@@ -2265,7 +2271,7 @@ impl KeystoreDB {
             Self::insert_keyparameter_internal(tx, &key_id, params)
                 .context("Trying to insert key parameters.")?;
             metadata.store_in_db(key_id.id(), tx).context("Trying to insert key metadata.")?;
-            let need_gc = Self::rebind_alias(tx, &key_id, &alias, &domain, namespace)
+            let need_gc = Self::rebind_alias(tx, &key_id, &alias, &domain, namespace, key_type)
                 .context("Trying to rebind alias.")?;
             Ok(key_id).do_gc(need_gc)
         })
@@ -2278,6 +2284,7 @@ impl KeystoreDB {
     pub fn store_new_certificate(
         &mut self,
         key: &KeyDescriptor,
+        key_type: KeyType,
         cert: &[u8],
         km_uuid: &Uuid,
     ) -> Result<KeyIdGuard> {
@@ -2295,7 +2302,7 @@ impl KeystoreDB {
             }
         };
         self.with_transaction(TransactionBehavior::Immediate, |tx| {
-            let key_id = Self::create_key_entry_internal(tx, &domain, namespace, km_uuid)
+            let key_id = Self::create_key_entry_internal(tx, &domain, namespace, key_type, km_uuid)
                 .context("Trying to create new key entry.")?;
 
             Self::set_blob_internal(
@@ -2314,7 +2321,7 @@ impl KeystoreDB {
 
             metadata.store_in_db(key_id.id(), tx).context("Trying to insert key metadata.")?;
 
-            let need_gc = Self::rebind_alias(tx, &key_id, &alias, &domain, namespace)
+            let need_gc = Self::rebind_alias(tx, &key_id, &alias, &domain, namespace, key_type)
                 .context("Trying to rebind alias.")?;
             Ok(key_id).do_gc(need_gc)
         })
@@ -3256,7 +3263,7 @@ mod tests {
         namespace: i64,
     ) -> Result<bool> {
         db.with_transaction(TransactionBehavior::Immediate, |tx| {
-            KeystoreDB::rebind_alias(tx, newid, alias, &domain, &namespace).no_gc()
+            KeystoreDB::rebind_alias(tx, newid, alias, &domain, &namespace, KeyType::Client).no_gc()
         })
         .context("In rebind_alias.")
     }
@@ -3380,7 +3387,7 @@ mod tests {
         let temp_dir = TempDir::new("persistent_db_test")?;
         let mut db = KeystoreDB::new(temp_dir.path(), None)?;
 
-        db.create_key_entry(&Domain::APP, &100, &KEYSTORE_UUID)?;
+        db.create_key_entry(&Domain::APP, &100, KeyType::Client, &KEYSTORE_UUID)?;
         let entries = get_keyentry(&db)?;
         assert_eq!(entries.len(), 1);
 
@@ -3399,8 +3406,8 @@ mod tests {
 
         let mut db = new_test_db()?;
 
-        db.create_key_entry(&Domain::APP, &100, &KEYSTORE_UUID)?;
-        db.create_key_entry(&Domain::SELINUX, &101, &KEYSTORE_UUID)?;
+        db.create_key_entry(&Domain::APP, &100, KeyType::Client, &KEYSTORE_UUID)?;
+        db.create_key_entry(&Domain::SELINUX, &101, KeyType::Client, &KEYSTORE_UUID)?;
 
         let entries = get_keyentry(&db)?;
         assert_eq!(entries.len(), 2);
@@ -3409,15 +3416,15 @@ mod tests {
 
         // Test that we must pass in a valid Domain.
         check_result_is_error_containing_string(
-            db.create_key_entry(&Domain::GRANT, &102, &KEYSTORE_UUID),
+            db.create_key_entry(&Domain::GRANT, &102, KeyType::Client, &KEYSTORE_UUID),
             "Domain Domain(1) must be either App or SELinux.",
         );
         check_result_is_error_containing_string(
-            db.create_key_entry(&Domain::BLOB, &103, &KEYSTORE_UUID),
+            db.create_key_entry(&Domain::BLOB, &103, KeyType::Client, &KEYSTORE_UUID),
             "Domain Domain(3) must be either App or SELinux.",
         );
         check_result_is_error_containing_string(
-            db.create_key_entry(&Domain::KEY_ID, &104, &KEYSTORE_UUID),
+            db.create_key_entry(&Domain::KEY_ID, &104, KeyType::Client, &KEYSTORE_UUID),
             "Domain Domain(4) must be either App or SELinux.",
         );
 
@@ -3585,7 +3592,7 @@ mod tests {
         let mut db = new_test_db()?;
         load_attestation_key_pool(&mut db, 45 /* expiration */, 1 /* namespace */, 0x02)?;
         load_attestation_key_pool(&mut db, 80 /* expiration */, 2 /* namespace */, 0x03)?;
-        db.create_key_entry(&Domain::APP, &42, &KEYSTORE_UUID)?;
+        db.create_key_entry(&Domain::APP, &42, KeyType::Client, &KEYSTORE_UUID)?;
         let result = db.delete_all_attestation_keys()?;
 
         // Give the garbage collector half a second to catch up.
@@ -3606,8 +3613,8 @@ mod tests {
         }
 
         let mut db = new_test_db()?;
-        db.create_key_entry(&Domain::APP, &42, &KEYSTORE_UUID)?;
-        db.create_key_entry(&Domain::APP, &42, &KEYSTORE_UUID)?;
+        db.create_key_entry(&Domain::APP, &42, KeyType::Client, &KEYSTORE_UUID)?;
+        db.create_key_entry(&Domain::APP, &42, KeyType::Client, &KEYSTORE_UUID)?;
         let entries = get_keyentry(&db)?;
         assert_eq!(entries.len(), 2);
         assert_eq!(
@@ -3943,6 +3950,7 @@ mod tests {
                 alias: Some(TEST_ALIAS.to_string()),
                 blob: None,
             },
+            KeyType::Client,
             TEST_CERT_BLOB,
             &KEYSTORE_UUID,
         )
@@ -5104,7 +5112,7 @@ mod tests {
         alias: &str,
         max_usage_count: Option<i32>,
     ) -> Result<KeyIdGuard> {
-        let key_id = db.create_key_entry(&domain, &namespace, &KEYSTORE_UUID)?;
+        let key_id = db.create_key_entry(&domain, &namespace, KeyType::Client, &KEYSTORE_UUID)?;
         let mut blob_metadata = BlobMetaData::new();
         blob_metadata.add(BlobMetaEntry::EncryptedBy(EncryptedBy::Password));
         blob_metadata.add(BlobMetaEntry::Salt(vec![1, 2, 3]));
@@ -5394,7 +5402,7 @@ mod tests {
         let mut db = new_test_db()?;
         let mut working_stats = get_storage_stats_map(&mut db);
 
-        let key_id = db.create_key_entry(&Domain::APP, &42, &KEYSTORE_UUID)?;
+        let key_id = db.create_key_entry(&Domain::APP, &42, KeyType::Client, &KEYSTORE_UUID)?;
         assert_storage_increased(
             &mut db,
             vec![

@@ -101,6 +101,7 @@ impl KeyMintDevice {
         &self,
         db: &mut KeystoreDB,
         key_desc: &KeyDescriptor,
+        key_type: KeyType,
         creator: F,
     ) -> Result<()>
     where
@@ -120,6 +121,7 @@ impl KeyMintDevice {
 
         db.store_new_key(
             &key_desc,
+            key_type,
             &key_parameters,
             &(&creation_result.keyBlob, &blob_metadata),
             &CertificateInfo::new(None, None),
@@ -144,11 +146,10 @@ impl KeyMintDevice {
     fn lookup_from_desc(
         db: &mut KeystoreDB,
         key_desc: &KeyDescriptor,
+        key_type: KeyType,
     ) -> Result<(KeyIdGuard, KeyEntry)> {
-        db.load_key_entry(&key_desc, KeyType::Client, KeyEntryLoadBits::KM, AID_KEYSTORE, |_, _| {
-            Ok(())
-        })
-        .context("In lookup_from_desc: load_key_entry failed")
+        db.load_key_entry(&key_desc, key_type, KeyEntryLoadBits::KM, AID_KEYSTORE, |_, _| Ok(()))
+            .context("In lookup_from_desc: load_key_entry failed.")
     }
 
     /// Look up the key in the database, and return None if it is absent.
@@ -170,6 +171,7 @@ impl KeyMintDevice {
         &self,
         db: &mut KeystoreDB,
         key_desc: &KeyDescriptor,
+        key_type: KeyType,
         params: &[KeyParameter],
         validate_characteristics: F,
     ) -> Result<(KeyIdGuard, KeyBlob)>
@@ -181,7 +183,7 @@ impl KeyMintDevice {
         // - because the caller needs to hold a lock in any case
         // - because it avoids holding database locks during slow
         //   KeyMint operations
-        let lookup = Self::not_found_is_none(Self::lookup_from_desc(db, key_desc))
+        let lookup = Self::not_found_is_none(Self::lookup_from_desc(db, key_desc, key_type))
             .context("In lookup_or_generate_key: first lookup failed")?;
 
         if let Some((key_id_guard, mut key_entry)) = lookup {
@@ -226,9 +228,11 @@ impl KeyMintDevice {
             };
         }
 
-        self.create_and_store_key(db, &key_desc, |km_dev| km_dev.generateKey(&params, None))
-            .context("In lookup_or_generate_key: generate_and_store_key failed")?;
-        Self::lookup_from_desc(db, key_desc)
+        self.create_and_store_key(db, &key_desc, key_type, |km_dev| {
+            km_dev.generateKey(&params, None)
+        })
+        .context("In lookup_or_generate_key: generate_and_store_key failed")?;
+        Self::lookup_from_desc(db, key_desc, key_type)
             .and_then(|(key_id_guard, mut key_entry)| {
                 Ok((
                     key_id_guard,

@@ -14,7 +14,11 @@
 
 //! Offer keys based on the "boot level" for superencryption.
 
-use crate::{database::KeystoreDB, key_parameter::KeyParameterValue, raw_device::KeyMintDevice};
+use crate::{
+    database::{KeyType, KeystoreDB},
+    key_parameter::KeyParameterValue,
+    raw_device::KeyMintDevice,
+};
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
     Algorithm::Algorithm, Digest::Digest, KeyParameter::KeyParameter as KmKeyParameter,
     KeyParameterValue::KeyParameterValue as KmKeyParameterValue, KeyPurpose::KeyPurpose,
@@ -67,7 +71,7 @@ pub fn get_level_zero_key(db: &mut KeystoreDB) -> Result<ZVec> {
     }
 
     let (key_id_guard, key_entry) = km_dev
-        .lookup_or_generate_key(db, &key_desc, &params, |key_characteristics| {
+        .lookup_or_generate_key(db, &key_desc, KeyType::Client, &params, |key_characteristics| {
             key_characteristics.iter().any(|kc| {
                 if kc.securityLevel == km_dev.security_level() {
                     kc.authorizations.iter().any(|a| {
