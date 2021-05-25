@@ -19,7 +19,7 @@ use crate::{
     database::EncryptedBy,
     database::KeyEntry,
     database::KeyType,
-    database::{KeyIdGuard, KeyMetaData, KeyMetaEntry, KeystoreDB},
+    database::{KeyEntryLoadBits, KeyIdGuard, KeyMetaData, KeyMetaEntry, KeystoreDB},
     ec_crypto::ECDHPrivateKey,
     enforcements::Enforcements,
     error::Error,
@@ -30,6 +30,7 @@ use crate::{
     raw_device::KeyMintDevice,
     try_insert::TryInsert,
     utils::watchdog as wd,
+    utils::AID_KEYSTORE,
 };
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
     Algorithm::Algorithm, BlockMode::BlockMode, HardwareAuthToken::HardwareAuthToken,
@@ -194,6 +195,12 @@ impl LockedKey {
         auth_token: &HardwareAuthToken,
         reencrypt_with: Option<Arc<SuperKey>>,
     ) -> Result<Arc<SuperKey>> {
+        let key_blob = key_entry
+            .key_blob_info()
+            .as_ref()
+            .map(|(key_blob, _)| KeyBlob::Ref(key_blob))
+            .ok_or(Error::Rc(ResponseCode::KEY_NOT_FOUND))
+            .context("In LockedKey::decrypt: Missing key blob info.")?;
         let key_params = vec![
             KeyParameterValue::Algorithm(Algorithm::AES),
             KeyParameterValue::KeySize(256),
@@ -206,7 +213,7 @@ impl LockedKey {
         let key = ZVec::try_from(km_dev.use_key_in_one_step(
             db,
             key_id_guard,
-            key_entry,
+            &key_blob,
             KeyPurpose::DECRYPT,
             &key_params,
             Some(auth_token),
@@ -985,8 +992,15 @@ impl SuperKeyManager {
         let mut data = self.data.lock().unwrap();
         let mut entry = data.user_keys.entry(user_id).or_default();
         if let Some(biometric) = entry.biometric_unlock.as_ref() {
-            let (key_id_guard, key_entry) =
-                KeyMintDevice::lookup_from_desc(db, &biometric.key_desc)?;
+            let (key_id_guard, key_entry) = db
+                .load_key_entry(
+                    &biometric.key_desc,
+                    KeyType::Client, // This should not be a Client key.
+                    KeyEntryLoadBits::KM,
+                    AID_KEYSTORE,
+                    |_, _| Ok(()),
+                )
+                .context("In try_unlock_user_with_biometric: load_key_entry failed")?;
             let km_dev: KeyMintDevice = KeyMintDevice::get(SecurityLevel::TRUSTED_ENVIRONMENT)
                 .context("In try_unlock_user_with_biometric: KeyMintDevice::get failed")?;
             for sid in &biometric.sids {

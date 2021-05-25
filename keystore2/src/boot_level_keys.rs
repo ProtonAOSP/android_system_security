@@ -16,7 +16,9 @@
 
 use crate::{database::KeystoreDB, key_parameter::KeyParameterValue, raw_device::KeyMintDevice};
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
-    Algorithm::Algorithm, Digest::Digest, KeyPurpose::KeyPurpose, SecurityLevel::SecurityLevel,
+    Algorithm::Algorithm, Digest::Digest, KeyParameter::KeyParameter as KmKeyParameter,
+    KeyParameterValue::KeyParameterValue as KmKeyParameterValue, KeyPurpose::KeyPurpose,
+    SecurityLevel::SecurityLevel, Tag::Tag,
 };
 use anyhow::{Context, Result};
 use keystore2_crypto::{hkdf_expand, ZVec, AES_256_KEY_LENGTH};
@@ -56,14 +58,41 @@ pub fn get_level_zero_key(db: &mut KeystoreDB) -> Result<ZVec> {
         KeyParameterValue::NoAuthRequired.into(),
     ];
 
-    if km_dev.version() >= KeyMintDevice::KEY_MASTER_V4_1 {
+    let has_early_boot_only = km_dev.version() >= KeyMintDevice::KEY_MASTER_V4_1;
+
+    if has_early_boot_only {
         params.push(KeyParameterValue::EarlyBootOnly.into());
     } else {
         params.push(KeyParameterValue::MaxUsesPerBoot(1).into())
     }
 
     let (key_id_guard, key_entry) = km_dev
-        .lookup_or_generate_key(db, &key_desc, &params)
+        .lookup_or_generate_key(db, &key_desc, &params, |key_characteristics| {
+            key_characteristics.iter().any(|kc| {
+                if kc.securityLevel == km_dev.security_level() {
+                    kc.authorizations.iter().any(|a| {
+                        matches!(
+                            (has_early_boot_only, a),
+                            (
+                                true,
+                                KmKeyParameter {
+                                    tag: Tag::EARLY_BOOT_ONLY,
+                                    value: KmKeyParameterValue::BoolValue(true)
+                                }
+                            ) | (
+                                false,
+                                KmKeyParameter {
+                                    tag: Tag::MAX_USES_PER_BOOT,
+                                    value: KmKeyParameterValue::Integer(1)
+                                }
+                            )
+                        )
+                    })
+                } else {
+                    false
+                }
+            })
+        })
         .context("In get_level_zero_key: lookup_or_generate_key failed")?;
 
     let params = [KeyParameterValue::MacLength(256).into()];
