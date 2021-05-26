@@ -19,7 +19,6 @@
 //! processed all tasks before it terminates.
 //! Note that low priority tasks are processed only when the high priority queue is empty.
 
-use crate::utils::watchdog as wd;
 use std::{any::Any, any::TypeId, time::Duration};
 use std::{
     collections::{HashMap, VecDeque},
@@ -241,14 +240,11 @@ impl AsyncTask {
                     // Now that the lock has been dropped, perform the action.
                     match action {
                         Action::QueuedFn(f) => {
-                            let _wd = wd::watch_millis("async_task thread: calling queued fn", 500);
                             f(&mut shelf);
                             done_idle = false;
                         }
                         Action::IdleFns(idle_fns) => {
                             for idle_fn in idle_fns {
-                                let _wd =
-                                    wd::watch_millis("async_task thread: calling idle_fn", 500);
                                 idle_fn(&mut shelf);
                             }
                             done_idle = true;
