@@ -84,22 +84,19 @@ cc_binary {
   srcs: [
     "odsign_main.cpp",
     "CertUtils.cpp",
-    "Keymaster.cpp",
-    "KeymasterSigningKey.cpp",
     "KeystoreKey.cpp",
+    "KeystoreHmacKey.cpp",
     "VerityUtils.cpp",
   ],
 
   header_libs: ["odrefresh_headers"],
 
   static_libs: [
-    "libmini_keyctl_static", // TODO need static?
     "libc++fs",
     "lib_odsign_proto",
   ],
 
   shared_libs: [
-    "android.hardware.keymaster@4.1",
     "android.system.keystore2-V1-cpp",
     "android.hardware.security.keymint-V1-cpp",
     "libbase",
@@ -107,11 +104,7 @@ cc_binary {
     "libcrypto",
     "libcrypto_utils",
     "libfsverity",
-    "libhidlbase",
     "liblogwrap",
-    "libkeymaster4support", // For authorization_set
-    "libkeymaster4_1support",
-    "libkeyutils",
     "libprotobuf-cpp-full",
     "libutils",
   ],

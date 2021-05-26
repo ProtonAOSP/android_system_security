@@ -16,3 +16,6 @@
 
 static constexpr int kRsaKeySize = 2048;
 static constexpr int kRsaKeyExponent = 65537;
+
+static constexpr int kHmacKeySize = 256;
+static constexpr int kHmacMinMacLength = 256;
