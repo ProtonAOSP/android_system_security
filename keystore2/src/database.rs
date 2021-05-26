@@ -43,6 +43,7 @@
 
 mod perboot;
 pub(crate) mod utils;
+mod versioning;
 
 use crate::impl_metadata; // This is in db_utils.rs
 use crate::key_parameter::{KeyParameter, Tag};
@@ -824,6 +825,8 @@ pub struct PerBootDbKeepAlive(Connection);
 
 impl KeystoreDB {
     const UNASSIGNED_KEY_ID: i64 = -1i64;
+    const CURRENT_DB_VERSION: u32 = 1;
+    const UPGRADERS: &'static [fn(&Transaction) -> Result<u32>] = &[Self::from_0_to_1];
 
     /// Name of the file that holds the cross-boot persistent database.
     pub const PERSISTENT_DB_FILENAME: &'static str = &"persistent.sqlite";
@@ -855,9 +858,31 @@ impl KeystoreDB {
 
         let mut db = Self { conn, gc, perboot: perboot::PERBOOT_DB.clone() };
         db.with_transaction(TransactionBehavior::Immediate, |tx| {
+            versioning::upgrade_database(tx, Self::CURRENT_DB_VERSION, Self::UPGRADERS)
+                .context("In KeystoreDB::new: trying to upgrade database.")?;
             Self::init_tables(tx).context("Trying to initialize tables.").no_gc()
         })?;
         Ok(db)
+    }
+
+    // This upgrade function deletes all MAX_BOOT_LEVEL keys, that were generated before
+    // cryptographic binding to the boot level keys was implemented.
+    fn from_0_to_1(tx: &Transaction) -> Result<u32> {
+        tx.execute(
+            "UPDATE persistent.keyentry SET state = ?
+             WHERE
+                 id IN (SELECT keyentryid FROM persistent.keyparameter WHERE tag = ?)
+             AND
+                 id NOT IN (
+                     SELECT keyentryid FROM persistent.blobentry
+                     WHERE id IN (
+                         SELECT blobentryid FROM persistent.blobmetadata WHERE tag = ?
+                     )
+                 );",
+            params![KeyLifeCycle::Unreferenced, Tag::MAX_BOOT_LEVEL.0, BlobMetaData::MaxBootLevel],
+        )
+        .context("In from_0_to_1: Failed to delete logical boot level keys.")?;
+        Ok(1)
     }
 
     fn init_tables(tx: &Transaction) -> Result<()> {
@@ -4469,6 +4494,152 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_upgrade_0_to_1() {
+        const ALIAS1: &str = &"test_upgrade_0_to_1_1";
+        const ALIAS2: &str = &"test_upgrade_0_to_1_2";
+        const ALIAS3: &str = &"test_upgrade_0_to_1_3";
+        const UID: u32 = 33;
+        let temp_dir = Arc::new(TempDir::new("test_upgrade_0_to_1").unwrap());
+        let mut db = KeystoreDB::new(temp_dir.path(), None).unwrap();
+        let key_id_untouched1 =
+            make_test_key_entry(&mut db, Domain::APP, UID as i64, ALIAS1, None).unwrap().id();
+        let key_id_untouched2 =
+            make_bootlevel_key_entry(&mut db, Domain::APP, UID as i64, ALIAS2, false).unwrap().id();
+        let key_id_deleted =
+            make_bootlevel_key_entry(&mut db, Domain::APP, UID as i64, ALIAS3, true).unwrap().id();
+
+        let (_, key_entry) = db
+            .load_key_entry(
+                &KeyDescriptor {
+                    domain: Domain::APP,
+                    nspace: -1,
+                    alias: Some(ALIAS1.to_string()),
+                    blob: None,
+                },
+                KeyType::Client,
+                KeyEntryLoadBits::BOTH,
+                UID,
+                |k, av| {
+                    assert_eq!(Domain::APP, k.domain);
+                    assert_eq!(UID as i64, k.nspace);
+                    assert!(av.is_none());
+                    Ok(())
+                },
+            )
+            .unwrap();
+        assert_eq!(key_entry, make_test_key_entry_test_vector(key_id_untouched1, None));
+        let (_, key_entry) = db
+            .load_key_entry(
+                &KeyDescriptor {
+                    domain: Domain::APP,
+                    nspace: -1,
+                    alias: Some(ALIAS2.to_string()),
+                    blob: None,
+                },
+                KeyType::Client,
+                KeyEntryLoadBits::BOTH,
+                UID,
+                |k, av| {
+                    assert_eq!(Domain::APP, k.domain);
+                    assert_eq!(UID as i64, k.nspace);
+                    assert!(av.is_none());
+                    Ok(())
+                },
+            )
+            .unwrap();
+        assert_eq!(key_entry, make_bootlevel_test_key_entry_test_vector(key_id_untouched2, false));
+        let (_, key_entry) = db
+            .load_key_entry(
+                &KeyDescriptor {
+                    domain: Domain::APP,
+                    nspace: -1,
+                    alias: Some(ALIAS3.to_string()),
+                    blob: None,
+                },
+                KeyType::Client,
+                KeyEntryLoadBits::BOTH,
+                UID,
+                |k, av| {
+                    assert_eq!(Domain::APP, k.domain);
+                    assert_eq!(UID as i64, k.nspace);
+                    assert!(av.is_none());
+                    Ok(())
+                },
+            )
+            .unwrap();
+        assert_eq!(key_entry, make_bootlevel_test_key_entry_test_vector(key_id_deleted, true));
+
+        db.with_transaction(TransactionBehavior::Immediate, |tx| {
+            KeystoreDB::from_0_to_1(tx).no_gc()
+        })
+        .unwrap();
+
+        let (_, key_entry) = db
+            .load_key_entry(
+                &KeyDescriptor {
+                    domain: Domain::APP,
+                    nspace: -1,
+                    alias: Some(ALIAS1.to_string()),
+                    blob: None,
+                },
+                KeyType::Client,
+                KeyEntryLoadBits::BOTH,
+                UID,
+                |k, av| {
+                    assert_eq!(Domain::APP, k.domain);
+                    assert_eq!(UID as i64, k.nspace);
+                    assert!(av.is_none());
+                    Ok(())
+                },
+            )
+            .unwrap();
+        assert_eq!(key_entry, make_test_key_entry_test_vector(key_id_untouched1, None));
+        let (_, key_entry) = db
+            .load_key_entry(
+                &KeyDescriptor {
+                    domain: Domain::APP,
+                    nspace: -1,
+                    alias: Some(ALIAS2.to_string()),
+                    blob: None,
+                },
+                KeyType::Client,
+                KeyEntryLoadBits::BOTH,
+                UID,
+                |k, av| {
+                    assert_eq!(Domain::APP, k.domain);
+                    assert_eq!(UID as i64, k.nspace);
+                    assert!(av.is_none());
+                    Ok(())
+                },
+            )
+            .unwrap();
+        assert_eq!(key_entry, make_bootlevel_test_key_entry_test_vector(key_id_untouched2, false));
+        assert_eq!(
+            Some(&KsError::Rc(ResponseCode::KEY_NOT_FOUND)),
+            db.load_key_entry(
+                &KeyDescriptor {
+                    domain: Domain::APP,
+                    nspace: -1,
+                    alias: Some(ALIAS3.to_string()),
+                    blob: None,
+                },
+                KeyType::Client,
+                KeyEntryLoadBits::BOTH,
+                UID,
+                |k, av| {
+                    assert_eq!(Domain::APP, k.domain);
+                    assert_eq!(UID as i64, k.nspace);
+                    assert!(av.is_none());
+                    Ok(())
+                },
+            )
+            .unwrap_err()
+            .root_cause()
+            .downcast_ref::<KsError>()
+        );
+    }
+
     static KEY_LOCK_TEST_ALIAS: &str = "my super duper locked key";
 
     #[test]
@@ -5146,6 +5317,66 @@ mod tests {
         blob_metadata.add(BlobMetaEntry::Salt(vec![1, 2, 3]));
         blob_metadata.add(BlobMetaEntry::Iv(vec![2, 3, 1]));
         blob_metadata.add(BlobMetaEntry::AeadTag(vec![3, 1, 2]));
+        blob_metadata.add(BlobMetaEntry::KmUuid(KEYSTORE_UUID));
+
+        let mut metadata = KeyMetaData::new();
+        metadata.add(KeyMetaEntry::CreationDate(DateTime::from_millis_epoch(123456789)));
+
+        KeyEntry {
+            id: key_id,
+            key_blob_info: Some((TEST_KEY_BLOB.to_vec(), blob_metadata)),
+            cert: Some(TEST_CERT_BLOB.to_vec()),
+            cert_chain: Some(TEST_CERT_CHAIN_BLOB.to_vec()),
+            km_uuid: KEYSTORE_UUID,
+            parameters: params,
+            metadata,
+            pure_cert: false,
+        }
+    }
+
+    fn make_bootlevel_key_entry(
+        db: &mut KeystoreDB,
+        domain: Domain,
+        namespace: i64,
+        alias: &str,
+        logical_only: bool,
+    ) -> Result<KeyIdGuard> {
+        let key_id = db.create_key_entry(&domain, &namespace, KeyType::Client, &KEYSTORE_UUID)?;
+        let mut blob_metadata = BlobMetaData::new();
+        if !logical_only {
+            blob_metadata.add(BlobMetaEntry::MaxBootLevel(3));
+        }
+        blob_metadata.add(BlobMetaEntry::KmUuid(KEYSTORE_UUID));
+
+        db.set_blob(
+            &key_id,
+            SubComponentType::KEY_BLOB,
+            Some(TEST_KEY_BLOB),
+            Some(&blob_metadata),
+        )?;
+        db.set_blob(&key_id, SubComponentType::CERT, Some(TEST_CERT_BLOB), None)?;
+        db.set_blob(&key_id, SubComponentType::CERT_CHAIN, Some(TEST_CERT_CHAIN_BLOB), None)?;
+
+        let mut params = make_test_params(None);
+        params.push(KeyParameter::new(KeyParameterValue::MaxBootLevel(3), SecurityLevel::KEYSTORE));
+
+        db.insert_keyparameter(&key_id, &params)?;
+
+        let mut metadata = KeyMetaData::new();
+        metadata.add(KeyMetaEntry::CreationDate(DateTime::from_millis_epoch(123456789)));
+        db.insert_key_metadata(&key_id, &metadata)?;
+        rebind_alias(db, &key_id, alias, domain, namespace)?;
+        Ok(key_id)
+    }
+
+    fn make_bootlevel_test_key_entry_test_vector(key_id: i64, logical_only: bool) -> KeyEntry {
+        let mut params = make_test_params(None);
+        params.push(KeyParameter::new(KeyParameterValue::MaxBootLevel(3), SecurityLevel::KEYSTORE));
+
+        let mut blob_metadata = BlobMetaData::new();
+        if !logical_only {
+            blob_metadata.add(BlobMetaEntry::MaxBootLevel(3));
+        }
         blob_metadata.add(BlobMetaEntry::KmUuid(KEYSTORE_UUID));
 
         let mut metadata = KeyMetaData::new();
