@@ -44,7 +44,6 @@ pub mod utils;
 
 mod attestation_key_utils;
 mod audit_log;
-mod db_utils;
 mod gc;
 mod super_key;
 

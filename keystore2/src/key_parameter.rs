@@ -92,7 +92,7 @@
 
 use std::convert::TryInto;
 
-use crate::db_utils::SqlField;
+use crate::database::utils::SqlField;
 use crate::error::Error as KeystoreError;
 use crate::error::ResponseCode;
 

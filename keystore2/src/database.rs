@@ -42,22 +42,21 @@
 //! callbacks.
 
 mod perboot;
+pub(crate) mod utils;
 
 use crate::impl_metadata; // This is in db_utils.rs
 use crate::key_parameter::{KeyParameter, Tag};
 use crate::permission::KeyPermSet;
 use crate::utils::{get_current_time_in_milliseconds, watchdog as wd, AID_USER_OFFSET};
 use crate::{
-    db_utils::{self, SqlField},
-    gc::Gc,
-    super_key::USER_SUPER_KEY,
-};
-use crate::{
     error::{Error as KsError, ErrorCode, ResponseCode},
     super_key::SuperKeyType,
 };
+use crate::{gc::Gc, super_key::USER_SUPER_KEY};
 use anyhow::{anyhow, Context, Result};
 use std::{convert::TryFrom, convert::TryInto, ops::Deref, time::SystemTimeError};
+use utils as db_utils;
+use utils::SqlField;
 
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
     HardwareAuthToken::HardwareAuthToken,
