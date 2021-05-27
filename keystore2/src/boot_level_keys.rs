@@ -99,7 +99,10 @@ pub fn get_level_zero_key(db: &mut KeystoreDB) -> Result<ZVec> {
         })
         .context("In get_level_zero_key: lookup_or_generate_key failed")?;
 
-    let params = [KeyParameterValue::MacLength(256).into()];
+    let params = [
+        KeyParameterValue::MacLength(256).into(),
+        KeyParameterValue::Digest(Digest::SHA_2_256).into(),
+    ];
     let level_zero_key = km_dev
         .use_key_in_one_step(
             db,
