@@ -169,11 +169,6 @@ static std::vector<KeyParameter> getVerifyOpParameters() {
     digest.value = KeyParameterValue::make<KeyParameterValue::digest>(Digest::SHA_2_256);
     opParameters.push_back(digest);
 
-    KeyParameter mac_length;
-    mac_length.tag = Tag::MAC_LENGTH;
-    mac_length.value = KeyParameterValue::make<KeyParameterValue::integer>(256);
-    opParameters.push_back(mac_length);
-
     KeyParameter purpose;
     purpose.tag = Tag::PURPOSE;
     purpose.value = KeyParameterValue::make<KeyParameterValue::keyPurpose>(KeyPurpose::VERIFY);
