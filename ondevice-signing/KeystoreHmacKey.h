@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020 The Android Open Source Project
+ * Copyright (C) 2021 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,38 +20,27 @@
 
 #include <android-base/macros.h>
 #include <android-base/result.h>
-#include <android-base/unique_fd.h>
 
 #include <utils/StrongPointer.h>
 
 #include <android/system/keystore2/IKeystoreService.h>
 
-#include "KeystoreHmacKey.h"
-#include "SigningKey.h"
-
-class KeystoreKey : public SigningKey {
+class KeystoreHmacKey {
     using IKeystoreService = ::android::system::keystore2::IKeystoreService;
     using IKeystoreSecurityLevel = ::android::system::keystore2::IKeystoreSecurityLevel;
     using KeyDescriptor = ::android::system::keystore2::KeyDescriptor;
-    using KeyMetadata = ::android::system::keystore2::KeyMetadata;
 
   public:
-    virtual ~KeystoreKey(){};
-    static android::base::Result<SigningKey*> getInstance();
-
-    virtual android::base::Result<std::string> sign(const std::string& message) const;
-    virtual android::base::Result<std::vector<uint8_t>> getPublicKey() const;
+    KeystoreHmacKey();
+    android::base::Result<void> initialize(android::sp<IKeystoreService> service,
+                                           android::sp<IKeystoreSecurityLevel> securityLevel);
+    android::base::Result<std::string> sign(const std::string& message) const;
+    android::base::Result<void> verify(const std::string& message,
+                                       const std::string& signature) const;
 
   private:
-    KeystoreKey();
-    bool initialize();
-    android::base::Result<std::vector<uint8_t>> verifyExistingKey();
-    android::base::Result<std::vector<uint8_t>> createKey();
-    android::base::Result<std::vector<uint8_t>> getOrCreateKey();
-
+    android::base::Result<void> createKey();
     KeyDescriptor mDescriptor;
-    KeystoreHmacKey mHmacKey;
     android::sp<IKeystoreService> mService;
     android::sp<IKeystoreSecurityLevel> mSecurityLevel;
-    std::vector<uint8_t> mPublicKey;
 };
