@@ -31,8 +31,9 @@ mod tests {
     use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
         Algorithm::Algorithm, BeginResult::BeginResult, BlockMode::BlockMode, Digest::Digest,
         ErrorCode::ErrorCode, IKeyMintDevice::IKeyMintDevice, KeyCreationResult::KeyCreationResult,
-        KeyFormat::KeyFormat, KeyParameter::KeyParameter, KeyParameterValue::KeyParameterValue,
-        KeyPurpose::KeyPurpose, PaddingMode::PaddingMode, SecurityLevel::SecurityLevel, Tag::Tag,
+        KeyFormat::KeyFormat, KeyOrigin::KeyOrigin, KeyParameter::KeyParameter,
+        KeyParameterValue::KeyParameterValue, KeyPurpose::KeyPurpose, PaddingMode::PaddingMode,
+        SecurityLevel::SecurityLevel, Tag::Tag,
     };
     use android_hardware_security_keymint::binder::{self, Strong};
     use android_security_compat::aidl::android::security::compat::IKeystoreCompatService::IKeystoreCompatService;
@@ -374,5 +375,86 @@ mod tests {
         let result = shared_secret.computeSharedSecret(&[params]);
         assert!(result.is_ok(), "{:?}", result);
         assert_ne!(result.unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_get_key_characteristics() {
+        let legacy = get_device_or_skip_test!();
+        let hw_info = legacy.getHardwareInfo().expect("GetHardwareInfo");
+
+        let blob = generate_rsa_key(legacy.as_ref(), false, false);
+        let characteristics =
+            legacy.getKeyCharacteristics(&blob, &[], &[]).expect("GetKeyCharacteristics.");
+
+        assert!(characteristics.iter().any(|kc| kc.securityLevel == hw_info.securityLevel));
+        let sec_level_enforced = &characteristics
+            .iter()
+            .find(|kc| kc.securityLevel == hw_info.securityLevel)
+            .expect("There should be characteristics matching the device's security level.")
+            .authorizations;
+
+        assert!(sec_level_enforced.iter().any(|kp| matches!(
+            kp,
+            KeyParameter {
+                tag: Tag::PURPOSE,
+                value: KeyParameterValue::KeyPurpose(KeyPurpose::SIGN)
+            }
+        )));
+        assert!(sec_level_enforced.iter().any(|kp| matches!(
+            kp,
+            KeyParameter { tag: Tag::DIGEST, value: KeyParameterValue::Digest(Digest::SHA_2_256) }
+        )));
+        assert!(sec_level_enforced.iter().any(|kp| matches!(
+            kp,
+            KeyParameter {
+                tag: Tag::PADDING,
+                value: KeyParameterValue::PaddingMode(PaddingMode::RSA_PSS)
+            }
+        )));
+        assert!(sec_level_enforced.iter().any(|kp| matches!(
+            kp,
+            KeyParameter {
+                tag: Tag::ALGORITHM,
+                value: KeyParameterValue::Algorithm(Algorithm::RSA)
+            }
+        )));
+        assert!(sec_level_enforced.iter().any(|kp| matches!(
+            kp,
+            KeyParameter { tag: Tag::KEY_SIZE, value: KeyParameterValue::Integer(2048) }
+        )));
+        assert!(sec_level_enforced.iter().any(|kp| matches!(
+            kp,
+            KeyParameter {
+                tag: Tag::RSA_PUBLIC_EXPONENT,
+                value: KeyParameterValue::LongInteger(65537)
+            }
+        )));
+        assert!(sec_level_enforced.iter().any(|kp| matches!(
+            kp,
+            KeyParameter { tag: Tag::NO_AUTH_REQUIRED, value: KeyParameterValue::BoolValue(true) }
+        )));
+        assert!(sec_level_enforced.iter().any(|kp| matches!(
+            kp,
+            KeyParameter {
+                tag: Tag::ORIGIN,
+                value: KeyParameterValue::Origin(KeyOrigin::GENERATED)
+            }
+        )));
+        assert!(sec_level_enforced.iter().any(|kp| matches!(
+            kp,
+            KeyParameter { tag: Tag::OS_VERSION, value: KeyParameterValue::Integer(_) }
+        )));
+        assert!(sec_level_enforced.iter().any(|kp| matches!(
+            kp,
+            KeyParameter { tag: Tag::OS_PATCHLEVEL, value: KeyParameterValue::Integer(_) }
+        )));
+        assert!(sec_level_enforced.iter().any(|kp| matches!(
+            kp,
+            KeyParameter { tag: Tag::VENDOR_PATCHLEVEL, value: KeyParameterValue::Integer(_) }
+        )));
+        assert!(sec_level_enforced.iter().any(|kp| matches!(
+            kp,
+            KeyParameter { tag: Tag::BOOT_PATCHLEVEL, value: KeyParameterValue::Integer(_) }
+        )));
     }
 }

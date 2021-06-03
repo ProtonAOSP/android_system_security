@@ -92,7 +92,7 @@
 
 use std::convert::TryInto;
 
-use crate::db_utils::SqlField;
+use crate::database::utils::SqlField;
 use crate::error::Error as KeystoreError;
 use crate::error::ResponseCode;
 
@@ -825,6 +825,9 @@ pub enum KeyParameterValue {
     /// When deleted, the key is guaranteed to be permanently deleted and unusable
     #[key_param(tag = ROLLBACK_RESISTANCE, field = BoolValue)]
     RollbackResistance,
+    /// The Key shall only be used during the early boot stage
+    #[key_param(tag = EARLY_BOOT_ONLY, field = BoolValue)]
+    EarlyBootOnly,
     /// The date and time at which the key becomes active
     #[key_param(tag = ACTIVE_DATETIME, field = DateTime)]
     ActiveDateTime(i64),

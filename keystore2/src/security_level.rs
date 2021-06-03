@@ -176,6 +176,7 @@ impl KeystoreSecurityLevel {
                     let key_id = db
                         .store_new_key(
                             &key,
+                            KeyType::Client,
                             &key_parameters,
                             &(&key_blob, &blob_metadata),
                             &cert_info,

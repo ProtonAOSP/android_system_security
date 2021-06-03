@@ -14,38 +14,95 @@
 
 //! Offer keys based on the "boot level" for superencryption.
 
+use crate::{
+    database::{KeyType, KeystoreDB},
+    key_parameter::KeyParameterValue,
+    raw_device::KeyMintDevice,
+};
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
-    Algorithm::Algorithm, Digest::Digest, KeyPurpose::KeyPurpose, SecurityLevel::SecurityLevel,
+    Algorithm::Algorithm, Digest::Digest, KeyParameter::KeyParameter as KmKeyParameter,
+    KeyParameterValue::KeyParameterValue as KmKeyParameterValue, KeyPurpose::KeyPurpose,
+    SecurityLevel::SecurityLevel, Tag::Tag,
 };
 use anyhow::{Context, Result};
 use keystore2_crypto::{hkdf_expand, ZVec, AES_256_KEY_LENGTH};
 use std::{collections::VecDeque, convert::TryFrom};
 
-use crate::{database::KeystoreDB, key_parameter::KeyParameterValue, raw_device::KeyMintDevice};
+fn get_preferred_km_instance_for_level_zero_key() -> Result<KeyMintDevice> {
+    let tee = KeyMintDevice::get(SecurityLevel::TRUSTED_ENVIRONMENT)
+        .context("In get_preferred_km_instance_for_level_zero_key: Get TEE instance failed.")?;
+    if tee.version() >= KeyMintDevice::KEY_MASTER_V4_1 {
+        Ok(tee)
+    } else {
+        match KeyMintDevice::get_or_none(SecurityLevel::STRONGBOX).context(
+            "In get_preferred_km_instance_for_level_zero_key: Get Strongbox instance failed.",
+        )? {
+            Some(strongbox) if strongbox.version() >= KeyMintDevice::KEY_MASTER_V4_1 => {
+                Ok(strongbox)
+            }
+            _ => Ok(tee),
+        }
+    }
+}
 
 /// This is not thread safe; caller must hold a lock before calling.
 /// In practice the caller is SuperKeyManager and the lock is the
 /// Mutex on its internal state.
 pub fn get_level_zero_key(db: &mut KeystoreDB) -> Result<ZVec> {
+    let km_dev = get_preferred_km_instance_for_level_zero_key()
+        .context("In get_level_zero_key: get preferred KM instance failed")?;
+
     let key_desc = KeyMintDevice::internal_descriptor("boot_level_key".to_string());
-    let params = [
+    let mut params = vec![
         KeyParameterValue::Algorithm(Algorithm::HMAC).into(),
         KeyParameterValue::Digest(Digest::SHA_2_256).into(),
         KeyParameterValue::KeySize(256).into(),
         KeyParameterValue::MinMacLength(256).into(),
         KeyParameterValue::KeyPurpose(KeyPurpose::SIGN).into(),
         KeyParameterValue::NoAuthRequired.into(),
-        KeyParameterValue::MaxUsesPerBoot(1).into(),
     ];
-    // We use TRUSTED_ENVIRONMENT here because it is the authority on when
-    // the device has rebooted.
-    let km_dev: KeyMintDevice = KeyMintDevice::get(SecurityLevel::TRUSTED_ENVIRONMENT)
-        .context("In get_level_zero_key: KeyMintDevice::get failed")?;
+
+    let has_early_boot_only = km_dev.version() >= KeyMintDevice::KEY_MASTER_V4_1;
+
+    if has_early_boot_only {
+        params.push(KeyParameterValue::EarlyBootOnly.into());
+    } else {
+        params.push(KeyParameterValue::MaxUsesPerBoot(1).into())
+    }
+
     let (key_id_guard, key_entry) = km_dev
-        .lookup_or_generate_key(db, &key_desc, &params)
+        .lookup_or_generate_key(db, &key_desc, KeyType::Client, &params, |key_characteristics| {
+            key_characteristics.iter().any(|kc| {
+                if kc.securityLevel == km_dev.security_level() {
+                    kc.authorizations.iter().any(|a| {
+                        matches!(
+                            (has_early_boot_only, a),
+                            (
+                                true,
+                                KmKeyParameter {
+                                    tag: Tag::EARLY_BOOT_ONLY,
+                                    value: KmKeyParameterValue::BoolValue(true)
+                                }
+                            ) | (
+                                false,
+                                KmKeyParameter {
+                                    tag: Tag::MAX_USES_PER_BOOT,
+                                    value: KmKeyParameterValue::Integer(1)
+                                }
+                            )
+                        )
+                    })
+                } else {
+                    false
+                }
+            })
+        })
         .context("In get_level_zero_key: lookup_or_generate_key failed")?;
 
-    let params = [KeyParameterValue::MacLength(256).into()];
+    let params = [
+        KeyParameterValue::MacLength(256).into(),
+        KeyParameterValue::Digest(Digest::SHA_2_256).into(),
+    ];
     let level_zero_key = km_dev
         .use_key_in_one_step(
             db,

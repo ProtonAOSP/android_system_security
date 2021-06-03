@@ -188,7 +188,7 @@ std::pair<bool, bool> prefixedKeyBlobParsePrefix(const std::vector<uint8_t>& pre
     return std::make_pair(true, isSoftKeyMint);
 }
 
-// Returns the prefix from a blob. If there's no prefix, returns the passed-in blob.
+// Removes the prefix from a blob. If there's no prefix, returns the passed-in blob.
 //
 std::vector<uint8_t> prefixedKeyBlobRemovePrefix(const std::vector<uint8_t>& prefixedBlob) {
     auto parsed = prefixedKeyBlobParsePrefix(prefixedBlob);
@@ -206,6 +206,21 @@ std::vector<uint8_t> prefixedKeyBlobRemovePrefix(const std::vector<uint8_t>& pre
 bool prefixedKeyBlobIsSoftKeyMint(const std::vector<uint8_t>& prefixedBlob) {
     auto parsed = prefixedKeyBlobParsePrefix(prefixedBlob);
     return parsed.second;
+}
+
+// Inspects the given blob for prefixes.
+// Returns the blob stripped of the prefix if present. The boolean argument is true if the blob was
+// a software blob.
+std::pair<std::vector<uint8_t>, bool>
+dissectPrefixedKeyBlob(const std::vector<uint8_t>& prefixedBlob) {
+    auto [hasPrefix, isSoftware] = prefixedKeyBlobParsePrefix(prefixedBlob);
+    if (!hasPrefix) {
+        // Not actually prefixed, blob was probably persisted to disk prior to the
+        // prefixing code being introduced.
+        return {prefixedBlob, false};
+    }
+    return {std::vector<uint8_t>(prefixedBlob.begin() + kKeyBlobPrefixSize, prefixedBlob.end()),
+            isSoftware};
 }
 
 /*
@@ -289,7 +304,14 @@ convertKeyParametersFromLegacy(const std::vector<V4_0_KeyParameter>& legacyKps) 
 static std::vector<KeyCharacteristics>
 processLegacyCharacteristics(KeyMintSecurityLevel securityLevel,
                              const std::vector<KeyParameter>& genParams,
-                             const V4_0_KeyCharacteristics& legacyKc) {
+                             const V4_0_KeyCharacteristics& legacyKc, bool hwEnforcedOnly = false) {
+
+    KeyCharacteristics hwEnforced{securityLevel,
+                                  convertKeyParametersFromLegacy(legacyKc.hardwareEnforced)};
+
+    if (hwEnforcedOnly) {
+        return {hwEnforced};
+    }
 
     KeyCharacteristics keystoreEnforced{KeyMintSecurityLevel::KEYSTORE,
                                         convertKeyParametersFromLegacy(legacyKc.softwareEnforced)};
@@ -308,8 +330,6 @@ processLegacyCharacteristics(KeyMintSecurityLevel securityLevel,
         return {keystoreEnforced};
     }
 
-    KeyCharacteristics hwEnforced{securityLevel,
-                                  convertKeyParametersFromLegacy(legacyKc.hardwareEnforced)};
     return {hwEnforced, keystoreEnforced};
 }
 
@@ -687,12 +707,35 @@ KeyMintDevice::convertStorageKeyToEphemeral(const std::vector<uint8_t>& prefixed
     return convertErrorCode(km_error);
 }
 
-ScopedAStatus
-KeyMintDevice::getKeyCharacteristics(const std::vector<uint8_t>& /* storageKeyBlob */,
-                                     const std::vector<uint8_t>& /* appId */,
-                                     const std::vector<uint8_t>& /* appData */,
-                                     std::vector<KeyCharacteristics>* /* keyCharacteristics */) {
-    return convertErrorCode(KMV1::ErrorCode::UNIMPLEMENTED);
+ScopedAStatus KeyMintDevice::getKeyCharacteristics(
+    const std::vector<uint8_t>& prefixedKeyBlob, const std::vector<uint8_t>& appId,
+    const std::vector<uint8_t>& appData, std::vector<KeyCharacteristics>* keyCharacteristics) {
+    auto [strippedKeyBlob, isSoftware] = dissectPrefixedKeyBlob(prefixedKeyBlob);
+    if (isSoftware) {
+        return softKeyMintDevice_->getKeyCharacteristics(strippedKeyBlob, appId, appData,
+                                                         keyCharacteristics);
+    } else {
+        KMV1::ErrorCode km_error;
+        auto ret = mDevice->getKeyCharacteristics(
+            strippedKeyBlob, appId, appData,
+            [&](V4_0_ErrorCode errorCode, const V4_0_KeyCharacteristics& v40KeyCharacteristics) {
+                km_error = convert(errorCode);
+                *keyCharacteristics =
+                    processLegacyCharacteristics(securityLevel_, {} /* getParams */,
+                                                 v40KeyCharacteristics, true /* hwEnforcedOnly */);
+            });
+
+        if (!ret.isOk()) {
+            LOG(ERROR) << __func__ << " getKeyCharacteristics failed: " << ret.description();
+            return convertErrorCode(KMV1::ErrorCode::UNKNOWN_ERROR);
+        }
+        if (km_error != KMV1::ErrorCode::OK) {
+            LOG(ERROR) << __func__
+                       << " getKeyCharacteristics failed with code: " << toString(km_error);
+        }
+
+        return convertErrorCode(km_error);
+    }
 }
 
 ScopedAStatus KeyMintOperation::updateAad(const std::vector<uint8_t>& input,
