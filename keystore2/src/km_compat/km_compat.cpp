@@ -304,33 +304,36 @@ convertKeyParametersFromLegacy(const std::vector<V4_0_KeyParameter>& legacyKps) 
 static std::vector<KeyCharacteristics>
 processLegacyCharacteristics(KeyMintSecurityLevel securityLevel,
                              const std::vector<KeyParameter>& genParams,
-                             const V4_0_KeyCharacteristics& legacyKc, bool hwEnforcedOnly = false) {
+                             const V4_0_KeyCharacteristics& legacyKc, bool kmEnforcedOnly = false) {
 
-    KeyCharacteristics hwEnforced{securityLevel,
-                                  convertKeyParametersFromLegacy(legacyKc.hardwareEnforced)};
+    KeyCharacteristics kmEnforced{securityLevel, convertKeyParametersFromLegacy(
+                                                     securityLevel == KeyMintSecurityLevel::SOFTWARE
+                                                         ? legacyKc.softwareEnforced
+                                                         : legacyKc.hardwareEnforced)};
 
-    if (hwEnforcedOnly) {
-        return {hwEnforced};
+    if (securityLevel == KeyMintSecurityLevel::SOFTWARE && legacyKc.hardwareEnforced.size() > 0) {
+        LOG(WARNING) << "Unexpected hardware enforced parameters.";
     }
 
-    KeyCharacteristics keystoreEnforced{KeyMintSecurityLevel::KEYSTORE,
-                                        convertKeyParametersFromLegacy(legacyKc.softwareEnforced)};
+    if (kmEnforcedOnly) {
+        return {kmEnforced};
+    }
+
+    KeyCharacteristics keystoreEnforced{KeyMintSecurityLevel::KEYSTORE, {}};
+
+    if (securityLevel != KeyMintSecurityLevel::SOFTWARE) {
+        // Don't include these tags on software backends, else they'd end up duplicated
+        // across both the keystore-enforced and software keymaster-enforced tags.
+        keystoreEnforced.authorizations = convertKeyParametersFromLegacy(legacyKc.softwareEnforced);
+    }
 
     // Add all parameters that we know can be enforced by keystore but not by the legacy backend.
     auto unsupported_requested = extractNewAndKeystoreEnforceableParams(genParams);
-    std::copy(unsupported_requested.begin(), unsupported_requested.end(),
-              std::back_insert_iterator(keystoreEnforced.authorizations));
+    keystoreEnforced.authorizations.insert(keystoreEnforced.authorizations.end(),
+                                           std::begin(unsupported_requested),
+                                           std::end(unsupported_requested));
 
-    if (securityLevel == KeyMintSecurityLevel::SOFTWARE) {
-        // If the security level of the backend is `software` we expect the hardware enforced list
-        // to be empty. Log a warning otherwise.
-        if (legacyKc.hardwareEnforced.size() != 0) {
-            LOG(WARNING) << "Unexpected hardware enforced parameters.";
-        }
-        return {keystoreEnforced};
-    }
-
-    return {hwEnforced, keystoreEnforced};
+    return {kmEnforced, keystoreEnforced};
 }
 
 static V4_0_KeyFormat convertKeyFormatToLegacy(const KeyFormat& kf) {
@@ -722,7 +725,7 @@ ScopedAStatus KeyMintDevice::getKeyCharacteristics(
                 km_error = convert(errorCode);
                 *keyCharacteristics =
                     processLegacyCharacteristics(securityLevel_, {} /* getParams */,
-                                                 v40KeyCharacteristics, true /* hwEnforcedOnly */);
+                                                 v40KeyCharacteristics, true /* kmEnforcedOnly */);
             });
 
         if (!ret.isOk()) {
