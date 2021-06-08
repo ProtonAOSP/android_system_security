@@ -1395,8 +1395,7 @@ KeystoreCompatService::getKeyMintDevice(KeyMintSecurityLevel in_securityLevel,
         if (!device) {
             return ScopedAStatus::fromStatus(STATUS_NAME_NOT_FOUND);
         }
-        bool inserted = false;
-        std::tie(i, inserted) = mDeviceCache.insert({in_securityLevel, std::move(device)});
+        i = mDeviceCache.insert(i, {in_securityLevel, std::move(device)});
     }
     *_aidl_return = i->second;
     return ScopedAStatus::ok();
@@ -1404,14 +1403,15 @@ KeystoreCompatService::getKeyMintDevice(KeyMintSecurityLevel in_securityLevel,
 
 ScopedAStatus KeystoreCompatService::getSharedSecret(KeyMintSecurityLevel in_securityLevel,
                                                      std::shared_ptr<ISharedSecret>* _aidl_return) {
-    if (!mSharedSecret) {
+    auto i = mSharedSecretCache.find(in_securityLevel);
+    if (i == mSharedSecretCache.end()) {
         auto secret = SharedSecret::createSharedSecret(in_securityLevel);
         if (!secret) {
             return ScopedAStatus::fromStatus(STATUS_NAME_NOT_FOUND);
         }
-        mSharedSecret = std::move(secret);
+        i = mSharedSecretCache.insert(i, {in_securityLevel, std::move(secret)});
     }
-    *_aidl_return = mSharedSecret;
+    *_aidl_return = i->second;
     return ScopedAStatus::ok();
 }
 

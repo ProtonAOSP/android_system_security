@@ -109,7 +109,11 @@ static COMPAT_PACKAGE_NAME: &str = "android.security.compat";
 
 /// Lists participants.
 fn list_participants() -> Result<Vec<SharedSecretParticipant>> {
-    Ok([(4, 0), (4, 1)]
+    // 4.1 implementation always also register as 4.0. So only the highest version of each
+    // "default" and "strongbox" makes the cut.
+    let mut legacy_default_found: bool = false;
+    let mut legacy_strongbox_found: bool = false;
+    Ok([(4, 1), (4, 0)]
         .iter()
         .map(|(ma, mi)| {
             get_hidl_instances(KEYMASTER_PACKAGE_NAME, *ma, *mi, KEYMASTER_INTERFACE_NAME)
@@ -119,7 +123,24 @@ fn list_participants() -> Result<Vec<SharedSecretParticipant>> {
                     instances
                         .into_iter()
                         .filter_map(|name| {
-                            filter_map_legacy_km_instances(name.to_string(), (*ma, *mi))
+                            filter_map_legacy_km_instances(name.to_string(), (*ma, *mi)).and_then(
+                                |sp| {
+                                    if let SharedSecretParticipant::Hidl {
+                                        is_strongbox: true,
+                                        ..
+                                    } = &sp
+                                    {
+                                        if !legacy_strongbox_found {
+                                            legacy_strongbox_found = true;
+                                            return Some(sp);
+                                        }
+                                    } else if !legacy_default_found {
+                                        legacy_default_found = true;
+                                        return Some(sp);
+                                    }
+                                    None
+                                },
+                            )
                         })
                         .collect::<Vec<SharedSecretParticipant>>()
                 })
