@@ -831,20 +831,6 @@ impl KeystoreDB {
     /// Name of the file that holds the cross-boot persistent database.
     pub const PERSISTENT_DB_FILENAME: &'static str = &"persistent.sqlite";
 
-    /// Set write-ahead logging mode on the persistent database found in `db_root`.
-    pub fn set_wal_mode(db_root: &Path) -> Result<()> {
-        let path = Self::make_persistent_path(&db_root)?;
-        let conn =
-            Connection::open(path).context("In KeystoreDB::set_wal_mode: Failed to open DB")?;
-        let mode: String = conn
-            .pragma_update_and_check(None, "journal_mode", &"WAL", |row| row.get(0))
-            .context("In KeystoreDB::set_wal_mode: Failed to set journal_mode")?;
-        match mode.as_str() {
-            "wal" => Ok(()),
-            _ => Err(anyhow!("Unable to set WAL mode, db is still in {} mode.", mode)),
-        }
-    }
-
     /// This will create a new database connection connecting the two
     /// files persistent.sqlite and perboot.sqlite in the given directory.
     /// It also attempts to initialize all of the tables.
@@ -3244,7 +3230,6 @@ mod tests {
     use android_hardware_security_secureclock::aidl::android::hardware::security::secureclock::{
         Timestamp::Timestamp,
     };
-    use rusqlite::DatabaseName::Attached;
     use rusqlite::NO_PARAMS;
     use rusqlite::TransactionBehavior;
     use std::cell::RefCell;
@@ -5758,28 +5743,6 @@ mod tests {
         assert_eq!(db.perboot.auth_tokens_len(), 3);
         // It selected the most recent timestamp
         assert_eq!(db.find_auth_token_entry(|_| true).unwrap().0.auth_token.mac, b"mac2".to_vec());
-        Ok(())
-    }
-
-    #[test]
-    fn test_set_wal_mode() -> Result<()> {
-        let temp_dir = TempDir::new("test_set_wal_mode")?;
-        let mut db = KeystoreDB::new(temp_dir.path(), None)?;
-        let mode: String =
-            db.conn.pragma_query_value(Some(Attached("persistent")), "journal_mode", |row| {
-                row.get(0)
-            })?;
-        assert_eq!(mode, "delete");
-        db.conn.close().expect("Close didn't work");
-
-        KeystoreDB::set_wal_mode(temp_dir.path())?;
-
-        db = KeystoreDB::new(temp_dir.path(), None)?;
-        let mode: String =
-            db.conn.pragma_query_value(Some(Attached("persistent")), "journal_mode", |row| {
-                row.get(0)
-            })?;
-        assert_eq!(mode, "wal");
         Ok(())
     }
 
