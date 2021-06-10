@@ -24,6 +24,7 @@ use android_security_compat::aidl::android::security::compat::IKeystoreCompatSer
 use anyhow::{Context, Result};
 use keystore2_vintf::{get_aidl_instances, get_hidl_instances};
 use std::fmt::{self, Display, Formatter};
+use std::time::Duration;
 
 /// This function initiates the shared secret negotiation. It starts a thread and then returns
 /// immediately. The thread consults the vintf manifest to enumerate expected negotiation
@@ -236,7 +237,7 @@ fn connect_participants(
         if participants.is_empty() {
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(1000));
+        std::thread::sleep(Duration::from_millis(1000));
     }
     connected_participants
 }
@@ -258,7 +259,7 @@ fn negotiate_shared_secret(
             Err(e) => {
                 log::warn!("{:?}", e);
                 log::warn!("Retrying in one second.");
-                std::thread::sleep(std::time::Duration::from_millis(1000));
+                std::thread::sleep(Duration::from_millis(1000));
             }
             Ok(params) => break params,
         }
@@ -267,20 +268,28 @@ fn negotiate_shared_secret(
     params.sort_unstable();
 
     // Phase 2: Send the sorted sharing parameters to all participants.
-    participants
-        .into_iter()
-        .try_fold(None, |acc, (s, p)| {
-            match (acc, map_binder_status(s.computeSharedSecret(&params))) {
-                (None, Ok(new_sum)) => Ok(Some(new_sum)),
-                (Some(old_sum), Ok(new_sum)) => {
-                    if old_sum == new_sum {
-                        Ok(Some(old_sum))
-                    } else {
-                        Err(SharedSecretError::Checksum(p))
-                    }
+    let negotiation_result = participants.into_iter().try_fold(None, |acc, (s, p)| {
+        match (acc, map_binder_status(s.computeSharedSecret(&params))) {
+            (None, Ok(new_sum)) => Ok(Some(new_sum)),
+            (Some(old_sum), Ok(new_sum)) => {
+                if old_sum == new_sum {
+                    Ok(Some(old_sum))
+                } else {
+                    Err(SharedSecretError::Checksum(p))
                 }
-                (_, Err(e)) => Err(SharedSecretError::Computation { e, p }),
             }
-        })
-        .expect("Fatal: Shared secret computation failed.");
+            (_, Err(e)) => Err(SharedSecretError::Computation { e, p }),
+        }
+    });
+
+    if let Err(e) = negotiation_result {
+        log::error!("In negotiate_shared_secret: {:?}.", e);
+        if let SharedSecretError::Checksum(_) = e {
+            log::error!(concat!(
+                "This means that this device is NOT PROVISIONED CORRECTLY.\n",
+                "User authorization and other security functions will not work\n",
+                "as expected. Please contact your OEM for instructions.",
+            ));
+        }
+    }
 }
