@@ -216,9 +216,12 @@ fn connect_keymint(security_level: &SecurityLevel) -> Result<(Asp, KeyMintHardwa
         }
     };
 
-    let keymint = if let Some(service_name) = service_name {
-        map_binder_status_code(binder::get_interface(&service_name))
-            .context("In connect_keymint: Trying to connect to genuine KeyMint service.")
+    let (keymint, hal_version) = if let Some(service_name) = service_name {
+        (
+            map_binder_status_code(binder::get_interface(&service_name))
+                .context("In connect_keymint: Trying to connect to genuine KeyMint service.")?,
+            Some(100i32), // The HAL version code for KeyMint V1 is 100.
+        )
     } else {
         // This is a no-op if it was called before.
         keystore2_km_compat::add_keymint_device_service();
@@ -226,20 +229,34 @@ fn connect_keymint(security_level: &SecurityLevel) -> Result<(Asp, KeyMintHardwa
         let keystore_compat_service: Strong<dyn IKeystoreCompatService> =
             map_binder_status_code(binder::get_interface("android.security.compat"))
                 .context("In connect_keymint: Trying to connect to compat service.")?;
-        map_binder_status(keystore_compat_service.getKeyMintDevice(*security_level))
-            .map_err(|e| match e {
-                Error::BinderTransaction(StatusCode::NAME_NOT_FOUND) => {
-                    Error::Km(ErrorCode::HARDWARE_TYPE_UNAVAILABLE)
-                }
-                e => e,
-            })
-            .context("In connect_keymint: Trying to get Legacy wrapper.")
-    }?;
+        (
+            map_binder_status(keystore_compat_service.getKeyMintDevice(*security_level))
+                .map_err(|e| match e {
+                    Error::BinderTransaction(StatusCode::NAME_NOT_FOUND) => {
+                        Error::Km(ErrorCode::HARDWARE_TYPE_UNAVAILABLE)
+                    }
+                    e => e,
+                })
+                .context("In connect_keymint: Trying to get Legacy wrapper.")?,
+            None,
+        )
+    };
 
     let wp = wd::watch_millis("In connect_keymint: calling getHardwareInfo()", 500);
-    let hw_info = map_km_error(keymint.getHardwareInfo())
+    let mut hw_info = map_km_error(keymint.getHardwareInfo())
         .context("In connect_keymint: Failed to get hardware info.")?;
     drop(wp);
+
+    // The legacy wrapper sets hw_info.versionNumber to the underlying HAL version like so:
+    // 10 * <major> + <minor>, e.g., KM 3.0 = 30. So 30, 40, and 41 are the only viable values.
+    // For KeyMint the versionNumber is implementation defined and thus completely meaningless
+    // to Keystore 2.0. So at this point the versionNumber field is set to the HAL version, so
+    // that higher levels have a meaningful guide as to which feature set to expect from the
+    // implementation. As of this writing the only meaningful version number is 100 for KeyMint V1,
+    // and future AIDL versions should follow the pattern <AIDL version> * 100.
+    if let Some(hal_version) = hal_version {
+        hw_info.versionNumber = hal_version;
+    }
 
     Ok((Asp::new(keymint.as_binder()), hw_info))
 }
