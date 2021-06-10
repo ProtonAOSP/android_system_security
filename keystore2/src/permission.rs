@@ -315,6 +315,8 @@ implement_permission!(
         EarlyBootEnded = 0x800,   selinux name: early_boot_ended;
         /// Checked when IKeystoreMaintenance::onDeviceOffBody is called.
         ReportOffBody = 0x1000, selinux name: report_off_body;
+        /// Checked when IkeystoreMetrics::pullMetris is called.
+        PullMetrics = 0x2000, selinux name: pull_metrics;
     }
 );
 
