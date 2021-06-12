@@ -315,3 +315,23 @@ TEST_P(CertificateUtilsWithRsa, CertSigningWithCallbackRsa) {
     EVP_PKEY_Ptr decoded_pkey(X509_get_pubkey(decoded_cert.get()));
     ASSERT_TRUE(X509_verify(decoded_cert.get(), decoded_pkey.get()));
 }
+
+TEST(TimeStringTests, toTimeStringTest) {
+    // Two test vectors that need to result in UTCTime
+    ASSERT_EQ(std::string(toTimeString(1622758591000)->data()), std::string("210603221631Z"));
+    ASSERT_EQ(std::string(toTimeString(0)->data()), std::string("700101000000Z"));
+    // Two test vectors that need to result in GeneralizedTime.
+    ASSERT_EQ(std::string(toTimeString(16227585910000)->data()), std::string("24840325064510Z"));
+    ASSERT_EQ(std::string(toTimeString(-1622758591000)->data()), std::string("19180731014329Z"));
+
+    // Highest possible UTCTime
+    ASSERT_EQ(std::string(toTimeString(2524607999999)->data()), "491231235959Z");
+    // And one millisecond later must be GeneralizedTime.
+    ASSERT_EQ(std::string(toTimeString(2524608000000)->data()), "20500101000000Z");
+
+    // Earliest possible UTCTime
+    ASSERT_EQ(std::string(toTimeString(-631152000000)->data()), "500101000000Z");
+    // And one millisecond earlier must be GeneralizedTime.
+    // This also checks that the rounding direction does not flip when the input is negative.
+    ASSERT_EQ(std::string(toTimeString(-631152000001)->data()), "19491231235959Z");
+}

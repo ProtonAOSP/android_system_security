@@ -53,6 +53,7 @@ class CertUtilsError {
         InvalidArgument,
         UnexpectedNullPointer,
         SignatureFailed,
+        TimeError,
     };
 
   private:
@@ -135,6 +136,16 @@ enum class Padding {
     PKCS1_5,
     PSS,
 };
+
+/**
+ * Takes an int64_t representing UNIX epoch time in milliseconds and turns it into a UTCTime
+ * or GeneralizedTime string depending on whether the year is in the interval [1950 .. 2050).
+ * Note: The string returned in the array buffer is NUL terminated and of length 13 (UTCTime)
+ * or 15 (GeneralizedTime).
+ * @param timeMillis
+ * @return UTCTime or GeneralizedTime string.
+ */
+std::optional<std::array<char, 16>> toTimeString(int64_t timeMillis);
 
 /**
  * Sets the signature specifier of the certificate and the signature according to the parameters

@@ -23,9 +23,12 @@
 
 #include <functional>
 #include <limits>
-#include <string>
 #include <variant>
 #include <vector>
+
+#ifndef __LP64__
+#include <time64.h>
+#endif
 
 namespace keystore {
 
@@ -167,45 +170,42 @@ makeKeyUsageExtension(bool is_signing_key, bool is_encryption_key, bool is_cert_
     return key_usage;
 }
 
-template <typename Out, typename In> static Out saturate(In in) {
-    if constexpr (std::is_signed_v<Out> == std::is_signed_v<In>) {
-        if constexpr (sizeof(Out) >= sizeof(In)) {
-            // Same sign, and In fits into Out. Cast is lossless.
-            return static_cast<Out>(in);
-        } else {
-            // Out is smaller than In we may need to truncate.
-            // We pick the smaller of `out::max()` and the greater of `out::min()` and `in`.
-            return static_cast<Out>(
-                std::min(static_cast<In>(std::numeric_limits<Out>::max()),
-                         std::max(static_cast<In>(std::numeric_limits<Out>::min()), in)));
-        }
-    } else {
-        // So we have different signs. This puts the lower bound at 0 because either input or output
-        // is unsigned. The upper bound is max of the smaller type or, if they are equal the max of
-        // the signed type.
-        if constexpr (std::is_signed_v<Out>) {
-            if constexpr (sizeof(Out) > sizeof(In)) {
-                return static_cast<Out>(in);
-            } else {
-                // Because `out` is the signed one, the lower bound of `in` is 0 and fits into
-                // `out`. We just have to compare the maximum and we do it in type In because it has
-                // a greater range than Out, so Out::max() is guaranteed to fit.
-                return static_cast<Out>(
-                    std::min(static_cast<In>(std::numeric_limits<Out>::max()), in));
-            }
-        } else {
-            // Out is unsigned. So we can return 0 if in is negative.
-            if (in < 0) return 0;
-            if constexpr (sizeof(Out) >= sizeof(In)) {
-                // If Out is wider or equal we can assign lossless.
-                return static_cast<Out>(in);
-            } else {
-                // Otherwise we have to take the minimum of Out::max() and `in`.
-                return static_cast<Out>(
-                    std::min(static_cast<In>(std::numeric_limits<Out>::max()), in));
-            }
-        }
+// TODO Once boring ssl can take int64_t instead of time_t we can go back to using
+//      ASN1_TIME_set: https://bugs.chromium.org/p/boringssl/issues/detail?id=416
+std::optional<std::array<char, 16>> toTimeString(int64_t timeMillis) {
+    struct tm time;
+    // If timeMillis is negative the rounding direction should still be to the nearest previous
+    // second.
+    if (timeMillis < 0 && __builtin_add_overflow(timeMillis, -999, &timeMillis)) {
+        return std::nullopt;
     }
+#if defined(__LP64__)
+    time_t timeSeconds = timeMillis / 1000;
+    if (gmtime_r(&timeSeconds, &time) == nullptr) {
+        return std::nullopt;
+    }
+#else
+    time64_t timeSeconds = timeMillis / 1000;
+    if (gmtime64_r(&timeSeconds, &time) == nullptr) {
+        return std::nullopt;
+    }
+#endif
+    std::array<char, 16> buffer;
+    if (__builtin_add_overflow(time.tm_year, 1900, &time.tm_year)) {
+        return std::nullopt;
+    }
+    if (time.tm_year >= 1950 && time.tm_year < 2050) {
+        // UTCTime according to RFC5280 4.1.2.5.1.
+        snprintf(buffer.data(), buffer.size(), "%02d%02d%02d%02d%02d%02dZ", time.tm_year % 100,
+                 time.tm_mon + 1, time.tm_mday, time.tm_hour, time.tm_min, time.tm_sec);
+    } else if (time.tm_year >= 0 && time.tm_year < 10000) {
+        // GeneralizedTime according to RFC5280 4.1.2.5.2.
+        snprintf(buffer.data(), buffer.size(), "%04d%02d%02d%02d%02d%02dZ", time.tm_year,
+                 time.tm_mon + 1, time.tm_mday, time.tm_hour, time.tm_min, time.tm_sec);
+    } else {
+        return std::nullopt;
+    }
+    return buffer;
 }
 
 // Creates a rump certificate structure with serial, subject and issuer names, as well as
@@ -259,19 +259,24 @@ makeCertRump(std::optional<std::reference_wrapper<const std::vector<uint8_t>>> s
         return std::get<CertUtilsError>(subjectName);
     }
 
-    time_t notBeforeTime = saturate<time_t>(activeDateTimeMilliSeconds / 1000);
+    auto notBeforeTime = toTimeString(activeDateTimeMilliSeconds);
+    if (!notBeforeTime) {
+        return CertUtilsError::TimeError;
+    }
     // Set activation date.
     ASN1_TIME_Ptr notBefore(ASN1_TIME_new());
-    if (!notBefore || !ASN1_TIME_set(notBefore.get(), notBeforeTime) ||
+    if (!notBefore || !ASN1_TIME_set_string(notBefore.get(), notBeforeTime->data()) ||
         !X509_set_notBefore(certificate.get(), notBefore.get() /* Don't release; copied */))
         return CertUtilsError::BoringSsl;
 
     // Set expiration date.
-    time_t notAfterTime;
-    notAfterTime = saturate<time_t>(usageExpireDateTimeMilliSeconds / 1000);
+    auto notAfterTime = toTimeString(usageExpireDateTimeMilliSeconds);
+    if (!notAfterTime) {
+        return CertUtilsError::TimeError;
+    }
 
     ASN1_TIME_Ptr notAfter(ASN1_TIME_new());
-    if (!notAfter || !ASN1_TIME_set(notAfter.get(), notAfterTime) ||
+    if (!notAfter || !ASN1_TIME_set_string(notAfter.get(), notAfterTime->data()) ||
         !X509_set_notAfter(certificate.get(), notAfter.get() /* Don't release; copied */)) {
         return CertUtilsError::BoringSsl;
     }
