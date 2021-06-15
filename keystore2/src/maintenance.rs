@@ -32,22 +32,35 @@ use android_security_maintenance::aidl::android::security::maintenance::{
 use android_security_maintenance::binder::{
     BinderFeatures, Interface, Result as BinderResult, Strong, ThreadState,
 };
+use android_system_keystore2::aidl::android::system::keystore2::KeyDescriptor::KeyDescriptor;
 use android_system_keystore2::aidl::android::system::keystore2::ResponseCode::ResponseCode;
-use android_system_keystore2::aidl::android::system::keystore2::{
-    Domain::Domain, KeyDescriptor::KeyDescriptor,
-};
 use anyhow::{Context, Result};
 use keystore2_crypto::Password;
 
+/// Reexport Domain for the benefit of DeleteListener
+pub use android_system_keystore2::aidl::android::system::keystore2::Domain::Domain;
+
+/// The Maintenance module takes a delete listener argument which observes user and namespace
+/// deletion events.
+pub trait DeleteListener {
+    /// Called by the maintenance module when an app/namespace is deleted.
+    fn delete_namespace(&self, domain: Domain, namespace: i64) -> Result<()>;
+    /// Called by the maintenance module when a user is deleted.
+    fn delete_user(&self, user_id: u32) -> Result<()>;
+}
+
 /// This struct is defined to implement the aforementioned AIDL interface.
-/// As of now, it is an empty struct.
-pub struct Maintenance;
+pub struct Maintenance {
+    delete_listener: Box<dyn DeleteListener + Send + Sync + 'static>,
+}
 
 impl Maintenance {
-    /// Create a new instance of Keystore User Manager service.
-    pub fn new_native_binder() -> Result<Strong<dyn IKeystoreMaintenance>> {
+    /// Create a new instance of Keystore Maintenance service.
+    pub fn new_native_binder(
+        delete_listener: Box<dyn DeleteListener + Send + Sync + 'static>,
+    ) -> Result<Strong<dyn IKeystoreMaintenance>> {
         Ok(BnKeystoreMaintenance::new_binder(
-            Self,
+            Self { delete_listener },
             BinderFeatures { set_requesting_sid: true, ..BinderFeatures::default() },
         ))
     }
@@ -89,7 +102,7 @@ impl Maintenance {
         }
     }
 
-    fn add_or_remove_user(user_id: i32) -> Result<()> {
+    fn add_or_remove_user(&self, user_id: i32) -> Result<()> {
         // Check permission. Function should return if this failed. Therefore having '?' at the end
         // is very important.
         check_keystore_permission(KeystorePerm::change_user()).context("In add_or_remove_user.")?;
@@ -102,10 +115,13 @@ impl Maintenance {
                 false,
             )
         })
-        .context("In add_or_remove_user: Trying to delete keys from db.")
+        .context("In add_or_remove_user: Trying to delete keys from db.")?;
+        self.delete_listener
+            .delete_user(user_id as u32)
+            .context("In add_or_remove_user: While invoking the delete listener.")
     }
 
-    fn clear_namespace(domain: Domain, nspace: i64) -> Result<()> {
+    fn clear_namespace(&self, domain: Domain, nspace: i64) -> Result<()> {
         // Permission check. Must return on error. Do not touch the '?'.
         check_keystore_permission(KeystorePerm::clear_uid()).context("In clear_namespace.")?;
 
@@ -113,7 +129,10 @@ impl Maintenance {
             .bulk_delete_uid(domain, nspace)
             .context("In clear_namespace: Trying to delete legacy keys.")?;
         DB.with(|db| db.borrow_mut().unbind_keys_for_namespace(domain, nspace))
-            .context("In clear_namespace: Trying to delete keys from db.")
+            .context("In clear_namespace: Trying to delete keys from db.")?;
+        self.delete_listener
+            .delete_namespace(domain, nspace)
+            .context("In clear_namespace: While invoking the delete listener.")
     }
 
     fn get_state(user_id: i32) -> Result<AidlUserState> {
@@ -231,17 +250,17 @@ impl IKeystoreMaintenance for Maintenance {
 
     fn onUserAdded(&self, user_id: i32) -> BinderResult<()> {
         let _wp = wd::watch_millis("IKeystoreMaintenance::onUserAdded", 500);
-        map_or_log_err(Self::add_or_remove_user(user_id), Ok)
+        map_or_log_err(self.add_or_remove_user(user_id), Ok)
     }
 
     fn onUserRemoved(&self, user_id: i32) -> BinderResult<()> {
         let _wp = wd::watch_millis("IKeystoreMaintenance::onUserRemoved", 500);
-        map_or_log_err(Self::add_or_remove_user(user_id), Ok)
+        map_or_log_err(self.add_or_remove_user(user_id), Ok)
     }
 
     fn clearNamespace(&self, domain: Domain, nspace: i64) -> BinderResult<()> {
         let _wp = wd::watch_millis("IKeystoreMaintenance::clearNamespace", 500);
-        map_or_log_err(Self::clear_namespace(domain, nspace), Ok)
+        map_or_log_err(self.clear_namespace(domain, nspace), Ok)
     }
 
     fn getState(&self, user_id: i32) -> BinderResult<AidlUserState> {
