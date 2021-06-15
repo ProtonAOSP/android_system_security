@@ -467,9 +467,6 @@ mod db_test {
         const PROFILE_COUNT: u32 = 5000u32;
         const PROFILE_DB_COUNT: u32 = 5000u32;
 
-        let mode: String = db.conn.pragma_query_value(None, "journal_mode", |row| row.get(0))?;
-        assert_eq!(mode, "wal");
-
         let mut actual_profile_count = PROFILE_COUNT;
         // First insert PROFILE_COUNT profiles.
         for count in 0..PROFILE_COUNT {
