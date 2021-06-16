@@ -831,20 +831,6 @@ impl KeystoreDB {
     /// Name of the file that holds the cross-boot persistent database.
     pub const PERSISTENT_DB_FILENAME: &'static str = &"persistent.sqlite";
 
-    /// Set write-ahead logging mode on the persistent database found in `db_root`.
-    pub fn set_wal_mode(db_root: &Path) -> Result<()> {
-        let path = Self::make_persistent_path(&db_root)?;
-        let conn =
-            Connection::open(path).context("In KeystoreDB::set_wal_mode: Failed to open DB")?;
-        let mode: String = conn
-            .pragma_update_and_check(None, "journal_mode", &"WAL", |row| row.get(0))
-            .context("In KeystoreDB::set_wal_mode: Failed to set journal_mode")?;
-        match mode.as_str() {
-            "wal" => Ok(()),
-            _ => Err(anyhow!("Unable to set WAL mode, db is still in {} mode.", mode)),
-        }
-    }
-
     /// This will create a new database connection connecting the two
     /// files persistent.sqlite and perboot.sqlite in the given directory.
     /// It also attempts to initialize all of the tables.
@@ -3244,7 +3230,6 @@ mod tests {
     use android_hardware_security_secureclock::aidl::android::hardware::security::secureclock::{
         Timestamp::Timestamp,
     };
-    use rusqlite::DatabaseName::Attached;
     use rusqlite::NO_PARAMS;
     use rusqlite::TransactionBehavior;
     use std::cell::RefCell;
@@ -4758,8 +4743,9 @@ mod tests {
 
         let test_begin = Instant::now();
 
-        let mut db = KeystoreDB::new(temp_dir.path()).expect("Failed to open database.");
         const KEY_COUNT: u32 = 500u32;
+        let mut db =
+            new_test_db_with_gc(temp_dir.path(), |_, _| Ok(())).expect("Failed to open database.");
         const OPEN_DB_COUNT: u32 = 50u32;
 
         let mut actual_key_count = KEY_COUNT;
@@ -4777,7 +4763,8 @@ mod tests {
         // Insert more keys from a different thread and into a different namespace.
         let temp_dir1 = temp_dir.clone();
         let handle1 = thread::spawn(move || {
-            let mut db = KeystoreDB::new(temp_dir1.path()).expect("Failed to open database.");
+            let mut db = new_test_db_with_gc(temp_dir1.path(), |_, _| Ok(()))
+                .expect("Failed to open database.");
 
             for count in 0..actual_key_count {
                 if Instant::now().duration_since(test_begin) >= Duration::from_secs(40) {
@@ -4806,7 +4793,8 @@ mod tests {
         // And start unbinding the first set of keys.
         let temp_dir2 = temp_dir.clone();
         let handle2 = thread::spawn(move || {
-            let mut db = KeystoreDB::new(temp_dir2.path()).expect("Failed to open database.");
+            let mut db = new_test_db_with_gc(temp_dir2.path(), |_, _| Ok(()))
+                .expect("Failed to open database.");
 
             for count in 0..actual_key_count {
                 if Instant::now().duration_since(test_begin) >= Duration::from_secs(40) {
@@ -4822,27 +4810,6 @@ mod tests {
             }
         });
 
-        let stop_deleting = Arc::new(AtomicU8::new(0));
-        let stop_deleting2 = stop_deleting.clone();
-
-        // And delete anything that is unreferenced keys.
-        let temp_dir3 = temp_dir.clone();
-        let handle3 = thread::spawn(move || {
-            let mut db = KeystoreDB::new(temp_dir3.path()).expect("Failed to open database.");
-
-            while stop_deleting2.load(Ordering::Relaxed) != 1 {
-                while let Some((key_guard, _key)) =
-                    db.get_unreferenced_key().expect("Failed to get unreferenced Key.")
-                {
-                    if Instant::now().duration_since(test_begin) >= Duration::from_secs(40) {
-                        return;
-                    }
-                    db.purge_key_entry(key_guard).expect("Failed to purge key.");
-                }
-                std::thread::sleep(std::time::Duration::from_millis(100));
-            }
-        });
-
         // While a lot of inserting and deleting is going on we have to open database connections
         // successfully and use them.
         // This clone is not redundant, because temp_dir needs to be kept alive until db goes
@@ -4854,7 +4821,8 @@ mod tests {
                 if Instant::now().duration_since(test_begin) >= Duration::from_secs(40) {
                     return;
                 }
-                let mut db = KeystoreDB::new(temp_dir4.path()).expect("Failed to open database.");
+                let mut db = new_test_db_with_gc(temp_dir4.path(), |_, _| Ok(()))
+                    .expect("Failed to open database.");
 
                 let alias = format!("test_alias_{}", count);
                 make_test_key_entry(&mut db, Domain::APP, 3, &alias, None)
@@ -4872,9 +4840,6 @@ mod tests {
         handle1.join().expect("Thread 1 panicked.");
         handle2.join().expect("Thread 2 panicked.");
         handle4.join().expect("Thread 4 panicked.");
-
-        stop_deleting.store(1, Ordering::Relaxed);
-        handle3.join().expect("Thread 3 panicked.");
 
         Ok(())
     }
@@ -5758,28 +5723,6 @@ mod tests {
         assert_eq!(db.perboot.auth_tokens_len(), 3);
         // It selected the most recent timestamp
         assert_eq!(db.find_auth_token_entry(|_| true).unwrap().0.auth_token.mac, b"mac2".to_vec());
-        Ok(())
-    }
-
-    #[test]
-    fn test_set_wal_mode() -> Result<()> {
-        let temp_dir = TempDir::new("test_set_wal_mode")?;
-        let mut db = KeystoreDB::new(temp_dir.path(), None)?;
-        let mode: String =
-            db.conn.pragma_query_value(Some(Attached("persistent")), "journal_mode", |row| {
-                row.get(0)
-            })?;
-        assert_eq!(mode, "delete");
-        db.conn.close().expect("Close didn't work");
-
-        KeystoreDB::set_wal_mode(temp_dir.path())?;
-
-        db = KeystoreDB::new(temp_dir.path(), None)?;
-        let mode: String =
-            db.conn.pragma_query_value(Some(Attached("persistent")), "journal_mode", |row| {
-                row.get(0)
-            })?;
-        assert_eq!(mode, "wal");
         Ok(())
     }
 

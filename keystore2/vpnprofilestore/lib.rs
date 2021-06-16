@@ -22,7 +22,7 @@ use android_security_vpnprofilestore::binder::{
     BinderFeatures, ExceptionCode, Result as BinderResult, Status as BinderStatus, Strong,
     ThreadState,
 };
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use keystore2::{async_task::AsyncTask, legacy_blob::LegacyBlobLoader, utils::watchdog as wd};
 use rusqlite::{
     params, Connection, OptionalExtension, Transaction, TransactionBehavior, NO_PARAMS,
@@ -30,10 +30,7 @@ use rusqlite::{
 use std::{
     collections::HashSet,
     path::{Path, PathBuf},
-    sync::Once,
 };
-
-static DB_SET_WAL_MODE: Once = Once::new();
 
 struct DB {
     conn: Connection,
@@ -41,29 +38,12 @@ struct DB {
 
 impl DB {
     fn new(db_file: &Path) -> Result<Self> {
-        DB_SET_WAL_MODE.call_once(|| {
-            log::info!("Setting VpnProfileStore database to WAL mode first time since boot.");
-            Self::set_wal_mode(&db_file).expect("In vpnprofilestore: Could not set WAL mode.");
-        });
-
         let mut db = Self {
             conn: Connection::open(db_file).context("Failed to initialize SQLite connection.")?,
         };
 
         db.init_tables().context("Trying to initialize vpnstore db.")?;
         Ok(db)
-    }
-
-    fn set_wal_mode(db_file: &Path) -> Result<()> {
-        let conn = Connection::open(db_file)
-            .context("In VpnProfileStore set_wal_mode: Failed to open DB.")?;
-        let mode: String = conn
-            .pragma_update_and_check(None, "journal_mode", &"WAL", |row| row.get(0))
-            .context("In VpnProfileStore set_wal_mode: Failed to set journal_mode")?;
-        match mode.as_str() {
-            "wal" => Ok(()),
-            _ => Err(anyhow!("Unable to set WAL mode, db is still in {} mode.", mode)),
-        }
     }
 
     fn with_transaction<T, F>(&mut self, behavior: TransactionBehavior, f: F) -> Result<T>
