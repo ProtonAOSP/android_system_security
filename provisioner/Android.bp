@@ -43,15 +43,6 @@ aidl_interface {
     },
 }
 
-java_binary {
-    name: "provisioner_cli",
-    wrapper: "provisioner_cli",
-    srcs: ["src/com/android/commands/provisioner/**/*.java"],
-    static_libs: [
-        "android.security.provisioner-java",
-    ],
-}
-
 cc_binary {
     name: "rkp_factory_extraction_tool",
     srcs: ["rkp_factory_extraction_tool.cpp"],
