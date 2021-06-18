@@ -54,7 +54,7 @@ cc_binary {
         "libcppcose_rkp",
         "libcrypto",
         "liblog",
+        "libkeymint_remote_prov_support",
         "libvintf",
     ],
-    //export_include_dirs: ["include"],
 }

@@ -22,6 +22,7 @@
 #include <cppbor.h>
 #include <keymaster/cppcose/cppcose.h>
 #include <log/log.h>
+#include <remote_prov/remote_prov_utils.h>
 #include <vintf/VintfObject.h>
 
 using std::set;
@@ -32,6 +33,7 @@ using aidl::android::hardware::security::keymint::DeviceInfo;
 using aidl::android::hardware::security::keymint::IRemotelyProvisionedComponent;
 using aidl::android::hardware::security::keymint::MacedPublicKey;
 using aidl::android::hardware::security::keymint::ProtectedData;
+using aidl::android::hardware::security::keymint::remote_prov::generateEekChain;
 
 using android::vintf::HalManifest;
 using android::vintf::VintfObject;
@@ -44,54 +46,6 @@ namespace {
 const string kPackage = "android.hardware.security.keymint";
 const string kInterface = "IRemotelyProvisionedComponent";
 const string kFormattedName = kPackage + "." + kInterface + "/";
-
-ErrMsgOr<vector<uint8_t>> generateEekChain(size_t length, const vector<uint8_t>& eekId) {
-    auto eekChain = cppbor::Array();
-
-    vector<uint8_t> prevPrivKey;
-    for (size_t i = 0; i < length - 1; ++i) {
-        vector<uint8_t> pubKey(ED25519_PUBLIC_KEY_LEN);
-        vector<uint8_t> privKey(ED25519_PRIVATE_KEY_LEN);
-
-        ED25519_keypair(pubKey.data(), privKey.data());
-
-        // The first signing key is self-signed.
-        if (prevPrivKey.empty()) prevPrivKey = privKey;
-
-        auto coseSign1 = constructCoseSign1(prevPrivKey,
-                                            cppbor::Map() /* payload CoseKey */
-                                                .add(CoseKey::KEY_TYPE, OCTET_KEY_PAIR)
-                                                .add(CoseKey::ALGORITHM, EDDSA)
-                                                .add(CoseKey::CURVE, ED25519)
-                                                .add(CoseKey::PUBKEY_X, pubKey)
-                                                .canonicalize()
-                                                .encode(),
-                                            {} /* AAD */);
-        if (!coseSign1) return coseSign1.moveMessage();
-        eekChain.add(coseSign1.moveValue());
-
-        prevPrivKey = privKey;
-    }
-
-    vector<uint8_t> pubKey(X25519_PUBLIC_VALUE_LEN);
-    vector<uint8_t> privKey(X25519_PRIVATE_KEY_LEN);
-    X25519_keypair(pubKey.data(), privKey.data());
-
-    auto coseSign1 = constructCoseSign1(prevPrivKey,
-                                        cppbor::Map() /* payload CoseKey */
-                                            .add(CoseKey::KEY_TYPE, OCTET_KEY_PAIR)
-                                            .add(CoseKey::KEY_ID, eekId)
-                                            .add(CoseKey::ALGORITHM, ECDH_ES_HKDF_256)
-                                            .add(CoseKey::CURVE, cppcose::X25519)
-                                            .add(CoseKey::PUBKEY_X, pubKey)
-                                            .canonicalize()
-                                            .encode(),
-                                        {} /* AAD */);
-    if (!coseSign1) return coseSign1.moveMessage();
-    eekChain.add(coseSign1.moveValue());
-
-    return eekChain.encode();
-}
 
 std::vector<uint8_t> getChallenge() {
     return std::vector<uint8_t>(0);
@@ -137,14 +91,14 @@ int main() {
         std::vector<MacedPublicKey> emptyKeys;
 
         // Replace this eek chain generation with the actual production GEEK
-        std::vector<uint8_t> eekId(10);  // replace with real KID later (EEK fingerprint)
-        auto eekOrErr = generateEekChain(3 /* chainlength */, eekId);
+        const std::vector<uint8_t> kFakeEekId = {'f', 'a', 'k', 'e', 0};
+        auto eekOrErr = generateEekChain(3 /* chainlength */, kFakeEekId);
         if (!eekOrErr) {
             ALOGE("Failed to generate test EEK somehow: %s", eekOrErr.message().c_str());
             return errorMsg(name);
         }
 
-        std::vector<uint8_t> eek = eekOrErr.moveValue();
+        auto [eek, pubkey, privkey] = eekOrErr.moveValue();
         DeviceInfo deviceInfo;
         ProtectedData protectedData;
         if (rkp_service) {
@@ -156,7 +110,6 @@ int main() {
                 ALOGE("Bundle extraction failed. Error code: %d", status.getServiceSpecificError());
                 return errorMsg(name);
             }
-            std::cout << "\n";
             std::vector<uint8_t> certificateRequest =
                 composeCertificateRequest(std::move(protectedData), std::move(deviceInfo));
             std::copy(certificateRequest.begin(), certificateRequest.end(),
