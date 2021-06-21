@@ -302,9 +302,17 @@ impl RemoteProvisioningService {
             (mac.len() as u8),
         ];
         cose_mac_0.append(&mut mac);
+        // If this is a test mode key, there is an extra 6 bytes added as an additional entry in
+        // the COSE_Key struct to denote that.
+        let test_mode_entry_shift = if test_mode { 0 } else { 6 };
+        let byte_dist_mac0_payload = 8;
+        let cose_key_size = 83 - test_mode_entry_shift;
         for maced_public_key in keys_to_sign {
-            if maced_public_key.macedKey.len() > 83 + 8 {
-                cose_mac_0.extend_from_slice(&maced_public_key.macedKey[8..83 + 8]);
+            if maced_public_key.macedKey.len() > cose_key_size + byte_dist_mac0_payload {
+                cose_mac_0.extend_from_slice(
+                    &maced_public_key.macedKey
+                        [byte_dist_mac0_payload..cose_key_size + byte_dist_mac0_payload],
+                );
             }
         }
         Ok(cose_mac_0)
