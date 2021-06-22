@@ -24,6 +24,7 @@
 #include <keymaster/cppcose/cppcose.h>
 #include <log/log.h>
 #include <remote_prov/remote_prov_utils.h>
+#include <sys/random.h>
 #include <vintf/VintfObject.h>
 
 using std::set;
@@ -51,12 +52,28 @@ const string kPackage = "android.hardware.security.keymint";
 const string kInterface = "IRemotelyProvisionedComponent";
 const string kFormattedName = kPackage + "." + kInterface + "/";
 
-std::vector<uint8_t> getChallenge() {
-    return std::vector<uint8_t>(0);
+constexpr size_t kChallengeSize = 16;
+
+std::vector<uint8_t> generateChallenge() {
+    std::vector<uint8_t> challenge(kChallengeSize);
+
+    ssize_t bytesRemaining = static_cast<ssize_t>(challenge.size());
+    uint8_t* writePtr = challenge.data();
+    while (bytesRemaining > 0) {
+        int bytesRead = getrandom(writePtr, bytesRemaining, /*flags=*/0);
+        if (bytesRead < 0) {
+            LOG_FATAL_IF(errno != EINTR, "%d - %s", errno, strerror(errno));
+        }
+        bytesRemaining -= bytesRead;
+        writePtr += bytesRead;
+    }
+
+    return challenge;
 }
 
 std::vector<uint8_t> composeCertificateRequest(ProtectedData&& protectedData,
-                                               DeviceInfo&& deviceInfo) {
+                                               DeviceInfo&& deviceInfo,
+                                               const std::vector<uint8_t>& challenge) {
     Array emptyMacedKeysToSign;
     emptyMacedKeysToSign
         .add(std::vector<uint8_t>(0))   // empty protected headers as bstr
@@ -65,7 +82,7 @@ std::vector<uint8_t> composeCertificateRequest(ProtectedData&& protectedData,
         .add(std::vector<uint8_t>(0));  // empty tag as bstr
     Array certificateRequest;
     certificateRequest.add(EncodedItem(std::move(deviceInfo.deviceInfo)))
-        .add(getChallenge())  // fake challenge
+        .add(challenge)
         .add(EncodedItem(std::move(protectedData.protectedData)))
         .add(std::move(emptyMacedKeysToSign));
     return certificateRequest.encode();
@@ -95,6 +112,7 @@ int main(int argc, char** argv) {
     gflags::ParseCommandLineFlags(&argc, &argv, /*remove_flags=*/true);
 
     const std::vector<uint8_t> eek_chain = getEekChain();
+    const std::vector<uint8_t> challenge = generateChallenge();
 
     std::shared_ptr<const HalManifest> manifest = VintfObject::GetDeviceHalManifest();
     set<string> rkpNames = manifest->getAidlInstances(kPackage, kInterface);
@@ -116,14 +134,14 @@ int main(int argc, char** argv) {
         if (rkp_service) {
             ALOGE("extracting bundle");
             ::ndk::ScopedAStatus status = rkp_service->generateCertificateRequest(
-                FLAGS_test_mode, emptyKeys, eek_chain, getChallenge(), &deviceInfo, &protectedData,
+                FLAGS_test_mode, emptyKeys, eek_chain, challenge, &deviceInfo, &protectedData,
                 &keysToSignMac);
             if (!status.isOk()) {
                 ALOGE("Bundle extraction failed. Error code: %d", status.getServiceSpecificError());
                 return errorMsg(name);
             }
-            std::vector<uint8_t> certificateRequest =
-                composeCertificateRequest(std::move(protectedData), std::move(deviceInfo));
+            std::vector<uint8_t> certificateRequest = composeCertificateRequest(
+                std::move(protectedData), std::move(deviceInfo), challenge);
             std::copy(certificateRequest.begin(), certificateRequest.end(),
                       std::ostream_iterator<char>(std::cout));
         }
