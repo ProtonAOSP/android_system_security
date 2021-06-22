@@ -346,7 +346,7 @@ pub fn ec_key_generate_key() -> Result<ECKey, Error> {
 
 /// Calls the boringssl EC_KEY_marshal_private_key function.
 pub fn ec_key_marshal_private_key(key: &ECKey) -> Result<ZVec, Error> {
-    let len = 39; // Empirically observed length of private key
+    let len = 73; // Empirically observed length of private key
     let mut buf = ZVec::new(len)?;
     // Safety: the key is valid.
     // This will not write past the specified length of the buffer; if the
@@ -381,8 +381,8 @@ pub fn ec_key_get0_public_key(key: &ECKey) -> BorrowedECPoint {
 
 /// Calls the boringssl EC_POINT_point2oct.
 pub fn ec_point_point_to_oct(point: &EC_POINT) -> Result<Vec<u8>, Error> {
-    // We fix the length to 65 (1 + 2 * field_elem_size), as we get an error if it's too small.
-    let len = 65;
+    // We fix the length to 133 (1 + 2 * field_elem_size), as we get an error if it's too small.
+    let len = 133;
     let mut buf = vec![0; len];
     // Safety: EC_POINT_point2oct writes at most len bytes. The point is valid.
     let result = unsafe { ECPOINTPoint2Oct(point, buf.as_mut_ptr(), len) };
