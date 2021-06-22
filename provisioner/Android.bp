@@ -53,6 +53,7 @@ cc_binary {
         "libcppbor_external",
         "libcppcose_rkp",
         "libcrypto",
+        "libgflags",
         "liblog",
         "libkeymint_remote_prov_support",
         "libvintf",

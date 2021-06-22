@@ -20,6 +20,7 @@
 #include <aidl/android/hardware/security/keymint/IRemotelyProvisionedComponent.h>
 #include <android/binder_manager.h>
 #include <cppbor.h>
+#include <gflags/gflags.h>
 #include <keymaster/cppcose/cppcose.h>
 #include <log/log.h>
 #include <remote_prov/remote_prov_utils.h>
@@ -34,12 +35,15 @@ using aidl::android::hardware::security::keymint::IRemotelyProvisionedComponent;
 using aidl::android::hardware::security::keymint::MacedPublicKey;
 using aidl::android::hardware::security::keymint::ProtectedData;
 using aidl::android::hardware::security::keymint::remote_prov::generateEekChain;
+using aidl::android::hardware::security::keymint::remote_prov::getProdEekChain;
 
 using android::vintf::HalManifest;
 using android::vintf::VintfObject;
 
 using namespace cppbor;
 using namespace cppcose;
+
+DEFINE_bool(test_mode, false, "If enabled, a fake EEK key/cert are used.");
 
 namespace {
 
@@ -72,9 +76,26 @@ int32_t errorMsg(string name) {
     return -1;
 }
 
+std::vector<uint8_t> getEekChain() {
+    if (FLAGS_test_mode) {
+        const std::vector<uint8_t> kFakeEekId = {'f', 'a', 'k', 'e', 0};
+        auto eekOrErr = generateEekChain(3 /* chainlength */, kFakeEekId);
+        LOG_FATAL_IF(!eekOrErr, "Failed to generate test EEK somehow: %s",
+                     eekOrErr.message().c_str());
+        auto [eek, ignored_pubkey, ignored_privkey] = eekOrErr.moveValue();
+        return eek;
+    }
+
+    return getProdEekChain();
+}
+
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    gflags::ParseCommandLineFlags(&argc, &argv, /*remove_flags=*/true);
+
+    const std::vector<uint8_t> eek_chain = getEekChain();
+
     std::shared_ptr<const HalManifest> manifest = VintfObject::GetDeviceHalManifest();
     set<string> rkpNames = manifest->getAidlInstances(kPackage, kInterface);
     for (auto name : rkpNames) {
@@ -90,21 +111,12 @@ int main() {
         std::vector<uint8_t> keysToSignMac;
         std::vector<MacedPublicKey> emptyKeys;
 
-        // Replace this eek chain generation with the actual production GEEK
-        const std::vector<uint8_t> kFakeEekId = {'f', 'a', 'k', 'e', 0};
-        auto eekOrErr = generateEekChain(3 /* chainlength */, kFakeEekId);
-        if (!eekOrErr) {
-            ALOGE("Failed to generate test EEK somehow: %s", eekOrErr.message().c_str());
-            return errorMsg(name);
-        }
-
-        auto [eek, pubkey, privkey] = eekOrErr.moveValue();
         DeviceInfo deviceInfo;
         ProtectedData protectedData;
         if (rkp_service) {
             ALOGE("extracting bundle");
             ::ndk::ScopedAStatus status = rkp_service->generateCertificateRequest(
-                true /* testMode */, emptyKeys, eek, getChallenge(), &deviceInfo, &protectedData,
+                FLAGS_test_mode, emptyKeys, eek_chain, getChallenge(), &deviceInfo, &protectedData,
                 &keysToSignMac);
             if (!status.isOk()) {
                 ALOGE("Bundle extraction failed. Error code: %d", status.getServiceSpecificError());
