@@ -227,13 +227,19 @@ Result<std::map<std::string, std::string>> verifyAllFilesInVerity(const std::str
 
     while (!ec && it != end) {
         if (it->is_regular_file()) {
-            // Verify
+            // Verify the file is in fs-verity
             auto result = isFileInVerity(it->path());
             if (!result.ok()) {
                 return result.error();
             }
             digests[it->path()] = *result;
-        }  // TODO reject other types besides dirs?
+        } else if (it->is_directory()) {
+            // These are fine to ignore
+        } else if (it->is_symlink()) {
+            return Error() << "Rejecting artifacts, symlink at " << it->path();
+        } else {
+            return Error() << "Rejecting artifacts, unexpected file type for " << it->path();
+        }
         ++it;
     }
     if (ec) {
