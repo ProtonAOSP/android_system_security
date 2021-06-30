@@ -599,6 +599,15 @@ impl LegacyBlobLoader {
     //  * USRCERT was used for public certificates of USRPKEY entries. But KeyChain also
     //            used this for user installed certificates without private key material.
 
+    const KNOWN_KEYSTORE_PREFIXES: &'static [&'static str] =
+        &["USRPKEY_", "USRSKEY_", "USRCERT_", "CACERT_"];
+
+    fn is_keystore_alias(encoded_alias: &str) -> bool {
+        // We can check the encoded alias because the prefixes we are interested
+        // in are all in the printable range that don't get mangled.
+        Self::KNOWN_KEYSTORE_PREFIXES.iter().any(|prefix| encoded_alias.starts_with(prefix))
+    }
+
     fn read_km_blob_file(&self, uid: u32, alias: &str) -> Result<Option<(Blob, String)>> {
         let mut iter = ["USRPKEY", "USRSKEY"].iter();
 
@@ -630,28 +639,28 @@ impl LegacyBlobLoader {
         Ok(Some(Self::new_from_stream(&mut file).context("In read_generic_blob.")?))
     }
 
-    /// Read a legacy vpn profile blob.
-    pub fn read_vpn_profile(&self, uid: u32, alias: &str) -> Result<Option<Vec<u8>>> {
-        let path = match self.make_vpn_profile_filename(uid, alias) {
+    /// Read a legacy keystore entry blob.
+    pub fn read_legacy_keystore_entry(&self, uid: u32, alias: &str) -> Result<Option<Vec<u8>>> {
+        let path = match self.make_legacy_keystore_entry_filename(uid, alias) {
             Some(path) => path,
             None => return Ok(None),
         };
 
-        let blob =
-            Self::read_generic_blob(&path).context("In read_vpn_profile: Failed to read blob.")?;
+        let blob = Self::read_generic_blob(&path)
+            .context("In read_legacy_keystore_entry: Failed to read blob.")?;
 
         Ok(blob.and_then(|blob| match blob.value {
             BlobValue::Generic(blob) => Some(blob),
             _ => {
-                log::info!("Unexpected vpn profile blob type. Ignoring");
+                log::info!("Unexpected legacy keystore entry blob type. Ignoring");
                 None
             }
         }))
     }
 
-    /// Remove a vpn profile by the name alias with owner uid.
-    pub fn remove_vpn_profile(&self, uid: u32, alias: &str) -> Result<()> {
-        let path = match self.make_vpn_profile_filename(uid, alias) {
+    /// Remove a legacy keystore entry by the name alias with owner uid.
+    pub fn remove_legacy_keystore_entry(&self, uid: u32, alias: &str) -> Result<()> {
+        let path = match self.make_legacy_keystore_entry_filename(uid, alias) {
             Some(path) => path,
             None => return Ok(()),
         };
@@ -659,25 +668,17 @@ impl LegacyBlobLoader {
         if let Err(e) = Self::with_retry_interrupted(|| fs::remove_file(path.as_path())) {
             match e.kind() {
                 ErrorKind::NotFound => return Ok(()),
-                _ => return Err(e).context("In remove_vpn_profile."),
+                _ => return Err(e).context("In remove_legacy_keystore_entry."),
             }
         }
 
         let user_id = uid_to_android_user(uid);
         self.remove_user_dir_if_empty(user_id)
-            .context("In remove_vpn_profile: Trying to remove empty user dir.")
+            .context("In remove_legacy_keystore_entry: Trying to remove empty user dir.")
     }
 
-    fn is_vpn_profile(encoded_alias: &str) -> bool {
-        // We can check the encoded alias because the prefixes we are interested
-        // in are all in the printable range that don't get mangled.
-        encoded_alias.starts_with("VPN_")
-            || encoded_alias.starts_with("PLATFORM_VPN_")
-            || encoded_alias == "LOCKDOWN_VPN"
-    }
-
-    /// List all profiles belonging to the given uid.
-    pub fn list_vpn_profiles(&self, uid: u32) -> Result<Vec<String>> {
+    /// List all entries belonging to the given uid.
+    pub fn list_legacy_keystore_entries(&self, uid: u32) -> Result<Vec<String>> {
         let mut path = self.path.clone();
         let user_id = uid_to_android_user(uid);
         path.push(format!("user_{}", user_id));
@@ -688,7 +689,10 @@ impl LegacyBlobLoader {
                 ErrorKind::NotFound => return Ok(Default::default()),
                 _ => {
                     return Err(e).context(format!(
-                        "In list_vpn_profiles: Failed to open legacy blob database. {:?}",
+                        concat!(
+                            "In list_legacy_keystore_entries: ,",
+                            "Failed to open legacy blob database: {:?}"
+                        ),
                         path
                     ))
                 }
@@ -696,14 +700,15 @@ impl LegacyBlobLoader {
         };
         let mut result: Vec<String> = Vec::new();
         for entry in dir {
-            let file_name =
-                entry.context("In list_vpn_profiles: Trying to access dir entry")?.file_name();
+            let file_name = entry
+                .context("In list_legacy_keystore_entries: Trying to access dir entry")?
+                .file_name();
             if let Some(f) = file_name.to_str() {
                 let encoded_alias = &f[uid_str.len() + 1..];
-                if f.starts_with(&uid_str) && Self::is_vpn_profile(encoded_alias) {
+                if f.starts_with(&uid_str) && !Self::is_keystore_alias(encoded_alias) {
                     result.push(
                         Self::decode_alias(encoded_alias)
-                            .context("In list_vpn_profiles: Trying to decode alias.")?,
+                            .context("In list_legacy_keystore_entries: Trying to decode alias.")?,
                     )
                 }
             }
@@ -711,12 +716,15 @@ impl LegacyBlobLoader {
         Ok(result)
     }
 
-    /// This function constructs the vpn_profile file name which has the form:
-    /// user_<android user id>/<uid>_<alias>.
-    fn make_vpn_profile_filename(&self, uid: u32, alias: &str) -> Option<PathBuf> {
-        // legacy vpn entries must start with VPN_ or PLATFORM_VPN_ or are literally called
-        // LOCKDOWN_VPN.
-        if !Self::is_vpn_profile(alias) {
+    /// This function constructs the legacy blob file name which has the form:
+    /// user_<android user id>/<uid>_<alias>. Legacy blob file names must not use
+    /// known keystore prefixes.
+    fn make_legacy_keystore_entry_filename(&self, uid: u32, alias: &str) -> Option<PathBuf> {
+        // Legacy entries must not use known keystore prefixes.
+        if Self::is_keystore_alias(alias) {
+            log::warn!(
+                "Known keystore prefixes cannot be used with legacy keystore -> ignoring request."
+            );
             return None;
         }
 
@@ -1376,11 +1384,11 @@ mod test {
     }
 
     #[test]
-    fn list_vpn_profiles_on_non_existing_user() -> Result<()> {
-        let temp_dir = TempDir::new("list_vpn_profiles_on_non_existing_user")?;
+    fn list_legacy_keystore_entries_on_non_existing_user() -> Result<()> {
+        let temp_dir = TempDir::new("list_legacy_keystore_entries_on_non_existing_user")?;
         let legacy_blob_loader = LegacyBlobLoader::new(temp_dir.path());
 
-        assert!(legacy_blob_loader.list_vpn_profiles(20)?.is_empty());
+        assert!(legacy_blob_loader.list_legacy_keystore_entries(20)?.is_empty());
 
         Ok(())
     }

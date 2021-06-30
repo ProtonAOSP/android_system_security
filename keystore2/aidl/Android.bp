@@ -151,8 +151,8 @@ aidl_interface {
 }
 
 aidl_interface {
-    name: "android.security.vpnprofilestore",
-    srcs: [ "android/security/vpnprofilestore/*.aidl" ],
+    name: "android.security.legacykeystore",
+    srcs: [ "android/security/legacykeystore/*.aidl" ],
     unstable: true,
     backend: {
         java: {
@@ -162,6 +162,10 @@ aidl_interface {
         rust: {
             enabled: true,
         },
+        ndk: {
+            enabled: true,
+            apps_enabled: false,
+        }
     },
 }
 
