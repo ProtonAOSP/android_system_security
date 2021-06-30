@@ -47,6 +47,7 @@ mod versioning;
 
 use crate::impl_metadata; // This is in db_utils.rs
 use crate::key_parameter::{KeyParameter, Tag};
+use crate::metrics_store::log_rkp_error_stats;
 use crate::permission::KeyPermSet;
 use crate::utils::{get_current_time_in_milliseconds, watchdog as wd, AID_USER_OFFSET};
 use crate::{
@@ -72,6 +73,7 @@ use android_security_remoteprovisioning::aidl::android::security::remoteprovisio
 use android_security_metrics::aidl::android::security::metrics::{
     StorageStats::StorageStats,
     Storage::Storage as MetricsStorage,
+    RkpError::RkpError as MetricsRkpError,
 };
 
 use keystore2_crypto::ZVec;
@@ -1829,6 +1831,7 @@ impl KeystoreDB {
                 )
                 .context("Failed to assign attestation key")?;
             if result == 0 {
+                log_rkp_error_stats(MetricsRkpError::OUT_OF_KEYS);
                 return Err(KsError::Rc(ResponseCode::OUT_OF_KEYS)).context("Out of keys.");
             } else if result > 1 {
                 return Err(KsError::sys())
