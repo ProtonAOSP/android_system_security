@@ -37,6 +37,7 @@ using aidl::android::hardware::security::keymint::MacedPublicKey;
 using aidl::android::hardware::security::keymint::ProtectedData;
 using aidl::android::hardware::security::keymint::remote_prov::generateEekChain;
 using aidl::android::hardware::security::keymint::remote_prov::getProdEekChain;
+using aidl::android::hardware::security::keymint::remote_prov::jsonEncodeCsrWithBuild;
 
 using android::vintf::HalManifest;
 using android::vintf::VintfObject;
@@ -46,11 +47,18 @@ using namespace cppcose;
 
 DEFINE_bool(test_mode, false, "If enabled, a fake EEK key/cert are used.");
 
+DEFINE_string(output_format, "csr", "How to format the output. Defaults to 'csr'.");
+
 namespace {
 
 const string kPackage = "android.hardware.security.keymint";
 const string kInterface = "IRemotelyProvisionedComponent";
 const string kFormattedName = kPackage + "." + kInterface + "/";
+
+// Various supported --output_format values.
+constexpr std::string_view kBinaryCsrOutput = "csr";     // Just the raw csr as binary
+constexpr std::string_view kBuildPlusCsr = "build+csr";  // Text-encoded (JSON) build
+                                                         // fingerprint plus CSR.
 
 constexpr size_t kChallengeSize = 16;
 
@@ -71,9 +79,8 @@ std::vector<uint8_t> generateChallenge() {
     return challenge;
 }
 
-std::vector<uint8_t> composeCertificateRequest(ProtectedData&& protectedData,
-                                               DeviceInfo&& deviceInfo,
-                                               const std::vector<uint8_t>& challenge) {
+Array composeCertificateRequest(ProtectedData&& protectedData, DeviceInfo&& deviceInfo,
+                                const std::vector<uint8_t>& challenge) {
     Array emptyMacedKeysToSign;
     emptyMacedKeysToSign
         .add(std::vector<uint8_t>(0))   // empty protected headers as bstr
@@ -85,7 +92,7 @@ std::vector<uint8_t> composeCertificateRequest(ProtectedData&& protectedData,
         .add(challenge)
         .add(EncodedItem(std::move(protectedData.protectedData)))
         .add(std::move(emptyMacedKeysToSign));
-    return certificateRequest.encode();
+    return certificateRequest;
 }
 
 int32_t errorMsg(string name) {
@@ -104,6 +111,26 @@ std::vector<uint8_t> getEekChain() {
     }
 
     return getProdEekChain();
+}
+
+void writeOutput(const Array& csr) {
+    if (FLAGS_output_format == kBinaryCsrOutput) {
+        auto bytes = csr.encode();
+        std::copy(bytes.begin(), bytes.end(), std::ostream_iterator<char>(std::cout));
+    } else if (FLAGS_output_format == kBuildPlusCsr) {
+        auto [json, error] = jsonEncodeCsrWithBuild(csr);
+        if (!error.empty()) {
+            std::cerr << "Error JSON encoding the output: " << error;
+            exit(1);
+        }
+        std::cout << json << std::endl;
+    } else {
+        std::cerr << "Unexpected output_format '" << FLAGS_output_format << "'" << std::endl;
+        std::cerr << "Valid formats:" << std::endl;
+        std::cerr << "  " << kBinaryCsrOutput << std::endl;
+        std::cerr << "  " << kBuildPlusCsr << std::endl;
+        exit(1);
+    }
 }
 
 }  // namespace
@@ -140,10 +167,8 @@ int main(int argc, char** argv) {
                 ALOGE("Bundle extraction failed. Error code: %d", status.getServiceSpecificError());
                 return errorMsg(name);
             }
-            std::vector<uint8_t> certificateRequest = composeCertificateRequest(
-                std::move(protectedData), std::move(deviceInfo), challenge);
-            std::copy(certificateRequest.begin(), certificateRequest.end(),
-                      std::ostream_iterator<char>(std::cout));
+            writeOutput(composeCertificateRequest(std::move(protectedData), std::move(deviceInfo),
+                                                  challenge));
         }
     }
 }
