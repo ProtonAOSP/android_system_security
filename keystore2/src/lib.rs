@@ -32,6 +32,7 @@ pub mod legacy_blob;
 pub mod legacy_migrator;
 pub mod maintenance;
 pub mod metrics;
+pub mod metrics_store;
 pub mod operation;
 pub mod permission;
 pub mod raw_device;

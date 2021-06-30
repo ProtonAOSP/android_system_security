@@ -165,3 +165,25 @@ aidl_interface {
     },
 }
 
+aidl_interface {
+    name: "android.security.metrics",
+    srcs: [ "android/security/metrics/*.aidl" ],
+    imports: [
+        "android.system.keystore2-V1",
+    ],
+    unstable: true,
+    backend: {
+        java: {
+            platform_apis: true,
+            srcs_available: true,
+        },
+        rust: {
+            enabled: true,
+        },
+        ndk: {
+            enabled: true,
+            apps_enabled: false,
+        }
+    },
+}
+
