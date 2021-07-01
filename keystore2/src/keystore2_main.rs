@@ -17,21 +17,22 @@
 use keystore2::entropy;
 use keystore2::globals::ENFORCEMENTS;
 use keystore2::maintenance::Maintenance;
-use keystore2::metrics;
+use keystore2::metrics::Metrics;
 use keystore2::remote_provisioning::RemoteProvisioningService;
 use keystore2::service::KeystoreService;
 use keystore2::{apc::ApcManager, shared_secret_negotiation};
 use keystore2::{authorization::AuthorizationManager, id_rotation::IdRotationState};
+use legacykeystore::LegacyKeystore;
 use log::{error, info};
 use std::{panic, path::Path, sync::mpsc::channel};
-use vpnprofilestore::VpnProfileStore;
 
 static KS2_SERVICE_NAME: &str = "android.system.keystore2.IKeystoreService/default";
 static APC_SERVICE_NAME: &str = "android.security.apc";
 static AUTHORIZATION_SERVICE_NAME: &str = "android.security.authorization";
+static METRICS_SERVICE_NAME: &str = "android.security.metrics";
 static REMOTE_PROVISIONING_SERVICE_NAME: &str = "android.security.remoteprovisioning";
 static USER_MANAGER_SERVICE_NAME: &str = "android.security.maintenance";
-static VPNPROFILESTORE_SERVICE_NAME: &str = "android.security.vpnprofilestore";
+static LEGACY_KEYSTORE_SERVICE_NAME: &str = "android.security.legacykeystore";
 
 /// Keystore 2.0 takes one argument which is a path indicating its designated working directory.
 fn main() {
@@ -105,6 +106,13 @@ fn main() {
         },
     );
 
+    let metrics_service = Metrics::new_native_binder().unwrap_or_else(|e| {
+        panic!("Failed to create service {} because of {:?}.", METRICS_SERVICE_NAME, e);
+    });
+    binder::add_service(METRICS_SERVICE_NAME, metrics_service.as_binder()).unwrap_or_else(|e| {
+        panic!("Failed to register service {} because of {:?}.", METRICS_SERVICE_NAME, e);
+    });
+
     // Devices with KS2 and KM 1.0 may not have any IRemotelyProvisionedComponent HALs at all. Do
     // not panic if new_native_binder returns failure because it could not find the TEE HAL.
     if let Ok(remote_provisioning_service) = RemoteProvisioningService::new_native_binder() {
@@ -120,19 +128,17 @@ fn main() {
         });
     }
 
-    let vpnprofilestore = VpnProfileStore::new_native_binder(
+    let legacykeystore = LegacyKeystore::new_native_binder(
         &keystore2::globals::DB_PATH.read().expect("Could not get DB_PATH."),
     );
-    binder::add_service(VPNPROFILESTORE_SERVICE_NAME, vpnprofilestore.as_binder()).unwrap_or_else(
+    binder::add_service(LEGACY_KEYSTORE_SERVICE_NAME, legacykeystore.as_binder()).unwrap_or_else(
         |e| {
             panic!(
                 "Failed to register service {} because of {:?}.",
-                VPNPROFILESTORE_SERVICE_NAME, e
+                LEGACY_KEYSTORE_SERVICE_NAME, e
             );
         },
     );
-
-    metrics::register_pull_metrics_callbacks();
 
     info!("Successfully registered Keystore 2.0 service.");
 

@@ -22,13 +22,13 @@ package {
 }
 
 rust_library {
-    name: "libvpnprofilestore-rust",
-    crate_name: "vpnprofilestore",
+    name: "liblegacykeystore-rust",
+    crate_name: "legacykeystore",
     srcs: [
         "lib.rs",
     ],
     rustlibs: [
-        "android.security.vpnprofilestore-rust",
+        "android.security.legacykeystore-rust",
         "libanyhow",
         "libbinder_rs",
         "libkeystore2",
@@ -39,13 +39,13 @@ rust_library {
 }
 
 rust_test {
-    name: "vpnprofilestore_test",
-    crate_name: "vpnprofilestore",
+    name: "legacykeystore_test",
+    crate_name: "legacykeystore",
     srcs: ["lib.rs"],
     test_suites: ["general-tests"],
     auto_gen_config: true,
     rustlibs: [
-        "android.security.vpnprofilestore-rust",
+        "android.security.legacykeystore-rust",
         "libanyhow",
         "libbinder_rs",
         "libkeystore2",

@@ -127,7 +127,7 @@
 
 use crate::enforcements::AuthInfo;
 use crate::error::{map_err_with, map_km_error, map_or_log_err, Error, ErrorCode, ResponseCode};
-use crate::metrics::log_key_operation_event_stats;
+use crate::metrics_store::log_key_operation_event_stats;
 use crate::utils::{watchdog as wd, Asp};
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
     IKeyMintOperation::IKeyMintOperation, KeyParameter::KeyParameter, KeyPurpose::KeyPurpose,

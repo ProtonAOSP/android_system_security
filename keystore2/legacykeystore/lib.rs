@@ -12,13 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Implements the android.security.vpnprofilestore interface.
+//! Implements the android.security.legacykeystore interface.
 
-use android_security_vpnprofilestore::aidl::android::security::vpnprofilestore::{
-    IVpnProfileStore::BnVpnProfileStore, IVpnProfileStore::IVpnProfileStore,
-    IVpnProfileStore::ERROR_PROFILE_NOT_FOUND, IVpnProfileStore::ERROR_SYSTEM_ERROR,
+use android_security_legacykeystore::aidl::android::security::legacykeystore::{
+    ILegacyKeystore::BnLegacyKeystore, ILegacyKeystore::ILegacyKeystore,
+    ILegacyKeystore::ERROR_ENTRY_NOT_FOUND, ILegacyKeystore::ERROR_PERMISSION_DENIED,
+    ILegacyKeystore::ERROR_SYSTEM_ERROR, ILegacyKeystore::UID_SELF,
 };
-use android_security_vpnprofilestore::binder::{
+use android_security_legacykeystore::binder::{
     BinderFeatures, ExceptionCode, Result as BinderResult, Status as BinderStatus, Strong,
     ThreadState,
 };
@@ -42,7 +43,7 @@ impl DB {
             conn: Connection::open(db_file).context("Failed to initialize SQLite connection.")?,
         };
 
-        db.init_tables().context("Trying to initialize vpnstore db.")?;
+        db.init_tables().context("Trying to initialize legacy keystore db.")?;
         Ok(db)
     }
 
@@ -110,11 +111,11 @@ impl DB {
         })
     }
 
-    fn put(&mut self, caller_uid: u32, alias: &str, profile: &[u8]) -> Result<()> {
+    fn put(&mut self, caller_uid: u32, alias: &str, entry: &[u8]) -> Result<()> {
         self.with_transaction(TransactionBehavior::Immediate, |tx| {
             tx.execute(
                 "INSERT OR REPLACE INTO profiles (owner, alias, profile) values (?, ?, ?)",
-                params![caller_uid, alias, profile,],
+                params![caller_uid, alias, entry,],
             )
             .context("In put: Failed to insert or replace.")?;
             Ok(())
@@ -129,7 +130,7 @@ impl DB {
                 |row| row.get(0),
             )
             .optional()
-            .context("In get: failed loading profile.")
+            .context("In get: failed loading entry.")
         })
     }
 
@@ -145,11 +146,11 @@ impl DB {
     }
 }
 
-/// This is the main VpnProfileStore error type, it wraps binder exceptions and the
-/// VnpStore errors.
+/// This is the main LegacyKeystore error type, it wraps binder exceptions and the
+/// LegacyKeystore errors.
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum Error {
-    /// Wraps a VpnProfileStore error code.
+    /// Wraps a LegacyKeystore error code.
     #[error("Error::Error({0:?})")]
     Error(i32),
     /// Wraps a Binder exception code other than a service specific exception.
@@ -163,16 +164,21 @@ impl Error {
         Error::Error(ERROR_SYSTEM_ERROR)
     }
 
-    /// Short hand for `Error::Error(ERROR_PROFILE_NOT_FOUND)`
+    /// Short hand for `Error::Error(ERROR_ENTRY_NOT_FOUND)`
     pub fn not_found() -> Self {
-        Error::Error(ERROR_PROFILE_NOT_FOUND)
+        Error::Error(ERROR_ENTRY_NOT_FOUND)
+    }
+
+    /// Short hand for `Error::Error(ERROR_PERMISSION_DENIED)`
+    pub fn perm() -> Self {
+        Error::Error(ERROR_PERMISSION_DENIED)
     }
 }
 
-/// This function should be used by vpnprofilestore service calls to translate error conditions
+/// This function should be used by legacykeystore service calls to translate error conditions
 /// into service specific exceptions.
 ///
-/// All error conditions get logged by this function, except for ERROR_PROFILE_NOT_FOUND error.
+/// All error conditions get logged by this function, except for ERROR_ENTRY_NOT_FOUND error.
 ///
 /// `Error::Error(x)` variants get mapped onto a service specific error code of `x`.
 ///
@@ -189,8 +195,8 @@ where
         |e| {
             let root_cause = e.root_cause();
             let (rc, log_error) = match root_cause.downcast_ref::<Error>() {
-                // Make the profile not found errors silent.
-                Some(Error::Error(ERROR_PROFILE_NOT_FOUND)) => (ERROR_PROFILE_NOT_FOUND, false),
+                // Make the entry not found errors silent.
+                Some(Error::Error(ERROR_ENTRY_NOT_FOUND)) => (ERROR_ENTRY_NOT_FOUND, false),
                 Some(Error::Error(e)) => (*e, true),
                 Some(Error::Binder(_, _)) | None => (ERROR_SYSTEM_ERROR, true),
             };
@@ -203,8 +209,8 @@ where
     )
 }
 
-/// Implements IVpnProfileStore AIDL interface.
-pub struct VpnProfileStore {
+/// Implements ILegacyKeystore AIDL interface.
+pub struct LegacyKeystore {
     db_path: PathBuf,
     async_task: AsyncTask,
 }
@@ -215,72 +221,93 @@ struct AsyncState {
     db_path: PathBuf,
 }
 
-impl VpnProfileStore {
-    /// Creates a new VpnProfileStore instance.
-    pub fn new_native_binder(path: &Path) -> Strong<dyn IVpnProfileStore> {
+impl LegacyKeystore {
+    /// Note: The filename was chosen before the purpose of this module was extended.
+    ///       It is kept for backward compatibility with early adopters.
+    const LEGACY_KEYSTORE_FILE_NAME: &'static str = "vpnprofilestore.sqlite";
+
+    /// Creates a new LegacyKeystore instance.
+    pub fn new_native_binder(path: &Path) -> Strong<dyn ILegacyKeystore> {
         let mut db_path = path.to_path_buf();
-        db_path.push("vpnprofilestore.sqlite");
+        db_path.push(Self::LEGACY_KEYSTORE_FILE_NAME);
 
         let result = Self { db_path, async_task: Default::default() };
         result.init_shelf(path);
-        BnVpnProfileStore::new_binder(result, BinderFeatures::default())
+        BnLegacyKeystore::new_binder(result, BinderFeatures::default())
     }
 
     fn open_db(&self) -> Result<DB> {
         DB::new(&self.db_path).context("In open_db: Failed to open db.")
     }
 
-    fn get(&self, alias: &str) -> Result<Vec<u8>> {
-        let mut db = self.open_db().context("In get.")?;
+    fn get_effective_uid(uid: i32) -> Result<u32> {
+        const AID_SYSTEM: u32 = 1000;
+        const AID_WIFI: u32 = 1010;
         let calling_uid = ThreadState::get_calling_uid();
+        let uid = uid as u32;
 
-        if let Some(profile) =
-            db.get(calling_uid, alias).context("In get: Trying to load profile from DB.")?
-        {
-            return Ok(profile);
+        if uid == UID_SELF as u32 || uid == calling_uid {
+            Ok(calling_uid)
+        } else if calling_uid == AID_SYSTEM && uid == AID_WIFI {
+            // The only exception for legacy reasons is allowing SYSTEM to access
+            // the WIFI namespace.
+            // IMPORTANT: If you attempt to add more exceptions, it means you are adding
+            // more callers to this deprecated feature. DON'T!
+            Ok(AID_WIFI)
+        } else {
+            Err(Error::perm()).with_context(|| {
+                format!("In get_effective_uid: caller: {}, requested uid: {}.", calling_uid, uid)
+            })
         }
-        if self.get_legacy(calling_uid, alias).context("In get: Trying to migrate legacy blob.")? {
+    }
+
+    fn get(&self, alias: &str, uid: i32) -> Result<Vec<u8>> {
+        let mut db = self.open_db().context("In get.")?;
+        let uid = Self::get_effective_uid(uid).context("In get.")?;
+
+        if let Some(entry) = db.get(uid, alias).context("In get: Trying to load entry from DB.")? {
+            return Ok(entry);
+        }
+        if self.get_legacy(uid, alias).context("In get: Trying to migrate legacy blob.")? {
             // If we were able to migrate a legacy blob try again.
-            if let Some(profile) =
-                db.get(calling_uid, alias).context("In get: Trying to load profile from DB.")?
+            if let Some(entry) =
+                db.get(uid, alias).context("In get: Trying to load entry from DB.")?
             {
-                return Ok(profile);
+                return Ok(entry);
             }
         }
-        Err(Error::not_found()).context("In get: No such profile.")
+        Err(Error::not_found()).context("In get: No such entry.")
     }
 
-    fn put(&self, alias: &str, profile: &[u8]) -> Result<()> {
-        let calling_uid = ThreadState::get_calling_uid();
-        // In order to make sure that we don't have stale legacy profiles, make sure they are
+    fn put(&self, alias: &str, uid: i32, entry: &[u8]) -> Result<()> {
+        let uid = Self::get_effective_uid(uid).context("In put.")?;
+        // In order to make sure that we don't have stale legacy entries, make sure they are
         // migrated before replacing them.
-        let _ = self.get_legacy(calling_uid, alias);
+        let _ = self.get_legacy(uid, alias);
         let mut db = self.open_db().context("In put.")?;
-        db.put(calling_uid, alias, profile).context("In put: Trying to insert profile into DB.")
+        db.put(uid, alias, entry).context("In put: Trying to insert entry into DB.")
     }
 
-    fn remove(&self, alias: &str) -> Result<()> {
-        let calling_uid = ThreadState::get_calling_uid();
+    fn remove(&self, alias: &str, uid: i32) -> Result<()> {
+        let uid = Self::get_effective_uid(uid).context("In remove.")?;
         let mut db = self.open_db().context("In remove.")?;
-        // In order to make sure that we don't have stale legacy profiles, make sure they are
+        // In order to make sure that we don't have stale legacy entries, make sure they are
         // migrated before removing them.
-        let _ = self.get_legacy(calling_uid, alias);
-        let removed = db
-            .remove(calling_uid, alias)
-            .context("In remove: Trying to remove profile from DB.")?;
+        let _ = self.get_legacy(uid, alias);
+        let removed =
+            db.remove(uid, alias).context("In remove: Trying to remove entry from DB.")?;
         if removed {
             Ok(())
         } else {
-            Err(Error::not_found()).context("In remove: No such profile.")
+            Err(Error::not_found()).context("In remove: No such entry.")
         }
     }
 
-    fn list(&self, prefix: &str) -> Result<Vec<String>> {
+    fn list(&self, prefix: &str, uid: i32) -> Result<Vec<String>> {
         let mut db = self.open_db().context("In list.")?;
-        let calling_uid = ThreadState::get_calling_uid();
-        let mut result = self.list_legacy(calling_uid).context("In list.")?;
-        result
-            .append(&mut db.list(calling_uid).context("In list: Trying to get list of profiles.")?);
+        let uid = Self::get_effective_uid(uid).context("In list.")?;
+        let mut result = self.list_legacy(uid).context("In list.")?;
+        result.append(&mut db.list(uid).context("In list: Trying to get list of entries.")?);
         result = result.into_iter().filter(|s| s.starts_with(prefix)).collect();
         result.sort_unstable();
         result.dedup();
@@ -291,7 +318,7 @@ impl VpnProfileStore {
         let mut db_path = path.to_path_buf();
         self.async_task.queue_hi(move |shelf| {
             let legacy_loader = LegacyBlobLoader::new(&db_path);
-            db_path.push("vpnprofilestore.sqlite");
+            db_path.push(Self::LEGACY_KEYSTORE_FILE_NAME);
 
             shelf.put(AsyncState { legacy_loader, db_path, recently_imported: Default::default() });
         })
@@ -313,8 +340,8 @@ impl VpnProfileStore {
         self.do_serialized(move |state| {
             state
                 .legacy_loader
-                .list_vpn_profiles(uid)
-                .context("Trying to list legacy vnp profiles.")
+                .list_legacy_keystore_entries(uid)
+                .context("Trying to list legacy keystore entries.")
         })
         .context("In list_legacy.")
     }
@@ -327,8 +354,8 @@ impl VpnProfileStore {
             }
             let mut db = DB::new(&state.db_path).context("In open_db: Failed to open db.")?;
             let migrated =
-                Self::migrate_one_legacy_profile(uid, &alias, &state.legacy_loader, &mut db)
-                    .context("Trying to migrate legacy vpn profile.")?;
+                Self::migrate_one_legacy_entry(uid, &alias, &state.legacy_loader, &mut db)
+                    .context("Trying to migrate legacy keystore entries.")?;
             if migrated {
                 state.recently_imported.insert((uid, alias));
             }
@@ -337,21 +364,21 @@ impl VpnProfileStore {
         .context("In get_legacy.")
     }
 
-    fn migrate_one_legacy_profile(
+    fn migrate_one_legacy_entry(
         uid: u32,
         alias: &str,
         legacy_loader: &LegacyBlobLoader,
         db: &mut DB,
     ) -> Result<bool> {
         let blob = legacy_loader
-            .read_vpn_profile(uid, alias)
-            .context("In migrate_one_legacy_profile: Trying to read legacy vpn profile.")?;
-        if let Some(profile) = blob {
-            db.put(uid, alias, &profile)
-                .context("In migrate_one_legacy_profile: Trying to insert profile into DB.")?;
+            .read_legacy_keystore_entry(uid, alias)
+            .context("In migrate_one_legacy_entry: Trying to read legacy keystore entry.")?;
+        if let Some(entry) = blob {
+            db.put(uid, alias, &entry)
+                .context("In migrate_one_legacy_entry: Trying to insert entry into DB.")?;
             legacy_loader
-                .remove_vpn_profile(uid, alias)
-                .context("In migrate_one_legacy_profile: Trying to delete legacy profile.")?;
+                .remove_legacy_keystore_entry(uid, alias)
+                .context("In migrate_one_legacy_entry: Trying to delete legacy keystore entry.")?;
             Ok(true)
         } else {
             Ok(false)
@@ -359,24 +386,24 @@ impl VpnProfileStore {
     }
 }
 
-impl binder::Interface for VpnProfileStore {}
+impl binder::Interface for LegacyKeystore {}
 
-impl IVpnProfileStore for VpnProfileStore {
-    fn get(&self, alias: &str) -> BinderResult<Vec<u8>> {
-        let _wp = wd::watch_millis("IVpnProfileStore::get", 500);
-        map_or_log_err(self.get(alias), Ok)
+impl ILegacyKeystore for LegacyKeystore {
+    fn get(&self, alias: &str, uid: i32) -> BinderResult<Vec<u8>> {
+        let _wp = wd::watch_millis("ILegacyKeystore::get", 500);
+        map_or_log_err(self.get(alias, uid), Ok)
     }
-    fn put(&self, alias: &str, profile: &[u8]) -> BinderResult<()> {
-        let _wp = wd::watch_millis("IVpnProfileStore::put", 500);
-        map_or_log_err(self.put(alias, profile), Ok)
+    fn put(&self, alias: &str, uid: i32, entry: &[u8]) -> BinderResult<()> {
+        let _wp = wd::watch_millis("ILegacyKeystore::put", 500);
+        map_or_log_err(self.put(alias, uid, entry), Ok)
     }
-    fn remove(&self, alias: &str) -> BinderResult<()> {
-        let _wp = wd::watch_millis("IVpnProfileStore::remove", 500);
-        map_or_log_err(self.remove(alias), Ok)
+    fn remove(&self, alias: &str, uid: i32) -> BinderResult<()> {
+        let _wp = wd::watch_millis("ILegacyKeystore::remove", 500);
+        map_or_log_err(self.remove(alias, uid), Ok)
     }
-    fn list(&self, prefix: &str) -> BinderResult<Vec<String>> {
-        let _wp = wd::watch_millis("IVpnProfileStore::list", 500);
-        map_or_log_err(self.list(prefix), Ok)
+    fn list(&self, prefix: &str, uid: i32) -> BinderResult<Vec<String>> {
+        let _wp = wd::watch_millis("ILegacyKeystore::list", 500);
+        map_or_log_err(self.list(prefix, uid), Ok)
     }
 }
 
@@ -396,12 +423,12 @@ mod db_test {
     static TEST_BLOB4: &[u8] = &[3, 2, 3, 4, 5, 6, 7, 8, 9, 0];
 
     #[test]
-    fn test_profile_db() {
-        let test_dir = TempDir::new("profiledb_test_").expect("Failed to create temp dir.");
-        let mut db =
-            DB::new(&test_dir.build().push("vpnprofile.sqlite")).expect("Failed to open database.");
+    fn test_entry_db() {
+        let test_dir = TempDir::new("entrydb_test_").expect("Failed to create temp dir.");
+        let mut db = DB::new(&test_dir.build().push(LegacyKeystore::LEGACY_KEYSTORE_FILE_NAME))
+            .expect("Failed to open database.");
 
-        // Insert three profiles for owner 2.
+        // Insert three entries for owner 2.
         db.put(2, "test1", TEST_BLOB1).expect("Failed to insert test1.");
         db.put(2, "test2", TEST_BLOB2).expect("Failed to insert test2.");
         db.put(2, "test3", TEST_BLOB3).expect("Failed to insert test3.");
@@ -409,73 +436,59 @@ mod db_test {
         // Check list returns all inserted aliases.
         assert_eq!(
             vec!["test1".to_string(), "test2".to_string(), "test3".to_string(),],
-            db.list(2).expect("Failed to list profiles.")
+            db.list(2).expect("Failed to list entries.")
         );
 
-        // There should be no profiles for owner 1.
-        assert_eq!(Vec::<String>::new(), db.list(1).expect("Failed to list profiles."));
+        // There should be no entries for owner 1.
+        assert_eq!(Vec::<String>::new(), db.list(1).expect("Failed to list entries."));
 
         // Check the content of the three entries.
-        assert_eq!(
-            Some(TEST_BLOB1),
-            db.get(2, "test1").expect("Failed to get profile.").as_deref()
-        );
-        assert_eq!(
-            Some(TEST_BLOB2),
-            db.get(2, "test2").expect("Failed to get profile.").as_deref()
-        );
-        assert_eq!(
-            Some(TEST_BLOB3),
-            db.get(2, "test3").expect("Failed to get profile.").as_deref()
-        );
+        assert_eq!(Some(TEST_BLOB1), db.get(2, "test1").expect("Failed to get entry.").as_deref());
+        assert_eq!(Some(TEST_BLOB2), db.get(2, "test2").expect("Failed to get entry.").as_deref());
+        assert_eq!(Some(TEST_BLOB3), db.get(2, "test3").expect("Failed to get entry.").as_deref());
 
         // Remove test2 and check and check that it is no longer retrievable.
-        assert!(db.remove(2, "test2").expect("Failed to remove profile."));
-        assert!(db.get(2, "test2").expect("Failed to get profile.").is_none());
+        assert!(db.remove(2, "test2").expect("Failed to remove entry."));
+        assert!(db.get(2, "test2").expect("Failed to get entry.").is_none());
 
         // test2 should now no longer be in the list.
         assert_eq!(
             vec!["test1".to_string(), "test3".to_string(),],
-            db.list(2).expect("Failed to list profiles.")
+            db.list(2).expect("Failed to list entries.")
         );
 
         // Put on existing alias replaces it.
         // Verify test1 is TEST_BLOB1.
-        assert_eq!(
-            Some(TEST_BLOB1),
-            db.get(2, "test1").expect("Failed to get profile.").as_deref()
-        );
+        assert_eq!(Some(TEST_BLOB1), db.get(2, "test1").expect("Failed to get entry.").as_deref());
         db.put(2, "test1", TEST_BLOB4).expect("Failed to replace test1.");
         // Verify test1 is TEST_BLOB4.
-        assert_eq!(
-            Some(TEST_BLOB4),
-            db.get(2, "test1").expect("Failed to get profile.").as_deref()
-        );
+        assert_eq!(Some(TEST_BLOB4), db.get(2, "test1").expect("Failed to get entry.").as_deref());
     }
 
     #[test]
-    fn concurrent_vpn_profile_test() -> Result<()> {
+    fn concurrent_legacy_keystore_entry_test() -> Result<()> {
         let temp_dir = Arc::new(
-            TempDir::new("concurrent_vpn_profile_test_").expect("Failed to create temp dir."),
+            TempDir::new("concurrent_legacy_keystore_entry_test_")
+                .expect("Failed to create temp dir."),
         );
 
-        let db_path = temp_dir.build().push("vpnprofile.sqlite").to_owned();
+        let db_path = temp_dir.build().push(LegacyKeystore::LEGACY_KEYSTORE_FILE_NAME).to_owned();
 
         let test_begin = Instant::now();
 
         let mut db = DB::new(&db_path).expect("Failed to open database.");
-        const PROFILE_COUNT: u32 = 5000u32;
-        const PROFILE_DB_COUNT: u32 = 5000u32;
+        const ENTRY_COUNT: u32 = 5000u32;
+        const ENTRY_DB_COUNT: u32 = 5000u32;
 
-        let mut actual_profile_count = PROFILE_COUNT;
-        // First insert PROFILE_COUNT profiles.
-        for count in 0..PROFILE_COUNT {
+        let mut actual_entry_count = ENTRY_COUNT;
+        // First insert ENTRY_COUNT entries.
+        for count in 0..ENTRY_COUNT {
             if Instant::now().duration_since(test_begin) >= Duration::from_secs(15) {
-                actual_profile_count = count;
+                actual_entry_count = count;
                 break;
             }
             let alias = format!("test_alias_{}", count);
-            db.put(1, &alias, TEST_BLOB1).expect("Failed to add profile (1).");
+            db.put(1, &alias, TEST_BLOB1).expect("Failed to add entry (1).");
         }
 
         // Insert more keys from a different thread and into a different namespace.
@@ -483,16 +496,16 @@ mod db_test {
         let handle1 = thread::spawn(move || {
             let mut db = DB::new(&db_path1).expect("Failed to open database.");
 
-            for count in 0..actual_profile_count {
+            for count in 0..actual_entry_count {
                 if Instant::now().duration_since(test_begin) >= Duration::from_secs(40) {
                     return;
                 }
                 let alias = format!("test_alias_{}", count);
-                db.put(2, &alias, TEST_BLOB2).expect("Failed to add profile (2).");
+                db.put(2, &alias, TEST_BLOB2).expect("Failed to add entry (2).");
             }
 
             // Then delete them again.
-            for count in 0..actual_profile_count {
+            for count in 0..actual_entry_count {
                 if Instant::now().duration_since(test_begin) >= Duration::from_secs(40) {
                     return;
                 }
@@ -501,12 +514,12 @@ mod db_test {
             }
         });
 
-        // And start deleting the first set of profiles.
+        // And start deleting the first set of entries.
         let db_path2 = db_path.clone();
         let handle2 = thread::spawn(move || {
             let mut db = DB::new(&db_path2).expect("Failed to open database.");
 
-            for count in 0..actual_profile_count {
+            for count in 0..actual_entry_count {
                 if Instant::now().duration_since(test_begin) >= Duration::from_secs(40) {
                     return;
                 }
@@ -516,16 +529,16 @@ mod db_test {
         });
 
         // While a lot of inserting and deleting is going on we have to open database connections
-        // successfully and then insert and delete a specific profile.
+        // successfully and then insert and delete a specific entry.
         let db_path3 = db_path.clone();
         let handle3 = thread::spawn(move || {
-            for _count in 0..PROFILE_DB_COUNT {
+            for _count in 0..ENTRY_DB_COUNT {
                 if Instant::now().duration_since(test_begin) >= Duration::from_secs(40) {
                     return;
                 }
                 let mut db = DB::new(&db_path3).expect("Failed to open database.");
 
-                db.put(3, &TEST_ALIAS, TEST_BLOB3).expect("Failed to add profile (3).");
+                db.put(3, &TEST_ALIAS, TEST_BLOB3).expect("Failed to add entry (3).");
 
                 db.remove(3, &TEST_ALIAS).expect("Remove failed (3).");
             }
@@ -534,14 +547,14 @@ mod db_test {
         // While thread 3 is inserting and deleting TEST_ALIAS, we try to get the alias.
         // This may yield an entry or none, but it must not fail.
         let handle4 = thread::spawn(move || {
-            for _count in 0..PROFILE_DB_COUNT {
+            for _count in 0..ENTRY_DB_COUNT {
                 if Instant::now().duration_since(test_begin) >= Duration::from_secs(40) {
                     return;
                 }
                 let mut db = DB::new(&db_path).expect("Failed to open database.");
 
                 // This may return Some or None but it must not fail.
-                db.get(3, &TEST_ALIAS).expect("Failed to get profile (4).");
+                db.get(3, &TEST_ALIAS).expect("Failed to get entry (4).");
             }
         });
 

@@ -35,6 +35,7 @@ rust_defaults {
         "android.security.authorization-rust",
         "android.security.compat-rust",
         "android.security.maintenance-rust",
+        "android.security.metrics-rust",
         "android.security.remoteprovisioning-rust",
         "android.system.keystore2-V1-rust",
         "libanyhow",
@@ -54,9 +55,6 @@ rust_defaults {
         "liblog_rust",
         "librand",
         "librusqlite",
-        "libstatslog_rust",
-        "libstatslog_rust_header",
-        "libstatspull_rust",
         "libthiserror",
     ],
     shared_libs: [
@@ -108,7 +106,7 @@ rust_binary {
         "libbinder_rs",
         "libkeystore2",
         "liblog_rust",
-        "libvpnprofilestore-rust",
+        "liblegacykeystore-rust",
     ],
     init_rc: ["keystore2.rc"],
 

@@ -23,7 +23,7 @@ use crate::error::{self, map_km_error, map_or_log_err, Error, ErrorCode};
 use crate::globals::{DB, ENFORCEMENTS, LEGACY_MIGRATOR, SUPER_KEY};
 use crate::key_parameter::KeyParameter as KsKeyParam;
 use crate::key_parameter::KeyParameterValue as KsKeyParamValue;
-use crate::metrics::log_key_creation_event_stats;
+use crate::metrics_store::log_key_creation_event_stats;
 use crate::remote_provisioning::RemProvState;
 use crate::super_key::{KeyBlob, SuperKeyManager};
 use crate::utils::{
