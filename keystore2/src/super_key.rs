@@ -68,8 +68,8 @@ type UserId = u32;
 pub enum SuperEncryptionAlgorithm {
     /// Symmetric encryption with AES-256-GCM
     Aes256Gcm,
-    /// Public-key encryption with ECDH P-256
-    EcdhP256,
+    /// Public-key encryption with ECDH P-521
+    EcdhP521,
 }
 
 /// A particular user may have several superencryption keys in the database, each for a
@@ -96,9 +96,9 @@ pub const USER_SCREEN_LOCK_BOUND_KEY: SuperKeyType = SuperKeyType {
 /// Key used for ScreenLockBound keys; the corresponding superencryption key is loaded in memory
 /// each time the user enters their LSKF, and cleared from memory each time the device is locked.
 /// Asymmetric, so keys can be encrypted when the device is locked.
-pub const USER_SCREEN_LOCK_BOUND_ECDH_KEY: SuperKeyType = SuperKeyType {
-    alias: "USER_SCREEN_LOCK_BOUND_ECDH_KEY",
-    algorithm: SuperEncryptionAlgorithm::EcdhP256,
+pub const USER_SCREEN_LOCK_BOUND_P521_KEY: SuperKeyType = SuperKeyType {
+    alias: "USER_SCREEN_LOCK_BOUND_P521_KEY",
+    algorithm: SuperEncryptionAlgorithm::EcdhP521,
 };
 
 /// Superencryption to apply to a new key.
@@ -468,7 +468,7 @@ impl SuperKeyManager {
                     tag.is_some(),
                 )),
             },
-            SuperEncryptionAlgorithm::EcdhP256 => {
+            SuperEncryptionAlgorithm::EcdhP521 => {
                 match (metadata.public_key(), metadata.salt(), metadata.iv(), metadata.aead_tag()) {
                     (Some(public_key), Some(salt), Some(iv), Some(aead_tag)) => {
                         ECDHPrivateKey::from_private_key(&key.key)
@@ -753,7 +753,7 @@ impl SuperKeyManager {
                 } else {
                     // Symmetric key is not available, use public key encryption
                     let loaded =
-                        db.load_super_key(&USER_SCREEN_LOCK_BOUND_ECDH_KEY, user_id).context(
+                        db.load_super_key(&USER_SCREEN_LOCK_BOUND_P521_KEY, user_id).context(
                             "In handle_super_encryption_on_key_init: load_super_key failed.",
                         )?;
                     let (key_id_guard, key_entry) = loaded.ok_or_else(Error::sys).context(
@@ -836,7 +836,7 @@ impl SuperKeyManager {
                         .context("In get_or_create_super_key: Failed to generate AES 256 key.")?,
                     None,
                 ),
-                SuperEncryptionAlgorithm::EcdhP256 => {
+                SuperEncryptionAlgorithm::EcdhP521 => {
                     let key = ECDHPrivateKey::generate()
                         .context("In get_or_create_super_key: Failed to generate ECDH key")?;
                     (
@@ -903,7 +903,7 @@ impl SuperKeyManager {
                 Self::get_or_create_super_key(
                     db,
                     user_id,
-                    &USER_SCREEN_LOCK_BOUND_ECDH_KEY,
+                    &USER_SCREEN_LOCK_BOUND_P521_KEY,
                     password,
                     Some(aes.clone()),
                 )
