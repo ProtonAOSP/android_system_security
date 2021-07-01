@@ -22,7 +22,7 @@ use crate::permission::KeyPerm;
 use crate::remote_provisioning::RemProvState;
 use crate::utils::check_key_permission;
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
-    AttestationKey::AttestationKey, Certificate::Certificate, KeyParameter::KeyParameter,
+    AttestationKey::AttestationKey, Certificate::Certificate, KeyParameter::KeyParameter, Tag::Tag,
 };
 use android_system_keystore2::aidl::android::system::keystore2::{
     Domain::Domain, KeyDescriptor::KeyDescriptor,
@@ -47,8 +47,8 @@ pub enum AttestationKeyInfo {
 }
 
 /// This function loads and, optionally, assigns the caller's remote provisioned
-/// attestation key or, if `attest_key_descriptor` is given, it loads the user
-/// generated attestation key from the database.
+/// attestation key if a challenge is present. Alternatively, if `attest_key_descriptor` is given,
+/// it loads the user generated attestation key from the database.
 pub fn get_attest_key_info(
     key: &KeyDescriptor,
     caller_uid: u32,
@@ -57,8 +57,9 @@ pub fn get_attest_key_info(
     rem_prov_state: &RemProvState,
     db: &mut KeystoreDB,
 ) -> Result<Option<AttestationKeyInfo>> {
+    let challenge_present = params.iter().any(|kp| kp.tag == Tag::ATTESTATION_CHALLENGE);
     match attest_key_descriptor {
-        None => rem_prov_state
+        None if challenge_present => rem_prov_state
             .get_remotely_provisioned_attestation_key_and_certs(&key, caller_uid, params, db)
             .context(concat!(
                 "In get_attest_key_and_cert_chain: ",
@@ -69,6 +70,7 @@ pub fn get_attest_key_info(
                     AttestationKeyInfo::RemoteProvisioned { attestation_key, attestation_certs }
                 })
             }),
+        None => Ok(None),
         Some(attest_key) => get_user_generated_attestation_key(&attest_key, caller_uid, db)
             .context("In get_attest_key_and_cert_chain: Trying to load attest key")
             .map(Some),
