@@ -22,14 +22,8 @@
 #include <cppbor.h>
 #include <gflags/gflags.h>
 #include <keymaster/cppcose/cppcose.h>
-#include <log/log.h>
 #include <remote_prov/remote_prov_utils.h>
 #include <sys/random.h>
-#include <vintf/VintfObject.h>
-
-using std::set;
-using std::string;
-using std::vector;
 
 using aidl::android::hardware::security::keymint::DeviceInfo;
 using aidl::android::hardware::security::keymint::IRemotelyProvisionedComponent;
@@ -39,9 +33,6 @@ using aidl::android::hardware::security::keymint::remote_prov::generateEekChain;
 using aidl::android::hardware::security::keymint::remote_prov::getProdEekChain;
 using aidl::android::hardware::security::keymint::remote_prov::jsonEncodeCsrWithBuild;
 
-using android::vintf::HalManifest;
-using android::vintf::VintfObject;
-
 using namespace cppbor;
 using namespace cppcose;
 
@@ -50,10 +41,6 @@ DEFINE_bool(test_mode, false, "If enabled, a fake EEK key/cert are used.");
 DEFINE_string(output_format, "csr", "How to format the output. Defaults to 'csr'.");
 
 namespace {
-
-const string kPackage = "android.hardware.security.keymint";
-const string kInterface = "IRemotelyProvisionedComponent";
-const string kFormattedName = kPackage + "." + kInterface + "/";
 
 // Various supported --output_format values.
 constexpr std::string_view kBinaryCsrOutput = "csr";     // Just the raw csr as binary
@@ -69,8 +56,9 @@ std::vector<uint8_t> generateChallenge() {
     uint8_t* writePtr = challenge.data();
     while (bytesRemaining > 0) {
         int bytesRead = getrandom(writePtr, bytesRemaining, /*flags=*/0);
-        if (bytesRead < 0) {
-            LOG_FATAL_IF(errno != EINTR, "%d - %s", errno, strerror(errno));
+        if (bytesRead < 0 && errno != EINTR) {
+            std::cerr << errno << ": " << strerror(errno) << std::endl;
+            exit(-1);
         }
         bytesRemaining -= bytesRead;
         writePtr += bytesRead;
@@ -95,17 +83,14 @@ Array composeCertificateRequest(ProtectedData&& protectedData, DeviceInfo&& devi
     return certificateRequest;
 }
 
-int32_t errorMsg(string name) {
-    std::cerr << "Failed for rkp instance: " << name;
-    return -1;
-}
-
 std::vector<uint8_t> getEekChain() {
     if (FLAGS_test_mode) {
         const std::vector<uint8_t> kFakeEekId = {'f', 'a', 'k', 'e', 0};
         auto eekOrErr = generateEekChain(3 /* chainlength */, kFakeEekId);
-        LOG_FATAL_IF(!eekOrErr, "Failed to generate test EEK somehow: %s",
-                     eekOrErr.message().c_str());
+        if (!eekOrErr) {
+            std::cerr << "Failed to generate test EEK somehow: " << eekOrErr.message() << std::endl;
+            exit(-1);
+        }
         auto [eek, ignored_pubkey, ignored_privkey] = eekOrErr.moveValue();
         return eek;
     }
@@ -133,42 +118,43 @@ void writeOutput(const Array& csr) {
     }
 }
 
+// Callback for AServiceManager_forEachDeclaredInstance that writes out a CSR
+// for every IRemotelyProvisionedComponent.
+void getCsrForInstance(const char* name, void* /*context*/) {
+    const std::vector<uint8_t> challenge = generateChallenge();
+
+    auto fullName = std::string(IRemotelyProvisionedComponent::descriptor) + "/" + name;
+    AIBinder* rkpAiBinder = AServiceManager_getService(fullName.c_str());
+    ::ndk::SpAIBinder rkp_binder(rkpAiBinder);
+    auto rkp_service = IRemotelyProvisionedComponent::fromBinder(rkp_binder);
+    if (!rkp_service) {
+        std::cerr << "Unable to get binder object for '" << fullName << "', skipping.";
+        return;
+    }
+
+    std::vector<uint8_t> keysToSignMac;
+    std::vector<MacedPublicKey> emptyKeys;
+    DeviceInfo deviceInfo;
+    ProtectedData protectedData;
+    ::ndk::ScopedAStatus status = rkp_service->generateCertificateRequest(
+        FLAGS_test_mode, emptyKeys, getEekChain(), challenge, &deviceInfo, &protectedData,
+        &keysToSignMac);
+    if (!status.isOk()) {
+        std::cerr << "Bundle extraction failed for '" << fullName
+                  << "'. Error code: " << status.getServiceSpecificError() << "." << std::endl;
+        exit(-1);
+    }
+    writeOutput(
+        composeCertificateRequest(std::move(protectedData), std::move(deviceInfo), challenge));
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
     gflags::ParseCommandLineFlags(&argc, &argv, /*remove_flags=*/true);
 
-    const std::vector<uint8_t> eek_chain = getEekChain();
-    const std::vector<uint8_t> challenge = generateChallenge();
+    AServiceManager_forEachDeclaredInstance(IRemotelyProvisionedComponent::descriptor,
+                                            /*context=*/nullptr, getCsrForInstance);
 
-    std::shared_ptr<const HalManifest> manifest = VintfObject::GetDeviceHalManifest();
-    set<string> rkpNames = manifest->getAidlInstances(kPackage, kInterface);
-    for (auto name : rkpNames) {
-        string fullName = kFormattedName + name;
-        if (!AServiceManager_isDeclared(fullName.c_str())) {
-            ALOGE("Could not find the following instance declared in the manifest: %s\n",
-                  fullName.c_str());
-            return errorMsg(name);
-        }
-        AIBinder* rkpAiBinder = AServiceManager_getService(fullName.c_str());
-        ::ndk::SpAIBinder rkp_binder(rkpAiBinder);
-        auto rkp_service = IRemotelyProvisionedComponent::fromBinder(rkp_binder);
-        std::vector<uint8_t> keysToSignMac;
-        std::vector<MacedPublicKey> emptyKeys;
-
-        DeviceInfo deviceInfo;
-        ProtectedData protectedData;
-        if (rkp_service) {
-            ALOGE("extracting bundle");
-            ::ndk::ScopedAStatus status = rkp_service->generateCertificateRequest(
-                FLAGS_test_mode, emptyKeys, eek_chain, challenge, &deviceInfo, &protectedData,
-                &keysToSignMac);
-            if (!status.isOk()) {
-                ALOGE("Bundle extraction failed. Error code: %d", status.getServiceSpecificError());
-                return errorMsg(name);
-            }
-            writeOutput(composeCertificateRequest(std::move(protectedData), std::move(deviceInfo),
-                                                  challenge));
-        }
-    }
+    return 0;
 }
