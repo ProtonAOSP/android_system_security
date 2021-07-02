@@ -31,6 +31,7 @@ rust_bindgen {
         "--size_t-is-usize",
         "--allowlist-function=__system_property_find",
         "--allowlist-function=__system_property_read_callback",
+        "--allowlist-function=__system_property_set",
         "--allowlist-function=__system_property_wait",
     ],
 }
