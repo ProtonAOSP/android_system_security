@@ -24,10 +24,14 @@ use android_security_legacykeystore::binder::{
     ThreadState,
 };
 use anyhow::{Context, Result};
-use keystore2::{async_task::AsyncTask, legacy_blob::LegacyBlobLoader, utils::watchdog as wd};
+use keystore2::{
+    async_task::AsyncTask, legacy_blob::LegacyBlobLoader, maintenance::DeleteListener,
+    maintenance::Domain, utils::watchdog as wd,
+};
 use rusqlite::{
     params, Connection, OptionalExtension, Transaction, TransactionBehavior, NO_PARAMS,
 };
+use std::sync::Arc;
 use std::{
     collections::HashSet,
     path::{Path, PathBuf},
@@ -144,6 +148,25 @@ impl DB {
         })?;
         Ok(removed == 1)
     }
+
+    fn remove_uid(&mut self, uid: u32) -> Result<()> {
+        self.with_transaction(TransactionBehavior::Immediate, |tx| {
+            tx.execute("DELETE FROM profiles WHERE owner = ?;", params![uid])
+                .context("In remove_uid: Failed to delete.")
+        })?;
+        Ok(())
+    }
+
+    fn remove_user(&mut self, user_id: u32) -> Result<()> {
+        self.with_transaction(TransactionBehavior::Immediate, |tx| {
+            tx.execute(
+                "DELETE FROM profiles WHERE cast ( ( owner/? ) as int) = ?;",
+                params![cutils_bindgen::AID_USER_OFFSET, user_id],
+            )
+            .context("In remove_uid: Failed to delete.")
+        })?;
+        Ok(())
+    }
 }
 
 /// This is the main LegacyKeystore error type, it wraps binder exceptions and the
@@ -209,6 +232,19 @@ where
     )
 }
 
+struct LegacyKeystoreDeleteListener {
+    legacy_keystore: Arc<LegacyKeystore>,
+}
+
+impl DeleteListener for LegacyKeystoreDeleteListener {
+    fn delete_namespace(&self, domain: Domain, namespace: i64) -> Result<()> {
+        self.legacy_keystore.delete_namespace(domain, namespace)
+    }
+    fn delete_user(&self, user_id: u32) -> Result<()> {
+        self.legacy_keystore.delete_user(user_id)
+    }
+}
+
 /// Implements ILegacyKeystore AIDL interface.
 pub struct LegacyKeystore {
     db_path: PathBuf,
@@ -226,14 +262,23 @@ impl LegacyKeystore {
     ///       It is kept for backward compatibility with early adopters.
     const LEGACY_KEYSTORE_FILE_NAME: &'static str = "vpnprofilestore.sqlite";
 
+    const WIFI_NAMESPACE: i64 = 102;
+    const AID_WIFI: u32 = 1010;
+
     /// Creates a new LegacyKeystore instance.
-    pub fn new_native_binder(path: &Path) -> Strong<dyn ILegacyKeystore> {
+    pub fn new_native_binder(
+        path: &Path,
+    ) -> (Box<dyn DeleteListener + Send + Sync + 'static>, Strong<dyn ILegacyKeystore>) {
         let mut db_path = path.to_path_buf();
         db_path.push(Self::LEGACY_KEYSTORE_FILE_NAME);
 
-        let result = Self { db_path, async_task: Default::default() };
-        result.init_shelf(path);
-        BnLegacyKeystore::new_binder(result, BinderFeatures::default())
+        let legacy_keystore = Arc::new(Self { db_path, async_task: Default::default() });
+        legacy_keystore.init_shelf(path);
+        let service = LegacyKeystoreService { legacy_keystore: legacy_keystore.clone() };
+        (
+            Box::new(LegacyKeystoreDeleteListener { legacy_keystore }),
+            BnLegacyKeystore::new_binder(service, BinderFeatures::default()),
+        )
     }
 
     fn open_db(&self) -> Result<DB> {
@@ -242,18 +287,17 @@ impl LegacyKeystore {
 
     fn get_effective_uid(uid: i32) -> Result<u32> {
         const AID_SYSTEM: u32 = 1000;
-        const AID_WIFI: u32 = 1010;
         let calling_uid = ThreadState::get_calling_uid();
         let uid = uid as u32;
 
         if uid == UID_SELF as u32 || uid == calling_uid {
             Ok(calling_uid)
-        } else if calling_uid == AID_SYSTEM && uid == AID_WIFI {
+        } else if calling_uid == AID_SYSTEM && uid == Self::AID_WIFI {
             // The only exception for legacy reasons is allowing SYSTEM to access
             // the WIFI namespace.
             // IMPORTANT: If you attempt to add more exceptions, it means you are adding
             // more callers to this deprecated feature. DON'T!
-            Ok(AID_WIFI)
+            Ok(Self::AID_WIFI)
         } else {
             Err(Error::perm()).with_context(|| {
                 format!("In get_effective_uid: caller: {}, requested uid: {}.", calling_uid, uid)
@@ -303,6 +347,36 @@ impl LegacyKeystore {
         }
     }
 
+    fn delete_namespace(&self, domain: Domain, namespace: i64) -> Result<()> {
+        let uid = match domain {
+            Domain::APP => namespace as u32,
+            Domain::SELINUX => {
+                if namespace == Self::WIFI_NAMESPACE {
+                    // Namespace WIFI gets mapped to AID_WIFI.
+                    Self::AID_WIFI
+                } else {
+                    // Nothing to do for any other namespace.
+                    return Ok(());
+                }
+            }
+            _ => return Ok(()),
+        };
+
+        if let Err(e) = self.bulk_delete_uid(uid) {
+            log::warn!("In LegacyKeystore::delete_namespace: {:?}", e);
+        }
+        let mut db = self.open_db().context("In LegacyKeystore::delete_namespace.")?;
+        db.remove_uid(uid).context("In LegacyKeystore::delete_namespace.")
+    }
+
+    fn delete_user(&self, user_id: u32) -> Result<()> {
+        if let Err(e) = self.bulk_delete_user(user_id) {
+            log::warn!("In LegacyKeystore::delete_user: {:?}", e);
+        }
+        let mut db = self.open_db().context("In LegacyKeystore::delete_user.")?;
+        db.remove_user(user_id).context("In LegacyKeystore::delete_user.")
+    }
+
     fn list(&self, prefix: &str, uid: i32) -> Result<Vec<String>> {
         let mut db = self.open_db().context("In list.")?;
         let uid = Self::get_effective_uid(uid).context("In list.")?;
@@ -340,7 +414,7 @@ impl LegacyKeystore {
         self.do_serialized(move |state| {
             state
                 .legacy_loader
-                .list_legacy_keystore_entries(uid)
+                .list_legacy_keystore_entries_for_uid(uid)
                 .context("Trying to list legacy keystore entries.")
         })
         .context("In list_legacy.")
@@ -362,6 +436,38 @@ impl LegacyKeystore {
             Ok(migrated)
         })
         .context("In get_legacy.")
+    }
+
+    fn bulk_delete_uid(&self, uid: u32) -> Result<()> {
+        self.do_serialized(move |state| {
+            let entries = state
+                .legacy_loader
+                .list_legacy_keystore_entries_for_uid(uid)
+                .context("In bulk_delete_uid: Trying to list entries.")?;
+            for alias in entries.iter() {
+                if let Err(e) = state.legacy_loader.remove_legacy_keystore_entry(uid, alias) {
+                    log::warn!("In bulk_delete_uid: Failed to delete legacy entry. {:?}", e);
+                }
+            }
+            Ok(())
+        })
+    }
+
+    fn bulk_delete_user(&self, user_id: u32) -> Result<()> {
+        self.do_serialized(move |state| {
+            let entries = state
+                .legacy_loader
+                .list_legacy_keystore_entries_for_user(user_id)
+                .context("In bulk_delete_user: Trying to list entries.")?;
+            for (uid, entries) in entries.iter() {
+                for alias in entries.iter() {
+                    if let Err(e) = state.legacy_loader.remove_legacy_keystore_entry(*uid, alias) {
+                        log::warn!("In bulk_delete_user: Failed to delete legacy entry. {:?}", e);
+                    }
+                }
+            }
+            Ok(())
+        })
     }
 
     fn migrate_one_legacy_entry(
@@ -386,24 +492,28 @@ impl LegacyKeystore {
     }
 }
 
-impl binder::Interface for LegacyKeystore {}
+struct LegacyKeystoreService {
+    legacy_keystore: Arc<LegacyKeystore>,
+}
 
-impl ILegacyKeystore for LegacyKeystore {
+impl binder::Interface for LegacyKeystoreService {}
+
+impl ILegacyKeystore for LegacyKeystoreService {
     fn get(&self, alias: &str, uid: i32) -> BinderResult<Vec<u8>> {
         let _wp = wd::watch_millis("ILegacyKeystore::get", 500);
-        map_or_log_err(self.get(alias, uid), Ok)
+        map_or_log_err(self.legacy_keystore.get(alias, uid), Ok)
     }
     fn put(&self, alias: &str, uid: i32, entry: &[u8]) -> BinderResult<()> {
         let _wp = wd::watch_millis("ILegacyKeystore::put", 500);
-        map_or_log_err(self.put(alias, uid, entry), Ok)
+        map_or_log_err(self.legacy_keystore.put(alias, uid, entry), Ok)
     }
     fn remove(&self, alias: &str, uid: i32) -> BinderResult<()> {
         let _wp = wd::watch_millis("ILegacyKeystore::remove", 500);
-        map_or_log_err(self.remove(alias, uid), Ok)
+        map_or_log_err(self.legacy_keystore.remove(alias, uid), Ok)
     }
     fn list(&self, prefix: &str, uid: i32) -> BinderResult<Vec<String>> {
         let _wp = wd::watch_millis("ILegacyKeystore::list", 500);
-        map_or_log_err(self.list(prefix, uid), Ok)
+        map_or_log_err(self.legacy_keystore.list(prefix, uid), Ok)
     }
 }
 
@@ -463,6 +573,52 @@ mod db_test {
         db.put(2, "test1", TEST_BLOB4).expect("Failed to replace test1.");
         // Verify test1 is TEST_BLOB4.
         assert_eq!(Some(TEST_BLOB4), db.get(2, "test1").expect("Failed to get entry.").as_deref());
+    }
+
+    #[test]
+    fn test_delete_uid() {
+        let test_dir = TempDir::new("test_delete_uid_").expect("Failed to create temp dir.");
+        let mut db = DB::new(&test_dir.build().push(LegacyKeystore::LEGACY_KEYSTORE_FILE_NAME))
+            .expect("Failed to open database.");
+
+        // Insert three entries for owner 2.
+        db.put(2, "test1", TEST_BLOB1).expect("Failed to insert test1.");
+        db.put(2, "test2", TEST_BLOB2).expect("Failed to insert test2.");
+        db.put(3, "test3", TEST_BLOB3).expect("Failed to insert test3.");
+
+        db.remove_uid(2).expect("Failed to remove uid 2");
+
+        assert_eq!(Vec::<String>::new(), db.list(2).expect("Failed to list entries."));
+
+        assert_eq!(vec!["test3".to_string(),], db.list(3).expect("Failed to list entries."));
+    }
+
+    #[test]
+    fn test_delete_user() {
+        let test_dir = TempDir::new("test_delete_user_").expect("Failed to create temp dir.");
+        let mut db = DB::new(&test_dir.build().push(LegacyKeystore::LEGACY_KEYSTORE_FILE_NAME))
+            .expect("Failed to open database.");
+
+        // Insert three entries for owner 2.
+        db.put(2 + 2 * cutils_bindgen::AID_USER_OFFSET, "test1", TEST_BLOB1)
+            .expect("Failed to insert test1.");
+        db.put(4 + 2 * cutils_bindgen::AID_USER_OFFSET, "test2", TEST_BLOB2)
+            .expect("Failed to insert test2.");
+        db.put(3, "test3", TEST_BLOB3).expect("Failed to insert test3.");
+
+        db.remove_user(2).expect("Failed to remove user 2");
+
+        assert_eq!(
+            Vec::<String>::new(),
+            db.list(2 + 2 * cutils_bindgen::AID_USER_OFFSET).expect("Failed to list entries.")
+        );
+
+        assert_eq!(
+            Vec::<String>::new(),
+            db.list(4 + 2 * cutils_bindgen::AID_USER_OFFSET).expect("Failed to list entries.")
+        );
+
+        assert_eq!(vec!["test3".to_string(),], db.list(3).expect("Failed to list entries."));
     }
 
     #[test]

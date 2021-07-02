@@ -97,7 +97,11 @@ fn main() {
             panic!("Failed to register service {} because of {:?}.", AUTHORIZATION_SERVICE_NAME, e);
         });
 
-    let maintenance_service = Maintenance::new_native_binder().unwrap_or_else(|e| {
+    let (delete_listener, legacykeystore) = LegacyKeystore::new_native_binder(
+        &keystore2::globals::DB_PATH.read().expect("Could not get DB_PATH."),
+    );
+
+    let maintenance_service = Maintenance::new_native_binder(delete_listener).unwrap_or_else(|e| {
         panic!("Failed to create service {} because of {:?}.", USER_MANAGER_SERVICE_NAME, e);
     });
     binder::add_service(USER_MANAGER_SERVICE_NAME, maintenance_service.as_binder()).unwrap_or_else(
@@ -128,9 +132,6 @@ fn main() {
         });
     }
 
-    let legacykeystore = LegacyKeystore::new_native_binder(
-        &keystore2::globals::DB_PATH.read().expect("Could not get DB_PATH."),
-    );
     binder::add_service(LEGACY_KEYSTORE_SERVICE_NAME, legacykeystore.as_binder()).unwrap_or_else(
         |e| {
             panic!(

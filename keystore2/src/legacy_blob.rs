@@ -678,7 +678,7 @@ impl LegacyBlobLoader {
     }
 
     /// List all entries belonging to the given uid.
-    pub fn list_legacy_keystore_entries(&self, uid: u32) -> Result<Vec<String>> {
+    pub fn list_legacy_keystore_entries_for_uid(&self, uid: u32) -> Result<Vec<String>> {
         let mut path = self.path.clone();
         let user_id = uid_to_android_user(uid);
         path.push(format!("user_{}", user_id));
@@ -690,7 +690,7 @@ impl LegacyBlobLoader {
                 _ => {
                     return Err(e).context(format!(
                         concat!(
-                            "In list_legacy_keystore_entries: ,",
+                            "In list_legacy_keystore_entries_for_uid: ,",
                             "Failed to open legacy blob database: {:?}"
                         ),
                         path
@@ -701,18 +701,51 @@ impl LegacyBlobLoader {
         let mut result: Vec<String> = Vec::new();
         for entry in dir {
             let file_name = entry
-                .context("In list_legacy_keystore_entries: Trying to access dir entry")?
+                .context("In list_legacy_keystore_entries_for_uid: Trying to access dir entry")?
                 .file_name();
             if let Some(f) = file_name.to_str() {
                 let encoded_alias = &f[uid_str.len() + 1..];
                 if f.starts_with(&uid_str) && !Self::is_keystore_alias(encoded_alias) {
-                    result.push(
-                        Self::decode_alias(encoded_alias)
-                            .context("In list_legacy_keystore_entries: Trying to decode alias.")?,
-                    )
+                    result.push(Self::decode_alias(encoded_alias).context(
+                        "In list_legacy_keystore_entries_for_uid: Trying to decode alias.",
+                    )?)
                 }
             }
         }
+        Ok(result)
+    }
+
+    fn extract_legacy_alias(encoded_alias: &str) -> Option<String> {
+        if !Self::is_keystore_alias(encoded_alias) {
+            Self::decode_alias(encoded_alias).ok()
+        } else {
+            None
+        }
+    }
+
+    /// Lists all keystore entries belonging to the given user. Returns a map of UIDs
+    /// to sets of decoded aliases. Only returns entries that do not begin with
+    /// KNOWN_KEYSTORE_PREFIXES.
+    pub fn list_legacy_keystore_entries_for_user(
+        &self,
+        user_id: u32,
+    ) -> Result<HashMap<u32, HashSet<String>>> {
+        let user_entries = self
+            .list_user(user_id)
+            .context("In list_legacy_keystore_entries_for_user: Trying to list user.")?;
+
+        let result =
+            user_entries.into_iter().fold(HashMap::<u32, HashSet<String>>::new(), |mut acc, v| {
+                if let Some(sep_pos) = v.find('_') {
+                    if let Ok(uid) = v[0..sep_pos].parse::<u32>() {
+                        if let Some(alias) = Self::extract_legacy_alias(&v[sep_pos + 1..]) {
+                            let entry = acc.entry(uid).or_default();
+                            entry.insert(alias);
+                        }
+                    }
+                }
+                acc
+            });
         Ok(result)
     }
 
@@ -798,10 +831,10 @@ impl LegacyBlobLoader {
             .is_none())
     }
 
-    fn extract_alias(encoded_alias: &str) -> Option<String> {
+    fn extract_keystore_alias(encoded_alias: &str) -> Option<String> {
         // We can check the encoded alias because the prefixes we are interested
         // in are all in the printable range that don't get mangled.
-        for prefix in &["USRPKEY_", "USRSKEY_", "USRCERT_", "CACERT_"] {
+        for prefix in Self::KNOWN_KEYSTORE_PREFIXES {
             if let Some(alias) = encoded_alias.strip_prefix(prefix) {
                 return Self::decode_alias(&alias).ok();
             }
@@ -849,7 +882,7 @@ impl LegacyBlobLoader {
             user_entries.into_iter().fold(HashMap::<u32, HashSet<String>>::new(), |mut acc, v| {
                 if let Some(sep_pos) = v.find('_') {
                     if let Ok(uid) = v[0..sep_pos].parse::<u32>() {
-                        if let Some(alias) = Self::extract_alias(&v[sep_pos + 1..]) {
+                        if let Some(alias) = Self::extract_keystore_alias(&v[sep_pos + 1..]) {
                             let entry = acc.entry(uid).or_default();
                             entry.insert(alias);
                         }
@@ -877,7 +910,7 @@ impl LegacyBlobLoader {
                     return None;
                 }
                 let encoded_alias = &v[uid_str.len()..];
-                Self::extract_alias(encoded_alias)
+                Self::extract_keystore_alias(encoded_alias)
             })
             .collect();
 
@@ -1388,7 +1421,7 @@ mod test {
         let temp_dir = TempDir::new("list_legacy_keystore_entries_on_non_existing_user")?;
         let legacy_blob_loader = LegacyBlobLoader::new(temp_dir.path());
 
-        assert!(legacy_blob_loader.list_legacy_keystore_entries(20)?.is_empty());
+        assert!(legacy_blob_loader.list_legacy_keystore_entries_for_user(20)?.is_empty());
 
         Ok(())
     }
