@@ -234,26 +234,6 @@ impl RemoteProvisioningService {
         Ok(BnRemoteProvisioning::new_binder(result, BinderFeatures::default()))
     }
 
-    /// Populates the AttestationPoolStatus parcelable with information about how many
-    /// certs will be expiring by the date provided in `expired_by` along with how many
-    /// keys have not yet been assigned.
-    pub fn get_pool_status(
-        &self,
-        expired_by: i64,
-        sec_level: SecurityLevel,
-    ) -> Result<AttestationPoolStatus> {
-        let (_, _, uuid) = get_keymint_device(&sec_level)?;
-        DB.with::<_, Result<AttestationPoolStatus>>(|db| {
-            let mut db = db.borrow_mut();
-            // delete_expired_attestation_keys is always safe to call, and will remove anything
-            // older than the date at the time of calling. No work should be done on the
-            // attestation keys unless the pool status is checked first, so this call should be
-            // enough to routinely clean out expired keys.
-            db.delete_expired_attestation_keys()?;
-            db.get_attestation_pool_status(expired_by, &uuid)
-        })
-    }
-
     /// Generates a CBOR blob which will be assembled by the calling code into a larger
     /// CBOR blob intended for delivery to a provisioning serever. This blob will contain
     /// `num_csr` certificate signing requests for attestation keys generated in the TEE,
@@ -389,6 +369,22 @@ impl RemoteProvisioningService {
     }
 }
 
+/// Populates the AttestationPoolStatus parcelable with information about how many
+/// certs will be expiring by the date provided in `expired_by` along with how many
+/// keys have not yet been assigned.
+pub fn get_pool_status(expired_by: i64, sec_level: SecurityLevel) -> Result<AttestationPoolStatus> {
+    let (_, _, uuid) = get_keymint_device(&sec_level)?;
+    DB.with::<_, Result<AttestationPoolStatus>>(|db| {
+        let mut db = db.borrow_mut();
+        // delete_expired_attestation_keys is always safe to call, and will remove anything
+        // older than the date at the time of calling. No work should be done on the
+        // attestation keys unless the pool status is checked first, so this call should be
+        // enough to routinely clean out expired keys.
+        db.delete_expired_attestation_keys()?;
+        db.get_attestation_pool_status(expired_by, &uuid)
+    })
+}
+
 impl binder::Interface for RemoteProvisioningService {}
 
 // Implementation of IRemoteProvisioning. See AIDL spec at
@@ -400,7 +396,7 @@ impl IRemoteProvisioning for RemoteProvisioningService {
         sec_level: SecurityLevel,
     ) -> binder::public_api::Result<AttestationPoolStatus> {
         let _wp = wd::watch_millis("IRemoteProvisioning::getPoolStatus", 500);
-        map_or_log_err(self.get_pool_status(expired_by, sec_level), Ok)
+        map_or_log_err(get_pool_status(expired_by, sec_level), Ok)
     }
 
     fn generateCsr(

@@ -16,14 +16,17 @@
 
 package android.security.metrics;
 
-import android.security.metrics.PoolStatus;
+import android.security.metrics.SecurityLevel;
 
 /**
- * Count of keys in the key pool related to Remote Key Provisioning (RKP).
+ * Count of keys in the attestation key pool related to Remote Key Provisioning (RKP).
  * @hide
  */
 @RustDerive(Clone=true, Eq=true, PartialEq=true, Ord=true, PartialOrd=true, Hash=true)
 parcelable RkpPoolStats {
-    PoolStatus pool_status;
-    int count_of_keys;
+    SecurityLevel security_level;
+    int expiring;
+    int unassigned;
+    int attested;
+    int total;
 }

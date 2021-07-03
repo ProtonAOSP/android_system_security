@@ -45,17 +45,21 @@ aidl_interface {
 
 cc_binary {
     name: "rkp_factory_extraction_tool",
+    vendor: true,
     srcs: ["rkp_factory_extraction_tool.cpp"],
     shared_libs: [
         "android.hardware.security.keymint-V1-ndk_platform",
         "libbinder",
         "libbinder_ndk",
+        "libcrypto",
+        "liblog",
+    ],
+    static_libs: [
+        "libbase",
         "libcppbor_external",
         "libcppcose_rkp",
-        "libcrypto",
         "libgflags",
-        "liblog",
+        "libjsoncpp",
         "libkeymint_remote_prov_support",
-        "libvintf",
     ],
 }

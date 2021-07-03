@@ -21,6 +21,7 @@ use crate::error::get_error_code;
 use crate::globals::DB;
 use crate::key_parameter::KeyParameterValue as KsKeyParamValue;
 use crate::operation::Outcome;
+use crate::remote_provisioning::get_pool_status;
 use android_hardware_security_keymint::aidl::android::hardware::security::keymint::{
     Algorithm::Algorithm, BlockMode::BlockMode, Digest::Digest, EcCurve::EcCurve,
     HardwareAuthenticatorType::HardwareAuthenticatorType, KeyOrigin::KeyOrigin,
@@ -38,12 +39,15 @@ use android_security_metrics::aidl::android::security::metrics::{
     KeyOrigin::KeyOrigin as MetricsKeyOrigin, Keystore2AtomWithOverflow::Keystore2AtomWithOverflow,
     KeystoreAtom::KeystoreAtom, KeystoreAtomPayload::KeystoreAtomPayload,
     Outcome::Outcome as MetricsOutcome, Purpose::Purpose as MetricsPurpose,
-    SecurityLevel::SecurityLevel as MetricsSecurityLevel, Storage::Storage as MetricsStorage,
+    RkpError::RkpError as MetricsRkpError, RkpErrorStats::RkpErrorStats,
+    RkpPoolStats::RkpPoolStats, SecurityLevel::SecurityLevel as MetricsSecurityLevel,
+    Storage::Storage as MetricsStorage,
 };
 use anyhow::Result;
 use lazy_static::lazy_static;
 use std::collections::HashMap;
 use std::sync::Mutex;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 lazy_static! {
     /// Singleton for MetricsStore.
@@ -83,7 +87,10 @@ impl MetricsStore {
             return pull_storage_stats();
         }
 
-        // TODO (b/184301651): process and return RKP pool stats.
+        // Process and return RKP pool stats.
+        if AtomID::RKP_POOL_STATS == atom_id {
+            return pull_attestation_pool_stats();
+        }
 
         // It is safe to call unwrap here since the lock can not be poisoned based on its usage
         // in this module and the lock is not acquired in the same thread before.
@@ -532,6 +539,47 @@ fn pull_storage_stats() -> Result<Vec<KeystoreAtom>> {
         append(db.get_storage_stat(MetricsStorage::BLOB_METADATA_BLOB_ENTRY_ID_INDEX));
     });
     Ok(atom_vec)
+}
+
+fn pull_attestation_pool_stats() -> Result<Vec<KeystoreAtom>> {
+    let mut atoms = Vec::<KeystoreAtom>::new();
+    for sec_level in &[SecurityLevel::TRUSTED_ENVIRONMENT, SecurityLevel::STRONGBOX] {
+        let expired_by = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_else(|_| Duration::new(0, 0))
+            .as_secs() as i64;
+
+        let result = get_pool_status(expired_by, *sec_level);
+
+        if let Ok(pool_status) = result {
+            let rkp_pool_stats = RkpPoolStats {
+                security_level: process_security_level(*sec_level),
+                expiring: pool_status.expiring,
+                unassigned: pool_status.unassigned,
+                attested: pool_status.attested,
+                total: pool_status.total,
+            };
+            atoms.push(KeystoreAtom {
+                payload: KeystoreAtomPayload::RkpPoolStats(rkp_pool_stats),
+                ..Default::default()
+            });
+        } else {
+            log::error!(
+                concat!(
+                    "In pull_attestation_pool_stats: Failed to retrieve pool status",
+                    " for security level: {:?}"
+                ),
+                sec_level
+            );
+        }
+    }
+    Ok(atoms)
+}
+
+/// Log error events related to Remote Key Provisioning (RKP).
+pub fn log_rkp_error_stats(rkp_error: MetricsRkpError) {
+    let rkp_error_stats = KeystoreAtomPayload::RkpErrorStats(RkpErrorStats { rkpError: rkp_error });
+    METRICS_STORE.insert_atom(AtomID::RKP_ERROR_STATS, rkp_error_stats);
 }
 
 /// Enum defining the bit position for each padding mode. Since padding mode can be repeatable, it
