@@ -20,6 +20,7 @@ import android.hardware.security.keymint.DeviceInfo;
 import android.hardware.security.keymint.ProtectedData;
 import android.hardware.security.keymint.SecurityLevel;
 import android.security.remoteprovisioning.AttestationPoolStatus;
+import android.security.remoteprovisioning.ImplInfo;
 
 /**
  * `IRemoteProvisioning` is the interface provided to use the remote provisioning functionality
@@ -127,13 +128,14 @@ interface IRemoteProvisioning {
     void generateKeyPair(in boolean is_test_mode, in SecurityLevel secLevel);
 
     /**
-     * This method returns the SecurityLevels of whichever instances of
+     * This method returns implementation information for whichever instances of
      * IRemotelyProvisionedComponent are running on the device. The RemoteProvisioner app needs to
-     * know which KM instances it should be generating and managing attestation keys for.
+     * know which KM instances it should be generating and managing attestation keys for, and which
+     * EC curves are supported in those instances.
      *
-     * @return The array of security levels.
+     * @return The array of ImplInfo parcelables.
      */
-     SecurityLevel[] getSecurityLevels();
+     ImplInfo[] getImplementationInfo();
 
     /**
      * This method deletes all remotely provisioned attestation keys in the database, regardless
