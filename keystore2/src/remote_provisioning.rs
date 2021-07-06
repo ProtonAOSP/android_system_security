@@ -180,23 +180,34 @@ impl RemProvState {
             // and therefore will not be attested.
             Ok(None)
         } else {
-            match self.get_rem_prov_attest_key(&key, caller_uid, db).context(concat!(
-                "In get_remote_provisioning_key_and_certs: Failed to get ",
-                "attestation key"
-            ))? {
-                Some(cert_chain) => Ok(Some((
-                    AttestationKey {
-                        keyBlob: cert_chain.private_key.to_vec(),
-                        attestKeyParams: vec![],
-                        issuerSubjectName: parse_subject_from_certificate(&cert_chain.batch_cert)
+            match self.get_rem_prov_attest_key(&key, caller_uid, db) {
+                Err(e) => {
+                    log::error!(
+                        concat!(
+                            "In get_remote_provisioning_key_and_certs: Failed to get ",
+                            "attestation key. {:?}"
+                        ),
+                        e
+                    );
+                    Ok(None)
+                }
+                Ok(v) => match v {
+                    Some(cert_chain) => Ok(Some((
+                        AttestationKey {
+                            keyBlob: cert_chain.private_key.to_vec(),
+                            attestKeyParams: vec![],
+                            issuerSubjectName: parse_subject_from_certificate(
+                                &cert_chain.batch_cert,
+                            )
                             .context(concat!(
-                            "In get_remote_provisioning_key_and_certs: Failed to ",
-                            "parse subject."
-                        ))?,
-                    },
-                    Certificate { encodedCertificate: cert_chain.cert_chain },
-                ))),
-                None => Ok(None),
+                                "In get_remote_provisioning_key_and_certs: Failed to ",
+                                "parse subject."
+                            ))?,
+                        },
+                        Certificate { encodedCertificate: cert_chain.cert_chain },
+                    ))),
+                    None => Ok(None),
+                },
             }
         }
     }
