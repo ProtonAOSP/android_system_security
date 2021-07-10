@@ -15,6 +15,7 @@
 //! This crate provides the PropertyWatcher type, which watches for changes
 //! in Android system properties.
 
+use anyhow::{anyhow, Context, Result as AnyhowResult};
 use keystore2_system_property_bindgen::prop_info as PropInfo;
 use std::os::raw::c_char;
 use std::ptr::null;
@@ -48,6 +49,9 @@ pub enum PropertyWatcherError {
     /// read callback returned an error
     #[error("Callback failed")]
     CallbackError(#[from] anyhow::Error),
+    /// Failure in setting the system property
+    #[error("__system_property_set failed.")]
+    SetPropertyFailed,
 }
 
 /// Result type specific for this crate.
@@ -187,5 +191,27 @@ impl PropertyWatcher {
         }
         self.serial = new_serial;
         Ok(())
+    }
+}
+
+/// Writes a system property.
+pub fn write(name: &str, value: &str) -> AnyhowResult<()> {
+    if
+    // Unsafe required for FFI call. Input and output are both const and valid strings.
+    unsafe {
+        // If successful, __system_property_set returns 0, otherwise, returns -1.
+        keystore2_system_property_bindgen::__system_property_set(
+            CString::new(name)
+                .context("In keystore2::system_property::write: Construction CString from name.")?
+                .as_ptr(),
+            CString::new(value)
+                .context("In keystore2::system_property::write: Constructing CString from value.")?
+                .as_ptr(),
+        )
+    } == 0
+    {
+        Ok(())
+    } else {
+        Err(anyhow!(PropertyWatcherError::SetPropertyFailed))
     }
 }

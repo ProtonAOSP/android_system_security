@@ -25,6 +25,7 @@ import android.security.metrics.StorageStats;
 import android.security.metrics.Keystore2AtomWithOverflow;
 import android.security.metrics.RkpErrorStats;
 import android.security.metrics.RkpPoolStats;
+import android.security.metrics.CrashStats;
 
 /** @hide */
 @RustDerive(Clone=true, Eq=true, PartialEq=true, Ord=true, PartialOrd=true, Hash=true)
@@ -38,4 +39,5 @@ union KeystoreAtomPayload {
     KeyOperationWithPurposeAndModesInfo keyOperationWithPurposeAndModesInfo;
     KeyOperationWithGeneralInfo keyOperationWithGeneralInfo;
     RkpErrorStats rkpErrorStats;
+    CrashStats crashStats;
 }

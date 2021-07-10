@@ -29,7 +29,8 @@ use android_hardware_security_keymint::aidl::android::hardware::security::keymin
     SecurityLevel::SecurityLevel,
 };
 use android_security_metrics::aidl::android::security::metrics::{
-    Algorithm::Algorithm as MetricsAlgorithm, AtomID::AtomID, EcCurve::EcCurve as MetricsEcCurve,
+    Algorithm::Algorithm as MetricsAlgorithm, AtomID::AtomID, CrashStats::CrashStats,
+    EcCurve::EcCurve as MetricsEcCurve,
     HardwareAuthenticatorType::HardwareAuthenticatorType as MetricsHardwareAuthenticatorType,
     KeyCreationWithAuthInfo::KeyCreationWithAuthInfo,
     KeyCreationWithGeneralInfo::KeyCreationWithGeneralInfo,
@@ -43,11 +44,16 @@ use android_security_metrics::aidl::android::security::metrics::{
     RkpPoolStats::RkpPoolStats, SecurityLevel::SecurityLevel as MetricsSecurityLevel,
     Storage::Storage as MetricsStorage,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
+use keystore2_system_property::{write, PropertyWatcher, PropertyWatcherError};
 use lazy_static::lazy_static;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+// Note: Crash events are recorded at keystore restarts, based on the assumption that keystore only
+// gets restarted after a crash, during a boot cycle.
+const KEYSTORE_CRASH_COUNT_PROPERTY: &str = "keystore.crash_count";
 
 lazy_static! {
     /// Singleton for MetricsStore.
@@ -90,6 +96,16 @@ impl MetricsStore {
         // Process and return RKP pool stats.
         if AtomID::RKP_POOL_STATS == atom_id {
             return pull_attestation_pool_stats();
+        }
+
+        // Process keystore crash stats.
+        if AtomID::CRASH_STATS == atom_id {
+            return Ok(vec![KeystoreAtom {
+                payload: KeystoreAtomPayload::CrashStats(CrashStats {
+                    count_of_crash_events: read_keystore_crash_count()?,
+                }),
+                ..Default::default()
+            }]);
         }
 
         // It is safe to call unwrap here since the lock can not be poisoned based on its usage
@@ -580,6 +596,55 @@ fn pull_attestation_pool_stats() -> Result<Vec<KeystoreAtom>> {
 pub fn log_rkp_error_stats(rkp_error: MetricsRkpError) {
     let rkp_error_stats = KeystoreAtomPayload::RkpErrorStats(RkpErrorStats { rkpError: rkp_error });
     METRICS_STORE.insert_atom(AtomID::RKP_ERROR_STATS, rkp_error_stats);
+}
+
+/// This function tries to read and update the system property: keystore.crash_count.
+/// If the property is absent, it sets the property with value 0. If the property is present, it
+/// increments the value. This helps tracking keystore crashes internally.
+pub fn update_keystore_crash_sysprop() {
+    let crash_count = read_keystore_crash_count();
+    let new_count = match crash_count {
+        Ok(count) => count + 1,
+        Err(error) => {
+            // If the property is absent, this is the first start up during the boot.
+            // Proceed to write the system property with value 0. Otherwise, log and return.
+            if !matches!(
+                error.root_cause().downcast_ref::<PropertyWatcherError>(),
+                Some(PropertyWatcherError::SystemPropertyAbsent)
+            ) {
+                log::warn!(
+                    concat!(
+                        "In update_keystore_crash_sysprop: ",
+                        "Failed to read the existing system property due to: {:?}.",
+                        "Therefore, keystore crashes will not be logged."
+                    ),
+                    error
+                );
+                return;
+            }
+            0
+        }
+    };
+
+    if let Err(e) = write(KEYSTORE_CRASH_COUNT_PROPERTY, &new_count.to_string()) {
+        log::error!(
+            concat!(
+                "In update_keystore_crash_sysprop:: ",
+                "Failed to write the system property due to error: {:?}"
+            ),
+            e
+        );
+    }
+}
+
+/// Read the system property: keystore.crash_count.
+pub fn read_keystore_crash_count() -> Result<i32> {
+    let mut prop_reader = PropertyWatcher::new("keystore.crash_count").context(concat!(
+        "In read_keystore_crash_count: Failed to create reader a PropertyWatcher."
+    ))?;
+    prop_reader
+        .read(|_n, v| v.parse::<i32>().map_err(std::convert::Into::into))
+        .context("In read_keystore_crash_count: Failed to read the existing system property.")
 }
 
 /// Enum defining the bit position for each padding mode. Since padding mode can be repeatable, it
