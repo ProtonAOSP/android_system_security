@@ -67,19 +67,24 @@ std::vector<uint8_t> generateChallenge() {
     return challenge;
 }
 
-Array composeCertificateRequest(ProtectedData&& protectedData, DeviceInfo&& deviceInfo,
-                                const std::vector<uint8_t>& challenge) {
-    Array emptyMacedKeysToSign;
-    emptyMacedKeysToSign
-        .add(std::vector<uint8_t>(0))   // empty protected headers as bstr
-        .add(Map())                     // empty unprotected headers
-        .add(Null())                    // nil for the payload
-        .add(std::vector<uint8_t>(0));  // empty tag as bstr
-    Array certificateRequest;
-    certificateRequest.add(EncodedItem(std::move(deviceInfo.deviceInfo)))
-        .add(challenge)
-        .add(EncodedItem(std::move(protectedData.protectedData)))
-        .add(std::move(emptyMacedKeysToSign));
+Array composeCertificateRequest(const ProtectedData& protectedData,
+                                const DeviceInfo& verifiedDeviceInfo,
+                                const std::vector<uint8_t>& challenge,
+                                const std::vector<uint8_t>& keysToSignMac) {
+    Array macedKeysToSign = Array()
+                                .add(std::vector<uint8_t>(0))  // empty protected headers as bstr
+                                .add(Map())                    // empty unprotected headers
+                                .add(Null())                   // nil for the payload
+                                .add(keysToSignMac);           // MAC as returned from the HAL
+
+    Array deviceInfo =
+        Array().add(EncodedItem(verifiedDeviceInfo.deviceInfo)).add(Map());  // Empty device info
+
+    Array certificateRequest = Array()
+                                   .add(std::move(deviceInfo))
+                                   .add(challenge)
+                                   .add(EncodedItem(protectedData.protectedData))
+                                   .add(std::move(macedKeysToSign));
     return certificateRequest;
 }
 
@@ -134,18 +139,19 @@ void getCsrForInstance(const char* name, void* /*context*/) {
 
     std::vector<uint8_t> keysToSignMac;
     std::vector<MacedPublicKey> emptyKeys;
-    DeviceInfo deviceInfo;
+    DeviceInfo verifiedDeviceInfo;
     ProtectedData protectedData;
     ::ndk::ScopedAStatus status = rkp_service->generateCertificateRequest(
-        FLAGS_test_mode, emptyKeys, getEekChain(), challenge, &deviceInfo, &protectedData,
+        FLAGS_test_mode, emptyKeys, getEekChain(), challenge, &verifiedDeviceInfo, &protectedData,
         &keysToSignMac);
     if (!status.isOk()) {
         std::cerr << "Bundle extraction failed for '" << fullName
                   << "'. Error code: " << status.getServiceSpecificError() << "." << std::endl;
         exit(-1);
     }
-    writeOutput(
-        composeCertificateRequest(std::move(protectedData), std::move(deviceInfo), challenge));
+    auto request =
+        composeCertificateRequest(protectedData, verifiedDeviceInfo, challenge, keysToSignMac);
+    writeOutput(request);
 }
 
 }  // namespace
