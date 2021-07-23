@@ -94,7 +94,12 @@ Result<std::vector<uint8_t>> createDigest(const std::string& path) {
     if (ret < 0) {
         return ErrnoError() << "Failed to compute fs-verity digest for " << path;
     }
-    std::vector<uint8_t> digestVector(&digest->digest[0], &digest->digest[32]);
+    int expected_digest_size = libfsverity_get_digest_size(FS_VERITY_HASH_ALG_SHA256);
+    if (digest->digest_size != expected_digest_size) {
+        return Error() << "Digest does not have expected size: " << expected_digest_size
+                       << " actual: " << digest->digest_size;
+    }
+    std::vector<uint8_t> digestVector(&digest->digest[0], &digest->digest[expected_digest_size]);
     free(digest);
     return digestVector;
 }
@@ -114,7 +119,7 @@ template <typename T> using trailing_unique_ptr = std::unique_ptr<T, DeleteAsPOD
 
 template <typename T>
 static trailing_unique_ptr<T> makeUniqueWithTrailingData(size_t trailing_data_size) {
-    uint8_t* memory = new uint8_t[sizeof(T*) + trailing_data_size];
+    uint8_t* memory = new uint8_t[sizeof(T) + trailing_data_size];
     T* ptr = new (memory) T;
     return trailing_unique_ptr<T>{ptr};
 }
