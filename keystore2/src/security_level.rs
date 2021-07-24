@@ -914,7 +914,7 @@ impl KeystoreSecurityLevel {
                         "In convert_storage_key_to_ephemeral: calling convertStorageKeyToEphemeral (2)",
                         500,
                     );
-                    map_km_error(km_dev.convertStorageKeyToEphemeral(key_blob))
+                    map_km_error(km_dev.convertStorageKeyToEphemeral(&upgraded_blob))
                 }
                     .context(concat!(
                         "In convert_storage_key_to_ephemeral: ",

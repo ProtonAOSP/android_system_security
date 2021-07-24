@@ -30,7 +30,7 @@ use android_hardware_security_keymint::aidl::android::hardware::security::keymin
 };
 use android_security_remoteprovisioning::aidl::android::security::remoteprovisioning::{
     AttestationPoolStatus::AttestationPoolStatus, IRemoteProvisioning::BnRemoteProvisioning,
-    IRemoteProvisioning::IRemoteProvisioning,
+    IRemoteProvisioning::IRemoteProvisioning, ImplInfo::ImplInfo,
 };
 use android_security_remoteprovisioning::binder::{BinderFeatures, Strong};
 use android_system_keystore2::aidl::android::system::keystore2::{
@@ -180,23 +180,34 @@ impl RemProvState {
             // and therefore will not be attested.
             Ok(None)
         } else {
-            match self.get_rem_prov_attest_key(&key, caller_uid, db).context(concat!(
-                "In get_remote_provisioning_key_and_certs: Failed to get ",
-                "attestation key"
-            ))? {
-                Some(cert_chain) => Ok(Some((
-                    AttestationKey {
-                        keyBlob: cert_chain.private_key.to_vec(),
-                        attestKeyParams: vec![],
-                        issuerSubjectName: parse_subject_from_certificate(&cert_chain.batch_cert)
+            match self.get_rem_prov_attest_key(&key, caller_uid, db) {
+                Err(e) => {
+                    log::error!(
+                        concat!(
+                            "In get_remote_provisioning_key_and_certs: Failed to get ",
+                            "attestation key. {:?}"
+                        ),
+                        e
+                    );
+                    Ok(None)
+                }
+                Ok(v) => match v {
+                    Some(cert_chain) => Ok(Some((
+                        AttestationKey {
+                            keyBlob: cert_chain.private_key.to_vec(),
+                            attestKeyParams: vec![],
+                            issuerSubjectName: parse_subject_from_certificate(
+                                &cert_chain.batch_cert,
+                            )
                             .context(concat!(
-                            "In get_remote_provisioning_key_and_certs: Failed to ",
-                            "parse subject."
-                        ))?,
-                    },
-                    Certificate { encodedCertificate: cert_chain.cert_chain },
-                ))),
-                None => Ok(None),
+                                "In get_remote_provisioning_key_and_certs: Failed to ",
+                                "parse subject."
+                            ))?,
+                        },
+                        Certificate { encodedCertificate: cert_chain.cert_chain },
+                    ))),
+                    None => Ok(None),
+                },
             }
         }
     }
@@ -205,6 +216,7 @@ impl RemProvState {
 #[derive(Default)]
 pub struct RemoteProvisioningService {
     device_by_sec_level: HashMap<SecurityLevel, Asp>,
+    curve_by_sec_level: HashMap<SecurityLevel, i32>,
 }
 
 impl RemoteProvisioningService {
@@ -227,8 +239,24 @@ impl RemoteProvisioningService {
         let mut result: Self = Default::default();
         let dev = get_remotely_provisioned_component(&SecurityLevel::TRUSTED_ENVIRONMENT)
             .context("In new_native_binder: Failed to get TEE Remote Provisioner instance.")?;
+        let rkp_tee_dev: Strong<dyn IRemotelyProvisionedComponent> = dev.get_interface()?;
+        result.curve_by_sec_level.insert(
+            SecurityLevel::TRUSTED_ENVIRONMENT,
+            rkp_tee_dev
+                .getHardwareInfo()
+                .context("In new_native_binder: Failed to get hardware info for the TEE.")?
+                .supportedEekCurve,
+        );
         result.device_by_sec_level.insert(SecurityLevel::TRUSTED_ENVIRONMENT, dev);
         if let Ok(dev) = get_remotely_provisioned_component(&SecurityLevel::STRONGBOX) {
+            let rkp_sb_dev: Strong<dyn IRemotelyProvisionedComponent> = dev.get_interface()?;
+            result.curve_by_sec_level.insert(
+                SecurityLevel::STRONGBOX,
+                rkp_sb_dev
+                    .getHardwareInfo()
+                    .context("In new_native_binder: Failed to get hardware info for StrongBox.")?
+                    .supportedEekCurve,
+            );
             result.device_by_sec_level.insert(SecurityLevel::STRONGBOX, dev);
         }
         Ok(BnRemoteProvisioning::new_binder(result, BinderFeatures::default()))
@@ -355,8 +383,12 @@ impl RemoteProvisioningService {
 
     /// Checks the security level of each available IRemotelyProvisionedComponent hal and returns
     /// all levels in an array to the caller.
-    pub fn get_security_levels(&self) -> Result<Vec<SecurityLevel>> {
-        Ok(self.device_by_sec_level.keys().cloned().collect())
+    pub fn get_implementation_info(&self) -> Result<Vec<ImplInfo>> {
+        Ok(self
+            .curve_by_sec_level
+            .iter()
+            .map(|(sec_level, curve)| ImplInfo { secLevel: *sec_level, supportedCurve: *curve })
+            .collect())
     }
 
     /// Deletes all attestation keys generated by the IRemotelyProvisionedComponent from the device,
@@ -448,9 +480,9 @@ impl IRemoteProvisioning for RemoteProvisioningService {
         map_or_log_err(self.generate_key_pair(is_test_mode, sec_level), Ok)
     }
 
-    fn getSecurityLevels(&self) -> binder::public_api::Result<Vec<SecurityLevel>> {
+    fn getImplementationInfo(&self) -> binder::public_api::Result<Vec<ImplInfo>> {
         let _wp = wd::watch_millis("IRemoteProvisioning::getSecurityLevels", 500);
-        map_or_log_err(self.get_security_levels(), Ok)
+        map_or_log_err(self.get_implementation_info(), Ok)
     }
 
     fn deleteAllKeys(&self) -> binder::public_api::Result<i64> {
