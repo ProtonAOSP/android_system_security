@@ -2,5 +2,8 @@ service odsign /system/bin/odsign
     class core
     user root
     group system
-    oneshot
     disabled # does not start with the core class
+
+# Note that odsign is not oneshot, but stopped manually when it exits. This
+# ensures that if odsign crashes during a module update, apexd will detect
+# those crashes and roll back the update.
