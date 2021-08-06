@@ -317,6 +317,8 @@ implement_permission!(
         ReportOffBody = 0x1000, selinux name: report_off_body;
         /// Checked when IkeystoreMetrics::pullMetris is called.
         PullMetrics = 0x2000, selinux name: pull_metrics;
+        /// Checked when IKeystoreMaintenance::deleteAllKeys is called.
+        DeleteAllKeys = 0x4000, selinux name: delete_all_keys;
     }
 );
 
