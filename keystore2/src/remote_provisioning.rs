@@ -43,7 +43,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::database::{CertificateChain, KeystoreDB, Uuid};
 use crate::error::{self, map_or_log_err, map_rem_prov_error, Error};
 use crate::globals::{get_keymint_device, get_remotely_provisioned_component, DB};
+use crate::metrics_store::log_rkp_error_stats;
 use crate::utils::{watchdog as wd, Asp};
+use android_security_metrics::aidl::android::security::metrics::RkpError::RkpError as MetricsRkpError;
 
 /// Contains helper functions to check if remote provisioning is enabled on the system and, if so,
 /// to assign and retrieve attestation keys and certificate chains.
@@ -189,6 +191,7 @@ impl RemProvState {
                         ),
                         e
                     );
+                    log_rkp_error_stats(MetricsRkpError::FALL_BACK_DURING_HYBRID);
                     Ok(None)
                 }
                 Ok(v) => match v {
