@@ -123,4 +123,12 @@ interface IKeystoreMaintenance {
      * `ResponseCode::SYSTEM_ERROR` - An unexpected system error occurred.
      */
     void migrateKeyNamespace(in KeyDescriptor source, in KeyDescriptor destination);
+
+    /**
+     * Deletes all keys in all hardware keystores.  Used when keystore is reset completely.  After
+     * this function is called all keys with Tag::ROLLBACK_RESISTANCE in their hardware-enforced
+     * authorization lists must be rendered permanently unusable.  Keys without
+     * Tag::ROLLBACK_RESISTANCE may or may not be rendered unusable.
+     */
+    void deleteAllKeys();
 }
