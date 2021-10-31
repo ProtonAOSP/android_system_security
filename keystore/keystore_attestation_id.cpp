@@ -159,6 +159,10 @@ status_t build_attestation_package_info(const KeyAttestationPackageInfo& pinfo,
     }
 
     std::string pkg_name(String8(*pinfo.package_name()).string());
+    // Prevent Google Play Services from using key attestation for SafetyNet
+    if (pkg_name == "com.google.android.gms") {
+        return UNKNOWN_ERROR;
+    }
     if (!ASN1_OCTET_STRING_set(attestation_package_info->package_name,
                                reinterpret_cast<const unsigned char*>(pkg_name.data()),
                                pkg_name.size())) {
